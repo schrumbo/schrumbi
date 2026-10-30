@@ -1,6 +1,17 @@
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
+/// Shortens a file name in the middle, so its start, date and extension stay readable.
+pub fn middle_ellipsis(name: &str, max: usize) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    if chars.len() <= max || max < 5 {
+        return name.to_string();
+    }
+    let tail = (max - 1) / 2;
+    let head = max - 1 - tail;
+    format!("{}…{}", chars[..head].iter().collect::<String>(), chars[chars.len() - tail..].iter().collect::<String>())
+}
+
 /// Removes accents, so "é" becomes "e".
 pub fn strip_diacritics(s: &str) -> String {
     s.nfd().filter(|c| !is_combining_mark(*c)).collect()

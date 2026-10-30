@@ -58,11 +58,11 @@ impl Theme {
         let ink = if dark { c(0xFFFFFF) } else { c(0x000000) };
         Self {
             dark,
-            sidebar: if dark { c(0x232628) } else { c(0xF3F3F5) },
+            sidebar: if dark { c(0x1D1D1D) } else { c(0xF3F3F5) },
             sidebar_border: ink.opacity(if dark { 0.08 } else { 0.06 }),
-            content: if dark { c(0x2A2D2E) } else { c(0xFFFFFF) },
-            secondary_bg: if dark { c(0x323536) } else { c(0xF5F5F7) },
-            column: if dark { c(0x2F3233) } else { c(0xF7F7F9) },
+            content: if dark { c(0x222222) } else { c(0xFFFFFF) },
+            secondary_bg: if dark { c(0x2A2A2A) } else { c(0xF5F5F7) },
+            column: if dark { c(0x262626) } else { c(0xF7F7F9) },
             primary: ink.opacity(0.88),
             secondary: ink.opacity(if dark { 0.55 } else { 0.5 }),
             tertiary: ink.opacity(0.26),
@@ -75,7 +75,7 @@ impl Theme {
             red: if dark { c(0xFF453A) } else { c(0xFF3B30) },
             gray: c(0x8E8E93),
             ink,
-            material: if dark { c(0x3A3D3F) } else { c(0xFBFBFC) },
+            material: if dark { c(0x303030) } else { c(0xFBFBFC) },
         }
     }
 
@@ -191,7 +191,8 @@ pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
     k.overlay = gpui_kit::black().opacity(if dark { 0.45 } else { 0.25 });
     k.scrollbar_thumb = t.ink.opacity(0.25);
     k.scrollbar_thumb_hover = t.ink.opacity(0.4);
-    k.title_bar = t.content;
+    k.title_bar = t.sidebar;
+    k.title_bar_border = t.separator;
     k.window_border = t.separator;
     ct.tokens = ct.colors.into();
 }

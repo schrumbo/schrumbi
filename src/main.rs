@@ -42,6 +42,8 @@ fn main() {
         gpui_kit::init(cx);
         ui::theme::apply(false, None, cx);
         ui::state::init(cx);
+        ui::notifications::init(cx);
+        ui::updates::init(cx);
         ui::app::init(cx);
         if let Some(path) = workspace {
             ui::state::open_workspace(&path, cx);

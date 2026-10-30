@@ -81,6 +81,7 @@ pub fn open(cx: &mut App) {
         titlebar: Some(TitlebarOptions { title: Some(tr("Einstellungen").into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }),
         ..Default::default()
     };
+    let options = super::chrome::window_options(options, tr("Einstellungen"));
     let _ = gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Settings::new(window, cx)));
 }
 
@@ -88,6 +89,7 @@ pub fn open(cx: &mut App) {
 pub fn open_about(cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(360.), px(300.)), cx);
     let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), is_resizable: false, titlebar: Some(TitlebarOptions { title: Some(tr("Über Schrumbi").into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }), ..Default::default() };
+    let options = super::chrome::window_options(options, tr("Über Schrumbi"));
     let _ = gpui_kit::open_window(options, cx, |_, cx| cx.new(|_| About));
 }
 
@@ -96,7 +98,7 @@ struct About;
 impl Render for About {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
-        div()
+        let content = div()
             .size_full()
             .bg(t.content)
             .font_family(Theme::font_family())
@@ -108,7 +110,8 @@ impl Render for About {
             .gap(px(10.))
             .child(super::onboarding::logo(40., &t))
             .child(div().text_color(t.secondary).child(trf("Version %@", &[&env!("CARGO_PKG_VERSION")])))
-            .child(div().text_size(px(font::CAPTION)).text_color(t.tertiary).child("Lucide (ISC) · Material Icon Theme (MIT)"))
+            .child(div().text_size(px(font::CAPTION)).text_color(t.tertiary).child("Lucide (ISC) · Material Icon Theme (MIT)"));
+        super::chrome::frame(tr("Über Schrumbi"), content, &t)
     }
 }
 
@@ -216,7 +219,7 @@ impl Settings {
     }
 
     fn tab_bar(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
-        let mut bar = div().flex().justify_center().gap(px(4.)).pt(px(34.)).pb(px(10.)).border_b_1().border_color(t.separator);
+        let mut bar = div().flex().justify_center().gap(px(4.)).pt(px(if super::chrome::CUSTOM { 10. } else { 34. })).pb(px(10.)).border_b_1().border_color(t.separator);
         for (tab, label, icon_name) in [
             (Tab::General, tr("Allgemein"), "settings"),
             (Tab::Semester, tr("Semester"), "calendar"),
@@ -462,6 +465,10 @@ impl Settings {
                     }
                     cx.notify();
                 })), t),
+                row(tr("Automatisch nach Updates suchen"), Switch::new("g-update").checked(p.update_check).on_click(|v, _, _| {
+                    let v = *v;
+                    prefs::update(|p| p.update_check = v);
+                }), t),
                 row(tr("Symbol in der Menüleiste"), Switch::new("g-tray").checked(p.tray).disabled(!super::tray::AVAILABLE).on_click(|v, _, cx| {
                     let v = *v;
                     prefs::update(|p| p.tray = v);
@@ -1438,7 +1445,7 @@ impl Render for Settings {
         let mut fields = std::mem::take(&mut self.fields);
         fields.prune();
         self.fields = fields;
-        div()
+        let content = div()
             .id("settings")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|s, e: &KeyDownEvent, _, cx| s.record_key(e, cx)))
@@ -1451,7 +1458,8 @@ impl Render for Settings {
             .line_height(relative(1.22))
             .text_color(t.primary)
             .child(tabs)
-            .child(div().flex_1().min_h_0().child(body))
+            .child(div().flex_1().min_h_0().child(body));
+        super::chrome::frame(tr("Einstellungen"), content, &t)
     }
 }
 

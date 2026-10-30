@@ -55,6 +55,7 @@ pub fn open(path: &Path, cx: &mut App) {
         }
     }
     let title = state::read(cx, |l| l.note_title(&path));
+    let title_for_bar = title.clone();
     let target = path.clone();
     state::lib(cx).update(cx, |l, _| {
         l.note_windows.insert(path.clone());
@@ -65,6 +66,7 @@ pub fn open(path: &Path, cx: &mut App) {
         window_min_size: Some(size(px(420.), px(320.))),
         ..Default::default()
     };
+    let options = super::chrome::window_options(options, title_for_bar);
     let _ = gpui_kit::open_window(options, cx, |window, cx| {
         window.on_window_should_close(cx, |window, cx| {
             request_close(window, cx);

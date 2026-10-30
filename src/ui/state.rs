@@ -256,6 +256,12 @@ pub fn schedule_notes_save(cx: &mut App) {
 
 /// Keeps one timer for the next due reminder; rebuilt only when the list changes.
 /// Also refreshes the subscribable calendar file when that is turned on.
+/// Schedules all reminders again, e.g. after the system allowed notifications.
+pub fn reschedule_reminders(cx: &mut App) {
+    cx.global_mut::<Store>().reminders.clear();
+    sync_reminders(cx);
+}
+
 pub fn sync_reminders(cx: &mut App) {
     if crate::core::prefs::get().calendar_feed
         && let (Some(root), Some(ics)) = read(cx, |l| (l.root.clone(), l.ics()))
@@ -270,12 +276,12 @@ pub fn sync_reminders(cx: &mut App) {
     if reminders == cx.global::<Store>().reminders {
         return;
     }
-    let pending = reminders.clone();
+    let pending = crate::ui::notifications::schedule(&reminders);
     let task = cx.spawn(async move |cx| {
         for r in pending {
             let wait = (r.fire - chrono::Local::now()).to_std().unwrap_or_default();
             cx.background_executor().timer(wait).await;
-            crate::ui::platform::notify(&r.title, &r.body);
+            cx.update(|cx| crate::ui::notifications::show(r, cx));
         }
     });
     let store = cx.global_mut::<Store>();

@@ -19,13 +19,47 @@ pub struct InboxPage {
     selection: HashSet<PathBuf>,
     form: Option<(Vec<PathBuf>, Entity<FilingForm>, Subscription)>,
     drop: bool,
+    focus: FocusHandle,
+    scroll: ScrollHandle,
+    anchor: ScrollAnchor,
     _sub: Subscription,
 }
 
 impl InboxPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let lib = state::lib(cx);
-        Self { selection: HashSet::new(), form: None, drop: false, _sub: cx.observe(&lib, |_, _, cx| cx.notify()) }
+        let scroll = ScrollHandle::new();
+        Self { selection: HashSet::new(), form: None, drop: false, focus: cx.focus_handle(), anchor: ScrollAnchor::for_handle(scroll.clone()), scroll, _sub: cx.observe(&lib, |_, _, cx| cx.notify()) }
+    }
+
+    fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let k = &e.keystroke;
+        if k.modifiers.platform || k.modifiers.control || k.modifiers.alt {
+            return;
+        }
+        let inbox = state::read(cx, |l| l.inbox.clone());
+        match k.key.as_str() {
+            "up" | "down" if !inbox.is_empty() => {
+                let current = inbox.iter().rposition(|p| self.selection.contains(p));
+                let next = match (current, k.key.as_str()) {
+                    (None, "up") => 0,
+                    (None, _) => 1.min(inbox.len() - 1),
+                    (Some(i), "up") => i.saturating_sub(1),
+                    (Some(i), _) => (i + 1).min(inbox.len() - 1),
+                };
+                self.selection = HashSet::from([inbox[next].clone()]);
+                self.anchor.scroll_to(window, cx);
+                cx.notify();
+            }
+            "space" => {
+                if let Some(path) = self.queue(&inbox).first() {
+                    let index = inbox.iter().position(|f| f == path).unwrap_or(0);
+                    super::preview::show_in(inbox, index, cx);
+                }
+            }
+            _ => return,
+        }
+        cx.stop_propagation();
     }
 
     fn queue(&self, inbox: &[PathBuf]) -> Vec<PathBuf> {
@@ -42,6 +76,7 @@ impl Render for InboxPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
         let me = cx.entity();
+        let list_focused = self.focus.is_focused(window);
         let (inbox, inbox_name, now) = state::read(cx, |l| (l.inbox.clone(), l.config.as_ref().map(|c| c.inbox.clone()).unwrap_or_else(|| "_Inbox".into()), l.now));
         self.selection.retain(|p| inbox.contains(p));
         let queue = self.queue(&inbox);
@@ -97,7 +132,7 @@ impl Render for InboxPage {
                         .py(px(5.))
                         .rounded(px(6.))
                         .cursor_pointer()
-                        .when(selected, |d| d.bg(t.accent.opacity(0.18)))
+                        .when(selected, |d| d.bg(if list_focused { t.accent.opacity(0.32) } else { t.ink.opacity(0.09) }).anchor_scroll(Some(self.anchor.clone())))
                         .when(!selected, |d| d.hover(move |s| s.bg(hover)))
                         .child(file_icon(p, 22.))
                         .child(
@@ -110,7 +145,8 @@ impl Render for InboxPage {
                                 .child(div().truncate().child(p.file_name().unwrap_or_default().to_string_lossy().to_string()))
                                 .when_some(created, |d, c| d.child(caption(day::due(c, now), &t))),
                         )
-                        .on_click(move |ev: &ClickEvent, _, cx| {
+                        .on_click(move |ev: &ClickEvent, window, cx| {
+                            e.update(cx, |this, cx| window.focus(&this.focus, cx));
                             if ev.click_count() >= 2 {
                                 super::preview::show(&path, cx);
                                 return;
@@ -148,7 +184,7 @@ impl Render for InboxPage {
                         .flex_col()
                         .border_r_1()
                         .border_color(t.separator)
-                        .child(div().id("inbox-list").flex_1().min_h_0().overflow_y_scroll().child(list))
+                        .child(div().id("inbox-list").flex_1().min_h_0().overflow_y_scroll().track_focus(&self.focus).track_scroll(&self.scroll).on_key_down(cx.listener(Self::on_key)).child(list))
                         .child(
                             div()
                                 .flex()

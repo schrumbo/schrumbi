@@ -730,6 +730,13 @@ impl Render for FilingForm {
             .child(Button::new("file-commit").primary().label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| e3.update(cx, |f, cx| f.commit(window, cx))));
 
         div()
+            .on_key_down(cx.listener(|f, e: &KeyDownEvent, window, cx| {
+                let k = &e.keystroke;
+                if k.key == "right" && k.modifiers.alt && (k.modifiers.platform || k.modifiers.control) && f.paths.len() > 1 {
+                    f.advance(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .size_full()
             .flex()
             .flex_col()

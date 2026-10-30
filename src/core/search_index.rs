@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 use chrono::{DateTime, Local, TimeZone};
+use rayon::prelude::*;
 use regex::Regex;
 use rusqlite::{Connection, params};
 use walkdir::WalkDir;
@@ -26,6 +27,8 @@ pub struct SearchHit {
 const TEXT_EXTENSIONS: [&str; 4] = ["txt", "md", "html", "csv"];
 const MAX_TEXT: usize = 200_000;
 const MAX_BYTES: u64 = 60 * 1024 * 1024;
+/// `fts` rows share their rowid with `files`, so updates need no scan of the full-text table.
+const SCHEMA: i64 = 2;
 
 /// Incremental full-text index in SQLite FTS5, stored in the app's data folder.
 pub struct SearchIndex {
@@ -36,16 +39,26 @@ impl SearchIndex {
     pub fn open() -> Self {
         let db = crate::core::prefs::data_dir().and_then(|dir| {
             std::fs::create_dir_all(&dir).ok()?;
-            let c = Connection::open(dir.join("search.sqlite")).ok()?;
-            c.execute_batch(
-                "PRAGMA journal_mode=WAL;
-                 CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, name TEXT, modified REAL);
-                 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(path UNINDEXED, name, body, tokenize='unicode61 remove_diacritics 2');",
-            )
-            .ok()?;
-            Some(c)
+            Self::connect(&dir.join("search.sqlite"))
         });
         Self { db: Mutex::new(db) }
+    }
+
+    /// Opens the database; an index from an older schema is rebuilt, it only holds derived data.
+    fn connect(path: &Path) -> Option<Connection> {
+        let c = Connection::open(path).ok()?;
+        let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).ok()?;
+        if version < SCHEMA {
+            c.execute_batch("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS fts;").ok()?;
+        }
+        c.execute_batch(&format!(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE IF NOT EXISTS files(id INTEGER PRIMARY KEY, path TEXT UNIQUE, name TEXT, modified REAL);
+             CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(name, body, tokenize='unicode61 remove_diacritics 2');
+             PRAGMA user_version={SCHEMA};"
+        ))
+        .ok()?;
+        Some(c)
     }
 
     fn with<T: Default>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> T {
@@ -60,7 +73,7 @@ impl SearchIndex {
         });
         let skip: HashSet<&str> = exclude.iter().map(String::as_str).collect();
         let mut seen: HashSet<String> = HashSet::new();
-        let mut changed: Vec<(String, String, f64, String)> = Vec::new();
+        let mut pending: Vec<(PathBuf, String, String, f64, bool)> = Vec::new();
         let walker = WalkDir::new(root).min_depth(1).into_iter().filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
             !name.starts_with('.') && !(e.file_type().is_dir() && (skip.contains(name.as_ref()) || is_package(e.path())))
@@ -78,21 +91,32 @@ impl SearchIndex {
                 continue;
             }
             let small = meta.is_some_and(|m| m.len() <= MAX_BYTES);
-            let body = if small { extract(entry.path()) } else { String::new() };
-            changed.push((path, name, modified, body));
+            pending.push((entry.path().to_path_buf(), path, name, modified, small));
         }
+        let changed: Vec<(String, String, f64, String)> = pending
+            .into_par_iter()
+            .map(|(file, path, name, modified, small)| {
+                let body = if small { extract(&file) } else { String::new() };
+                (path, name, modified, body)
+            })
+            .collect();
         let removed: Vec<&String> = known.keys().filter(|p| !seen.contains(*p)).collect();
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
+            let remove = |path: &str| -> rusqlite::Result<()> {
+                tx.execute("DELETE FROM fts WHERE rowid = (SELECT id FROM files WHERE path = ?1)", [path])?;
+                tx.execute("DELETE FROM files WHERE path = ?1", [path])?;
+                Ok(())
+            };
             for p in &removed {
-                tx.execute("DELETE FROM files WHERE path = ?1", [p])?;
-                tx.execute("DELETE FROM fts WHERE path = ?1", [p])?;
+                remove(p)?;
             }
             for (path, name, modified, body) in &changed {
-                tx.execute("DELETE FROM files WHERE path = ?1", [path])?;
-                tx.execute("DELETE FROM fts WHERE path = ?1", [path])?;
+                if known.contains_key(path) {
+                    remove(path)?;
+                }
                 tx.execute("INSERT INTO files(path, name, modified) VALUES(?1, ?2, ?3)", params![path, name, modified])?;
-                tx.execute("INSERT INTO fts(path, name, body) VALUES(?1, ?2, ?3)", params![path, name, body])?;
+                tx.execute("INSERT INTO fts(rowid, name, body) VALUES(last_insert_rowid(), ?1, ?2)", params![name, body])?;
             }
             tx.commit()
         });
@@ -125,7 +149,7 @@ impl SearchIndex {
         let like = format!("{}%", prefix.map(|p| p.to_string_lossy().to_string()).unwrap_or_default());
         self.with(|c| {
             let mut s = c.prepare(
-                "SELECT f.path, f.name, f.modified, snippet(fts, 2, '', '', '…', 14) FROM fts JOIN files f ON f.path = fts.path WHERE fts MATCH ?1 AND f.path LIKE ?2 ORDER BY rank LIMIT ?3",
+                "SELECT f.path, f.name, f.modified, snippet(fts, 1, '', '', '…', 14) FROM fts JOIN files f ON f.id = fts.rowid WHERE fts MATCH ?1 AND f.path LIKE ?2 ORDER BY rank LIMIT ?3",
             )?;
             s.query_map(params![query, like, limit as i64], |r| Ok(SearchHit { file: file(r)?, snippet: r.get::<_, Option<String>>(3)?.map(|s| s.replace('\n', " ")) }))?.collect()
         })
@@ -182,4 +206,48 @@ pub fn extract(path: &Path) -> String {
         s = SPACE.replace_all(&s, " ").into_owned();
     }
     take(s)
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::SearchIndex;
+    use std::sync::Mutex;
+
+    fn index(name: &str) -> (SearchIndex, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("schrumbi-index-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        (SearchIndex { db: Mutex::new(SearchIndex::connect(&dir.join("i.sqlite"))) }, root)
+    }
+
+    #[test]
+    fn follows_new_changed_and_deleted_files() {
+        let (index, root) = index("changes");
+        let search = |term: &str| index.content_search(&[term.to_string()], None, 10).len();
+        std::fs::write(root.join("a.md"), "apfel").unwrap();
+        std::fs::write(root.join("b.md"), "birne").unwrap();
+        assert_eq!(index.update(&root, &[]), 2);
+        assert_eq!((search("apfel"), search("birne")), (1, 1));
+
+        std::fs::remove_file(root.join("b.md")).unwrap();
+        std::fs::write(root.join("c.md"), "kirsche").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(root.join("a.md"), "traube").unwrap();
+        assert_eq!(index.update(&root, &[]), 2);
+        assert_eq!(index.count(), 2);
+        assert_eq!((search("apfel"), search("birne"), search("traube"), search("kirsche")), (0, 0, 1, 1));
+    }
+
+    #[test]
+    fn indexes_many_files_quickly() {
+        let (index, root) = index("many");
+        for i in 0..3000 {
+            std::fs::write(root.join(format!("f{i}.md")), format!("inhalt {i}")).unwrap();
+        }
+        let start = std::time::Instant::now();
+        assert_eq!(index.update(&root, &[]), 3000);
+        assert!(start.elapsed().as_secs() < 20, "{:?}", start.elapsed());
+        println!("3000 files: {:?}", start.elapsed());
+    }
 }

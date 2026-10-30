@@ -46,6 +46,7 @@ fn open(cx: &mut App) {
         kind: WindowKind::Floating,
         ..Default::default()
     };
+    let options = super::chrome::window_options(options, tr("Hochladen"));
     let _ = gpui_kit::open_window(options, cx, |window, cx| {
         keep_visible_when_inactive(window);
         cx.new(UploadPanel::new)
@@ -207,7 +208,7 @@ impl Render for UploadPanel {
             })
         });
         let Some(data) = data else {
-            return root.child(unavailable("file-up", tr("Kein Upload aktiv"), tr("Starte einen Upload über „Hochladen“ bei einer Abgabe."), &t));
+            return super::chrome::frame(tr("Hochladen"), root.child(unavailable("file-up", tr("Kein Upload aktiv"), tr("Starte einen Upload über „Hochladen“ bei einer Abgabe."), &t)), &t);
         };
         let (finals, drafts): (Vec<PathBuf>, Vec<PathBuf>) = data.files.iter().cloned().partition(|f| !FileRole::is_draft(f));
         let both = !finals.is_empty() && !drafts.is_empty();
@@ -291,6 +292,6 @@ impl Render for UploadPanel {
                     })),
             )
             .child(Button::new("upload-done").primary().w_full().icon(menu_icon("check")).label(tr("Hochgeladen")).disabled(data.uploaded).on_click(move |_, window, cx| done.update(cx, |p, cx| p.mark_uploaded(window, cx))));
-        root.child(div().id("upload-scroll").size_full().overflow_y_scroll().child(body))
+        super::chrome::frame(tr("Hochladen"), root.child(div().id("upload-scroll").size_full().overflow_y_scroll().child(body)), &t)
     }
 }

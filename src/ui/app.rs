@@ -12,6 +12,7 @@ actions!(
     [
         Quit,
         About,
+        CheckForUpdates,
         OpenSettings,
         Undo,
         Redo,
@@ -66,6 +67,7 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &Quit, cx| quit(cx));
     cx.on_action(|_: &OpenSettings, cx| super::settings::open(cx));
     cx.on_action(|_: &About, cx| super::settings::open_about(cx));
+    cx.on_action(|_: &CheckForUpdates, cx| super::updates::check(true, cx));
     cx.on_action(|_: &Undo, cx| act(cx, |l| l.perform_undo()));
     cx.on_action(|_: &NewEntry, cx| act(cx, |l| if l.root.is_some() { l.show_quick_add = true }));
     cx.on_action(|_: &NewFile, cx| {
@@ -254,6 +256,7 @@ pub fn rebuild_menus(cx: &mut App) {
     cx.set_menus([
         Menu::new("Schrumbi").items([
             MenuItem::action(tr("Über Schrumbi"), About),
+            MenuItem::action(tr("Nach Updates suchen…"), CheckForUpdates),
             MenuItem::separator(),
             MenuItem::action(tr("Einstellungen…"), OpenSettings),
             MenuItem::separator(),
@@ -299,4 +302,5 @@ pub fn rebuild_menus(cx: &mut App) {
         Menu::new(tr("Gehe zu")).items(go),
         Menu::new(tr("Fenster")).items([MenuItem::action(tr("Im Dock ablegen"), Minimize), MenuItem::action(tr("Zoomen"), Zoom)]),
     ]);
+    super::chrome::sync_menus(cx);
 }

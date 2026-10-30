@@ -427,7 +427,7 @@ impl Render for NoteView {
         } else {
             div().h(px(44.)).flex_none().flex().items_center().justify_center().border_b_1().border_color(t.separator).child(header)
         };
-        div()
+        let view = div()
             .size_full()
             .flex()
             .flex_col()
@@ -448,7 +448,12 @@ impl Render for NoteView {
                     .on_action(|_: &super::app::CloseWindow, window, cx| super::note_window::request_close(window, cx))
             })
             .child(top)
-            .child(div().flex_1().min_h_0().child(content))
+            .child(div().flex_1().min_h_0().child(content));
+        if self.embedded {
+            view.into_any_element()
+        } else {
+            super::chrome::frame_with_close(self.window_title.clone(), view, super::note_window::request_close, &t)
+        }
     }
 }
 

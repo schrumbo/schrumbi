@@ -60,6 +60,16 @@ struct Results {
     loaded: bool,
 }
 
+/// One row of the virtualized list: indices into `Results`.
+#[derive(Clone, Copy, PartialEq)]
+enum Line {
+    BestHeader,
+    Best(usize),
+    Group(usize),
+    Row(usize, usize),
+    OtherKinds,
+}
+
 /// Files grouped by lecture week, newest first; typing narrows by name, folder and content.
 /// "w3", "kw44", "woche 3" and module codes in the query act as filters.
 pub struct FileBrowser {
@@ -75,6 +85,12 @@ pub struct FileBrowser {
     load: Option<Task<()>>,
     /// Picks the best hit automatically, as the search page's preview needs.
     pub auto_select: bool,
+    focus: FocusHandle,
+    list_focused: bool,
+    lines: Vec<Line>,
+    list: ListState,
+    results_changed: bool,
+    shown_view: String,
     _sub: Subscription,
 }
 
@@ -94,6 +110,12 @@ impl FileBrowser {
             key: String::new(),
             load: None,
             auto_select,
+            focus: cx.focus_handle(),
+            list_focused: false,
+            lines: Vec::new(),
+            list: ListState::new(0, ListAlignment::Top, px(400.)),
+            results_changed: false,
+            shown_view: String::new(),
             _sub: sub,
         };
         b.reload(cx);
@@ -198,6 +220,11 @@ impl FileBrowser {
         if was_searching != self.results.searching {
             self.toggled.clear();
         }
+        let view = format!("{}|{:?}|{:?}|{:?}", self.query, self.kind.key(), self.module_filter, self.week_filter);
+        if view != self.shown_view {
+            self.shown_view = view;
+            self.results_changed = true;
+        }
         let first = self.results.best.first().or_else(|| self.results.groups.first().and_then(|g| g.items.first())).map(|i| i.file.file.path.clone());
         if self.auto_select && (self.results.searching || self.selected.as_ref().is_none_or(|s| !self.contains(s))) {
             self.selected = first;
@@ -235,6 +262,97 @@ impl FileBrowser {
         let i = self.selected.as_ref().and_then(|s| v.iter().position(|p| p == s)).map_or(0, |i| (i as i64 + step).clamp(0, v.len() as i64 - 1) as usize);
         self.selected = Some(v[i].clone());
         cx.notify();
+    }
+
+    fn line_list(&self, current: Option<u32>) -> Vec<Line> {
+        let r = &self.results;
+        let mut lines = Vec::new();
+        if !r.best.is_empty() {
+            lines.push(Line::BestHeader);
+            lines.extend((0..r.best.len()).map(Line::Best));
+        }
+        for (g, group) in r.groups.iter().enumerate() {
+            lines.push(Line::Group(g));
+            if self.is_expanded(group, current) {
+                lines.extend((0..group.items.len()).map(|i| Line::Row(g, i)));
+            }
+        }
+        if r.other_kinds > 0 {
+            lines.push(Line::OtherKinds);
+        }
+        lines
+    }
+
+    fn reveal_selection(&self) {
+        let Some(selected) = &self.selected else { return };
+        let r = &self.results;
+        let found = self.lines.iter().position(|l| match *l {
+            Line::Best(i) => &r.best[i].file.file.path == selected,
+            Line::Row(g, i) => &r.groups[g].items[i].file.file.path == selected,
+            _ => false,
+        });
+        if let Some(ix) = found {
+            self.list.scroll_to_reveal_item(ix);
+        }
+    }
+
+    fn render_line(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let t = Theme::get(cx);
+        let me = cx.entity();
+        let lib = state::lib(cx);
+        let l = lib.read(cx);
+        let current = current_week(l);
+        let show_module = self.scope_module.is_none();
+        let content = match self.lines.get(ix).copied() {
+            Some(Line::BestHeader) => div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).py(px(4.)).child(tr("Beste Treffer")).into_any_element(),
+            Some(Line::Best(i)) => self.row(&self.results.best[i], show_module, true, l, &t, &me),
+            Some(Line::Group(g)) => {
+                let group = &self.results.groups[g];
+                self.group_header(group, self.is_expanded(group, current), l, current, &t, &me)
+            }
+            Some(Line::Row(g, i)) => self.row(&self.results.groups[g].items[i], show_module, false, l, &t, &me),
+            Some(Line::OtherKinds) => {
+                let e = me.clone();
+                link_button("other-kinds", trf("%lld weitere Treffer in anderen Dateitypen", &[&self.results.other_kinds]), &t)
+                    .py(px(4.))
+                    .on_click(move |_, _, cx| {
+                        e.update(cx, |b, cx| {
+                            b.kind = FileKind::All;
+                            b.reload(cx);
+                        })
+                    })
+                    .into_any_element()
+            }
+            None => return div().into_any_element(),
+        };
+        div().w_full().px(px(16.)).child(content).into_any_element()
+    }
+
+    fn on_key(&mut self, e: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let k = &e.keystroke;
+        if k.modifiers.platform || k.modifiers.control || k.modifiers.alt {
+            return;
+        }
+        match k.key.as_str() {
+            "up" | "down" => {
+                self.move_selection(if k.key == "up" { -1 } else { 1 }, cx);
+                self.reveal_selection();
+            }
+            "space" => {
+                if let Some(path) = self.selected.clone() {
+                    let files = self.visible(state::read(cx, current_week));
+                    let index = files.iter().position(|f| *f == path).unwrap_or(0);
+                    super::preview::show_in(files, index, cx);
+                }
+            }
+            "enter" => {
+                if let Some(path) = self.selected.clone() {
+                    act(cx, |l| l.open_file(&path));
+                }
+            }
+            _ => return,
+        }
+        cx.stop_propagation();
     }
 }
 
@@ -377,12 +495,13 @@ impl FileBrowser {
             .py(px(3.))
             .px(px(6.))
             .rounded(px(radius::CONTROL - 2.))
-            .when(selected, |d| d.bg(t.accent.opacity(0.18)))
+            .when(selected, |d| d.bg(if self.list_focused { t.accent.opacity(0.32) } else { t.ink.opacity(0.09) }))
             .when(!selected, |d| d.hover(move |s| s.bg(hover)))
             .tooltip(tip(lib.relative_path(&path)))
-            .on_click(move |e: &ClickEvent, _, cx| {
+            .on_click(move |e: &ClickEvent, window, cx| {
                 click.update(cx, |this, cx| {
                     this.selected = Some(sel.clone());
+                    window.focus(&this.focus, cx);
                     cx.notify();
                 });
                 if e.click_count() >= 2 {
@@ -670,38 +789,21 @@ fn filter_menu(
 }
 
 impl Render for FileBrowser {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.list_focused = self.focus.is_focused(window);
         let t = Theme::get(cx);
         let me = cx.entity();
         let lib = state::lib(cx);
         let l = lib.read(cx);
         let current = current_week(l);
         let bar = self.filter_bar(l, current, &t, &me);
-        let show_module = self.scope_module.is_none();
-        let mut list = div().flex().flex_col().px(px(16.)).py(px(8.));
-        if !self.results.best.is_empty() {
-            list = list.child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).py(px(4.)).child(tr("Beste Treffer")));
-            for i in self.results.best.clone() {
-                list = list.child(self.row(&i, show_module, true, l, &t, &me));
-            }
+        let lines = self.line_list(current);
+        if lines != self.lines {
+            self.list.reset(lines.len());
+            self.lines = lines;
         }
-        for g in self.results.groups.clone() {
-            let open = self.is_expanded(&g, current);
-            list = list.child(self.group_header(&g, open, l, current, &t, &me));
-            if open {
-                for i in &g.items {
-                    list = list.child(self.row(i, show_module, false, l, &t, &me));
-                }
-            }
-        }
-        if self.results.other_kinds > 0 {
-            let e = me.clone();
-            list = list.child(
-                link_button("other-kinds", trf("%lld weitere Treffer in anderen Dateitypen", &[&self.results.other_kinds]), &t).py(px(4.)).on_click(move |_, _, cx| e.update(cx, |b, cx| {
-                    b.kind = FileKind::All;
-                    b.reload(cx);
-                })),
-            );
+        if std::mem::take(&mut self.results_changed) {
+            self.list.scroll_to(ListOffset::default());
         }
         let empty = self.results.loaded && self.results.total == 0;
         let body: AnyElement = if empty {
@@ -729,7 +831,7 @@ impl Render for FileBrowser {
                 unavailable("folder", tr("Noch keine Dokumente"), tr("Abgelegte Dateien erscheinen hier, nach Woche sortiert."), &t).into_any_element()
             }
         } else {
-            div().id("browser-list").flex_1().overflow_y_scroll().child(list).into_any_element()
+            div().id("browser-list").flex_1().min_h_0().pt(px(8.)).track_focus(&self.focus).on_key_down(cx.listener(Self::on_key)).child(list(self.list.clone(), cx.processor(|this, ix, _, cx| this.render_line(ix, cx))).size_full()).into_any_element()
         };
         div().size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().flex().flex_col().child(body))
     }

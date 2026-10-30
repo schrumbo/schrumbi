@@ -22,6 +22,10 @@ iana-time-zone = "0.1.65"
 lopdf = "0.46.0"
 notify = "8.2.1"
 notify-rust = "4.18.2"
+rayon = "1"
+semver = "1"
+sha2 = "0.10"
+ureq = "3"
 opener = { version = "0.9.0", features = ["reveal"] }
 pulldown-cmark = "0.13.5"
 regex = "1"
@@ -72,5 +76,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 tray-icon = "0.26"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
 objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-user-notifications = "0.3"
 raw-window-handle = "0.6"

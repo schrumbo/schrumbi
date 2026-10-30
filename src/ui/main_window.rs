@@ -101,9 +101,14 @@ impl MainWindow {
     fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
         self.sidebar_open = open;
         self.sidebar_auto_closed = false;
-        self.sidebar_motion = Some((std::time::Instant::now(), self.sidebar_shown));
+        self.start_motion();
         crate::core::prefs::update(|p| p.sidebar_open = open);
         cx.notify();
+    }
+
+    /// Starts the width transition, unless the system asks for reduced motion.
+    fn start_motion(&mut self) {
+        self.sidebar_motion = (!super::platform::reduce_motion()).then(|| (std::time::Instant::now(), self.sidebar_shown));
     }
 
     /// The width to draw this frame, easing out over 180 ms towards the target.
@@ -165,7 +170,7 @@ impl MainWindow {
             .flex()
             .items_center()
             .gap(px(10.))
-            .pl(px((92. - left).max(10.)))
+            .pl(px(if super::chrome::CUSTOM { 10. } else { (92. - left).max(10.) }))
             .pr(px(10.))
             .child(div().flex_1().min_w_0().truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)))
             .child(
@@ -179,13 +184,15 @@ impl MainWindow {
                     .child(
                         Button::new("new-entry")
                             .ghost()
+                            .w(px(36.))
+                            .h(px(28.))
                             .rounded(px(18.))
                             .icon(menu_icon("plus"))
                             .tooltip(tr("Klick: Abgabe, Aufgabe oder Prüfung (⌘N) · Gedrückt halten: Notiz, Datei oder Ordner (⇧⌘N)"))
                             .on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)),
                     )
                     .child(div().w(px(1.)).h(px(18.)).bg(t.ink.opacity(0.12)))
-                    .child(Button::new("new-menu").ghost().rounded(px(18.)).icon(menu_icon("chevron-down")).dropdown_menu(move |menu, _, _| {
+                    .child(Button::new("new-menu").ghost().w(px(28.)).h(px(28.)).rounded(px(18.)).icon(menu_icon("chevron-down")).dropdown_menu(move |menu, _, _| {
                         let m = module2.clone();
                         menu.item(PopupMenuItem::new(tr("Neuer Termin…")).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)))
                             .item(PopupMenuItem::new(tr("Neue Notiz, Datei oder Ordner…")).icon(menu_icon("file-plus")).on_click(move |_, _, cx| {
@@ -197,13 +204,16 @@ impl MainWindow {
             .child(
                 Button::new("toggle-inspector")
                     .ghost()
+                    .size(px(30.))
                     .rounded(px(18.))
+                    .bg(t.ink.opacity(if show { 0.14 } else { 0.06 }))
+                    .border_1()
+                    .border_color(t.ink.opacity(0.1))
                     .icon(menu_icon("panel-right"))
                     .tooltip(if show { tr("Details ausblenden (⌥⌘I)") } else { tr("Details einblenden (⌥⌘I)") })
                     .on_click(|_, _, cx| act(cx, |l| l.toggle_inspector())),
             )
-            .child(div().w(px(325.)).child(Input::new(&self.search).prefix(icon("search", 15., t.secondary)).cleanable(true)))
-            .when(module.is_some(), |d| d)
+            .child(div().w(px(325.)).child(Input::new(&self.search).h(px(30.)).prefix(icon("search", 15., t.secondary)).cleanable(true)))
     }
 }
 
@@ -217,11 +227,11 @@ impl Render for MainWindow {
         if crowded && self.sidebar_open {
             self.sidebar_open = false;
             self.sidebar_auto_closed = true;
-            self.sidebar_motion = Some((std::time::Instant::now(), self.sidebar_shown));
+            self.start_motion();
         } else if !crowded && self.sidebar_auto_closed {
             self.sidebar_open = true;
             self.sidebar_auto_closed = false;
-            self.sidebar_motion = Some((std::time::Instant::now(), self.sidebar_shown));
+            self.start_motion();
         }
 
         let base = div()
@@ -247,9 +257,15 @@ impl Render for MainWindow {
 
         if l.root.is_none() {
             let error = l.last_error.clone();
-            return base.child(super::onboarding::render(error, &t)).into_any_element();
+            let page = base.child(super::onboarding::render(error, &t));
+            if super::chrome::CUSTOM {
+                let bar = super::chrome::main_bar(cx);
+                return div().size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().relative().child(page)).into_any_element();
+            }
+            return page.into_any_element();
         }
 
+        let update = super::updates::available(cx);
         let target = if self.sidebar_open { sidebar::WIDTH } else { sidebar::RAIL };
         let left = self.sidebar_frame(target, window);
         let inspector_w = if l.show_inspector { 340. } else { 0. };
@@ -275,7 +291,7 @@ impl Render for MainWindow {
                     .left_0()
                     .bottom_0()
                     .w(px(left))
-                    .child(sidebar::render(l, &t)),
+                    .child(sidebar::render(l, update, &t)),
             )
             .child(
                 div()
@@ -297,6 +313,10 @@ impl Render for MainWindow {
             .children(toast.or(working).map(|v| div().absolute().bottom(px(22.)).left_0().right_0().flex().justify_center().child(v)));
         if let Some(message) = error {
             root = root.child(error_alert(message, broken, config_path, &t));
+        }
+        if super::chrome::CUSTOM {
+            let bar = super::chrome::main_bar(cx);
+            return div().size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().relative().child(root)).into_any_element();
         }
         root.into_any_element()
     }
@@ -356,6 +376,7 @@ pub fn open(cx: &mut App) {
         app_id: Some("io.github.schrumbo.schrumbi".into()),
         ..Default::default()
     };
+    let options = super::chrome::window_options(options, "Schrumbi");
     if let Ok((handle, _)) = gpui_kit::open_window(options, cx, |window, cx| {
         theme::apply(theme::is_dark(window.appearance()), Some(window), cx);
         cx.new(|cx| MainWindow::new(window, cx))

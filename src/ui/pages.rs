@@ -275,7 +275,7 @@ impl Render for Pages {
             Route::Search => self.search_page(lib.read(cx), width, &t),
             Route::Module(id) => self.module_page(lib.read(cx), &id, width, view, &t),
             Route::Doc(path) => self.document(path, window, cx),
-            other => unavailable("hammer", tr("Noch nicht portiert"), format!("{other:?}"), &t).into_any_element(),
+            Route::Today => div().into_any_element(),
         };
         fields.prune();
         self.fields = fields;

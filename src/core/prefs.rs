@@ -72,6 +72,10 @@ pub struct Prefs {
     pub shortcuts: BTreeMap<String, Shortcut>,
     pub disabled_shortcuts: BTreeSet<String>,
     pub tray: bool,
+    /// Looks for a new version once a day.
+    pub update_check: bool,
+    /// A version the user chose not to install.
+    pub update_skip: String,
     /// Keeps `Schrumbi-Kalender.ics` in the workspace up to date for calendar subscriptions.
     pub calendar_feed: bool,
     pub sidebar_open: bool,
@@ -102,6 +106,8 @@ impl Default for Prefs {
             shortcuts: BTreeMap::new(),
             disabled_shortcuts: BTreeSet::new(),
             tray: true,
+            update_check: true,
+            update_skip: String::new(),
             calendar_feed: false,
             sidebar_open: true,
         }
@@ -110,11 +116,17 @@ impl Default for Prefs {
 
 /// Folder for settings; `SCHRUMBI_HOME` redirects settings and caches, e.g. for tests.
 pub fn config_dir() -> Option<PathBuf> {
+    if cfg!(test) {
+        return Some(std::env::temp_dir().join(format!("schrumbi-test-home-{}", std::process::id())));
+    }
     std::env::var_os("SCHRUMBI_HOME").map(PathBuf::from).or_else(|| dirs::config_dir().map(|d| d.join("Schrumbi")))
 }
 
 /// Folder for caches such as the search index.
 pub fn data_dir() -> Option<PathBuf> {
+    if cfg!(test) {
+        return config_dir().map(|d| d.join("data"));
+    }
     std::env::var_os("SCHRUMBI_HOME").map(|d| PathBuf::from(d).join("data")).or_else(|| dirs::data_dir().map(|d| d.join("Schrumbi")))
 }
 

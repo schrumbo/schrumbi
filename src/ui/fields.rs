@@ -82,6 +82,7 @@ pub fn parse_number(s: &str) -> Option<f64> {
 pub fn format_number(v: f64, digits: usize) -> String {
     let s = format!("{v:.digits$}");
     let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s };
+    let s = if s == "-0" { "0".to_string() } else { s };
     if crate::core::i18n::lang() == crate::core::i18n::Lang::De { s.replace('.', ",") } else { s }
 }
 
@@ -109,5 +110,13 @@ mod tests {
         crate::core::i18n::init("de");
         assert_eq!(format_number(20., 1), "20");
         assert_eq!(format_number(7.5, 1), "7,5");
+    }
+
+    #[test]
+    fn never_shows_negative_zero() {
+        assert_eq!(format_number(-0.0, 1), "0");
+        assert_eq!(format_number(-0.04, 1), "0");
+        assert_eq!(format_number(std::iter::empty::<f64>().sum(), 0), "0");
+        assert_eq!(format_number(20.0, 1), "20");
     }
 }

@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
-use gpui_kit::component::Sizable;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -14,7 +13,7 @@ use crate::core::library::{self, Library, Route};
 use crate::core::prefs;
 
 /// Height of the title band that holds the traffic lights.
-pub const BAND: f32 = 52.;
+pub const BAND: f32 = if super::chrome::CUSTOM { 8. } else { 52. };
 /// Width of the sidebar when collapsed: just the icons.
 pub const RAIL: f32 = 48.;
 /// Width of the sidebar with labels.
@@ -70,8 +69,8 @@ fn shortcut_label(key: &str) -> String {
 fn badge(n: usize, tint: Hsla) -> Div {
     div()
         .absolute()
-        .bottom(px(6.))
-        .right(px(6.))
+        .bottom(px(3.))
+        .right(px(1.))
         .min_w(px(15.))
         .h(px(15.))
         .px(px(4.))
@@ -127,7 +126,7 @@ fn menu_overlay(id: &'static str, help: String) -> Button {
 }
 
 /// The sidebar: one column of tabs. The icons always show, the labels sit beside them when wide enough.
-pub fn render(lib: &Library, t: &Theme) -> Div {
+pub fn render(lib: &Library, update: Option<String>, t: &Theme) -> Div {
     let fg = t.primary;
     let mut top = div().flex().flex_col();
     for e in entries(lib) {
@@ -207,6 +206,10 @@ pub fn render(lib: &Library, t: &Theme) -> Div {
         .flex()
         .flex_col()
         .pb(px(6.))
+        .when_some(update, |d, version| {
+            let label = trf("Update auf %@", &[&version]);
+            d.child(tab("tab-update".into(), false, false, icon("download", 22., t.accent).into_any_element(), label.clone(), None, label, t).on_click(|_, window, cx| super::updates::show(window, cx)))
+        })
         .when(semesters.len() > 1, |d| {
             d.child(tab("tab-semester-row".into(), false, true, icon("calendar-range", 22., fg).into_any_element(), semester.clone(), None, semester.clone(), t).child(div().absolute().inset_0().child(menu_overlay("tab-semester", semester.clone()).dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
                 for s in &semesters {

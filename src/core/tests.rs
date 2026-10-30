@@ -34,3 +34,30 @@ fn renders_pdf_page() {
     println!("pages {} png {} bytes in {:?}", doc.page_count(), png.len(), t.elapsed());
     std::fs::write(std::env::temp_dir().join("schrumbi-page.png"), png).unwrap();
 }
+
+#[test]
+fn every_translation_key_exists_in_english() {
+    let catalog: std::collections::HashMap<String, serde_json::Value> = serde_json::from_str(include_str!("../../assets/i18n/en.json")).unwrap();
+    let call = regex::Regex::new(r#"\btrf?\(\s*"((?:[^"\\]|\\.)*)""#).unwrap();
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+    let mut missing = Vec::new();
+    for file in walkdir::WalkDir::new(root).into_iter().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "rs")) {
+        let source = std::fs::read_to_string(file.path()).unwrap();
+        for c in call.captures_iter(&source) {
+            let key = c[1].replace("\\\"", "\"").replace("\\n", "\n");
+            if !catalog.contains_key(&key) {
+                missing.push(key);
+            }
+        }
+    }
+    assert!(missing.is_empty(), "missing translations: {missing:?}");
+}
+
+#[test]
+fn shortens_file_names_in_the_middle() {
+    use super::text::middle_ellipsis;
+    assert_eq!(middle_ellipsis("kurz.pdf", 26), "kurz.pdf");
+    assert_eq!(middle_ellipsis("P1_26_Fragebogen-Lang_Muster-M_261028.pdf", 26), "P1_26_Fragebo…M_261028.pdf");
+    assert_eq!(middle_ellipsis("Übung-Übung-Übung-Übung.pdf", 11), "Übung…g.pdf");
+    assert_eq!(middle_ellipsis("abc", 2), "abc");
+}

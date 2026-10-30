@@ -21,3 +21,6 @@ mod tests;
 pub mod pdf_render;
 pub mod edit_ops;
 pub mod pdf_export;
+pub mod update;
+#[cfg(test)]
+mod edge_tests;

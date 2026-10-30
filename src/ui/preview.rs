@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::text::TextView;
 use gpui_kit::component::Sizable;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -21,10 +20,10 @@ const TEXTS: [&str; 14] = ["txt", "csv", "json", "xml", "yml", "yaml", "css", "j
 
 enum Content {
     Loading,
-    Markdown(String),
+    Markdown(Arc<super::markdown_view::ParsedNote>),
     Text(String),
     Image(PathBuf),
-    Pdf(Vec<Arc<Image>>),
+    Pdf(Vec<(Arc<Image>, f32)>),
     Other,
 }
 
@@ -71,12 +70,12 @@ impl FilePreview {
         cx.notify();
         let task = cx.background_spawn(async move {
             if markdown::is_markdown(&path) {
-                Content::Markdown(std::fs::read_to_string(&path).unwrap_or_default())
+                Content::Markdown(Arc::new(super::markdown_view::parse(&std::fs::read_to_string(&path).unwrap_or_default())))
             } else if TEXTS.contains(&e.as_str()) {
                 Content::Text(std::fs::read_to_string(&path).map(|s| s.chars().take(200_000).collect()).unwrap_or_default())
             } else if e == "pdf" {
                 match PdfDoc::open(&path) {
-                    Some(doc) => Content::Pdf((0..doc.page_count().min(60)).filter_map(|i| doc.render_png(i, 2.)).map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png))).collect()),
+                    Some(doc) => Content::Pdf((0..doc.page_count().min(60)).filter_map(|i| Some((Arc::new(Image::from_bytes(ImageFormat::Png, doc.render_png(i, 2.)?)), doc.page_size(i).map_or(0.707, |(w, h)| w / h.max(1.))))).collect()),
                     None => Content::Other,
                 }
             } else {
@@ -107,7 +106,7 @@ impl Render for FilePreview {
                 .id("preview-md")
                 .size_full()
                 .overflow_y_scroll()
-                .child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(680.)).p(px(24.)).child(TextView::markdown("preview-markdown", text.clone()).selectable(true))))
+                .child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(680.)).p(px(24.)).child(super::markdown_view::render(text, self.path.as_deref().and_then(Path::parent), None, &t))))
                 .into_any_element(),
             Content::Text(text) => div().id("preview-text").size_full().overflow_y_scroll().p(px(24.)).font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(text.clone()).into_any_element(),
             Content::Image(p) => div().size_full().p(px(16.)).flex().items_center().justify_center().child(img(p.clone()).max_w_full().max_h_full().object_fit(ObjectFit::Contain)).into_any_element(),
@@ -116,7 +115,11 @@ impl Render for FilePreview {
                 .size_full()
                 .overflow_y_scroll()
                 .bg(t.ink.opacity(0.04))
-                .child(div().flex().flex_col().items_center().gap(px(12.)).p(px(16.)).children(pages.iter().map(|p| img(p.clone()).w_full().max_w(px(820.)).shadow_md())))
+                .child(div().flex().flex_col().items_center().gap(px(12.)).p(px(16.)).children(pages.iter().map(|(p, ratio)| {
+                    let mut page = div().w_full().max_w(px(820.)).flex_none().shadow_md();
+                    page.style().aspect_ratio = Some(*ratio);
+                    page.child(img(p.clone()).size_full())
+                })))
                 .into_any_element(),
             Content::Other => div()
                 .size_full()
@@ -158,19 +161,73 @@ impl Render for FilePreview {
 
 /// Opens a floating preview window for `path`, like Quick Look (Space in lists).
 pub fn show(path: &Path, cx: &mut App) {
-    let path = path.to_path_buf();
+    show_in(vec![path.to_path_buf()], 0, cx);
+}
+
+/// Opens the preview on one of `files`; the arrow keys move through them.
+pub fn show_in(files: Vec<PathBuf>, index: usize, cx: &mut App) {
+    let Some(path) = files.get(index).cloned() else { return };
+    let title = path.file_name().unwrap_or_default().to_string_lossy().to_string();
     let bounds = Bounds::centered(None, size(px(820.), px(900.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        titlebar: Some(TitlebarOptions { title: Some(path.file_name().unwrap_or_default().to_string_lossy().to_string().into()), appears_transparent: false, traffic_light_position: None }),
+        titlebar: Some(TitlebarOptions { title: Some(title.clone().into()), appears_transparent: false, traffic_light_position: None }),
         kind: WindowKind::Floating,
         ..Default::default()
     };
+    let options = super::chrome::window_options(options, title);
     let _ = gpui_kit::open_window(options, cx, move |_, cx| {
-        cx.new(|cx| {
+        let preview = cx.new(|cx| {
             let mut p = FilePreview::new(true);
             p.set_path(Some(path), cx);
             p
-        })
+        });
+        cx.new(|cx| PreviewWindow { files, index, preview, focus: cx.focus_handle(), focused: false })
     });
+}
+
+/// The floating preview: the file preview below the window's title bar.
+struct PreviewWindow {
+    files: Vec<PathBuf>,
+    index: usize,
+    preview: Entity<FilePreview>,
+    focus: FocusHandle,
+    focused: bool,
+}
+
+impl PreviewWindow {
+    fn title(&self) -> String {
+        self.files[self.index].file_name().unwrap_or_default().to_string_lossy().to_string()
+    }
+
+    fn step(&mut self, delta: i64, window: &mut Window, cx: &mut Context<Self>) {
+        let next = (self.index as i64 + delta).clamp(0, self.files.len() as i64 - 1) as usize;
+        if next != self.index {
+            self.index = next;
+            let path = self.files[next].clone();
+            self.preview.update(cx, |p, cx| p.set_path(Some(path), cx));
+            window.set_window_title(&self.title());
+            cx.notify();
+        }
+    }
+}
+
+impl Render for PreviewWindow {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !std::mem::replace(&mut self.focused, true) {
+            window.focus(&self.focus, cx);
+        }
+        let t = Theme::get(cx);
+        let content = div()
+            .size_full()
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|p, e: &KeyDownEvent, window, cx| match e.keystroke.key.as_str() {
+                "escape" | "space" => window.remove_window(),
+                "left" | "up" => p.step(-1, window, cx),
+                "right" | "down" => p.step(1, window, cx),
+                _ => {}
+            }))
+            .child(self.preview.clone());
+        super::chrome::frame(self.title(), content, &t)
+    }
 }

@@ -16,11 +16,6 @@ pub fn reveal_label() -> String {
     }
 }
 
-/// Desktop notification.
-pub fn notify(title: &str, body: &str) {
-    let _ = notify_rust::Notification::new().appname("Schrumbi").summary(title).body(body).show();
-}
-
 /// Shows an open panel and hands the chosen paths to `then`.
 pub fn pick(options: PathPromptOptions, cx: &mut App, then: impl FnOnce(Vec<PathBuf>, &mut App) + 'static) {
     let rx = cx.prompt_for_paths(options);
@@ -135,4 +130,23 @@ pub fn reveal_workspace_label() -> String {
     } else {
         tr("Studienordner im Dateimanager zeigen")
     }
+}
+
+/// Whether the system asks apps to avoid animations.
+#[cfg(target_os = "macos")]
+pub fn reduce_motion() -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject, Bool};
+    let Some(class) = AnyClass::get(c"NSWorkspace") else { return false };
+    unsafe {
+        let workspace: *mut AnyObject = msg_send![class, sharedWorkspace];
+        let reduce: Bool = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
+        reduce.as_bool()
+    }
+}
+
+/// Whether the system asks apps to avoid animations.
+#[cfg(not(target_os = "macos"))]
+pub fn reduce_motion() -> bool {
+    false
 }

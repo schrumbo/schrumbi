@@ -30,3 +30,6 @@ pub mod quick;
 pub mod wizards;
 pub mod markdown_view;
 pub mod tray;
+pub mod notifications;
+pub mod chrome;
+pub mod updates;

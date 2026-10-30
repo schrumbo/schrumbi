@@ -79,7 +79,7 @@ fn file_pills(lib: &Library, a: &Assignment, st: &ModuleState, view: Entity<Page
                 .tooltip(tip(if brief { trf("Aufgabenstellung: %@", &[&name]) } else { name.clone() }))
                 .on_click(move |_, _, cx| super::preview::show(&preview, cx))
                 .when(brief, |d| d.child(icon("clipboard-list", 11., t.accent)).child(div().font_weight(FontWeight::MEDIUM).child(tr("Aufgabe"))))
-                .when(!brief, |d| d.child(file_icon(path, 14.)).child(div().truncate().child(name.clone())))
+                .when(!brief, |d| d.child(file_icon(path, 14.)).child(div().truncate().child(crate::core::text::middle_ellipsis(&name, 26))))
                 .context_menu(move |menu, _, _| {
                     let (p1, p2, p3, id) = (menu_path.clone(), menu_path.clone(), menu_path.clone(), id.clone());
                     let role = if brief { FileRole::Work } else { FileRole::Brief };

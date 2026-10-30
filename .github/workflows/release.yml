@@ -36,9 +36,10 @@ jobs:
           codesign --force --deep --sign - "$APP"
           ln -s /Applications dist/Applications
           hdiutil create -volname Schrumbi -srcfolder dist -ov -format UDZO "Schrumbi-$VERSION-macos-universal.dmg"
+          shasum -a 256 Schrumbi-*.dmg > "Schrumbi-$VERSION-macos-universal.dmg.sha256"
       - uses: softprops/action-gh-release@v2
         with:
-          files: Schrumbi-*.dmg
+          files: Schrumbi-*.dmg*
 
   windows:
     runs-on: windows-latest
@@ -54,9 +55,11 @@ jobs:
           cd packaging/windows
           makensis -DVERSION="$VERSION" installer.nsi
           mv Schrumbi-Setup-*.exe ../../
+          cd ../..
+          sha256sum Schrumbi-Setup-*.exe > "Schrumbi-Setup-$VERSION-windows-x64.exe.sha256"
       - uses: softprops/action-gh-release@v2
         with:
-          files: Schrumbi-Setup-*.exe
+          files: Schrumbi-Setup-*
 
   linux:
     runs-on: ubuntu-22.04
@@ -86,8 +89,9 @@ jobs:
           curl -sSLo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
           ARCH=x86_64 ./appimagetool $D "Schrumbi-$VERSION-linux-x86_64.AppImage"
+          sha256sum "Schrumbi-$VERSION-linux-x86_64.AppImage" > "Schrumbi-$VERSION-linux-x86_64.AppImage.sha256"
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             *.deb
-            Schrumbi-*.AppImage
+            Schrumbi-*.AppImage*
