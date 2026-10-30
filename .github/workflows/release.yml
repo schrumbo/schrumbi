@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build universal binary
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          mkdir -p target/release
+          lipo -create -output target/release/schrumbi target/aarch64-apple-darwin/release/schrumbi target/x86_64-apple-darwin/release/schrumbi
+      - name: Bundle and DMG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          APP="dist/Schrumbi.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp target/release/schrumbi "$APP/Contents/MacOS/"
+          cp packaging/icons/schrumbi.icns "$APP/Contents/Resources/"
+          sed "s/VERSION/$VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
+          codesign --force --deep --sign - "$APP"
+          ln -s /Applications dist/Applications
+          hdiutil create -volname Schrumbi -srcfolder dist -ov -format UDZO "Schrumbi-$VERSION-macos-universal.dmg"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: Schrumbi-*.dmg
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: Installer
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd packaging/windows
+          makensis -DVERSION="$VERSION" installer.nsi
+          mv Schrumbi-Setup-*.exe ../../
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: Schrumbi-Setup-*.exe
+
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libdbus-1-dev pkg-config libfuse2
+          cargo install cargo-deb --locked
+      - run: cargo build --release --locked
+      - name: deb
+        run: cargo deb --no-build --no-strip -o .
+      - name: AppImage
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          D=AppDir
+          mkdir -p $D/usr/bin $D/usr/share/applications $D/usr/share/icons/hicolor/512x512/apps
+          cp target/release/schrumbi $D/usr/bin/
+          cp packaging/linux/schrumbi.desktop $D/usr/share/applications/ $D/
+          cp packaging/icons/schrumbi.png $D/usr/share/icons/hicolor/512x512/apps/schrumbi.png
+          cp packaging/icons/schrumbi.png $D/schrumbi.png
+          printf '#!/bin/sh\nexec "$(dirname "$(readlink -f "$0")")/usr/bin/schrumbi" "$@"\n' > $D/AppRun
+          chmod +x $D/AppRun
+          curl -sSLo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool $D "Schrumbi-$VERSION-linux-x86_64.AppImage"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.deb
+            Schrumbi-*.AppImage

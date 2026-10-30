@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Schrumbi
+GenericName=Study Planner
+Comment=Deadlines, files and notes for your studies
+Exec=schrumbi %F
+Icon=schrumbi
+Terminal=false
+Categories=Education;Office;
+MimeType=text/markdown;
+StartupWMClass=io.github.schrumbo.schrumbi

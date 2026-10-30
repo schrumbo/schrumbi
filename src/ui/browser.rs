@@ -1,0 +1,736 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
+use std::time::Duration;
+
+use chrono::{Days, NaiveDate};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
+use gpui_kit::component::Sizable;
+use gpui_kit::prelude::*;
+use gpui_kit::*;
+
+use super::state::{self, act};
+use super::theme::{Theme, font, radius};
+use super::widgets::*;
+use crate::core::catalog::{self, CatalogFile, FileKind, Query};
+use crate::core::i18n::{tr, trf};
+use crate::core::library::{self, Library, NewNoteRequest};
+use crate::core::markdown;
+use crate::core::prefs::{self, FileGrouping};
+use crate::core::text::fold;
+
+#[derive(Clone, PartialEq)]
+pub struct Item {
+    pub file: CatalogFile,
+    pub snippet: Option<String>,
+    pub score: f64,
+}
+
+#[derive(Clone, PartialEq)]
+enum GroupKind {
+    Week(Option<u32>),
+    Folder(Option<String>, Vec<String>),
+    Date(String),
+}
+
+#[derive(Clone)]
+struct Group {
+    kind: GroupKind,
+    items: Vec<Item>,
+}
+
+impl Group {
+    fn id(&self) -> String {
+        match &self.kind {
+            GroupKind::Week(w) => w.map_or("none".into(), |w| format!("w{w}")),
+            GroupKind::Folder(m, p) => format!("f:{}/{}", m.clone().unwrap_or_default(), p.join("/")),
+            GroupKind::Date(d) => format!("d:{d}"),
+        }
+    }
+}
+
+#[derive(Default)]
+struct Results {
+    best: Vec<Item>,
+    groups: Vec<Group>,
+    total: usize,
+    other_kinds: usize,
+    searching: bool,
+    query: Query,
+    loaded: bool,
+}
+
+/// Files grouped by lecture week, newest first; typing narrows by name, folder and content.
+/// "w3", "kw44", "woche 3" and module codes in the query act as filters.
+pub struct FileBrowser {
+    scope_module: Option<String>,
+    query: String,
+    kind: FileKind,
+    module_filter: Option<String>,
+    week_filter: Option<u32>,
+    pub selected: Option<PathBuf>,
+    toggled: HashSet<String>,
+    results: Results,
+    key: String,
+    load: Option<Task<()>>,
+    /// Picks the best hit automatically, as the search page's preview needs.
+    pub auto_select: bool,
+    _sub: Subscription,
+}
+
+impl FileBrowser {
+    pub fn new(scope_module: Option<String>, auto_select: bool, cx: &mut Context<Self>) -> Self {
+        let lib = state::lib(cx);
+        let sub = cx.observe(&lib, |this, _, cx| this.reload(cx));
+        let mut b = Self {
+            scope_module,
+            query: String::new(),
+            kind: FileKind::from_key(&prefs::get().file_kind),
+            module_filter: None,
+            week_filter: None,
+            selected: None,
+            toggled: HashSet::new(),
+            results: Results::default(),
+            key: String::new(),
+            load: None,
+            auto_select,
+            _sub: sub,
+        };
+        b.reload(cx);
+        b
+    }
+
+    pub fn set_scope(&mut self, module: Option<String>, cx: &mut Context<Self>) {
+        if self.scope_module != module {
+            self.scope_module = module;
+            self.toggled.clear();
+            self.selected = None;
+            self.reload(cx);
+        }
+    }
+
+    pub fn set_query(&mut self, q: &str, cx: &mut Context<Self>) {
+        if self.query != q {
+            self.query = q.to_string();
+            self.reload(cx);
+        }
+    }
+
+    fn key(&self, lib: &Library) -> String {
+        format!("{}|{:?}|{:?}|{:?}|{}|{:?}|{}", self.query, self.scope_module, self.module_filter, self.week_filter, self.kind.key(), prefs::get().file_grouping, lib.index_version)
+    }
+
+    /// Recomputes the list when its inputs changed; name matches are instant, content matches arrive from a background query.
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        let lib = state::lib(cx);
+        let key = self.key(lib.read(cx));
+        if key == self.key {
+            return;
+        }
+        let was_searching = self.results.searching;
+        self.key = key;
+        let l = lib.read(cx);
+        let Some(config) = l.config.clone() else { return };
+        let weeks = l.weeks();
+        let current = current_week(l);
+        let q = Query::parse(&self.query, &config.modules, &weeks);
+        let module = self.scope_module.clone().or(q.module_id.clone()).or(self.module_filter.clone());
+        let week = q.week.or(self.week_filter);
+        let searching = !q.terms.is_empty();
+        let scoped: Vec<CatalogFile> = l.catalog.iter().filter(|f| module.as_ref().is_none_or(|m| f.module_id.as_ref() == Some(m)) && week.is_none_or(|w| f.week == Some(w))).cloned().collect();
+        let mut items: Vec<Item> = if searching {
+            scoped.iter().filter_map(|f| catalog::score(f, &q.terms, current).map(|s| Item { file: f.clone(), snippet: None, score: s })).collect()
+        } else {
+            scoped.iter().filter(|f| !f.in_project).map(|f| Item { file: f.clone(), snippet: None, score: 0. }).collect()
+        };
+        let kind = self.kind;
+        let grouping = prefs::get().file_grouping;
+        let today = l.today();
+        let module_order: HashMap<String, usize> = config.modules.iter().enumerate().map(|(i, m)| (m.id.clone(), i)).collect();
+        let finish = move |items: Vec<Item>, scoped: &[CatalogFile]| -> Results {
+            let mut items = items;
+            if searching && items.is_empty() {
+                items = scoped.iter().filter_map(|f| catalog::fuzzy_score(f, &q.terms, current).map(|s| Item { file: f.clone(), snippet: None, score: s })).collect();
+            }
+            let total_all = items.len();
+            let mut matching: Vec<Item> = items.into_iter().filter(|i| kind.matches(i.file.name())).collect();
+            let other_kinds = total_all - matching.len();
+            matching.sort_by(|a, b| if a.score == b.score { b.file.date.cmp(&a.file.date) } else { b.score.total_cmp(&a.score) });
+            let best: Vec<Item> = if searching && week.is_none() && matching.len() > 8 { matching[..5].to_vec() } else { Vec::new() };
+            let rest = matching[best.len()..].to_vec();
+            Results { best, groups: group(rest, searching, grouping, today, &module_order), total: matching.len(), other_kinds: if searching { other_kinds } else { 0 }, searching, query: q.clone(), loaded: true }
+        };
+        if !searching {
+            self.results = finish(items, &scoped);
+            self.after_load(was_searching);
+            cx.notify();
+            return;
+        }
+        let index = l.search_index.clone();
+        let prefix = module.as_ref().and_then(|m| config.module(m)).zip(l.root.clone()).map(|(m, r)| r.join(&m.folder));
+        self.results = finish(items.clone(), &scoped);
+        self.after_load(was_searching);
+        cx.notify();
+        let terms = self.results.query.terms.clone();
+        let finish = std::sync::Arc::new(finish);
+        self.load = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(120)).await;
+            let hits = cx.background_spawn(async move { index.content_search(&terms, prefix.as_deref(), 150) }).await;
+            let seen: HashSet<PathBuf> = items.iter().map(|i| i.file.file.path.clone()).collect();
+            let by_path: HashMap<PathBuf, &CatalogFile> = scoped.iter().map(|f| (f.file.path.clone(), f)).collect();
+            for h in hits {
+                if !seen.contains(&h.file.path)
+                    && let Some(f) = by_path.get(&h.file.path)
+                {
+                    items.push(Item { file: (*f).clone(), snippet: h.snippet, score: 0.5 + catalog::recency(f.week, current) });
+                }
+            }
+            let results = finish(items, &scoped);
+            let _ = this.update(cx, |b, cx| {
+                b.results = results;
+                b.after_load(true);
+                cx.notify();
+            });
+        }));
+    }
+
+    fn after_load(&mut self, was_searching: bool) {
+        if was_searching != self.results.searching {
+            self.toggled.clear();
+        }
+        let first = self.results.best.first().or_else(|| self.results.groups.first().and_then(|g| g.items.first())).map(|i| i.file.file.path.clone());
+        if self.auto_select && (self.results.searching || self.selected.as_ref().is_none_or(|s| !self.contains(s))) {
+            self.selected = first;
+        } else if self.selected.as_ref().is_some_and(|s| !self.contains(s)) {
+            self.selected = None;
+        }
+    }
+
+    fn contains(&self, p: &PathBuf) -> bool {
+        self.results.best.iter().chain(self.results.groups.iter().flat_map(|g| g.items.iter())).any(|i| &i.file.file.path == p)
+    }
+
+    fn is_expanded(&self, g: &Group, current: Option<u32>) -> bool {
+        let base = if self.results.searching || self.week_filter.is_some() || self.results.groups.len() <= 3 {
+            true
+        } else if let (GroupKind::Week(Some(w)), Some(c)) = (&g.kind, current) {
+            *w + 1 >= c
+        } else {
+            self.results.groups.iter().position(|x| x.id() == g.id()).unwrap_or(99) < 3
+        };
+        base != self.toggled.contains(&g.id())
+    }
+
+    /// Paths in display order, for previews and arrow keys.
+    pub fn visible(&self, current: Option<u32>) -> Vec<PathBuf> {
+        self.results.best.iter().chain(self.results.groups.iter().filter(|g| self.is_expanded(g, current)).flat_map(|g| g.items.iter())).map(|i| i.file.file.path.clone()).collect()
+    }
+
+    pub fn move_selection(&mut self, step: i64, cx: &mut Context<Self>) {
+        let current = state::read(cx, current_week);
+        let v = self.visible(current);
+        if v.is_empty() {
+            return;
+        }
+        let i = self.selected.as_ref().and_then(|s| v.iter().position(|p| p == s)).map_or(0, |i| (i as i64 + step).clamp(0, v.len() as i64 - 1) as usize);
+        self.selected = Some(v[i].clone());
+        cx.notify();
+    }
+}
+
+pub fn current_week(l: &Library) -> Option<u32> {
+    l.current_week().map(|w| w.index).or_else(|| l.weeks().iter().rev().find(|w| w.monday <= l.today()).map(|w| w.index))
+}
+
+fn group(items: Vec<Item>, searching: bool, grouping: FileGrouping, today: NaiveDate, order: &HashMap<String, usize>) -> Vec<Group> {
+    match grouping {
+        FileGrouping::Week => {
+            let mut map: BTreeMap<i64, Vec<Item>> = BTreeMap::new();
+            for i in items {
+                map.entry(i.file.week.map_or(-1, |w| w as i64)).or_default().push(i);
+            }
+            map.into_iter().rev().map(|(w, items)| Group { kind: GroupKind::Week((w >= 0).then_some(w as u32)), items }).collect()
+        }
+        FileGrouping::Folder => {
+            let mut map: HashMap<(Option<String>, Vec<String>), Vec<Item>> = HashMap::new();
+            for i in items {
+                map.entry((i.file.module_id.clone(), i.file.place.clone())).or_default().push(i);
+            }
+            let mut keys: Vec<_> = map.keys().cloned().collect();
+            keys.sort_by(|a, b| {
+                let (ma, mb) = (a.0.as_ref().and_then(|m| order.get(m)).copied().unwrap_or(usize::MAX), b.0.as_ref().and_then(|m| order.get(m)).copied().unwrap_or(usize::MAX));
+                ma.cmp(&mb).then_with(|| crate::core::text::natural_cmp(&a.1.join("/"), &b.1.join("/")))
+            });
+            keys.into_iter()
+                .map(|k| {
+                    let mut items = map.remove(&k).unwrap_or_default();
+                    if !searching {
+                        items.sort_by(|a, b| b.file.date.cmp(&a.file.date));
+                    }
+                    Group { kind: GroupKind::Folder(k.0, k.1), items }
+                })
+                .collect()
+        }
+        FileGrouping::Date => {
+            let monday = crate::core::day::monday(today);
+            let bucket = |d: NaiveDate| -> (u8, String) {
+                if d >= today {
+                    (0, tr("Heute"))
+                } else if d >= today - Days::new(1) {
+                    (1, tr("Gestern"))
+                } else if d >= monday {
+                    (2, tr("Diese Woche"))
+                } else if d >= monday - Days::new(7) {
+                    (3, tr("Letzte Woche"))
+                } else if d >= today - Days::new(30) {
+                    (4, tr("Letzte 30 Tage"))
+                } else {
+                    (5, tr("Älter"))
+                }
+            };
+            let mut map: BTreeMap<u8, (String, Vec<Item>)> = BTreeMap::new();
+            for i in items {
+                let (k, label) = bucket(i.file.date);
+                map.entry(k).or_insert_with(|| (label, Vec::new())).1.push(i);
+            }
+            map.into_values()
+                .map(|(label, mut items)| {
+                    if !searching {
+                        items.sort_by(|a, b| b.file.date.cmp(&a.file.date));
+                    }
+                    Group { kind: GroupKind::Date(label), items }
+                })
+                .collect()
+        }
+    }
+}
+
+fn badge(text: String, prominent: bool, t: &Theme) -> Div {
+    div().px(px(6.)).py(px(1.)).rounded_full().text_size(px(font::CAPTION2)).font_weight(FontWeight::SEMIBOLD).bg(if prominent { t.accent } else { t.ink.opacity(0.08) }).text_color(if prominent { white() } else { t.secondary }).child(text)
+}
+
+pub fn week_badge(text: String, prominent: bool, t: &Theme) -> Div {
+    badge(text, prominent, t)
+}
+
+/// Text with every search term bold and tinted.
+fn highlighted(s: &str, terms: &[String], t: &Theme) -> StyledText {
+    let folded = fold(s);
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    if folded.chars().count() == s.chars().count() {
+        let map: Vec<usize> = s.char_indices().map(|(i, _)| i).chain([s.len()]).collect();
+        let fchars: Vec<char> = folded.chars().collect();
+        for term in terms.iter().filter(|t| t.chars().count() >= 2) {
+            let tc: Vec<char> = term.chars().collect();
+            let mut i = 0;
+            while i + tc.len() <= fchars.len() {
+                if fchars[i..i + tc.len()] == tc[..] {
+                    ranges.push(map[i]..map[i + tc.len()]);
+                    i += tc.len();
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+    ranges.sort_by_key(|r| r.start);
+    ranges.dedup_by(|b, a| b.start < a.end);
+    let style = HighlightStyle { color: Some(t.accent), font_weight: Some(FontWeight::BOLD), ..Default::default() };
+    StyledText::new(s.to_string()).with_highlights(ranges.into_iter().map(|r| (r, style)))
+}
+
+impl FileBrowser {
+    fn row(&self, item: &Item, show_module: bool, show_week: bool, lib: &Library, t: &Theme, entity: &Entity<Self>) -> AnyElement {
+        let f = &item.file;
+        let path = f.file.path.clone();
+        let selected = self.selected.as_ref() == Some(&path);
+        let terms = self.results.query.terms.clone();
+        let (sel, open, reveal, preview, menu_path) = (path.clone(), path.clone(), path.clone(), path.clone(), path.clone());
+        let week_filter = self.week_filter;
+        let module_filter = self.module_filter.clone();
+        let scoped = self.scope_module.is_some();
+        let f2 = f.clone();
+        let (entity, click) = (entity.clone(), entity.clone());
+        let mut meta = div().flex().items_center().gap(px(6.)).text_size(px(font::CAPTION)).text_color(t.secondary);
+        if show_module && let Some(m) = f.module_id.as_deref().and_then(|id| lib.module_by_id(id)) {
+            meta = meta.child(module_tag(&m.code, t.palette(&m.color)));
+        }
+        if let (true, Some(w)) = (show_week, f.week) {
+            meta = meta.child(format!("W{w:02}"));
+        }
+        if !f.place.is_empty() {
+            meta = meta.child(div().truncate().child(f.place.join(" › ")));
+        }
+        if f.title.is_some() {
+            meta = meta.child(div().truncate().text_color(t.tertiary).child(f.name().to_string()));
+        }
+        if f.is_brief {
+            meta = meta.child(div().flex().items_center().gap(px(2.)).child(icon("clipboard-list", 10., t.secondary)).child(tr("Aufgabe")));
+        }
+        let hover = t.ink.opacity(0.045);
+        div()
+            .id(SharedString::from(format!("file-{}", path.display())))
+            .group("file-row")
+            .flex()
+            .items_start()
+            .gap(px(10.))
+            .py(px(3.))
+            .px(px(6.))
+            .rounded(px(radius::CONTROL - 2.))
+            .when(selected, |d| d.bg(t.accent.opacity(0.18)))
+            .when(!selected, |d| d.hover(move |s| s.bg(hover)))
+            .tooltip(tip(lib.relative_path(&path)))
+            .on_click(move |e: &ClickEvent, _, cx| {
+                click.update(cx, |this, cx| {
+                    this.selected = Some(sel.clone());
+                    cx.notify();
+                });
+                if e.click_count() >= 2 {
+                    act(cx, |l| l.open_file(&open));
+                }
+            })
+            .on_drag(DraggedFile(path.clone()), |d, _, _, cx| cx.new(|_| d.clone()))
+            .child(file_icon(&path, 22.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .child(div().truncate().child(highlighted(&f.display_name(), &terms, t)))
+                    .child(meta)
+                    .when_some(item.snippet.clone(), |d, s| d.child(div().text_size(px(font::CAPTION)).text_color(t.secondary).line_clamp(2).child(highlighted(&s, &terms, t)))),
+            )
+            .child(
+                div()
+                    .relative()
+                    .child(div().group_hover("file-row", |s| s.invisible()).text_size(px(font::CAPTION)).text_color(t.secondary).child(crate::core::day::day_label(crate::core::day::at(f.date, chrono::NaiveTime::MIN).unwrap_or(lib.now), lib.now)))
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .flex()
+                            .invisible()
+                            .group_hover("file-row", |s| s.visible())
+                            .child(Button::new(SharedString::from(format!("pv-{}", path.display()))).ghost().xsmall().icon(menu_icon("eye")).tooltip(tr("Vorschau (Leertaste)")).on_click(move |_, _, cx| super::preview::show(&preview, cx)))
+                            .child(Button::new(SharedString::from(format!("rv-{}", path.display()))).ghost().xsmall().icon(menu_icon("folder")).tooltip(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&reveal))),
+                    ),
+            )
+            .context_menu(move |menu, _, _| {
+                let p = menu_path.clone();
+                let (p1, p2, p3, p4) = (p.clone(), p.clone(), p.clone(), p.clone());
+                let module = f2.module_id.clone();
+                let mut menu = menu
+                    .item(PopupMenuItem::new(tr("Öffnen")).on_click(move |_, _, cx| act(cx, |l| l.open_file(&p1))))
+                    .item(PopupMenuItem::new(tr("Vorschau")).on_click(move |_, _, cx| super::preview::show(&p2, cx)))
+                    .item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&p3)))
+                    .item(PopupMenuItem::new(tr("Neu in diesem Ordner…")).on_click(move |_, _, cx| {
+                        let (m, folder) = (module.clone(), p4.parent().map(PathBuf::from));
+                        act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: m, folder }))
+                    }));
+                if markdown::is_markdown(&p) {
+                    let (n, e) = (p.clone(), p.clone());
+                    menu = menu
+                        .item(PopupMenuItem::new(tr("Als Notiz öffnen")).on_click(move |_, _, cx| super::note_window::open(&n, cx)))
+                        .item(PopupMenuItem::new(tr("Als PDF exportieren")).on_click(move |_, _, cx| super::pdf::export(&e, None, cx)));
+                }
+                if let Some(w) = f2.week.filter(|w| week_filter != Some(*w)) {
+                    let e = entity.clone();
+                    menu = menu.separator().item(PopupMenuItem::new(trf("Alles aus W%@ zeigen", &[&format!("{w:02}")])).on_click(move |_, _, cx| e.update(cx, |b, cx| {
+                        b.week_filter = Some(w);
+                        b.reload(cx);
+                    })));
+                }
+                if let Some(id) = f2.module_id.clone().filter(|id| !scoped && module_filter.as_ref() != Some(id)) {
+                    let e = entity.clone();
+                    let code = id.clone();
+                    menu = menu.item(PopupMenuItem::new(trf("Nur %@ zeigen", &[&code])).on_click(move |_, _, cx| e.update(cx, |b, cx| {
+                        b.module_filter = Some(id.clone());
+                        b.reload(cx);
+                    })));
+                }
+                menu
+            })
+            .into_any_element()
+    }
+
+    fn group_header(&self, g: &Group, expanded: bool, lib: &Library, current: Option<u32>, t: &Theme, entity: &Entity<Self>) -> AnyElement {
+        let entity = entity.clone();
+        let id = g.id();
+        let mut title = div().flex().items_center().gap(px(6.)).min_w_0();
+        match &g.kind {
+            GroupKind::Week(Some(w)) => {
+                title = title.child(div().font_weight(FontWeight::SEMIBOLD).child(format!("W{w:02}")));
+                if let Some(iso) = lib.weeks().iter().find(|x| x.index == *w).map(|x| x.iso_week) {
+                    title = title.child(div().text_color(t.secondary).child(format!("KW{iso:02}")));
+                }
+                if current == Some(*w) {
+                    title = title.child(badge(tr("Diese Woche"), true, t));
+                } else if current.is_some_and(|c| c == w + 1) {
+                    title = title.child(badge(tr("Letzte Woche"), false, t));
+                }
+            }
+            GroupKind::Week(None) => title = title.child(div().font_weight(FontWeight::SEMIBOLD).child(tr("Ohne Woche"))),
+            GroupKind::Folder(m, place) => {
+                if let Some(m) = m.as_deref().and_then(|id| lib.module_by_id(id)) {
+                    title = title.child(module_chip(&m.code, t.palette(&m.color)));
+                }
+                title = title.child(div().truncate().font_weight(FontWeight::SEMIBOLD).child(if place.is_empty() { tr("Hauptordner") } else { place.join(" › ") }));
+            }
+            GroupKind::Date(label) => title = title.child(div().font_weight(FontWeight::SEMIBOLD).child(label.clone())),
+        }
+        div()
+            .id(SharedString::from(format!("group-{id}")))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .py(px(3.))
+            .px(px(6.))
+            .mt(px(6.))
+            .rounded(px(6.))
+            .cursor_pointer()
+            .hover(|s| s.bg(t.ink.opacity(0.05)))
+            .on_click(move |_, _, cx| {
+                entity.update(cx, |this, cx| {
+                    if !this.toggled.remove(&id) {
+                        this.toggled.insert(id.clone());
+                    }
+                    cx.notify();
+                })
+            })
+            .child(icon(if expanded { "chevron-down" } else { "chevron-right" }, 10., t.tertiary))
+            .child(title)
+            .child(div().flex_1())
+            .child(div().text_color(t.tertiary).child(g.items.len().to_string()))
+            .into_any_element()
+    }
+
+    fn filter_bar(&self, lib: &Library, current: Option<u32>, t: &Theme, entity: &Entity<Self>) -> Div {
+        let e = entity.clone();
+        let kinds = div().flex().rounded(px(6.)).bg(t.ink.opacity(0.06)).p(px(2.)).children(FileKind::ALL.into_iter().map(|k| {
+            let active = k == self.kind;
+            let e = e.clone();
+            div()
+                .id(SharedString::from(format!("kind-{}", k.key())))
+                .px(px(9.))
+                .py(px(2.))
+                .rounded(px(5.))
+                .text_size(px(font::CALLOUT))
+                .cursor_pointer()
+                .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
+                .child(match k {
+                    FileKind::Documents => tr("Dokumente"),
+                    FileKind::Notes => tr("Notizen"),
+                    FileKind::Pdf => "PDF".into(),
+                    FileKind::Office => "Office".into(),
+                    FileKind::Image => tr("Bilder"),
+                    FileKind::All => tr("Alle"),
+                })
+                .on_click(move |_, _, cx| {
+                    prefs::update(|p| p.file_kind = k.key().into());
+                    e.update(cx, |b, cx| {
+                        b.kind = k;
+                        b.reload(cx);
+                    })
+                })
+        }));
+        let mut bar = div().flex().items_center().gap(px(8.)).px(px(16.)).py(px(8.)).border_b_1().border_color(t.separator).child(kinds);
+        if self.scope_module.is_none() {
+            let typed = self.results.query.module_id.clone();
+            let active = typed.clone().or(self.module_filter.clone());
+            let title = active.as_deref().and_then(|id| lib.module_by_id(id)).map_or_else(|| tr("Alle Module"), |m| m.code.clone());
+            let modules: Vec<(String, String)> = lib.semester_modules().iter().map(|m| (m.id.clone(), m.code.clone())).collect();
+            bar = bar.child(filter_menu("module-filter", title, active.is_some(), typed.is_some(), e.clone(), move |b| b.module_filter = None, move |menu, e| {
+                let mut menu = menu.item(PopupMenuItem::new(tr("Alle Module")).on_click({
+                    let e = e.clone();
+                    move |_, _, cx| e.update(cx, |b, cx| {
+                        b.module_filter = None;
+                        b.reload(cx);
+                    })
+                }));
+                menu = menu.separator();
+                for (id, code) in &modules {
+                    let (e, id) = (e.clone(), id.clone());
+                    menu = menu.item(PopupMenuItem::new(code.clone()).on_click(move |_, _, cx| e.update(cx, |b, cx| {
+                        b.module_filter = Some(id.clone());
+                        b.reload(cx);
+                    })));
+                }
+                menu
+            }, t));
+        }
+        let typed_week = self.results.query.week;
+        let active_week = typed_week.or(self.week_filter);
+        let weeks: Vec<(u32, u32)> = lib.weeks().iter().filter(|w| current.is_none_or(|c| w.index <= c)).rev().map(|w| (w.index, w.iso_week)).collect();
+        bar = bar.child(filter_menu("week-filter", active_week.map_or_else(|| tr("Alle Wochen"), |w| format!("W{w:02}")), active_week.is_some(), typed_week.is_some(), e.clone(), |b| b.week_filter = None, move |menu, e| {
+            let set = |w: Option<u32>| {
+                let e = e.clone();
+                move |_: &ClickEvent, _: &mut Window, cx: &mut App| e.update(cx, |b, cx| {
+                    b.week_filter = w;
+                    b.reload(cx);
+                })
+            };
+            let mut menu = menu.item(PopupMenuItem::new(tr("Alle Wochen")).on_click(set(None)));
+            if let Some(c) = current {
+                menu = menu.item(PopupMenuItem::new(tr("Diese Woche")).on_click(set(Some(c))));
+                if c > 1 {
+                    menu = menu.item(PopupMenuItem::new(tr("Letzte Woche")).on_click(set(Some(c - 1))));
+                }
+            }
+            menu = menu.separator();
+            for (w, iso) in &weeks {
+                menu = menu.item(PopupMenuItem::new(format!("W{w:02} · KW{iso:02}")).on_click(set(Some(*w))));
+            }
+            menu
+        }, t));
+        let grouping = prefs::get().file_grouping;
+        let label = |g: FileGrouping| match g {
+            FileGrouping::Week => tr("Nach Woche"),
+            FileGrouping::Folder => tr("Nach Ordner"),
+            FileGrouping::Date => tr("Nach Datum"),
+        };
+        let e2 = e.clone();
+        bar.child(div().flex_1())
+            .child(Button::new("grouping").ghost().small().icon(menu_icon("layers")).label(label(grouping)).tooltip(tr("Gruppierung")).dropdown_menu(move |mut menu, _, _| {
+                for g in [FileGrouping::Week, FileGrouping::Folder, FileGrouping::Date] {
+                    let e = e2.clone();
+                    menu = menu.item(PopupMenuItem::new(label(g)).checked(g == grouping).on_click(move |_, _, cx| {
+                        prefs::update(|p| p.file_grouping = g);
+                        e.update(cx, |b, cx| {
+                            b.toggled.clear();
+                            b.reload(cx);
+                        })
+                    }));
+                }
+                menu
+            }))
+            .when(lib.is_indexing, |d| d.child(div().id("indexing").child(icon("loader", 13., t.secondary)).tooltip(tip(tr("Index wird aktualisiert")))))
+    }
+}
+
+/// A file dragged out of a list, e.g. onto an assignment.
+#[derive(Clone)]
+pub struct DraggedFile(pub PathBuf);
+
+impl Render for DraggedFile {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::get(cx);
+        div().flex().items_center().gap(px(6.)).px(px(8.)).py(px(4.)).rounded(px(6.)).bg(t.material).shadow_md().child(file_icon(&self.0, 16.)).child(self.0.file_name().unwrap_or_default().to_string_lossy().to_string())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn filter_menu(
+    id: &'static str,
+    title: String,
+    active: bool,
+    locked: bool,
+    entity: Entity<FileBrowser>,
+    clear: impl Fn(&mut FileBrowser) + 'static,
+    items: impl Fn(gpui_kit::component::menu::PopupMenu, Entity<FileBrowser>) -> gpui_kit::component::menu::PopupMenu + 'static,
+    t: &Theme,
+) -> AnyElement {
+    if locked {
+        return div()
+            .id(id)
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .px(px(9.))
+            .py(px(3.))
+            .rounded(px(6.))
+            .bg(t.accent.opacity(0.18))
+            .text_color(t.accent)
+            .text_size(px(font::CALLOUT))
+            .font_weight(FontWeight::MEDIUM)
+            .child(icon("search", 11., t.accent))
+            .child(title)
+            .tooltip(tip(tr("Aus der Suche übernommen")))
+            .into_any_element();
+    }
+    let e = entity.clone();
+    let mut b = Button::new(id).small().label(title).dropdown_caret(true);
+    if active {
+        b = b.primary();
+    }
+    div()
+        .flex()
+        .items_center()
+        .gap(px(2.))
+        .child(b.dropdown_menu(move |menu, _, _| items(menu, e.clone())))
+        .when(active, |d| {
+            d.child(Button::new(SharedString::from(format!("{id}-clear"))).ghost().xsmall().icon(menu_icon("circle-x")).tooltip(tr("Filter entfernen")).on_click(move |_, _, cx| entity.update(cx, |b, cx| {
+                clear(b);
+                b.reload(cx);
+            })))
+        })
+        .into_any_element()
+}
+
+impl Render for FileBrowser {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::get(cx);
+        let me = cx.entity();
+        let lib = state::lib(cx);
+        let l = lib.read(cx);
+        let current = current_week(l);
+        let bar = self.filter_bar(l, current, &t, &me);
+        let show_module = self.scope_module.is_none();
+        let mut list = div().flex().flex_col().px(px(16.)).py(px(8.));
+        if !self.results.best.is_empty() {
+            list = list.child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).py(px(4.)).child(tr("Beste Treffer")));
+            for i in self.results.best.clone() {
+                list = list.child(self.row(&i, show_module, true, l, &t, &me));
+            }
+        }
+        for g in self.results.groups.clone() {
+            let open = self.is_expanded(&g, current);
+            list = list.child(self.group_header(&g, open, l, current, &t, &me));
+            if open {
+                for i in &g.items {
+                    list = list.child(self.row(i, show_module, false, l, &t, &me));
+                }
+            }
+        }
+        if self.results.other_kinds > 0 {
+            let e = me.clone();
+            list = list.child(
+                link_button("other-kinds", trf("%lld weitere Treffer in anderen Dateitypen", &[&self.results.other_kinds]), &t).py(px(4.)).on_click(move |_, _, cx| e.update(cx, |b, cx| {
+                    b.kind = FileKind::All;
+                    b.reload(cx);
+                })),
+            );
+        }
+        let empty = self.results.loaded && self.results.total == 0;
+        let body: AnyElement = if empty {
+            if self.results.searching || self.module_filter.is_some() || self.week_filter.is_some() || self.results.query.week.is_some() {
+                let e = me.clone();
+                let filtered = self.module_filter.is_some() || self.week_filter.is_some() || self.kind != FileKind::All;
+                unavailable(
+                    "search",
+                    if self.query.is_empty() { tr("Keine Dateien") } else { trf("Keine Treffer für „%@“", &[&self.query]) },
+                    tr("Gesucht wird in Namen, Ordnern und dem Text von PDFs. Tipp: „w3“ oder „kw44“ filtert nach Woche."),
+                    &t,
+                )
+                .when(filtered, |d| {
+                    d.child(Button::new("reset-filters").label(tr("Filter zurücksetzen")).on_click(move |_, _, cx| e.update(cx, |b, cx| {
+                        b.module_filter = None;
+                        b.week_filter = None;
+                        b.kind = FileKind::All;
+                        b.reload(cx);
+                    })))
+                })
+                .into_any_element()
+            } else if l.index_count == 0 {
+                unavailable("file-search", if l.is_indexing { tr("Indexiere Dateien …") } else { tr("Keine Dateien") }, "", &t).into_any_element()
+            } else {
+                unavailable("folder", tr("Noch keine Dokumente"), tr("Abgelegte Dateien erscheinen hier, nach Woche sortiert."), &t).into_any_element()
+            }
+        } else {
+            div().id("browser-list").flex_1().overflow_y_scroll().child(list).into_any_element()
+        };
+        div().size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().flex().flex_col().child(body))
+    }
+}

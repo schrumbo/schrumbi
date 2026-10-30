@@ -1,0 +1,753 @@
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
+
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Editor, EditorState, InputEvent};
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
+use gpui_kit::component::{Disableable, Sizable};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
+
+use super::markdown_view::{self, ParsedNote};
+use super::preview::FilePreview;
+use super::state::{self, act};
+use super::theme::{Theme, font, radius};
+use super::widgets::*;
+use crate::core::edit_ops::{self, Edit};
+use crate::core::i18n::{tr, trf};
+use crate::core::library;
+use crate::core::markdown;
+use crate::core::naming::extension;
+use crate::core::pdf_render::PdfDoc;
+use crate::core::prefs::{self, NoteSaveMode};
+use crate::core::shortcuts::ShortcutAction;
+
+actions!(
+    schrumbi_editor,
+    [
+        Bold, Italic, InsertLink, InlineCode, ToggleTask, ToggleComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine, SelectLine, IndentLines, OutdentLines, ZoomIn, ZoomOut, ZoomReset,
+        ListNewline, ListTab, ListBacktab
+    ]
+);
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Mode {
+    Read,
+    Edit,
+    Split,
+}
+
+/// A Markdown note: read, edit or both side by side. Saving follows Settings → Notizen.
+pub struct NoteView {
+    path: PathBuf,
+    mode: Mode,
+    editor: Entity<EditorState>,
+    parsed: Option<(u64, Rc<ParsedNote>)>,
+    revision: u64,
+    syncing: bool,
+    autosave: Option<Task<()>>,
+    reparse: Option<Task<()>>,
+    /// Shown inside the main window with tabs, or in its own window.
+    pub embedded: bool,
+    focus: FocusHandle,
+    needs_focus: bool,
+    window_title: String,
+    _subs: Vec<Subscription>,
+}
+
+impl NoteView {
+    pub fn new(path: PathBuf, embedded: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let text = state::lib(cx).update(cx, |l, _| l.buffer(&path).text.clone());
+        let editor = cx.new(|cx| EditorState::new(window, cx).language("markdown").soft_wrap(true).line_number(true).default_value(text.clone()));
+        let lib = state::lib(cx);
+        let p = path.clone();
+        let subs = vec![
+            cx.subscribe_in(&editor, window, |this, e, ev: &InputEvent, _, cx| match ev {
+                InputEvent::Change if !this.syncing => {
+                    let text = e.read(cx).value().to_string();
+                    let path = this.path.clone();
+                    state::lib(cx).update(cx, |l, cx| {
+                        if let Some(b) = l.buffers.get_mut(&path) {
+                            b.edited(text);
+                        }
+                        cx.notify();
+                    });
+                    this.schedule_autosave(cx);
+                    this.schedule_reparse(cx);
+                }
+                InputEvent::Blur => this.focus_lost(cx),
+                _ => {}
+            }),
+            cx.observe_in(&lib, window, move |this, lib, window, cx| {
+                let Some((rev, text)) = lib.read(cx).buffers.get(&p).map(|b| (b.revision, b.text.clone())) else { return };
+                if rev != this.revision {
+                    this.revision = rev;
+                    this.syncing = true;
+                    this.editor.update(cx, |s, cx| s.set_value(text, window, cx));
+                    this.syncing = false;
+                    this.parsed = None;
+                }
+                cx.notify();
+            }),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.focus_lost(cx);
+                } else {
+                    let path = this.path.clone();
+                    state::lib(cx).update(cx, |l, cx| {
+                        if l.buffers.get_mut(&path).is_some_and(|b| b.reload_if_changed()) {
+                            cx.notify();
+                        }
+                    });
+                }
+            }),
+        ];
+        let mode = if text.trim().chars().count() < 40 { Mode::Edit } else { Mode::Read };
+        let revision = state::lib(cx).update(cx, |l, _| l.buffer(&path).revision);
+        Self { path, mode, editor, parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Focuses the editor when editing, otherwise the note itself so its shortcuts work.
+    pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode == Mode::Read {
+            window.focus(&self.focus, cx);
+        } else {
+            self.editor.update(cx, |s, cx| s.focus(window, cx));
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = mode;
+        if mode != Mode::Read {
+            self.editor.update(cx, |s, cx| s.focus(window, cx));
+        } else {
+            window.focus(&self.focus, cx);
+            self.focus_lost(cx);
+        }
+        cx.notify();
+    }
+
+    fn schedule_autosave(&mut self, cx: &mut Context<Self>) {
+        let p = prefs::get();
+        if p.note_save_mode != NoteSaveMode::Delay {
+            return;
+        }
+        let delay = Duration::from_secs_f64(p.note_save_delay.max(1.));
+        self.autosave = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update(cx, |n, cx| n.save(cx));
+        }));
+    }
+
+    fn schedule_reparse(&mut self, cx: &mut Context<Self>) {
+        if self.mode != Mode::Split {
+            self.parsed = None;
+            return;
+        }
+        self.reparse = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(200)).await;
+            let _ = this.update(cx, |n, cx| {
+                n.parsed = None;
+                cx.notify();
+            });
+        }));
+    }
+
+    fn focus_lost(&mut self, cx: &mut Context<Self>) {
+        if prefs::get().note_save_mode != NoteSaveMode::Manual {
+            self.save(cx);
+        }
+    }
+
+    pub fn save(&mut self, cx: &mut Context<Self>) {
+        let path = self.path.clone();
+        let result = state::lib(cx).update(cx, |l, cx| {
+            let r = l.buffers.get_mut(&path).map_or(Ok(()), |b| b.save());
+            cx.notify();
+            r
+        });
+        if let Err(e) = result {
+            act(cx, |l| l.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e])));
+        }
+    }
+
+    fn export(&mut self, cx: &mut Context<Self>) {
+        let text = self.editor.read(cx).value().to_string();
+        if prefs::get().note_save_mode != NoteSaveMode::Manual {
+            self.save(cx);
+        }
+        super::pdf::export(&self.path, Some(text), cx);
+    }
+
+    fn apply(&mut self, edit: Edit, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor.update(cx, |s, cx| {
+            s.set_selected_range(edit.range.clone(), cx);
+            s.replace(edit.text.clone(), window, cx);
+            s.set_selected_range(edit.select.clone(), cx);
+        });
+    }
+
+    fn with_text(&mut self, cx: &mut Context<Self>) -> (String, std::ops::Range<usize>) {
+        let s = self.editor.read(cx);
+        (s.value().to_string(), s.selected_range())
+    }
+
+    fn zoom(delta: f32, cx: &mut App) {
+        let size = if delta == 0. { 13. } else { (prefs::get().editor_font_size + delta).clamp(10., 24.) };
+        set_font_size(size, cx);
+    }
+
+    fn header(&self, exporting: bool, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let me = cx.entity();
+        let mut modes = div().flex().rounded(px(6.)).bg(t.ink.opacity(0.06)).p(px(2.));
+        let help = ShortcutAction::TogglePreview.shortcut().map_or_else(|| tr("Lesen, Bearbeiten oder beides"), |s| trf("Lesen, Bearbeiten oder beides (%@ wechselt)", &[&s.display()]));
+        for (m, label, icon_name) in [(Mode::Read, tr("Lesen"), "eye"), (Mode::Edit, tr("Bearbeiten"), "pencil"), (Mode::Split, tr("Geteilt"), "columns-2")] {
+            let active = m == self.mode;
+            let e = me.clone();
+            modes = modes.child(
+                div()
+                    .id(SharedString::from(format!("mode-{label}")))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .px(px(9.))
+                    .py(px(2.))
+                    .rounded(px(5.))
+                    .cursor_pointer()
+                    .text_size(px(font::CALLOUT))
+                    .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
+                    .child(icon(icon_name, 12., if active { t.primary } else { t.secondary }))
+                    .child(label)
+                    .tooltip(tip(help.clone()))
+                    .on_click(move |_, window, cx| e.update(cx, |n, cx| n.set_mode(m, window, cx))),
+            );
+        }
+        let (e1, path, p2, p3) = (me.clone(), self.path.clone(), self.path.clone(), self.path.clone());
+        let embedded = self.embedded;
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(modes)
+            .child(Button::new("note-pdf").small().icon(menu_icon("share")).label("PDF").tooltip(tr("Als PDF neben der Notiz sichern (⇧⌘E)")).disabled(exporting).on_click(move |_, _, cx| e1.update(cx, |n, cx| n.export(cx))))
+            .child(Button::new("note-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, _, _| {
+                let (a, b, c, d) = (path.clone(), p2.clone(), p3.clone(), path.clone());
+                let mut menu = menu;
+                if embedded {
+                    menu = menu.item(PopupMenuItem::new(tr("In eigenem Fenster öffnen")).icon(menu_icon("app-window")).on_click(move |_, _, cx| {
+                        super::note_window::open(&a, cx);
+                        act(cx, |l| l.close_document(&a));
+                    }));
+                }
+                menu = menu
+                    .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| library::reveal(&b)))
+                    .item(PopupMenuItem::new(tr("Mit Standard-App öffnen")).icon(menu_icon("square-arrow-out-up-right")).on_click(move |_, _, _| library::open_path(&c)));
+                if embedded {
+                    menu = menu.separator().item(PopupMenuItem::new(tr("Tab schließen")).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&d, cx)));
+                }
+                menu
+            }))
+            .into_any_element()
+    }
+
+    fn reader(&mut self, lib_text: &str, t: &Theme, _cx: &mut Context<Self>) -> AnyElement {
+        if lib_text.trim().is_empty() {
+            return div().p(px(32.)).text_color(t.secondary).child(tr("Leere Notiz. Zum Schreiben auf „Bearbeiten“ wechseln.")).into_any_element();
+        }
+        let parsed = match &self.parsed {
+            Some((rev, p)) if *rev == self.revision => p.clone(),
+            _ => {
+                let p = Rc::new(markdown_view::parse(lib_text));
+                self.parsed = Some((self.revision, p.clone()));
+                p
+            }
+        };
+        let path = self.path.clone();
+        let toggle: markdown_view::OnToggle = Rc::new(move |line, cx: &mut App| {
+            let path = path.clone();
+            state::lib(cx).update(cx, |l, cx| {
+                let b = l.buffer(&path);
+                let next = markdown::toggle_task(&b.text, line);
+                b.replace(next);
+                if prefs::get().note_save_mode != NoteSaveMode::Manual {
+                    let _ = b.save();
+                }
+                cx.notify();
+            });
+        });
+        let base = self.path.parent().map(Path::to_path_buf);
+        div()
+            .id("note-reader")
+            .size_full()
+            .overflow_y_scroll()
+            .bg(t.content)
+            .child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(32.)).py(px(24.)).child(markdown_view::render(&parsed, base.as_deref(), Some(toggle), t))))
+            .into_any_element()
+    }
+
+    fn editor_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .size_full()
+            .key_context("NoteEditor")
+            .on_action(cx.listener(|n, _: &Bold, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::wrap(&s, r, "**"), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &Italic, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::wrap(&s, r, "*"), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &InlineCode, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::wrap(&s, r, "`"), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &InsertLink, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::link(&s, r), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &ToggleTask, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::edit_lines(&s, r, edit_ops::toggled_task), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &ToggleComment, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::toggle_comment(&s, r), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &MoveLineUp, w, cx| {
+                let (s, r) = n.with_text(cx);
+                if let Some(e) = edit_ops::move_lines(&s, r, true) {
+                    n.apply(e, w, cx)
+                }
+            }))
+            .on_action(cx.listener(|n, _: &MoveLineDown, w, cx| {
+                let (s, r) = n.with_text(cx);
+                if let Some(e) = edit_ops::move_lines(&s, r, false) {
+                    n.apply(e, w, cx)
+                }
+            }))
+            .on_action(cx.listener(|n, _: &CopyLineUp, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::copy_lines(&s, r, true), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &CopyLineDown, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::copy_lines(&s, r, false), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &DeleteLine, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::delete_lines(&s, r), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &SelectLine, _, cx| {
+                let (s, r) = n.with_text(cx);
+                let sel = edit_ops::select_lines(&s, r);
+                n.editor.update(cx, |e, cx| e.set_selected_range(sel, cx));
+            }))
+            .on_action(cx.listener(|n, _: &IndentLines, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::shift_lines(&s, r, 1), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &OutdentLines, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::shift_lines(&s, r, -1), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &ListNewline, w, cx| {
+                let (s, r) = n.with_text(cx);
+                match (r.is_empty(), edit_ops::newline(&s, r.start)) {
+                    (true, Some(e)) => n.apply(e, w, cx),
+                    _ => n.apply(Edit { range: r.clone(), text: "\n".into(), select: r.start + 1..r.start + 1 }, w, cx),
+                }
+            }))
+            .on_action(cx.listener(|n, _: &ListTab, w, cx| {
+                let (s, r) = n.with_text(cx);
+                if edit_ops::tab_indents(&s, &r) {
+                    n.apply(edit_ops::shift_lines(&s, r, 1), w, cx)
+                } else {
+                    n.apply(Edit { range: r.clone(), text: "    ".into(), select: r.start + 4..r.start + 4 }, w, cx)
+                }
+            }))
+            .on_action(cx.listener(|n, _: &ListBacktab, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::shift_lines(&s, r, -1), w, cx)
+            }))
+            .on_action(|_: &ZoomIn, _, cx| NoteView::zoom(1., cx))
+            .on_action(|_: &ZoomOut, _, cx| NoteView::zoom(-1., cx))
+            .on_action(|_: &ZoomReset, _, cx| NoteView::zoom(0., cx))
+            .child(Editor::new(&self.editor).h_full().bg(Theme::get(cx).content))
+            .into_any_element()
+    }
+}
+
+impl Focusable for NoteView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
+impl Render for NoteView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.needs_focus) {
+            self.activate(window, cx);
+        }
+        let t = Theme::get(cx);
+        let lib = state::lib(cx);
+        let (missing, text) = lib.update(cx, |l, _| {
+            let b = l.buffer(&self.path);
+            (b.missing, b.text.clone())
+        });
+        let exporting = lib.read(cx).exporting_pdfs.contains(&self.path);
+        if !self.embedded {
+            let (title, relative, dirty) = state::read(cx, |l| {
+                let folder = self.path.parent().unwrap_or(&self.path);
+                (l.note_title(&self.path), l.relative_path(folder), l.buffers.get(&self.path).is_some_and(|b| b.dirty))
+            });
+            let full = format!("{title} — {}{relative}", if dirty { "● " } else { "" });
+            if full != self.window_title {
+                window.set_window_title(&full);
+                self.window_title = full;
+            }
+        }
+        let header = self.header(exporting, &t, cx);
+        let content: AnyElement = if missing {
+            unavailable("file-question", tr("Datei nicht gefunden"), self.path.file_name().unwrap_or_default().to_string_lossy().to_string(), &t).into_any_element()
+        } else {
+            match self.mode {
+                Mode::Read => self.reader(&text, &t, cx),
+                Mode::Edit => self.editor_view(cx),
+                Mode::Split => div().size_full().flex().child(div().flex_1().min_w_0().h_full().border_r_1().border_color(t.separator).child(self.editor_view(cx))).child(div().flex_1().min_w_0().h_full().child(self.reader(&text, &t, cx))).into_any_element(),
+            }
+        };
+        let top = if self.embedded {
+            document_bar(&self.path, header, &t, cx)
+        } else {
+            div().h(px(44.)).flex_none().flex().items_center().justify_center().border_b_1().border_color(t.separator).child(header)
+        };
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .track_focus(&self.focus)
+            .key_context("NoteView")
+            .on_action(cx.listener(|n, _: &super::app::TogglePreview, w, cx| {
+                let m = if n.mode == Mode::Read { Mode::Edit } else { Mode::Read };
+                n.set_mode(m, w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &super::app::SplitPreview, w, cx| {
+                let m = if n.mode == Mode::Split { Mode::Edit } else { Mode::Split };
+                n.set_mode(m, w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &super::app::ExportPdf, _, cx| n.export(cx)))
+            .on_action(cx.listener(|n, _: &super::app::Save, _, cx| n.save(cx)))
+            .when(!self.embedded, |d| {
+                d.on_action(|_: &super::app::CloseTab, window, cx| super::note_window::request_close(window, cx))
+                    .on_action(|_: &super::app::CloseWindow, window, cx| super::note_window::request_close(window, cx))
+            })
+            .child(top)
+            .child(div().flex_1().min_h_0().child(content))
+    }
+}
+
+/// Sets the editor font size everywhere.
+pub fn set_font_size(size: f32, cx: &mut App) {
+    prefs::update(|p| p.editor_font_size = size);
+    gpui_kit::component::Theme::global_mut(cx).mono_font_size = px(size);
+    cx.refresh_windows();
+}
+
+fn save_buffer(path: &Path, cx: &mut App) -> bool {
+    let result = state::lib(cx).update(cx, |l, cx| {
+        let r = l.buffers.get_mut(path).map_or(Ok(()), |b| b.save());
+        cx.notify();
+        r
+    });
+    match result {
+        Ok(()) => true,
+        Err(e) => {
+            act(cx, |l| l.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e])));
+            false
+        }
+    }
+}
+
+/// Saves the given notes, or asks about each when saving on close is off, then runs `done`.
+/// Cancelling a question or a failed save keeps everything open.
+pub fn resolve_unsaved(paths: Vec<PathBuf>, cx: &mut App, done: impl FnOnce(&mut App) + 'static) {
+    let dirty: Vec<PathBuf> = state::read(cx, |l| paths.into_iter().filter(|p| l.buffers.get(p).is_some_and(|b| b.dirty)).collect());
+    if prefs::get().note_save_on_close {
+        if dirty.iter().all(|p| save_buffer(p, cx)) {
+            done(cx);
+        }
+        return;
+    }
+    cx.spawn(async move |cx| {
+        for path in dirty {
+            let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let answers = [tr("Sichern"), tr("Abbrechen"), tr("Nicht sichern")];
+            let answers: Vec<&str> = answers.iter().map(String::as_str).collect();
+            let question = cx.update(|cx| {
+                if cx.windows().is_empty() {
+                    super::main_window::open(cx);
+                }
+                let window = cx.active_window().or_else(|| cx.windows().first().copied())?;
+                window.update(cx, |_, window, cx| window.prompt(PromptLevel::Warning, &trf("Änderungen an „%@“ sichern?", &[&name]), Some(&tr("Ohne Sichern gehen die Änderungen verloren.")), &answers, cx)).ok()
+            });
+            let Some(question) = question else { return };
+            match question.await {
+                Ok(0) => {
+                    if !cx.update(|cx| save_buffer(&path, cx)) {
+                        return;
+                    }
+                }
+                Ok(2) => {}
+                _ => return,
+            }
+        }
+        cx.update(done);
+    })
+    .detach();
+}
+
+/// Saves or asks about the note behind a tab, then closes the tab.
+pub fn close_tab(path: &Path, cx: &mut App) {
+    let target = path.to_path_buf();
+    resolve_unsaved(vec![target.clone()], cx, move |cx| act(cx, |l| l.close_document(&target)));
+}
+
+fn close_other_tabs(path: &Path, cx: &mut App) {
+    let keep = path.to_path_buf();
+    let others = state::read(cx, |l| l.open_documents.iter().filter(|d| **d != keep).cloned().collect());
+    resolve_unsaved(others, cx, move |cx| act(cx, |l| l.close_other_documents(&keep)));
+}
+
+fn close_all_tabs(cx: &mut App) {
+    let all = state::read(cx, |l| l.open_documents.clone());
+    resolve_unsaved(all, cx, |cx| close_all_tabs(cx));
+}
+
+/// One row: open tabs on the left, the shown document's actions on the right.
+pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) -> Div {
+    let (docs, titles, dirty) = state::read(cx, |l| {
+        let docs = l.open_documents.clone();
+        let titles: Vec<String> = docs.iter().map(|d| l.note_title(d)).collect();
+        let dirty: Vec<bool> = docs.iter().map(|d| l.buffers.get(d).is_some_and(|b| b.dirty)).collect();
+        (docs, titles, dirty)
+    });
+    let mut tabs = div().flex().gap(px(2.)).py(px(6.));
+    for (i, doc) in docs.iter().enumerate() {
+        let active = doc.as_path() == current;
+        let (open, close, menu) = (doc.clone(), doc.clone(), doc.clone());
+        let is_dirty = dirty[i];
+        let hover = t.ink.opacity(0.05);
+        let rel = state::read(cx, |l| l.relative_path(doc));
+        tabs = tabs.child(
+            div()
+                .id(SharedString::from(format!("tab-{}", doc.display())))
+                .group("doc-tab")
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .pl(px(10.))
+                .pr(px(6.))
+                .py(px(5.))
+                .rounded(px(radius::CONTROL - 2.))
+                .cursor_pointer()
+                .when(active, |d| d.bg(t.ink.opacity(0.1)))
+                .when(!active, |d| d.hover(move |s| s.bg(hover)))
+                .tooltip(tip(rel))
+                .on_click(move |_, _, cx| act(cx, |l| l.open_document(&open)))
+                .child(file_icon(doc, 16.))
+                .child(div().max_w(px(180.)).truncate().text_size(px(font::CALLOUT)).text_color(if active { t.primary } else { t.secondary }).child(titles[i].clone()))
+                .child(
+                    div()
+                        .id(SharedString::from(format!("tab-close-{}", doc.display())))
+                        .size(px(16.))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .hover(|s| s.bg(t.ink.opacity(0.1)))
+                        .when(!active && !is_dirty, |d| d.invisible().group_hover("doc-tab", |s| s.visible()))
+                        .child(if is_dirty {
+                            div().relative().size(px(16.)).flex().items_center().justify_center().child(div().size(px(7.)).rounded_full().bg(t.secondary).group_hover("doc-tab", |s| s.invisible())).child(div().absolute().invisible().group_hover("doc-tab", |s| s.visible()).child(icon("x", 10., t.secondary))).into_any_element()
+                        } else {
+                            icon("x", 10., t.secondary).into_any_element()
+                        })
+                        .tooltip(tip(if is_dirty { tr("Ungesicherte Änderungen – Tab schließen") } else { tr("Tab schließen") }))
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            close_tab(&close, cx)
+                        }),
+                )
+                .context_menu(move |m, _, _| {
+                    let (a, b, c, d) = (menu.clone(), menu.clone(), menu.clone(), menu.clone());
+                    m.item(PopupMenuItem::new(tr("Tab schließen")).on_click(move |_, _, cx| close_tab(&a, cx)))
+                        .item(PopupMenuItem::new(tr("Andere Tabs schließen")).on_click(move |_, _, cx| close_other_tabs(&b, cx)))
+                        .item(PopupMenuItem::new(tr("Alle Tabs schließen")).on_click(|_, _, cx| act(cx, |l| l.close_all_documents())))
+                        .separator()
+                        .item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&c)))
+                        .item(PopupMenuItem::new(tr("Mit Standard-App öffnen")).on_click(move |_, _, _| library::open_path(&d)))
+                }),
+        );
+    }
+    div()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .pl(px(8.))
+        .pr(px(12.))
+        .min_h(px(40.))
+        .border_b_1()
+        .border_color(t.separator)
+        .child(div().id("doc-tabs").flex_1().min_w_0().overflow_x_scroll().child(tabs))
+        .child(div().flex_none().child(actions))
+}
+
+/// Read-only view of PDFs, images, text and other files inside the main window.
+pub struct FileViewer {
+    path: PathBuf,
+    pages: Vec<Arc<Image>>,
+    sizes: Vec<(f32, f32)>,
+    zoom: f32,
+    scroll: ScrollHandle,
+    preview: Entity<FilePreview>,
+    load: Option<Task<()>>,
+}
+
+enum PdfLoad {
+    Sizes(Vec<(f32, f32)>),
+    Page(Arc<Image>),
+}
+
+impl FileViewer {
+    pub fn new(path: PathBuf, cx: &mut Context<Self>) -> Self {
+        let preview = cx.new(|cx| {
+            let mut p = FilePreview::new(false);
+            p.set_path(Some(path.clone()), cx);
+            p
+        });
+        let mut v = Self { path: path.clone(), pages: Vec::new(), sizes: Vec::new(), zoom: 1., scroll: ScrollHandle::new(), preview, load: None };
+        if v.is_pdf() {
+            let (tx, rx) = async_channel::unbounded();
+            let p = path;
+            cx.background_spawn(async move {
+                let Some(doc) = PdfDoc::open(&p) else { return };
+                let count = doc.page_count();
+                let _ = tx.send(PdfLoad::Sizes((0..count).filter_map(|i| doc.page_size(i)).collect())).await;
+                for i in 0..count {
+                    let Some(png) = doc.render_png(i, 2.) else { continue };
+                    if tx.send(PdfLoad::Page(Arc::new(Image::from_bytes(ImageFormat::Png, png)))).await.is_err() {
+                        return;
+                    }
+                }
+            })
+            .detach();
+            v.load = Some(cx.spawn(async move |this, cx| {
+                while let Ok(msg) = rx.recv().await {
+                    let alive = this.update(cx, |v, cx| {
+                        match msg {
+                            PdfLoad::Sizes(sizes) => v.sizes = sizes,
+                            PdfLoad::Page(image) => v.pages.push(image),
+                        }
+                        cx.notify();
+                    });
+                    if alive.is_err() {
+                        return;
+                    }
+                }
+            }));
+        }
+        v
+    }
+
+    fn is_pdf(&self) -> bool {
+        extension(&self.path.to_string_lossy()).eq_ignore_ascii_case("pdf")
+    }
+
+    fn page_width(&self) -> f32 {
+        let available = f32::from(self.scroll.bounds().size.width) - 32.;
+        (if available > 0. { available } else { 820. }) * self.zoom
+    }
+
+    fn page_height(&self, index: usize, width: f32) -> f32 {
+        self.sizes.get(index).map_or(width * 1.414, |(w, h)| width * h / w.max(1.))
+    }
+
+    fn current_page(&self) -> usize {
+        let width = self.page_width();
+        let mut y = -f32::from(self.scroll.offset().y) + f32::from(self.scroll.bounds().size.height) / 3.;
+        for i in 0..self.sizes.len() {
+            y -= self.page_height(i, width) + 12.;
+            if y < 0. {
+                return i + 1;
+            }
+        }
+        self.sizes.len()
+    }
+}
+
+impl Render for FileViewer {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::get(cx);
+        let me = cx.entity();
+        let (p1, p2, p3, p4) = (self.path.clone(), self.path.clone(), self.path.clone(), self.path.clone());
+        let mut actions = div().flex().items_center().gap(px(8.));
+        if self.is_pdf() {
+            let (z1, z2, z3) = (me.clone(), me.clone(), me.clone());
+            actions = actions
+                .when(!self.sizes.is_empty(), |d| d.child(caption(trf("Seite %lld von %lld", &[&self.current_page(), &self.sizes.len()]), &t)))
+                .child(
+                    div()
+                        .flex()
+                        .child(Button::new("pdf-out").ghost().small().icon(menu_icon("zoom-out")).tooltip(tr("Verkleinern")).on_click(move |_, _, cx| z1.update(cx, |v, cx| {
+                            v.zoom = (v.zoom * 0.8).max(0.25);
+                            cx.notify();
+                        })))
+                        .child(Button::new("pdf-fit").ghost().small().icon(menu_icon("scan")).tooltip(tr("Einpassen")).on_click(move |_, _, cx| z2.update(cx, |v, cx| {
+                            v.zoom = 1.;
+                            cx.notify();
+                        })))
+                        .child(Button::new("pdf-in").ghost().small().icon(menu_icon("zoom-in")).tooltip(tr("Vergrößern")).on_click(move |_, _, cx| z3.update(cx, |v, cx| {
+                            v.zoom = (v.zoom * 1.25).min(6.);
+                            cx.notify();
+                        }))),
+                );
+        }
+        actions = actions
+            .child(Button::new("open-default").small().icon(menu_icon("square-arrow-out-up-right")).label(tr("Mit Standard-App öffnen")).tooltip(tr("Zum Bearbeiten in der Standard-App öffnen")).on_click(move |_, _, _| library::open_path(&p1)))
+            .child(Button::new("viewer-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |m, _, _| {
+                let (a, b, c) = (p2.clone(), p3.clone(), p4.clone());
+                m.item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| library::reveal(&a)))
+                    .item(PopupMenuItem::new(tr("Vorschau-Fenster (Leertaste)")).icon(menu_icon("eye")).on_click(move |_, _, cx| super::preview::show(&b, cx)))
+                    .separator()
+                    .item(PopupMenuItem::new(tr("Tab schließen")).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&c, cx)))
+            }));
+        let body: AnyElement = if !self.path.exists() {
+            unavailable("file-question", tr("Datei nicht gefunden"), self.path.file_name().unwrap_or_default().to_string_lossy().to_string(), &t).into_any_element()
+        } else if self.is_pdf() {
+            let width = self.page_width();
+            div()
+                .id("pdf-pages")
+                .size_full()
+                .overflow_scroll()
+                .track_scroll(&self.scroll)
+                .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
+                .bg(t.ink.opacity(0.04))
+                .child(div().flex().flex_col().items_center().gap(px(12.)).p(px(16.)).children(self.pages.iter().map(|p| img(p.clone()).w(px(width)).flex_none().shadow_md())))
+                .into_any_element()
+        } else {
+            self.preview.clone().into_any_element()
+        };
+        div().size_full().flex().flex_col().child(document_bar(&self.path, actions.into_any_element(), &t, cx)).child(div().flex_1().min_h_0().child(body))
+    }
+}
+
+/// Saves or asks about every open note, then quits.
+pub fn prepare_to_quit(cx: &mut App) {
+    let all = state::read(cx, |l| l.buffers.keys().cloned().collect());
+    resolve_unsaved(all, cx, |cx| cx.quit());
+}

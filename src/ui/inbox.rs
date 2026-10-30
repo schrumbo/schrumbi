@@ -1,0 +1,189 @@
+use std::collections::HashSet;
+use std::path::PathBuf;
+
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
+
+use super::filing_form::{FilingEvent, FilingForm};
+use super::state::{self, act};
+use super::theme::{Theme, font};
+use super::widgets::*;
+use crate::core::day;
+use crate::core::i18n::{tr, trf};
+use crate::core::library;
+
+/// Inbox: files waiting to be filed on the left, the filing form for the selection (or the first file) on the right.
+pub struct InboxPage {
+    selection: HashSet<PathBuf>,
+    form: Option<(Vec<PathBuf>, Entity<FilingForm>, Subscription)>,
+    drop: bool,
+    _sub: Subscription,
+}
+
+impl InboxPage {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        let lib = state::lib(cx);
+        Self { selection: HashSet::new(), form: None, drop: false, _sub: cx.observe(&lib, |_, _, cx| cx.notify()) }
+    }
+
+    fn queue(&self, inbox: &[PathBuf]) -> Vec<PathBuf> {
+        let picked: Vec<PathBuf> = inbox.iter().filter(|p| self.selection.contains(*p)).cloned().collect();
+        if picked.is_empty() { inbox.iter().take(1).cloned().collect() } else { picked }
+    }
+}
+
+fn add_files(cx: &mut App) {
+    super::platform::pick(PathPromptOptions { files: true, directories: false, multiple: true, prompt: None }, cx, |paths, cx| act(cx, |l| l.import_to_inbox(&paths)));
+}
+
+impl Render for InboxPage {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::get(cx);
+        let me = cx.entity();
+        let (inbox, inbox_name, now) = state::read(cx, |l| (l.inbox.clone(), l.config.as_ref().map(|c| c.inbox.clone()).unwrap_or_else(|| "_Inbox".into()), l.now));
+        self.selection.retain(|p| inbox.contains(p));
+        let queue = self.queue(&inbox);
+        if self.form.as_ref().is_none_or(|(q, _, _)| *q != queue) {
+            self.form = (!queue.is_empty()).then(|| {
+                let form = cx.new(|cx| FilingForm::new(queue.clone(), None, window, cx));
+                let sub = cx.subscribe(&form, |this, _, _: &FilingEvent, cx| {
+                    this.selection.clear();
+                    this.form = None;
+                    cx.notify();
+                });
+                (queue.clone(), form, sub)
+            });
+        }
+        let accent = t.accent;
+        let (m1, m2) = (me.clone(), me.clone());
+        let base = div()
+            .id("inbox")
+            .size_full()
+            .relative()
+            .on_drag_move::<ExternalPaths>(move |_, _, cx| m1.update(cx, |p, cx| {
+                if !p.drop {
+                    p.drop = true;
+                    cx.notify();
+                }
+            }))
+            .on_drop(move |paths: &ExternalPaths, _, cx| {
+                let paths = paths.paths().to_vec();
+                m2.update(cx, |p, cx| {
+                    p.drop = false;
+                    cx.notify();
+                });
+                act(cx, |l| l.import_to_inbox(&paths));
+            });
+        let content: AnyElement = if inbox.is_empty() {
+            unavailable("inbox", tr("Inbox leer"), trf("Zieh Dateien hierher oder lege sie in „%@“ ab. Die App schlägt Abgabe, Titel und Namen vor.", &[&inbox_name]), &t)
+                .child(Button::new("inbox-add").label(tr("Dateien hinzufügen…")).on_click(|_, _, cx| add_files(cx)))
+                .into_any_element()
+        } else {
+            let mut list = div().flex().flex_col().p(px(6.));
+            for (i, p) in inbox.iter().enumerate() {
+                let selected = self.selection.contains(p) || (self.selection.is_empty() && i == 0);
+                let created = std::fs::metadata(p).ok().and_then(|m| m.created().or_else(|_| m.modified()).ok()).map(chrono::DateTime::<chrono::Local>::from);
+                let (e, path, menu_path) = (me.clone(), p.clone(), p.clone());
+                let hover = t.ink.opacity(0.05);
+                list = list.child(
+                    div()
+                        .id(SharedString::from(format!("inbox-{}", p.display())))
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .px(px(8.))
+                        .py(px(5.))
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .when(selected, |d| d.bg(t.accent.opacity(0.18)))
+                        .when(!selected, |d| d.hover(move |s| s.bg(hover)))
+                        .child(file_icon(p, 22.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .child(div().truncate().child(p.file_name().unwrap_or_default().to_string_lossy().to_string()))
+                                .when_some(created, |d, c| d.child(caption(day::due(c, now), &t))),
+                        )
+                        .on_click(move |ev: &ClickEvent, _, cx| {
+                            if ev.click_count() >= 2 {
+                                super::preview::show(&path, cx);
+                                return;
+                            }
+                            let extend = ev.modifiers().platform || ev.modifiers().control || ev.modifiers().shift;
+                            e.update(cx, |this, cx| {
+                                if !extend {
+                                    this.selection.clear();
+                                }
+                                if !this.selection.remove(&path) {
+                                    this.selection.insert(path.clone());
+                                }
+                                cx.notify();
+                            })
+                        })
+                        .context_menu(move |menu, _, _| {
+                            let (a, b, c, d) = (menu_path.clone(), menu_path.clone(), menu_path.clone(), menu_path.clone());
+                            menu.item(PopupMenuItem::new(tr("Öffnen")).on_click(move |_, _, cx| act(cx, |l| l.open_file(&a))))
+                                .item(PopupMenuItem::new(tr("Vorschau")).on_click(move |_, _, cx| super::preview::show(&b, cx)))
+                                .item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&c)))
+                                .separator()
+                                .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| act(cx, |l| l.trash(&d))))
+                        }),
+                );
+            }
+            let count = self.selection.len();
+            div()
+                .size_full()
+                .flex()
+                .child(
+                    div()
+                        .w(px(280.))
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .border_r_1()
+                        .border_color(t.separator)
+                        .child(div().id("inbox-list").flex_1().min_h_0().overflow_y_scroll().child(list))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .p(px(8.))
+                                .border_t_1()
+                                .border_color(t.separator)
+                                .child(Button::new("inbox-add-files").ghost().icon(menu_icon("plus")).label(tr("Dateien hinzufügen…")).on_click(|_, _, cx| add_files(cx)))
+                                .child(div().flex_1())
+                                .when(count > 1, |d| d.child(caption(trf("%lld ausgewählt", &[&count]), &t))),
+                        ),
+                )
+                .child(div().flex_1().min_w_0().h_full().children(self.form.as_ref().map(|(_, f, _)| f.clone())))
+                .into_any_element()
+        };
+        base.child(content).when(self.drop, |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .inset(px(10.))
+                    .rounded(px(12.))
+                    .border(px(3.))
+                    .border_dashed()
+                    .border_color(accent)
+                    .bg(accent.opacity(0.06))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(8.))
+                    .text_size(px(font::TITLE3))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(accent)
+                    .child(icon("inbox", 18., accent))
+                    .child(tr("In die Inbox legen")),
+            )
+        })
+    }
+}
