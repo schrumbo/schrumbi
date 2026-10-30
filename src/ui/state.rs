@@ -57,6 +57,9 @@ pub fn act<R>(cx: &mut App, f: impl FnOnce(&mut Library) -> R) -> R {
         cx.notify();
         out
     });
+    if lib.update(cx, |l, _| l.take_rows_moved()) {
+        super::motion::arm_rows(cx);
+    }
     let toast = lib.read(cx).toast.as_ref().map(|t| (t.id, t.undo.is_some()));
     if let Some((id, undoable)) = toast
         && Some(id) != before
@@ -294,7 +297,11 @@ pub fn edit_config(cx: &mut App, f: impl FnOnce(&mut crate::core::model::StudyCo
     let Some(mut c) = read(cx, |l| l.config.clone()) else { return };
     f(&mut c);
     let changed = lib(cx).update(cx, |l, cx| {
+        let before = l.config_snapshot();
         let changed = l.update_config(c);
+        if let (true, Some(before)) = (changed, before) {
+            l.record_edit("config", crate::core::i18n::tr("Einstellung geändert"), before);
+        }
         cx.notify();
         changed
     });

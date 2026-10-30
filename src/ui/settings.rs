@@ -7,12 +7,14 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, Sizable};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::fields::Fields;
 use super::state::{self, act, edit_config};
-use super::theme::{self, Theme, font, radius};
+use super::motion::{self, Soft};
+use super::theme::{self, Theme, font, radius, space, iconsize, control};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::ics;
@@ -55,6 +57,7 @@ pub struct Settings {
     focus: FocusHandle,
     launch_language: String,
     launch_at_login: bool,
+    markdown_default: Option<bool>,
     _subs: Vec<Subscription>,
 }
 
@@ -107,7 +110,7 @@ impl Render for About {
             .flex_col()
             .items_center()
             .justify_center()
-            .gap(px(10.))
+            .gap(px(space::S))
             .child(super::onboarding::logo(40., &t))
             .child(div().text_color(t.secondary).child(trf("Version %@", &[&env!("CARGO_PKG_VERSION")])))
             .child(div().text_size(px(font::CAPTION)).text_color(t.tertiary).child("Lucide (ISC) · Material Icon Theme (MIT)"));
@@ -126,14 +129,14 @@ fn section(title: Option<String>, footer: Option<String>, rows: Vec<AnyElement>,
     div()
         .flex()
         .flex_col()
-        .gap(px(6.))
-        .when_some(title, |d, s| d.child(div().px(px(4.)).text_size(px(font::SUBHEADLINE)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(s)))
+        .gap(px(space::S))
+        .when_some(title, |d, s| d.child(div().px(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(s)))
         .child(g)
-        .when_some(footer, |d, f| d.child(div().px(px(4.)).text_size(px(font::CAPTION)).text_color(t.secondary).child(f)))
+        .when_some(footer, |d, f| d.child(div().px(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(f)))
 }
 
 fn row(label: impl Into<SharedString>, control: impl IntoElement, t: &Theme) -> AnyElement {
-    div().flex().items_center().gap(px(12.)).px(px(14.)).min_h(px(40.)).py(px(6.)).child(div().flex_1().min_w_0().text_color(t.primary).child(label.into())).child(div().flex_none().max_w(px(460.)).child(control)).into_any_element()
+    div().flex().items_center().gap(px(space::M)).px(px(space::L)).min_h(px(40.)).py(px(space::S)).child(div().flex_1().min_w_0().text_color(t.primary).child(label.into())).child(div().flex_none().max_w(px(460.)).child(control)).into_any_element()
 }
 
 /// A pop-up button like SwiftUI's menu-style `Picker`.
@@ -214,12 +217,13 @@ impl Settings {
             focus: cx.focus_handle(),
             launch_language: prefs::get().language,
             launch_at_login: super::platform::launches_at_login(),
+            markdown_default: super::platform::markdown_is_default(),
             _subs: subs,
         }
     }
 
     fn tab_bar(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
-        let mut bar = div().flex().justify_center().gap(px(4.)).pt(px(if super::chrome::CUSTOM { 10. } else { 34. })).pb(px(10.)).border_b_1().border_color(t.separator);
+        let mut bar = div().flex().justify_center().gap(px(space::XS)).pt(px(if super::chrome::CUSTOM { space::M } else { space::XXL })).pb(px(space::S)).border_b_1().border_color(t.separator);
         for (tab, label, icon_name) in [
             (Tab::General, tr("Allgemein"), "settings"),
             (Tab::Semester, tr("Semester"), "calendar"),
@@ -236,13 +240,13 @@ impl Settings {
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap(px(3.))
-                    .py(px(6.))
+                    .gap(px(space::XS))
+                    .py(px(space::S))
                     .rounded(px(radius::CONTROL))
-                    .cursor_pointer()
+                    .cursor_pointer().key_nav()
                     .when(active, |d| d.bg(t.ink.opacity(0.09)))
-                    .when(!active, |d| d.hover(move |s| s.bg(hover)))
-                    .child(icon(icon_name, 20., if active { t.accent } else { t.secondary }))
+                    .when(!active, |d| d.soft(hover, radius::CONTROL))
+                    .child(icon(icon_name, iconsize::L, if active { t.accent } else { t.secondary }))
                     .child(div().text_size(px(font::CAPTION)).text_color(if active { t.accent } else { t.primary }).child(label))
                     .on_click(cx.listener(move |s, _, _, cx| {
                         s.tab = tab;
@@ -348,7 +352,7 @@ impl Settings {
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(8.))
+                        .gap(px(space::S))
                         .child(div().max_w(px(220.)).truncate().text_color(t.secondary).child(root.as_ref().map_or("—".into(), |r| r.display().to_string())))
                         .when_some(r1, |d, r| d.child(Button::new("g-show-root").small().label(tr("Zeigen")).on_click(move |_, _, _| crate::core::library::reveal(&r))))
                         .child(Button::new("g-change-root").small().label(tr("Ändern…")).on_click(|_, _, cx| {
@@ -365,7 +369,7 @@ impl Settings {
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(8.))
+                        .gap(px(space::S))
                         .child(div().text_color(t.secondary).child("schrumbi.json"))
                         .child(Button::new("g-show-config").small().label(tr("Zeigen")).on_click(move |_, _, _| {
                             if let Some(p) = &c1 {
@@ -474,11 +478,11 @@ impl Settings {
                     prefs::update(|p| p.tray = v);
                     super::tray::sync(cx);
                 }), t),
-                div().flex().items_center().gap(px(6.)).px(px(14.)).py(px(10.)).text_color(t.secondary).child(icon("shield-check", 14., t.secondary)).child(tr("Sendet keine Daten · nur der gewählte Ordner wird gelesen")).into_any_element(),
+                div().flex().items_center().gap(px(space::S)).px(px(space::L)).py(px(space::S)).text_color(t.secondary).child(icon("shield-check", iconsize::S, t.secondary)).child(tr("Sendet keine Daten · nur der gewählte Ordner wird gelesen")).into_any_element(),
             ],
             t,
         );
-        div().flex().flex_col().gap(px(22.)).child(studium).child(grades).child(search).child(storage).child(language).child(reminders).child(calendar).child(system)
+        div().flex().flex_col().gap(px(space::XL)).child(studium).child(grades).child(search).child(storage).child(language).child(reminders).child(calendar).child(system)
     }
 }
 
@@ -496,10 +500,10 @@ fn relaunch(cx: &mut App) {
 
 impl Settings {
     fn master(&self, items: Vec<(String, String, String, Option<Hsla>)>, selected: Option<&str>, on_select: impl Fn(&mut Settings, String) + 'static + Clone, bar: Div, t: &Theme, cx: &mut Context<Self>) -> Div {
-        let mut list = div().flex().flex_col().p(px(6.));
+        let mut list = div().flex().flex_col().p(px(space::S));
         for (id, title, sub, dot) in items {
             if title.is_empty() {
-                list = list.child(div().px(px(8.)).pt(px(10.)).pb(px(2.)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(sub));
+                list = list.child(div().px(px(space::S)).pt(px(space::S)).pb(px(space::XXS)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(sub));
                 continue;
             }
             let active = selected == Some(id.as_str());
@@ -511,14 +515,14 @@ impl Settings {
                     .id(SharedString::from(format!("m-{id}")))
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .px(px(8.))
-                    .py(px(5.))
-                    .rounded(px(6.))
-                    .cursor_pointer()
+                    .gap(px(space::S))
+                    .px(px(space::S))
+                    .py(px(space::XS))
+                    .rounded(px(radius::INNER))
+                    .cursor_pointer().key_nav()
                     .when(active, |d| d.bg(t.selection).text_color(white()))
-                    .when(!active, |d| d.hover(move |s| s.bg(hover)))
-                    .when_some(dot, |d, c| d.child(div().size(px(9.)).rounded_full().bg(c)))
+                    .when(!active, |d| d.soft(hover, radius::INNER))
+                    .when_some(dot, |d, c| d.child(div().size(px(space::S)).rounded_full().bg(if active { white() } else { c })))
                     .child(div().flex().flex_col().min_w_0().child(div().truncate().child(title)).child(div().truncate().text_size(px(font::CAPTION)).text_color(if active { white().opacity(0.8) } else { t.secondary }).child(sub)))
                     .on_click(cx.listener(move |s, _, _, cx| {
                         f(s, id2.clone());
@@ -526,7 +530,7 @@ impl Settings {
                     })),
             );
         }
-        div().w(px(210.)).flex_none().h_full().flex().flex_col().border_r_1().border_color(t.separator).child(div().id("master").flex_1().min_h_0().overflow_y_scroll().child(list)).child(bar.border_t_1().border_color(t.separator).p(px(6.)))
+        div().w(px(210.)).flex_none().h_full().flex().flex_col().border_r_1().border_color(t.separator).child(div().id("master").flex_1().min_h_0().overflow_y_scrollbar().child(list)).child(bar.border_t_1().border_color(t.separator).p(px(space::S)))
     }
 
     fn semesters(&mut self, c: &StudyConfig, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
@@ -539,7 +543,7 @@ impl Settings {
         let (e1, e2, e3) = (me.clone(), me.clone(), me.clone());
         let bar = div()
             .flex()
-            .gap(px(2.))
+            .gap(px(space::XXS))
             .child(Button::new("s-add").ghost().small().icon(menu_icon("plus")).tooltip(tr("Neues Semester")).on_click(move |_, _, cx| e1.update(cx, |s, cx| s.add_semester(false, cx))))
             .child(Button::new("s-del").ghost().small().icon(menu_icon("minus")).tooltip(tr("Semester löschen")).disabled(!can_delete).on_click(move |_, window, cx| {
                 let e = e2.clone();
@@ -558,7 +562,7 @@ impl Settings {
             Some(s) => self.semester_editor(c, s, window, cx, t).into_any_element(),
             None => unavailable("calendar", tr("Semester wählen"), "", t).into_any_element(),
         };
-        div().size_full().flex().child(master).child(div().id("s-detail").flex_1().min_w_0().h_full().overflow_y_scroll().p(px(20.)).child(div().w_full().child(detail)))
+        div().size_full().flex().child(master).child(div().id("s-detail").flex_1().min_w_0().h_full().overflow_y_scrollbar().p(px(space::XL)).child(div().w_full().child(detail)))
     }
 
     fn add_semester(&mut self, copy: bool, cx: &mut Context<Self>) {
@@ -606,9 +610,9 @@ impl Settings {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .px(px(14.))
-                    .py(px(6.))
+                    .gap(px(space::S))
+                    .px(px(space::L))
+                    .py(px(space::S))
                     .child(div().w(px(150.)).child(Input::new(&n).small()))
                     .child(div().flex_1())
                     .child(div().w(px(120.)).child(gpui_kit::component::date_picker::DatePicker::new(&from).small()))
@@ -621,7 +625,7 @@ impl Settings {
         }
         let e = edit.clone();
         let start_date = s.start.clone();
-        breaks.push(div().px(px(14.)).py(px(6.)).child(Button::new("brk-add").ghost().small().icon(menu_icon("plus")).label(tr("Pause hinzufügen")).on_click(move |_, _, cx| {
+        breaks.push(div().px(px(space::L)).py(px(space::S)).child(Button::new("brk-add").ghost().small().icon(menu_icon("plus")).label(tr("Pause hinzufügen")).on_click(move |_, _, cx| {
             let st = day::parse(&start_date).unwrap_or_else(|| Local::now().date_naive());
             e(Box::new(move |s| s.breaks.push(Break { name: tr("Pause"), start: day::format(st), end: day::format(st + Days::new(6)) })))(cx)
         })).into_any_element());
@@ -636,9 +640,9 @@ impl Settings {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .px(px(14.))
-                    .py(px(6.))
+                    .gap(px(space::S))
+                    .px(px(space::L))
+                    .py(px(space::S))
                     .child(div().w(px(220.)).child(Input::new(&n).small()))
                     .child(div().flex_1())
                     .child(div().w(px(130.)).child(gpui_kit::component::date_picker::DatePicker::new(&d).small()))
@@ -653,8 +657,8 @@ impl Settings {
         holidays.push(
             div()
                 .flex()
-                .px(px(14.))
-                .py(px(6.))
+                .px(px(space::L))
+                .py(px(space::S))
                 .child(Button::new("hol-add").ghost().small().icon(menu_icon("plus")).label(tr("Feiertag hinzufügen")).on_click(move |_, _, cx| {
                     let f = first.clone();
                     e1(Box::new(move |s| s.holidays.push(Holiday { name: tr("Feiertag"), date: f.clone() })))(cx)
@@ -687,7 +691,7 @@ impl Settings {
         div()
             .flex()
             .flex_col()
-            .gap(px(22.))
+            .gap(px(space::XL))
             .child(section(
                 Some(tr("Semester")),
                 None,
@@ -741,7 +745,7 @@ impl Settings {
         let sel = self.module.clone();
         let bar = div()
             .flex()
-            .gap(px(2.))
+            .gap(px(space::XXS))
             .child(Button::new("m-add").ghost().small().icon(menu_icon("plus")).tooltip(tr("Neues Modul")).on_click(move |_, _, cx| {
                 let (current, count) = state::read(cx, |l| (l.semester().map(|s| s.id.clone()).unwrap_or_default(), l.config.as_ref().map_or(0, |c| c.modules.len())));
                 let id = format!("m{}", chrono::Utc::now().timestamp());
@@ -767,7 +771,7 @@ impl Settings {
             Some(m) => self.module_editor(c, m, window, cx, t).into_any_element(),
             None => unavailable("library", tr("Modul wählen"), "", t).into_any_element(),
         };
-        div().size_full().flex().child(master).child(div().id("m-detail").flex_1().min_w_0().h_full().overflow_y_scroll().p(px(20.)).child(div().w_full().child(detail)))
+        div().size_full().flex().child(master).child(div().id("m-detail").flex_1().min_w_0().h_full().overflow_y_scrollbar().p(px(space::XL)).child(div().w_full().child(detail)))
     }
 
     fn module_editor(&mut self, c: &StudyConfig, m: Module, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
@@ -789,7 +793,7 @@ impl Settings {
         let naming = fields.input(&k("naming"), &m.naming, &tr("Muster"), window, cx, move |v, cx| e(Box::new(move |m| m.naming = v.clone()))(cx));
         let root = state::read(cx, |l| l.root.clone());
         let exists = root.as_ref().is_some_and(|r| r.join(&m.folder).is_dir());
-        let mut dots = div().flex().gap(px(5.));
+        let mut dots = div().flex().gap(px(space::XS));
         for name in PALETTE {
             let selected = m.color == name;
             let e = edit.clone();
@@ -801,7 +805,7 @@ impl Settings {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .cursor_pointer()
+                    .cursor_pointer().key_nav()
                     .when(selected, |d| d.border_2().border_color(t.primary))
                     .child(div().size(px(14.)).rounded_full().bg(t.palette(name)))
                     .tooltip(tip(name))
@@ -823,7 +827,7 @@ impl Settings {
         });
         let (e, base) = (edit.clone(), root.clone());
         let module_rows = vec![
-            row(tr("Kürzel"), div().flex().items_center().gap(px(12.)).child(div().w(px(110.)).child(Input::new(&code))).child(dots), t),
+            row(tr("Kürzel"), div().flex().items_center().gap(px(space::M)).child(div().w(px(110.)).child(Input::new(&code))).child(dots), t),
             row(tr("Name"), div().w(px(320.)).child(Input::new(&name)), t),
             row(tr("Semester"), sem_picker, t),
             row(
@@ -831,13 +835,13 @@ impl Settings {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
+                    .gap(px(space::S))
                     .child(div().w(px(220.)).child(Input::new(&folder)))
-                    .child(div().id("folder-state").child(icon(if exists { "circle-check" } else { "circle-alert" }, 14., if exists { t.green } else { t.orange })).tooltip(tip(if exists { tr("Ordner existiert") } else { tr("Ordner existiert nicht") })))
+                    .child(div().id("folder-state").child(icon(if exists { "circle-check" } else { "circle-alert" }, iconsize::S, if exists { t.green } else { t.orange })).tooltip(tip(if exists { tr("Ordner existiert") } else { tr("Ordner existiert nicht") })))
                     .child(Button::new("m-pick-folder").small().label(tr("Wählen…")).on_click(move |_, _, cx| {
                         let (e, base) = (e.clone(), base.clone());
                         super::platform::choose_folder(cx, move |p, cx| {
-                            let rel = base.as_ref().and_then(|b| p.strip_prefix(b).ok()).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|| p.to_string_lossy().to_string());
+                            let rel = base.as_ref().and_then(|b| p.strip_prefix(b).ok()).map(|r| crate::core::text::slash_path(r).to_string()).unwrap_or_else(|| p.to_string_lossy().to_string());
                             e(Box::new(move |m| m.folder = rel.clone()))(cx)
                         })
                     })),
@@ -857,12 +861,12 @@ impl Settings {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .px(px(14.))
-                    .py(px(6.))
+                    .gap(px(space::S))
+                    .px(px(space::L))
+                    .py(px(space::S))
                     .child(div().w(px(110.)).child(Input::new(&title).small()))
                     .child(div().flex_1().child(Input::new(&addr).small()))
-                    .child(div().id(("lv", i)).child(icon(if valid { "circle-check" } else { "circle-alert" }, 14., if valid { t.green } else if link.address.is_empty() { t.secondary } else { t.orange })).tooltip(tip(if valid { tr("Gültige Adresse") } else { tr("Nur http(s)-Adressen") })))
+                    .child(div().id(("lv", i)).child(icon(if valid { "circle-check" } else { "circle-alert" }, iconsize::S, if valid { t.green } else if link.address.is_empty() { t.secondary } else { t.orange })).tooltip(tip(if valid { tr("Gültige Adresse") } else { tr("Nur http(s)-Adressen") })))
                     .child(Checkbox::new(("lu", i)).label(tr("Upload")).checked(link.upload).tooltip(tr("Wird beim Hochladen einer Abgabe geöffnet")).on_click(move |v, _, cx| {
                         let v = *v;
                         e1(Box::new(move |m| {
@@ -881,7 +885,7 @@ impl Settings {
             );
         }
         let e = edit.clone();
-        links.push(div().px(px(14.)).py(px(6.)).child(Button::new("link-add").ghost().small().icon(menu_icon("plus")).label(tr("Link hinzufügen")).on_click(move |_, _, cx| {
+        links.push(div().px(px(space::L)).py(px(space::S)).child(Button::new("link-add").ghost().small().icon(menu_icon("plus")).label(tr("Link hinzufügen")).on_click(move |_, _, cx| {
             e(Box::new(|m| {
                 let first = m.links.is_empty();
                 m.links.push(ModuleLink { title: if first { "Moodle".into() } else { String::new() }, upload: first, ..Default::default() })
@@ -895,7 +899,7 @@ impl Settings {
         }
         let e = edit.clone();
         let me = cx.entity();
-        rules.push(div().px(px(14.)).py(px(6.)).child(Button::new("rule-add").ghost().small().icon(menu_icon("plus")).label(tr("Regel hinzufügen")).dropdown_menu(move |menu, _, _| {
+        rules.push(div().px(px(space::L)).py(px(space::S)).child(Button::new("rule-add").ghost().small().icon(menu_icon("plus")).label(tr("Regel hinzufügen")).dropdown_menu(move |menu, _, _| {
             let add = |rule: Rule| {
                 let (e, me) = (e.clone(), me.clone());
                 move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
@@ -928,9 +932,9 @@ impl Settings {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .px(px(14.))
-                    .py(px(6.))
+                    .gap(px(space::S))
+                    .px(px(space::L))
+                    .py(px(space::S))
                     .child(div().flex_1().child(Input::new(&title).small()))
                     .child(picker(("sd", i), names[(s.weekday.clamp(1, 7) - 1) as usize].chars().take(2).collect(), move |mut menu| {
                         for d in 1..=7u32 {
@@ -948,7 +952,7 @@ impl Settings {
             );
         }
         let (e, code_text) = (edit.clone(), m.code.clone());
-        sessions.push(div().px(px(14.)).py(px(6.)).child(Button::new("session-add").ghost().small().icon(menu_icon("plus")).label(tr("Termin hinzufügen")).on_click(move |_, _, cx| {
+        sessions.push(div().px(px(space::L)).py(px(space::S)).child(Button::new("session-add").ghost().small().icon(menu_icon("plus")).label(tr("Termin hinzufügen")).on_click(move |_, _, cx| {
             let c = code_text.clone();
             e(Box::new(move |m| m.sessions.push(Session { title: c.clone(), ..Default::default() })))(cx)
         })).into_any_element());
@@ -956,7 +960,7 @@ impl Settings {
         div()
             .flex()
             .flex_col()
-            .gap(px(22.))
+            .gap(px(space::XL))
             .child(section(Some(tr("Modul")), None, module_rows, t))
             .child(section(Some(tr("Links")), Some(tr("Der Upload-Link öffnet sich beim Hochladen einer Abgabe, daneben erscheinen die Dateien zum Hineinziehen.")), links, t))
             .child(section(Some(tr("Dateinamen")), Some(tr("Platzhalter: {code} {yy} {yyyy} {title} {author} {matrikel} {date} {date:yyyy-MM-dd} {w} {kw}")), naming_rows, t))
@@ -980,19 +984,21 @@ impl Settings {
             .id(SharedString::from(format!("rule-{}", r.id)))
             .flex()
             .items_center()
-            .gap(px(8.))
-            .cursor_pointer()
-            .child(icon(if expanded { "chevron-down" } else { "chevron-right" }, 12., t.secondary))
+            .gap(px(space::S))
+            .cursor_pointer().key_nav()
+            .child(motion::chevron("chevron", expanded, t.secondary))
             .child(div().flex_1().flex().flex_col().child(div().font_weight(FontWeight::MEDIUM).child(r.title.clone())).child(caption(summary, t)))
             .when(r.optional, |d| d.child(div().text_size(px(font::CAPTION2)).text_color(t.secondary).child(tr("optional"))))
             .on_click(cx.listener(move |s, _, _, cx| {
                 s.expanded_rule = if s.expanded_rule.as_deref() == Some(rid.as_str()) { None } else { Some(rid.clone()) };
                 cx.notify();
             }));
-        let mut card = div().flex().flex_col().gap(px(10.)).px(px(14.)).py(px(10.)).child(header);
+        let shell = div().flex().flex_col().px(px(space::L)).py(px(space::S)).child(header);
+        let body_id = SharedString::from(format!("rule-body-{}", r.id));
         if !expanded {
-            return card.into_any_element();
+            return shell.child(motion::reveal(body_id, false, div())).into_any_element();
         }
+        let mut card = div().flex().flex_col().gap(px(space::S)).pt(px(space::S));
         let edit_rules = edit.clone();
         let set = move |f: Box<dyn Fn(&mut Rule)>| {
             let e = edit.clone();
@@ -1018,7 +1024,7 @@ impl Settings {
             let k: Vec<String> = v.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
             s1(Box::new(move |r| r.keywords = k.clone()))(cx)
         });
-        let field = |label: String, content: AnyElement| div().flex().items_center().gap(px(12.)).child(div().w(px(80.)).text_color(t.secondary).child(label)).child(div().flex_1().child(content));
+        let field = |label: String, content: AnyElement| div().flex().items_center().gap(px(space::M)).child(div().w(px(80.)).text_color(t.secondary).child(label)).child(div().flex_1().child(content));
         let (s1, s2, s3, s4) = (set.clone(), set.clone(), set.clone(), set.clone());
         let offset = r.week_offset;
         let offset_label = |o: i64| match o {
@@ -1030,12 +1036,12 @@ impl Settings {
             .then(|| semester.and_then(|s| schedule::lecture_weeks(s).first().copied()).and_then(|w| schedule::due_date(r, &w).map(|d| schedule::resolve(&r.folder, &w, d))))
             .flatten();
         card = card
-            .child(field(tr("Titel"), div().flex().gap(px(8.)).child(div().flex_1().child(Input::new(&title).small())).child(div().w(px(110.)).child(Input::new(&short).small())).into_any_element()))
+            .child(field(tr("Titel"), div().flex().gap(px(space::S)).child(div().flex_1().child(Input::new(&title).small())).child(div().w(px(110.)).child(Input::new(&short).small())).into_any_element()))
             .child(field(
                 tr("Fällig"),
                 div()
                     .flex()
-                    .gap(px(8.))
+                    .gap(px(space::S))
                     .child(picker(("rwd", i), wd.to_string(), move |mut menu| {
                         for d in 1..=7u32 {
                             let s = s1.clone();
@@ -1053,7 +1059,7 @@ impl Settings {
                     }).small())
                     .into_any_element(),
             ))
-            .child(field(tr("Ordner"), div().flex().flex_col().gap(px(3.)).child(Input::new(&folder).small()).when_some(example, |d, ex| d.child(div().font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.secondary).child(trf("z. B. %@/%@", &[&m.folder, &ex])))).into_any_element()))
+            .child(field(tr("Ordner"), div().flex().flex_col().gap(px(space::XS)).child(Input::new(&folder).small()).when_some(example, |d, ex| d.child(div().font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.secondary).child(trf("z. B. %@/%@", &[&m.folder, &ex])))).into_any_element()))
             .child(field(String::new(), Switch::new(("ropt", i)).label(tr("Optional")).checked(r.optional).on_click(move |v, _, cx| {
                 let v = *v;
                 s4(Box::new(move |r| r.optional = v))(cx)
@@ -1064,8 +1070,8 @@ impl Settings {
             link_button(SharedString::from(format!("adv-{}", r.id)), tr("Erweitert"), t)
                 .flex()
                 .items_center()
-                .gap(px(4.))
-                .child(icon(if adv_open { "chevron-down" } else { "chevron-right" }, 11., t.accent))
+                .gap(px(space::XS))
+                .child(motion::chevron("chevron", adv_open, t.accent))
                 .on_click(cx.listener(move |s, _, _, cx| {
                     if !s.advanced.remove(&rid) {
                         s.advanced.insert(rid.clone());
@@ -1088,7 +1094,7 @@ impl Settings {
                     tr("Rhythmus"),
                     div()
                         .flex()
-                        .gap(px(12.))
+                        .gap(px(space::M))
                         .child(picker(("rint", i), interval_label(interval), move |mut menu| {
                             for n in 1..=4u32 {
                                 let s = s2.clone();
@@ -1099,13 +1105,13 @@ impl Settings {
                         .child(div().w(px(180.)).child(Input::new(&weeks).small()))
                         .into_any_element(),
                 ))
-                .child(field(tr("Zeitraum"), div().flex().gap(px(16.)).child(week_limit(("rsw", i), tr("ab"), r.start_week, move |v, cx| s3(Box::new(move |r| r.start_week = v))(cx), t)).child(week_limit(("rew", i), tr("bis"), r.end_week, move |v, cx| s4(Box::new(move |r| r.end_week = v))(cx), t)).into_any_element()))
+                .child(field(tr("Zeitraum"), div().flex().gap(px(space::L)).child(week_limit(("rsw", i), tr("ab"), r.start_week, move |v, cx| s3(Box::new(move |r| r.start_week = v))(cx), t)).child(week_limit(("rew", i), tr("bis"), r.end_week, move |v, cx| s4(Box::new(move |r| r.end_week = v))(cx), t)).into_any_element()))
                 .child(field(
                     tr("Erkennung"),
                     div()
                         .flex()
                         .flex_col()
-                        .gap(px(6.))
+                        .gap(px(space::S))
                         .child(Switch::new(("rrec", i)).label(tr("Auch Unterordner durchsuchen")).checked(r.recursive).on_click(move |v, _, cx| {
                             let v = *v;
                             s5(Box::new(move |r| r.recursive = v))(cx)
@@ -1129,7 +1135,8 @@ impl Settings {
             }
         }
         let e = edit_rules;
-        card.child(div().flex().justify_end().child(Button::new(("rdel", i)).ghost().danger().small().label(tr("Regel löschen")).on_click(move |_, _, cx| e(Box::new(move |m| if i < m.rules.len() { m.rules.remove(i); }))(cx)))).into_any_element()
+        let card = card.child(div().flex().justify_end().child(Button::new(("rdel", i)).ghost().danger().small().label(tr("Regel löschen")).on_click(move |_, _, cx| e(Box::new(move |m| if i < m.rules.len() { m.rules.remove(i); }))(cx))));
+        shell.child(motion::reveal(body_id, true, card)).into_any_element()
     }
 }
 
@@ -1154,12 +1161,12 @@ fn week_limit(id: impl Into<ElementId>, label: String, value: Option<u32>, set: 
     div()
         .flex()
         .items_center()
-        .gap(px(4.))
+        .gap(px(space::XS))
         .child(Checkbox::new(id.clone()).label(label).checked(value.is_some()).on_click(move |v, _, cx| s1(if *v { Some(1) } else { None }, cx)))
         .when_some(value, |d, v| {
-            d.child(Button::new(ElementId::Name(format!("{id:?}-dec").into())).ghost().xsmall().icon(menu_icon("minus")).on_click(move |_, _, cx| s2(Some(v.saturating_sub(1).max(1)), cx)))
+            d.child(Button::new(ElementId::Name(format!("{id:?}-dec").into())).ghost().small().icon(menu_icon("minus")).tooltip(tr("Weniger")).on_click(move |_, _, cx| s2(Some(v.saturating_sub(1).max(1)), cx)))
                 .child(div().w(px(32.)).text_center().text_color(t.primary).child(format!("W{v:02}")))
-                .child(Button::new(ElementId::Name(format!("{id:?}-inc").into())).ghost().xsmall().icon(menu_icon("plus")).on_click(move |_, _, cx| s3(Some((v + 1).min(30)), cx)))
+                .child(Button::new(ElementId::Name(format!("{id:?}-inc").into())).ghost().small().icon(menu_icon("plus")).tooltip(tr("Mehr")).on_click(move |_, _, cx| s3(Some((v + 1).min(30)), cx)))
         })
 }
 
@@ -1192,15 +1199,31 @@ impl Settings {
             div()
                 .flex()
                 .items_center()
-                .gap(px(6.))
-                .child(Button::new(SharedString::from(format!("{id}-dec"))).small().icon(menu_icon("minus")).on_click(move |_, _, cx| dec(cx)))
+                .gap(px(space::S))
+                .child(Button::new(SharedString::from(format!("{id}-dec"))).small().icon(menu_icon("minus")).tooltip(tr("Weniger")).on_click(move |_, _, cx| dec(cx)))
                 .child(div().w(px(110.)).text_center().child(label))
-                .child(Button::new(SharedString::from(format!("{id}-inc"))).small().icon(menu_icon("plus")).on_click(move |_, _, cx| inc(cx)))
+                .child(Button::new(SharedString::from(format!("{id}-inc"))).small().icon(menu_icon("plus")).tooltip(tr("Mehr")).on_click(move |_, _, cx| inc(cx)))
+        };
+        let me = cx.entity();
+        let markdown_row = match self.markdown_default {
+            Some(true) => row(super::platform::markdown_label(), div().flex().items_center().gap(px(space::S)).text_color(t.secondary).child(icon("circle-check", iconsize::S, t.green)).child(tr("Öffnet in Schrumbi")), t),
+            Some(false) => row(
+                super::platform::markdown_label(),
+                Button::new("n-default").small().label(tr("Schrumbi als Standard festlegen")).on_click(move |_, _, cx| {
+                    super::platform::set_markdown_default();
+                    me.update(cx, |s, cx| {
+                        s.markdown_default = super::platform::markdown_is_default();
+                        cx.notify();
+                    });
+                }),
+                t,
+            ),
+            None => div().into_any_element(),
         };
         let editor = section(
             Some(tr("Editor")),
             Some(tr("Doppelklick auf .md-Dateien in Schrumbi öffnet immer den eigenen Editor.")),
-            vec![row(
+            vec![markdown_row, row(
                 tr("Schriftgröße"),
                 stepper(
                     "n-size",
@@ -1239,21 +1262,21 @@ impl Settings {
             prefs::update(|p| p.note_save_on_close = v);
         }), t));
         let current = p.note_accent.to_uppercase();
-        let mut swatches = div().flex().items_center().gap(px(8.));
+        let mut swatches = div().flex().items_center().gap(px(space::S));
         for (hex, name) in ACCENTS {
             let selected = current == hex;
             let color: Hsla = rgb(u32::from_str_radix(&hex[1..], 16).unwrap_or(0)).into();
             swatches = swatches.child(
                 div()
                     .id(SharedString::from(format!("acc-{hex}")))
-                    .size(px(24.))
+                    .size(px(control::S))
                     .rounded_full()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .cursor_pointer()
+                    .cursor_pointer().key_nav()
                     .when(selected, |d| d.border_2().border_color(t.primary))
-                    .child(div().size(px(18.)).rounded_full().bg(color))
+                    .child(div().size(px(iconsize::M)).rounded_full().bg(color))
                     .tooltip(tip(tr(name)))
                     .on_click(move |_, _, _| prefs::update(|p| p.note_accent = hex.into())),
             );
@@ -1261,7 +1284,7 @@ impl Settings {
         swatches = swatches.child(div().w(px(90.)).child(Input::new(&accent).small()));
         let pdf = section(
             Some(tr("PDF-Export")),
-            Some(tr("Notizen werden als A4-PDF neben der Markdown-Datei gesichert (⇧⌘E im Notizfenster). Eigenes CSS wird nach dem Standard-Stylesheet geladen; die Akzentfarbe steht als var(--accent) bereit.")),
+            Some(trf("Notizen werden als A4-PDF neben der Markdown-Datei gesichert (%@ im Notizfenster). Eigenes CSS ändert Farben, Schriften, Größen und Ausrichtung; die Akzentfarbe steht als var(--accent) bereit.", &[&ShortcutAction::ExportPdf.shortcut().map_or_else(String::new, |s| s.display())])),
             vec![
                 row(tr("Akzentfarbe"), swatches, t),
                 row(tr("Kopfzeile mit Modul, Woche, Name und Datum"), Switch::new("n-header").checked(p.pdf_header).on_click(|v, _, _| {
@@ -1272,11 +1295,11 @@ impl Settings {
                     let v = *v;
                     prefs::update(|p| p.pdf_page_numbers = v);
                 }), t),
-                div().flex().flex_col().gap(px(6.)).px(px(14.)).py(px(8.)).child(tr("Eigenes CSS")).child(div().font_family(Theme::mono_family()).child(Input::new(&css))).into_any_element(),
+                div().flex().flex_col().gap(px(space::S)).px(px(space::L)).py(px(space::S)).child(tr("Eigenes CSS")).child(div().font_family(Theme::mono_family()).child(Input::new(&css))).into_any_element(),
                 div()
                     .flex()
-                    .px(px(14.))
-                    .py(px(8.))
+                    .px(px(space::L))
+                    .py(px(space::S))
                     .child(Button::new("n-reset").ghost().label(tr("Standard wiederherstellen")).on_click(|_, _, _| {
                         prefs::update(|p| {
                             p.note_accent = prefs::DEFAULT_ACCENT.into();
@@ -1291,7 +1314,7 @@ impl Settings {
             ],
             t,
         );
-        div().flex().flex_col().gap(px(22.)).child(editor).child(section(Some(tr("Sichern")), Some(save_footer), save_rows, t)).child(pdf)
+        div().flex().flex_col().gap(px(space::XL)).child(editor).child(section(Some(tr("Sichern")), Some(save_footer), save_rows, t)).child(pdf)
     }
 
     fn shortcuts(&mut self, t: &Theme, cx: &mut Context<Self>) -> Div {
@@ -1300,14 +1323,14 @@ impl Settings {
         let head = div()
             .flex()
             .items_center()
-            .gap(px(10.))
-            .child(div().flex_1().child(Input::new(&self.filter).prefix(icon("search", 13., t.secondary)).cleanable(true)))
+            .gap(px(space::S))
+            .child(div().flex_1().child(Input::new(&self.filter).prefix(icon("search", iconsize::S, t.secondary)).cleanable(true)))
             .child(Button::new("sc-reset-all").label(tr("Alle zurücksetzen")).disabled(!any_custom).on_click(cx.listener(|_, _, _, cx| {
                 ShortcutAction::reset_all();
                 super::app::bind_keys(cx);
                 cx.notify();
             })));
-        let mut col = div().flex().flex_col().gap(px(22.)).child(div().flex().flex_col().gap(px(6.)).child(head).child(caption(tr("Klick auf ein Kürzel und drück die neuen Tasten. ⎋ bricht ab, ⌫ entfernt das Kürzel."), t)));
+        let mut col = div().flex().flex_col().gap(px(space::XL)).child(div().flex().flex_col().gap(px(space::S)).child(head).child(caption(tr("Klick auf ein Kürzel und drück die neuen Tasten. ⎋ bricht ab, ⌫ entfernt das Kürzel."), t)));
         for g in Group::ALL {
             let actions: Vec<ShortcutAction> = ShortcutAction::ALL.into_iter().filter(|a| a.group() == g && (filter.is_empty() || a.label().to_lowercase().contains(&filter))).collect();
             if actions.is_empty() {
@@ -1321,7 +1344,7 @@ impl Settings {
                 let caps: AnyElement = if recording {
                     div().text_size(px(font::CALLOUT)).text_color(t.accent).child(tr("Tasten drücken …")).into_any_element()
                 } else if let Some(s) = a.shortcut() {
-                    div().flex().gap(px(3.)).children(caps(&s).into_iter().map(|c| div().min_w(px(18.)).h(px(18.)).px(px(4.)).flex().items_center().justify_center().rounded(px(4.)).bg(t.ink.opacity(0.07)).border_1().border_color(t.ink.opacity(0.12)).text_size(px(11.)).font_weight(FontWeight::MEDIUM).child(c))).into_any_element()
+                    div().flex().gap(px(space::XS)).children(Shortcut::parts(&s).into_iter().map(|c| div().min_w(px(iconsize::M)).h(px(iconsize::M)).px(px(space::XS)).flex().items_center().justify_center().rounded(px(radius::SMALL)).bg(t.ink.opacity(0.07)).border_1().border_color(t.ink.opacity(0.12)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).child(c))).into_any_element()
                 } else {
                     div().text_size(px(font::CALLOUT)).text_color(t.tertiary).child(tr("Kein Kürzel")).into_any_element()
                 };
@@ -1329,14 +1352,14 @@ impl Settings {
                 let recorder = div()
                     .id(SharedString::from(format!("rec-{}", a.id())))
                     .min_w(px(120.))
-                    .h(px(26.))
-                    .px(px(6.))
+                    .h(px(control::M))
+                    .px(px(space::S))
                     .flex()
                     .items_center()
                     .justify_end()
                     .rounded(px(radius::CONTROL))
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(hover))
+                    .cursor_pointer().key_nav()
+                    .soft(hover, radius::CONTROL)
                     .when(recording, |d| d.border(px(1.5)).border_color(t.accent))
                     .child(caps)
                     .tooltip(tip(if recording { tr("⎋ bricht ab, ⌫ entfernt das Kürzel") } else { tr("Klicken zum Ändern") }))
@@ -1350,16 +1373,16 @@ impl Settings {
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(10.))
-                        .px(px(14.))
-                        .py(px(6.))
+                        .gap(px(space::S))
+                        .px(px(space::L))
+                        .py(px(space::S))
                         .child(div().flex_1().child(a.label()))
                         .when(!conflicts.is_empty(), |d| {
-                            d.child(div().id(SharedString::from(format!("dup-{}", a.id()))).flex().items_center().gap(px(3.)).text_size(px(font::CAPTION)).text_color(t.orange).child(icon("triangle-alert", 11., t.orange)).child(tr("Doppelt")).tooltip(tip(trf("Auch belegt: %@", &[&conflicts.iter().map(|c| c.label()).collect::<Vec<_>>().join(", ")]))))
+                            d.child(div().id(SharedString::from(format!("dup-{}", a.id()))).flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange).child(icon("triangle-alert", iconsize::XS, t.orange)).child(tr("Doppelt")).tooltip(tip(trf("Auch belegt: %@", &[&conflicts.iter().map(|c| c.label()).collect::<Vec<_>>().join(", ")]))))
                         })
                         .child(recorder)
                         .child(div().w(px(26.)).when(customized, |d| {
-                            d.child(Button::new(SharedString::from(format!("rst-{}", a.id()))).ghost().xsmall().icon(menu_icon("rotate-ccw")).tooltip(trf("Zurücksetzen auf %@", &[&default])).on_click(cx.listener(move |_, _, _, cx| {
+                            d.child(Button::new(SharedString::from(format!("rst-{}", a.id()))).ghost().small().icon(menu_icon("rotate-ccw")).tooltip(trf("Zurücksetzen auf %@", &[&default])).on_click(cx.listener(move |_, _, _, cx| {
                                 a.reset();
                                 super::app::bind_keys(cx);
                                 cx.notify();
@@ -1409,36 +1432,19 @@ impl Settings {
     }
 }
 
-/// "⇧⌘V" → ["⇧", "⌘", "V"].
-fn caps(s: &Shortcut) -> Vec<String> {
-    let mut out = Vec::new();
-    if s.control {
-        out.push("⌃".to_string());
-    }
-    if s.option {
-        out.push("⌥".into());
-    }
-    if s.shift {
-        out.push("⇧".into());
-    }
-    if s.command {
-        out.push(if cfg!(target_os = "macos") { "⌘".into() } else { "Ctrl".into() });
-    }
-    let display = s.display();
-    out.push(display.trim_start_matches(['⌃', '⌥', '⇧', '⌘']).to_string());
-    out
-}
-
 impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if window.focused(cx).is_none() {
+            window.focus(&self.focus, cx);
+        }
         let t = Theme::get(cx);
         let config = state::read(cx, |l| l.config.clone());
         let tabs = self.tab_bar(&t, cx);
         let body: AnyElement = match (config, self.tab) {
-            (_, Tab::Notes) => div().id("notes-scroll").size_full().overflow_y_scroll().p(px(24.)).child(self.notes(window, cx, &t)).into_any_element(),
-            (_, Tab::Shortcuts) => div().id("sc-scroll").size_full().overflow_y_scroll().p(px(24.)).child(self.shortcuts(&t, cx)).into_any_element(),
+            (_, Tab::Notes) => div().id("notes-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.notes(window, cx, &t)).into_any_element(),
+            (_, Tab::Shortcuts) => div().id("sc-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.shortcuts(&t, cx)).into_any_element(),
             (None, _) => unavailable("folder", tr("Kein Ordner gewählt"), tr("Wähle zuerst im Hauptfenster deinen Studienordner."), &t).into_any_element(),
-            (Some(c), Tab::General) => div().id("general-scroll").size_full().overflow_y_scroll().p(px(24.)).child(self.general(&c, window, cx, &t)).into_any_element(),
+            (Some(c), Tab::General) => div().id("general-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.general(&c, window, cx, &t)).into_any_element(),
             (Some(c), Tab::Semester) => self.semesters(&c, window, cx, &t).into_any_element(),
             (Some(c), Tab::Modules) => self.modules(&c, window, cx, &t).into_any_element(),
         };
@@ -1448,7 +1454,18 @@ impl Render for Settings {
         let content = div()
             .id("settings")
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|s, e: &KeyDownEvent, _, cx| s.record_key(e, cx)))
+            .on_key_down(cx.listener(|s, e: &KeyDownEvent, window, cx| {
+                if s.recording.is_none() && e.keystroke.key == "escape" {
+                    if window.context_stack().iter().any(|c| c.contains("Input")) {
+                        window.focus(&s.focus, cx);
+                    } else {
+                        window.remove_window();
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+                s.record_key(e, cx)
+            }))
             .size_full()
             .flex()
             .flex_col()

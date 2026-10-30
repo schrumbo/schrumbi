@@ -1,11 +1,12 @@
 use chrono::Duration;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
-use super::theme::{Theme, font};
+use super::theme::{Theme, font, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::{tr, trf};
@@ -134,7 +135,7 @@ fn content_height(l: &Library) -> f32 {
     const FOOTER: f32 = 56.;
     const DEADLINE: f32 = 106.;
     const SECTION: f32 = 40.;
-    const ROW: f32 = 27.;
+    const ROW: f32 = 28.;
     const FREE: f32 = 46.;
     let today = day::local_date(l.now);
     let days: Vec<usize> = (0..3).map(|i| l.assignments_on(today + Duration::days(i)).len()).filter(|n| *n > 0).collect();
@@ -216,13 +217,13 @@ fn close_popup(window: &mut Window, cx: &mut App) {
 }
 
 fn section(title: String, tint: Hsla, items: &[&Assignment], lib: &Library, t: &Theme) -> Div {
-    div().flex().flex_col().gap(px(6.)).px(px(14.)).py(px(10.)).child(div().font_weight(FontWeight::SEMIBOLD).child(text(title, font::CAPTION, tint))).children(items.iter().map(|a| {
+    div().flex().flex_col().gap(px(space::S)).px(px(space::L)).py(px(space::S)).child(div().font_weight(FontWeight::SEMIBOLD).child(text(title, font::CAPTION, tint))).children(items.iter().map(|a| {
         let module = lib.module(a);
         div()
             .flex()
             .items_center()
-            .gap(px(8.))
-            .child(status_toggle(a, lib, 16., t))
+            .gap(px(space::S))
+            .child(status_toggle(a, lib, iconsize::M, t))
             .when_some(module, |d, m| d.child(div().flex_none().font_weight(FontWeight::SEMIBOLD).text_size(px(font::CAPTION)).child(module_tag(&m.code, t.palette(&m.color)))))
             .child(div().flex_1().min_w_0().truncate().child(a.title.clone()))
             .child(div().flex_none().text_size(px(font::CAPTION)).child(due_label(lib, a, t)))
@@ -236,7 +237,7 @@ impl Render for TrayPopup {
         let l = lib.read(cx);
         let mut body = div().flex().flex_col();
         if l.root.is_none() {
-            body = body.child(div().p(px(14.)).text_color(t.secondary).child(tr("Kein Ordner gewählt")));
+            body = body.child(div().p(px(space::L)).text_color(t.secondary).child(tr("Kein Ordner gewählt")));
         } else {
             if let Some(a) = l.next_deadline() {
                 body = body
@@ -244,15 +245,15 @@ impl Render for TrayPopup {
                         div()
                             .flex()
                             .flex_col()
-                            .gap(px(4.))
-                            .p(px(14.))
+                            .gap(px(space::XS))
+                            .p(px(space::L))
                             .child(caption(tr("Nächste Deadline"), &t))
                             .child(div().font_weight(FontWeight::SEMIBOLD).text_size(px(font::TITLE2)).child(day::countdown(a.due, l.now)))
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
-                                    .gap(px(6.))
+                                    .gap(px(space::S))
                                     .text_size(px(font::CALLOUT))
                                     .when_some(l.module(a), |d, m| d.child(module_tag(&m.code, t.palette(&m.color))))
                                     .child(a.title.clone()),
@@ -275,7 +276,7 @@ impl Render for TrayPopup {
                 }
             }
             if !any {
-                body = body.child(div().p(px(14.)).text_color(t.secondary).child(tr("Die nächsten 3 Tage sind frei.")));
+                body = body.child(div().p(px(space::L)).text_color(t.secondary).child(tr("Die nächsten 3 Tage sind frei.")));
             }
         }
         let inbox = l.inbox.len();
@@ -292,19 +293,19 @@ impl Render for TrayPopup {
                 let paths = paths.paths().to_vec();
                 act(cx, |l| l.import_to_inbox(&paths));
             })
-            .child(div().id("tray-scroll").flex_1().min_h_0().overflow_y_scroll().child(body))
+            .child(div().id("tray-scroll").flex_1().min_h_0().overflow_y_scrollbar().child(body))
             .child(divider(&t))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .p(px(12.))
+                    .gap(px(space::S))
+                    .p(px(space::M))
                     .child(Button::new("tray-open").primary().small().label(tr("Dashboard öffnen")).on_click(|_, window, cx| {
                         close_popup(window, cx);
                         cx.defer(super::main_window::show);
                     }))
-                    .when(inbox > 0, |d| d.child(div().id("tray-inbox").flex().items_center().gap(px(4.)).text_color(t.secondary).tooltip(tip(tr("Dateien in der Inbox"))).child(icon("inbox", 14., t.secondary)).child(trf("%lld", &[&inbox]))))
+                    .when(inbox > 0, |d| d.child(div().id("tray-inbox").flex().items_center().gap(px(space::XS)).text_color(t.secondary).tooltip(tip(tr("Dateien in der Inbox"))).child(icon("inbox", iconsize::S, t.secondary)).child(trf("%lld", &[&inbox]))))
                     .child(div().flex_1())
                     .child(Button::new("tray-quit").ghost().small().label(tr("Beenden")).on_click(|_, _, cx| super::app::quit(cx))),
             )

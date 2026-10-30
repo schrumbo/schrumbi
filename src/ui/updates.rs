@@ -3,13 +3,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::markdown_view;
 use super::quick::Dismissed;
 use super::state::act;
-use super::theme::{Theme, font};
+use super::theme::{Theme, font, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::prefs;
@@ -89,7 +90,7 @@ pub fn show(window: &mut Window, cx: &mut App) {
     })
     .detach();
     use gpui_kit::component::WindowExt;
-    window.open_dialog(cx, move |d, _, _| d.w(px(480.)).p_0().child(view.clone()));
+    window.open_dialog(cx, move |d, _, _| d.entrance(gpui_kit::component::dialog::DialogEntrance::FadeSlide).w(px(480.)).p_0().child(view.clone()));
 }
 
 enum Phase {
@@ -170,18 +171,18 @@ impl Render for UpdateSheet {
             Phase::Offer => div()
                 .flex()
                 .items_center()
-                .gap(px(8.))
+                .gap(px(space::S))
                 .child(Button::new("update-skip").ghost().label(tr("Diese Version überspringen")).on_click(move |_, _, cx| skip.update(cx, |s, cx| s.skip(cx))))
                 .child(div().flex_1())
                 .child(Button::new("update-later").label(tr("Später")).on_click(move |_, _, cx| later.update(cx, |_, cx| cx.emit(Dismissed))))
                 .when(automatic, |d| d.child(Button::new("update-now").primary().label(tr("Jetzt aktualisieren")).on_click(move |_, _, cx| install.update(cx, |s, cx| s.start(cx)))))
                 .when(!automatic, |d| d.child(page_button("update-page")))
                 .into_any_element(),
-            Phase::Downloading(p) => div().flex().flex_col().gap(px(6.)).child(progress_bar(*p, t.accent, &t)).child(caption(tr("Wird geladen und geprüft …"), &t)).into_any_element(),
+            Phase::Downloading(p) => div().flex().flex_col().gap(px(space::S)).child(progress_bar(*p, t.accent, &t)).child(caption(tr("Wird geladen und geprüft …"), &t)).into_any_element(),
             Phase::Failed(_) => div()
                 .flex()
                 .items_center()
-                .gap(px(8.))
+                .gap(px(space::S))
                 .child(div().flex_1().child(text(tr("Das Update konnte nicht installiert werden."), font::CALLOUT, t.red)))
                 .child(page_button("update-page"))
                 .into_any_element(),
@@ -194,19 +195,19 @@ impl Render for UpdateSheet {
         div()
             .flex()
             .flex_col()
-            .gap(px(14.))
-            .p(px(20.))
+            .gap(px(space::M))
+            .p(px(space::XL))
             .text_size(px(font::BODY))
             .text_color(t.primary)
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(2.))
+                    .gap(px(space::XXS))
                     .child(div().font_weight(FontWeight::SEMIBOLD).text_size(px(font::TITLE3)).child(trf("Version %@ ist verfügbar", &[&self.release.version])))
                     .child(caption(trf("Installiert: %@", &[&env!("CARGO_PKG_VERSION")]), &t)),
             )
-            .child(div().id("update-notes").max_h(px(280.)).overflow_y_scroll().child(notes))
+            .child(div().id("update-notes").max_h(px(280.)).overflow_y_scrollbar().child(notes))
             .child(footer)
     }
 }

@@ -2,12 +2,14 @@ use std::collections::HashMap;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::act;
-use super::theme::{Theme, font};
-use super::widgets::{icon, tip};
+use super::motion::Soft;
+use super::theme::{Theme, font, space, iconsize, radius, control};
+use super::widgets::{KeyNav, icon, tip};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library, Route};
 use crate::core::prefs;
@@ -69,24 +71,24 @@ fn shortcut_label(key: &str) -> String {
 fn badge(n: usize, tint: Hsla) -> Div {
     div()
         .absolute()
-        .bottom(px(3.))
-        .right(px(1.))
-        .min_w(px(15.))
-        .h(px(15.))
-        .px(px(4.))
+        .bottom(px(space::XS))
+        .right(px(space::XXS))
+        .min_w(px(iconsize::M))
+        .h(px(iconsize::M))
+        .px(px(space::XS))
         .rounded_full()
         .bg(tint)
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px(9.))
+        .text_size(px(font::CAPTION2))
         .font_weight(FontWeight::BOLD)
         .text_color(white())
         .child(if n > 99 { "99+".to_string() } else { n.to_string() })
 }
 
 fn label_view(label: String) -> Div {
-    div().w(px(WIDTH - RAIL - 12.)).flex_none().truncate().text_size(px(font::BODY)).child(label)
+    div().w(px(WIDTH - RAIL - space::M)).flex_none().truncate().text_size(px(font::BODY)).child(label)
 }
 
 fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: String, count: Option<(usize, Hsla)>, help: String, t: &Theme) -> Stateful<Div> {
@@ -99,10 +101,10 @@ fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: Stri
         .flex_none()
         .flex()
         .items_center()
-        .cursor_pointer()
+        .cursor_pointer().key_nav()
         .overflow_hidden()
-        .when(active, |d| d.bg(selected).child(div().absolute().left_0().top(px(10.)).bottom(px(10.)).w(px(2.)).rounded_r(px(1.)).bg(accent)))
-        .when(!active, |d| d.hover(move |s| s.bg(hover).opacity(1.)))
+        .when(active, |d| d.bg(selected).child(div().absolute().left_0().top(px(space::M)).bottom(px(space::M)).w(px(space::XXS)).rounded_r(px(space::XXS)).bg(accent)))
+        .when(!active, |d| d.soft(hover, 0.).hover(|s| s.opacity(1.)))
         .child(
             div()
                 .relative()
@@ -138,7 +140,7 @@ pub fn render(lib: &Library, update: Option<String>, t: &Theme) -> Div {
         let route = e.route.clone();
         let is_inbox = e.route == Route::Inbox;
         let count = (e.badge > 0).then_some((e.badge, if e.urgent { t.red } else { t.accent }));
-        let row = tab(SharedString::from(format!("tab-{:?}", e.route)), active, true, icon(e.icon, 22., fg).into_any_element(), e.label, count, help, t).on_click(move |_, window, cx| tab_click(route.clone(), window, cx));
+        let row = tab(SharedString::from(format!("tab-{:?}", e.route)), active, true, icon(e.icon, iconsize::L, fg).into_any_element(), e.label, count, help, t).on_click(move |_, window, cx| tab_click(route.clone(), window, cx));
         if is_inbox {
             let dir = lib.root.as_ref().zip(lib.config.as_ref()).map(|(r, c)| r.join(&c.inbox));
             top = top.child(row.context_menu(move |menu, _, _| {
@@ -165,13 +167,13 @@ pub fn render(lib: &Library, update: Option<String>, t: &Theme) -> Div {
         let color = t.palette(&m.color);
         let code: String = m.code.chars().take(3).collect();
         let chip = div()
-            .size(px(26.))
-            .rounded(px(7.))
+            .size(px(control::S))
+            .rounded(px(radius::CONTROL))
             .bg(color.opacity(if active { 0.9 } else { 0.22 }))
             .flex()
             .items_center()
             .justify_center()
-            .text_size(px(if code.chars().count() > 2 { 9. } else { 11. }))
+            .text_size(px(if code.chars().count() > 2 { font::CAPTION2 } else { font::CAPTION }))
             .font_weight(FontWeight::BOLD)
             .text_color(if active { white() } else { color })
             .child(code)
@@ -205,13 +207,13 @@ pub fn render(lib: &Library, update: Option<String>, t: &Theme) -> Div {
     let bottom = div()
         .flex()
         .flex_col()
-        .pb(px(6.))
+        .pb(px(space::S))
         .when_some(update, |d, version| {
             let label = trf("Update auf %@", &[&version]);
-            d.child(tab("tab-update".into(), false, false, icon("download", 22., t.accent).into_any_element(), label.clone(), None, label, t).on_click(|_, window, cx| super::updates::show(window, cx)))
+            d.child(tab("tab-update".into(), false, false, icon("download", iconsize::L, t.accent).into_any_element(), label.clone(), None, label, t).on_click(|_, window, cx| super::updates::show(window, cx)))
         })
         .when(semesters.len() > 1, |d| {
-            d.child(tab("tab-semester-row".into(), false, true, icon("calendar-range", 22., fg).into_any_element(), semester.clone(), None, semester.clone(), t).child(div().absolute().inset_0().child(menu_overlay("tab-semester", semester.clone()).dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+            d.child(tab("tab-semester-row".into(), false, true, icon("calendar-range", iconsize::L, fg).into_any_element(), semester.clone(), None, semester.clone(), t).child(div().absolute().inset_0().child(menu_overlay("tab-semester", semester.clone()).dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
                 for s in &semesters {
                     let id = s.id.clone();
                     menu = menu.item(PopupMenuItem::new(s.name.clone()).checked(selected_id.as_deref() == Some(s.id.as_str())).on_click(move |_, _, cx| {
@@ -224,21 +226,21 @@ pub fn render(lib: &Library, update: Option<String>, t: &Theme) -> Div {
                 menu
             }))))
         })
-        .child(tab("tab-workspace-row".into(), false, true, icon("folder-open", 22., fg).into_any_element(), workspace, None, tr("Arbeitsordner"), t).child(div().absolute().inset_0().child(menu_overlay("tab-workspace", tr("Arbeitsordner")).dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+        .child(tab("tab-workspace-row".into(), false, true, icon("folder-open", iconsize::L, fg).into_any_element(), workspace, None, tr("Arbeitsordner"), t).child(div().absolute().inset_0().child(menu_overlay("tab-workspace", tr("Arbeitsordner")).dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
             for (i, p) in recents.iter().enumerate() {
                 let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 menu = menu.item(PopupMenuItem::new(name).checked(current.as_ref() == Some(p)).on_click(move |_, window, cx| window.dispatch_action(Box::new(super::app::OpenRecent(i)), cx)));
             }
             menu.separator().item(PopupMenuItem::new(tr("Anderen Ordner öffnen…")).on_click(|_, window, cx| window.dispatch_action(Box::new(super::app::OpenOtherWorkspace), cx)))
         }))))
-        .child(tab("tab-settings".into(), false, true, icon("settings", 22., fg).into_any_element(), tr("Einstellungen"), None, format!("{}  {}", tr("Einstellungen"), shortcut_label(",")), t).on_click(|_, _, cx| super::settings::open(cx)));
+        .child(tab("tab-settings".into(), false, true, icon("settings", iconsize::L, fg).into_any_element(), tr("Einstellungen"), None, format!("{}  {}", tr("Einstellungen"), shortcut_label(",")), t).on_click(|_, _, cx| super::settings::open(cx)));
     div()
         .size_full()
         .flex()
         .flex_col()
         .overflow_hidden()
         .child(top)
-        .when(!modules.is_empty(), |d| d.child(div().mx(px(12.)).my(px(6.)).h(px(1.)).bg(t.separator)))
-        .child(div().id("tab-modules").flex_1().min_h_0().overflow_y_scroll().child(mods))
+        .when(!modules.is_empty(), |d| d.child(div().mx(px(space::M)).my(px(space::S)).h(px(1.)).bg(t.separator)))
+        .child(div().id("tab-modules").flex_1().min_h_0().overflow_y_scrollbar().child(mods))
         .child(bottom)
 }

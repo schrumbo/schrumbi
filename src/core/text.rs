@@ -1,6 +1,12 @@
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
+/// A relative path with `/` on every platform, as configs and convention paths use it.
+pub fn slash_path(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy();
+    if cfg!(windows) { text.replace('\\', "/") } else { text.into_owned() }
+}
+
 /// Shortens a file name in the middle, so its start, date and extension stay readable.
 pub fn middle_ellipsis(name: &str, max: usize) -> String {
     let chars: Vec<char> = name.chars().collect();

@@ -115,7 +115,7 @@ pub fn build(files: &[IndexedFile], root: &Path, config: &StudyConfig) -> Vec<Ca
     files
         .iter()
         .filter_map(|f| {
-            let rel = f.path.strip_prefix(root).ok()?.to_string_lossy().to_string();
+            let rel = super::text::slash_path(f.path.strip_prefix(root).ok()?);
             let module = modules.iter().find(|m| rel.starts_with(&format!("{}/", m.folder))).copied();
             let inner = module.map_or(rel.as_str(), |m| &rel[m.folder.len() + 1..]);
             let all: Vec<&str> = inner.split('/').collect();

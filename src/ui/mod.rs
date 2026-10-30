@@ -33,3 +33,8 @@ pub mod tray;
 pub mod notifications;
 pub mod chrome;
 pub mod updates;
+pub mod smoke;
+pub mod pdf_view;
+pub mod pdf_worker;
+pub mod motion;
+pub mod palette;

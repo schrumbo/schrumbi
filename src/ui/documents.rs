@@ -1,26 +1,27 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{Disableable, Sizable};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::markdown_view::{self, ParsedNote};
+use super::pdf_view::PdfView;
 use super::preview::FilePreview;
 use super::state::{self, act};
-use super::theme::{Theme, font, radius};
+use super::motion::Soft;
+use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::edit_ops::{self, Edit};
 use crate::core::i18n::{tr, trf};
 use crate::core::library;
 use crate::core::markdown;
 use crate::core::naming::extension;
-use crate::core::pdf_render::PdfDoc;
 use crate::core::prefs::{self, NoteSaveMode};
 use crate::core::shortcuts::ShortcutAction;
 
@@ -205,7 +206,7 @@ impl NoteView {
 
     fn header(&self, exporting: bool, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let me = cx.entity();
-        let mut modes = div().flex().rounded(px(6.)).bg(t.ink.opacity(0.06)).p(px(2.));
+        let mut modes = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS));
         let help = ShortcutAction::TogglePreview.shortcut().map_or_else(|| tr("Lesen, Bearbeiten oder beides"), |s| trf("Lesen, Bearbeiten oder beides (%@ wechselt)", &[&s.display()]));
         for (m, label, icon_name) in [(Mode::Read, tr("Lesen"), "eye"), (Mode::Edit, tr("Bearbeiten"), "pencil"), (Mode::Split, tr("Geteilt"), "columns-2")] {
             let active = m == self.mode;
@@ -215,14 +216,14 @@ impl NoteView {
                     .id(SharedString::from(format!("mode-{label}")))
                     .flex()
                     .items_center()
-                    .gap(px(5.))
-                    .px(px(9.))
-                    .py(px(2.))
-                    .rounded(px(5.))
-                    .cursor_pointer()
+                    .gap(px(space::XS))
+                    .px(px(space::S))
+                    .py(px(space::XXS))
+                    .rounded(px(radius::INNER))
+                    .cursor_pointer().key_nav()
                     .text_size(px(font::CALLOUT))
                     .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
-                    .child(icon(icon_name, 12., if active { t.primary } else { t.secondary }))
+                    .child(icon(icon_name, iconsize::XS, if active { t.primary } else { t.secondary }))
                     .child(label)
                     .tooltip(tip(help.clone()))
                     .on_click(move |_, window, cx| e.update(cx, |n, cx| n.set_mode(m, window, cx))),
@@ -233,7 +234,7 @@ impl NoteView {
         div()
             .flex()
             .items_center()
-            .gap(px(8.))
+            .gap(px(space::S))
             .child(modes)
             .child(Button::new("note-pdf").small().icon(menu_icon("share")).label("PDF").tooltip(tr("Als PDF neben der Notiz sichern (⇧⌘E)")).disabled(exporting).on_click(move |_, _, cx| e1.update(cx, |n, cx| n.export(cx))))
             .child(Button::new("note-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, _, _| {
@@ -258,7 +259,7 @@ impl NoteView {
 
     fn reader(&mut self, lib_text: &str, t: &Theme, _cx: &mut Context<Self>) -> AnyElement {
         if lib_text.trim().is_empty() {
-            return div().p(px(32.)).text_color(t.secondary).child(tr("Leere Notiz. Zum Schreiben auf „Bearbeiten“ wechseln.")).into_any_element();
+            return div().p(px(space::XXL)).text_color(t.secondary).child(tr("Leere Notiz. Zum Schreiben auf „Bearbeiten“ wechseln.")).into_any_element();
         }
         let parsed = match &self.parsed {
             Some((rev, p)) if *rev == self.revision => p.clone(),
@@ -285,9 +286,9 @@ impl NoteView {
         div()
             .id("note-reader")
             .size_full()
-            .overflow_y_scroll()
+            .overflow_y_scrollbar()
             .bg(t.content)
-            .child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(32.)).py(px(24.)).child(markdown_view::render(&parsed, base.as_deref(), Some(toggle), t))))
+            .child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).py(px(space::XL)).child(markdown_view::render(&parsed, base.as_deref(), Some(toggle), t))))
             .into_any_element()
     }
 
@@ -542,7 +543,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
         let dirty: Vec<bool> = docs.iter().map(|d| l.buffers.get(d).is_some_and(|b| b.dirty)).collect();
         (docs, titles, dirty)
     });
-    let mut tabs = div().flex().gap(px(2.)).py(px(6.));
+    let mut tabs = div().flex().gap(px(space::XXS)).py(px(space::S));
     for (i, doc) in docs.iter().enumerate() {
         let active = doc.as_path() == current;
         let (open, close, menu) = (doc.clone(), doc.clone(), doc.clone());
@@ -555,17 +556,17 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
                 .group("doc-tab")
                 .flex()
                 .items_center()
-                .gap(px(6.))
-                .pl(px(10.))
-                .pr(px(6.))
-                .py(px(5.))
-                .rounded(px(radius::CONTROL - 2.))
-                .cursor_pointer()
+                .gap(px(space::S))
+                .pl(px(space::M))
+                .pr(px(space::S))
+                .py(px(space::XS))
+                .rounded(px(radius::INNER))
+                .cursor_pointer().key_nav()
                 .when(active, |d| d.bg(t.ink.opacity(0.1)))
-                .when(!active, |d| d.hover(move |s| s.bg(hover)))
+                .when(!active, |d| d.soft(hover, radius::INNER))
                 .tooltip(tip(rel))
                 .on_click(move |_, _, cx| act(cx, |l| l.open_document(&open)))
-                .child(file_icon(doc, 16.))
+                .child(file_icon(doc, iconsize::M))
                 .child(div().max_w(px(180.)).truncate().text_size(px(font::CALLOUT)).text_color(if active { t.primary } else { t.secondary }).child(titles[i].clone()))
                 .child(
                     div()
@@ -575,12 +576,12 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
                         .flex()
                         .items_center()
                         .justify_center()
-                        .hover(|s| s.bg(t.ink.opacity(0.1)))
+                        .soft(t.ink.opacity(0.1), radius::FULL)
                         .when(!active && !is_dirty, |d| d.invisible().group_hover("doc-tab", |s| s.visible()))
                         .child(if is_dirty {
-                            div().relative().size(px(16.)).flex().items_center().justify_center().child(div().size(px(7.)).rounded_full().bg(t.secondary).group_hover("doc-tab", |s| s.invisible())).child(div().absolute().invisible().group_hover("doc-tab", |s| s.visible()).child(icon("x", 10., t.secondary))).into_any_element()
+                            div().relative().size(px(16.)).flex().items_center().justify_center().child(div().size(px(space::S)).rounded_full().bg(t.secondary).group_hover("doc-tab", |s| s.invisible())).child(div().absolute().invisible().group_hover("doc-tab", |s| s.visible()).child(icon("x", iconsize::XS, t.secondary))).into_any_element()
                         } else {
-                            icon("x", 10., t.secondary).into_any_element()
+                            icon("x", iconsize::XS, t.secondary).into_any_element()
                         })
                         .tooltip(tip(if is_dirty { tr("Ungesicherte Änderungen – Tab schließen") } else { tr("Tab schließen") }))
                         .on_click(move |_, _, cx| {
@@ -602,9 +603,9 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
     div()
         .flex()
         .items_center()
-        .gap(px(10.))
-        .pl(px(8.))
-        .pr(px(12.))
+        .gap(px(space::S))
+        .pl(px(space::S))
+        .pr(px(space::M))
         .min_h(px(40.))
         .border_b_1()
         .border_color(t.separator)
@@ -615,115 +616,45 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
 /// Read-only view of PDFs, images, text and other files inside the main window.
 pub struct FileViewer {
     path: PathBuf,
-    pages: Vec<Arc<Image>>,
-    sizes: Vec<(f32, f32)>,
-    zoom: f32,
-    scroll: ScrollHandle,
+    pdf: Option<Entity<PdfView>>,
     preview: Entity<FilePreview>,
-    load: Option<Task<()>>,
-}
-
-enum PdfLoad {
-    Sizes(Vec<(f32, f32)>),
-    Page(Arc<Image>),
+    app: Option<String>,
 }
 
 impl FileViewer {
     pub fn new(path: PathBuf, cx: &mut Context<Self>) -> Self {
+        let is_pdf = extension(&path.to_string_lossy()).eq_ignore_ascii_case("pdf");
+        let pdf = is_pdf.then(|| cx.new(|cx| PdfView::new(&path, cx)));
         let preview = cx.new(|cx| {
             let mut p = FilePreview::new(false);
-            p.set_path(Some(path.clone()), cx);
+            if !is_pdf {
+                p.set_path(Some(path.clone()), cx);
+            }
             p
         });
-        let mut v = Self { path: path.clone(), pages: Vec::new(), sizes: Vec::new(), zoom: 1., scroll: ScrollHandle::new(), preview, load: None };
-        if v.is_pdf() {
-            let (tx, rx) = async_channel::unbounded();
-            let p = path;
-            cx.background_spawn(async move {
-                let Some(doc) = PdfDoc::open(&p) else { return };
-                let count = doc.page_count();
-                let _ = tx.send(PdfLoad::Sizes((0..count).filter_map(|i| doc.page_size(i)).collect())).await;
-                for i in 0..count {
-                    let Some(png) = doc.render_png(i, 2.) else { continue };
-                    if tx.send(PdfLoad::Page(Arc::new(Image::from_bytes(ImageFormat::Png, png)))).await.is_err() {
-                        return;
-                    }
-                }
-            })
-            .detach();
-            v.load = Some(cx.spawn(async move |this, cx| {
-                while let Ok(msg) = rx.recv().await {
-                    let alive = this.update(cx, |v, cx| {
-                        match msg {
-                            PdfLoad::Sizes(sizes) => v.sizes = sizes,
-                            PdfLoad::Page(image) => v.pages.push(image),
-                        }
-                        cx.notify();
-                    });
-                    if alive.is_err() {
-                        return;
-                    }
-                }
-            }));
-        }
-        v
-    }
-
-    fn is_pdf(&self) -> bool {
-        extension(&self.path.to_string_lossy()).eq_ignore_ascii_case("pdf")
-    }
-
-    fn page_width(&self) -> f32 {
-        let available = f32::from(self.scroll.bounds().size.width) - 32.;
-        (if available > 0. { available } else { 820. }) * self.zoom
-    }
-
-    fn page_height(&self, index: usize, width: f32) -> f32 {
-        self.sizes.get(index).map_or(width * 1.414, |(w, h)| width * h / w.max(1.))
-    }
-
-    fn current_page(&self) -> usize {
-        let width = self.page_width();
-        let mut y = -f32::from(self.scroll.offset().y) + f32::from(self.scroll.bounds().size.height) / 3.;
-        for i in 0..self.sizes.len() {
-            y -= self.page_height(i, width) + 12.;
-            if y < 0. {
-                return i + 1;
-            }
-        }
-        self.sizes.len()
+                let app = super::platform::default_app_name(&path);
+        Self { path, pdf, preview, app }
     }
 }
 
 impl Render for FileViewer {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
+        if let Some(pdf) = self.pdf.clone() {
+            let lib = state::lib(cx);
+            let query = lib.update(cx, |l, _| {
+                let matches = l.pdf_query.as_ref().is_some_and(|(p, _)| dunce::canonicalize(p).is_ok_and(|p| p == self.path));
+                if matches { l.pdf_query.take().map(|(_, q)| q) } else { None }
+            });
+            if let Some(query) = query {
+                pdf.update(cx, |v, cx| v.search_for(&query, window, cx));
+            }
+        }
         let me = cx.entity();
         let (p1, p2, p3, p4) = (self.path.clone(), self.path.clone(), self.path.clone(), self.path.clone());
-        let mut actions = div().flex().items_center().gap(px(8.));
-        if self.is_pdf() {
-            let (z1, z2, z3) = (me.clone(), me.clone(), me.clone());
-            actions = actions
-                .when(!self.sizes.is_empty(), |d| d.child(caption(trf("Seite %lld von %lld", &[&self.current_page(), &self.sizes.len()]), &t)))
-                .child(
-                    div()
-                        .flex()
-                        .child(Button::new("pdf-out").ghost().small().icon(menu_icon("zoom-out")).tooltip(tr("Verkleinern")).on_click(move |_, _, cx| z1.update(cx, |v, cx| {
-                            v.zoom = (v.zoom * 0.8).max(0.25);
-                            cx.notify();
-                        })))
-                        .child(Button::new("pdf-fit").ghost().small().icon(menu_icon("scan")).tooltip(tr("Einpassen")).on_click(move |_, _, cx| z2.update(cx, |v, cx| {
-                            v.zoom = 1.;
-                            cx.notify();
-                        })))
-                        .child(Button::new("pdf-in").ghost().small().icon(menu_icon("zoom-in")).tooltip(tr("Vergrößern")).on_click(move |_, _, cx| z3.update(cx, |v, cx| {
-                            v.zoom = (v.zoom * 1.25).min(6.);
-                            cx.notify();
-                        }))),
-                );
-        }
+        let mut actions = div().flex().items_center().gap(px(space::S));
         actions = actions
-            .child(Button::new("open-default").small().icon(menu_icon("square-arrow-out-up-right")).label(tr("Mit Standard-App öffnen")).tooltip(tr("Zum Bearbeiten in der Standard-App öffnen")).on_click(move |_, _, _| library::open_path(&p1)))
+            .child(Button::new("open-default").small().icon(menu_icon("square-arrow-out-up-right")).label(self.app.as_ref().map_or_else(|| tr("Mit Standard-App öffnen"), |a| trf("In %@ öffnen", &[a]))).tooltip(tr("Zum Bearbeiten in der Standard-App öffnen")).on_click(move |_, _, _| library::open_path(&p1)))
             .child(Button::new("viewer-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |m, _, _| {
                 let (a, b, c) = (p2.clone(), p3.clone(), p4.clone());
                 m.item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| library::reveal(&a)))
@@ -733,17 +664,8 @@ impl Render for FileViewer {
             }));
         let body: AnyElement = if !self.path.exists() {
             unavailable("file-question", tr("Datei nicht gefunden"), self.path.file_name().unwrap_or_default().to_string_lossy().to_string(), &t).into_any_element()
-        } else if self.is_pdf() {
-            let width = self.page_width();
-            div()
-                .id("pdf-pages")
-                .size_full()
-                .overflow_scroll()
-                .track_scroll(&self.scroll)
-                .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
-                .bg(t.ink.opacity(0.04))
-                .child(div().flex().flex_col().items_center().gap(px(12.)).p(px(16.)).children(self.pages.iter().map(|p| img(p.clone()).w(px(width)).flex_none().shadow_md())))
-                .into_any_element()
+        } else if let Some(pdf) = &self.pdf {
+            pdf.clone().into_any_element()
         } else {
             self.preview.clone().into_any_element()
         };

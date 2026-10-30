@@ -4,8 +4,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::act;
-use super::theme::{Theme, font, radius};
-use super::widgets::{icon, status_menu, status_toggle, tip};
+use super::motion::Soft;
+use super::theme::{Theme, font, radius, space, iconsize};
+use super::widgets::{KeyNav, icon, status_menu, status_toggle, tip};
 use crate::core::i18n::tr;
 use crate::core::library::Library;
 use crate::core::model::{Assignment, Module, Session, Status};
@@ -14,9 +15,9 @@ use crate::core::day;
 /// Column-per-day board showing timetable sessions and deadlines; one row per day when narrow.
 pub fn render(lib: &Library, days: &[NaiveDate], narrow: bool, t: &Theme) -> Div {
     if narrow {
-        return div().flex().flex_col().gap(px(6.)).children(days.iter().map(|d| agenda_row(lib, *d, t)));
+        return div().flex().flex_col().gap(px(space::S)).children(days.iter().map(|d| agenda_row(lib, *d, t)));
     }
-    div().flex().gap(px(6.)).children(days.iter().map(|d| column(lib, *d, t)))
+    div().flex().gap(px(space::S)).children(days.iter().map(|d| column(lib, *d, t)))
 }
 
 fn day_label(d: NaiveDate, today: NaiveDate) -> String {
@@ -36,10 +37,10 @@ fn column(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
     let header = div()
         .flex()
         .items_baseline()
-        .gap(px(6.))
-        .pb(px(2.))
+        .gap(px(space::S))
+        .pb(px(space::XXS))
         .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent } else { t.secondary }).child(day_label(d, today)))
-        .child(div().text_size(px(font::TITLE2 + 1.)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent } else { t.primary }).child(d.day().to_string()))
+        .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent } else { t.primary }).child(d.day().to_string()))
         .child(div().flex_1())
         .when(open > 0, |h| h.child(div().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).text_color(t.secondary).child(open.to_string())));
 
@@ -47,10 +48,10 @@ fn column(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
         .flex_1()
         .min_w_0()
         .min_h(px(230.))
-        .p(px(8.))
+        .p(px(space::S))
         .flex()
         .flex_col()
-        .gap(px(8.))
+        .gap(px(space::S))
         .rounded(px(radius::CARD))
         .bg(if is_today {
             t.content.blend(t.accent.opacity(0.12))
@@ -64,12 +65,12 @@ fn column(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
         .when(d < today, |c| c.opacity(0.6))
         .child(header)
         .when_some(break_name.clone(), |c, name| {
-            c.child(div().flex().items_center().gap(px(4.)).py(px(2.)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("sun", 11., t.secondary)).child(name))
+            c.child(div().flex().items_center().gap(px(space::XS)).py(px(space::XXS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("sun", iconsize::XS, t.secondary)).child(name))
         })
         .children(sessions.iter().map(|(m, s)| session_chip(m, s, t)))
         .children(items.iter().map(|a| deadline_card(lib, a, t)))
         .when(items.is_empty() && sessions.is_empty() && break_name.is_none(), |c| {
-            c.child(div().w_full().flex().justify_center().py(px(14.)).text_size(px(font::CAPTION)).text_color(t.tertiary).child(if weekend { tr("Wochenende") } else { tr("Frei") }))
+            c.child(div().w_full().flex().justify_center().py(px(space::M)).text_size(px(font::CAPTION)).text_color(t.tertiary).child(if weekend { tr("Wochenende") } else { tr("Frei") }))
         })
         .into_any_element()
 }
@@ -82,8 +83,8 @@ fn agenda_row(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
     div()
         .flex()
         .items_start()
-        .gap(px(14.))
-        .p(px(10.))
+        .gap(px(space::M))
+        .p(px(space::M))
         .rounded(px(radius::CARD))
         .bg(if is_today { t.content.blend(t.accent.opacity(0.07)) } else { t.secondary_bg })
         .border(px(if is_today { 1.5 } else { 1. }))
@@ -98,12 +99,12 @@ fn agenda_row(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
                 .child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent } else { t.primary }).child(d.day().to_string())),
         )
         .child(if items.is_empty() && sessions.is_empty() {
-            div().pt(px(8.)).text_size(px(font::CALLOUT)).text_color(t.tertiary).child(if day::is_weekend(d) { tr("Wochenende") } else { tr("Frei") }).into_any_element()
+            div().pt(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.tertiary).child(if day::is_weekend(d) { tr("Wochenende") } else { tr("Frei") }).into_any_element()
         } else {
             div()
                 .flex()
                 .flex_wrap()
-                .gap(px(6.))
+                .gap(px(space::S))
                 .children(sessions.iter().map(|(m, s)| div().w(px(200.)).child(session_chip(m, s, t))))
                 .children(items.iter().map(|a| div().w(px(200.)).child(deadline_card(lib, a, t))))
                 .into_any_element()
@@ -117,10 +118,10 @@ fn session_chip(m: &Module, s: &Session, t: &Theme) -> Stateful<Div> {
     div()
         .id(SharedString::from(format!("session-{}", s.id)))
         .flex()
-        .gap(px(6.))
-        .py(px(2.))
+        .gap(px(space::S))
+        .py(px(space::XXS))
         .tooltip(tip(format!("{} · {} {}–{}", m.code, s.title, s.start, s.end)))
-        .child(div().w(px(3.)).flex_none().rounded(px(1.5)).bg(t.palette(&m.color).opacity(0.6)))
+        .child(div().w(px(3.)).flex_none().rounded_full().bg(t.palette(&m.color).opacity(0.6)))
         .child(
             div()
                 .flex()
@@ -159,16 +160,16 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .id(SharedString::from(a.id.clone()))
         .relative()
         .w_full()
-        .py(px(7.))
-        .pl(px(9.))
-        .pr(px(6.))
+        .py(px(space::S))
+        .pl(px(space::S))
+        .pr(px(space::S))
         .flex()
         .flex_col()
-        .gap(px(4.))
+        .gap(px(space::XS))
         .rounded(px(radius::CONTROL))
         .bg(if selected { hover_fill } else { fill })
-        .hover(move |s| s.bg(hover_fill))
-        .cursor_pointer()
+        .soft(hover_fill, radius::CONTROL)
+        .cursor_pointer().key_nav()
         .tooltip(tip(help))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(select_id.clone()))))
         .when(tracks, |c| {
@@ -182,14 +183,14 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
             div()
                 .flex()
                 .items_center()
-                .gap(px(5.))
+                .gap(px(space::XS))
                 .text_size(px(font::CAPTION))
-                .child(status_toggle(a, lib, 15., t))
+                .child(status_toggle(a, lib, iconsize::M, t))
                 .child(div().font_weight(FontWeight::SEMIBOLD).text_color(tint).child(module.map_or(String::new(), |m| m.code.clone())))
                 .child(div().text_color(t.secondary).child(day::hm(a.due))),
         )
         .child({
-            let title = div().text_size(px(font::CALLOUT + 1.)).font_weight(FontWeight::MEDIUM).line_clamp(3).text_color(if closed { t.secondary } else { t.primary }).child(a.title.clone());
+            let title = div().text_size(px(font::BODY)).font_weight(FontWeight::MEDIUM).line_clamp(3).text_color(if closed { t.secondary } else { t.primary }).child(a.title.clone());
             if e.status == Status::Skipped { title.line_through() } else { title }
         })
         .when(attention, |c| {
@@ -202,5 +203,5 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
             card = card.border_dashed();
         }
     }
-    card.context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx)).into_any_element()
+    super::motion::flip(format!("card-{}", a.id), card.context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx))).into_any_element()
 }

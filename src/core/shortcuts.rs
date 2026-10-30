@@ -173,6 +173,14 @@ impl ShortcutAction {
     }
 
     pub fn default_shortcut(self) -> Shortcut {
+        if !cfg!(target_os = "macos") {
+            match self {
+                Self::GoBack => return s("left", false, false, true, false),
+                Self::Refresh => return s("f5", false, false, false, false),
+                Self::ToggleInspector => return s("i", true, true, false, false),
+                _ => {}
+            }
+        }
         match self {
             Self::QuickOpen => s("p", true, false, false, false),
             Self::SearchFiles => s("f", true, true, false, false),
@@ -252,6 +260,11 @@ impl ShortcutAction {
         });
     }
 
+    /// The keys as a tooltip suffix, e.g. ` (⌘N)`; empty when the user cleared the shortcut.
+    pub fn hint(self) -> String {
+        self.shortcut().map_or_else(String::new, |s| format!(" ({})", s.display()))
+    }
+
     /// Other actions using the same keys in an overlapping scope.
     pub fn conflicts(self) -> Vec<ShortcutAction> {
         let Some(mine) = self.shortcut() else { return Vec::new() };
@@ -263,34 +276,46 @@ impl ShortcutAction {
 }
 
 impl Shortcut {
-    /// Display like macOS menus: ⌃⌥⇧⌘ then the key.
-    pub fn display(&self) -> String {
-        let mut s = String::new();
-        if self.control {
-            s.push('⌃');
+    /// The modifier and key labels in this platform's order, e.g. ⇧ ⌘ E or Ctrl Shift E.
+    pub fn parts(&self) -> Vec<String> {
+        let mac = cfg!(target_os = "macos");
+        let mut parts: Vec<String> = Vec::new();
+        if mac {
+            for (on, glyph) in [(self.control, "⌃"), (self.option, "⌥"), (self.shift, "⇧"), (self.command, "⌘")] {
+                if on {
+                    parts.push(glyph.into());
+                }
+            }
+        } else {
+            for (on, label) in [(self.command || self.control, "Ctrl"), (self.option, "Alt"), (self.shift, "Shift")] {
+                if on {
+                    parts.push(label.into());
+                }
+            }
         }
-        if self.option {
-            s.push('⌥');
-        }
-        if self.shift {
-            s.push('⇧');
-        }
-        if self.command {
-            s.push('⌘');
-        }
-        let key = match self.key.as_str() {
-            "up" => "↑".to_string(),
-            "down" => "↓".into(),
-            "left" => "←".into(),
-            "right" => "→".into(),
-            "tab" => "⇥".into(),
-            "return" => "↩".into(),
-            "space" => "Space".into(),
-            "delete" => "⌫".into(),
-            "escape" => "⎋".into(),
-            k => k.to_uppercase(),
+        let key = match (self.key.as_str(), mac) {
+            ("up", _) => "↑".to_string(),
+            ("down", _) => "↓".into(),
+            ("left", _) => "←".into(),
+            ("right", _) => "→".into(),
+            ("space", _) => "Space".into(),
+            ("tab", true) => "⇥".into(),
+            ("return", true) => "↩".into(),
+            ("delete", true) => "⌫".into(),
+            ("escape", true) => "⎋".into(),
+            ("tab", false) => "Tab".into(),
+            ("return", false) => "Enter".into(),
+            ("delete", false) => "Backspace".into(),
+            ("escape", false) => "Esc".into(),
+            (k, _) => k.to_uppercase(),
         };
-        s + &key
+        parts.push(key);
+        parts
+    }
+
+    /// Display as the platform writes shortcuts: `⇧⌘E` on macOS, `Ctrl+Shift+E` elsewhere.
+    pub fn display(&self) -> String {
+        self.parts().join(if cfg!(target_os = "macos") { "" } else { "+" })
     }
 
     /// GPUI keystroke syntax, e.g. `cmd-shift-n`; ⌘ maps to Ctrl off macOS.

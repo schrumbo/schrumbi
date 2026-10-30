@@ -10,7 +10,8 @@ use gpui_kit::*;
 use super::fields::{Fields, format_grade, format_number, parse_number};
 use super::pages::Pages;
 use super::state::edit_config;
-use super::theme::{Theme, font};
+use super::motion::{self, Soft};
+use super::theme::{Theme, font, space, radius};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::model::{GradeComponent, GradingSystem, StudyConfig};
@@ -39,7 +40,7 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
 
     let tiles = div()
         .flex()
-        .gap(px(12.))
+        .gap(px(space::M))
         .child(
             tile("earned", tr("Punkte erreicht"), "badge-check", t.green, false, t)
                 .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(format!("{} / {} {credit}", format_number(earned, 1), format_number(planned, 1))))
@@ -58,7 +59,7 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
                 .child(caption(tr("bestanden"), t)),
         );
 
-    let mut col = div().w_full().max_w(px(980.)).px(px(32.)).py(px(24.)).flex().flex_col().gap(px(24.)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Leistungen"))).child(tiles);
+    let mut col = div().w_full().max_w(px(980.)).px(px(space::XXL)).py(px(space::XL)).flex().flex_col().gap(px(space::XL)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Leistungen"))).child(tiles);
 
     for s in &semesters {
         let ms: Vec<_> = c.modules.iter().filter(|m| m.semester == s.id).collect();
@@ -69,8 +70,8 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
             div()
                 .flex()
                 .items_center()
-                .px(px(14.))
-                .py(px(8.))
+                .px(px(space::L))
+                .py(px(space::S))
                 .text_size(px(font::CAPTION))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(t.secondary)
@@ -86,7 +87,7 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
             div()
                 .flex()
                 .flex_col()
-                .gap(px(8.))
+                .gap(px(space::S))
                 .child(div().flex().child(section_title(s.name.clone())).child(div().flex_1()).child(div().text_color(t.secondary).child(format!("{} {credit}", format_number(sum(c.modules.iter().filter(|m| m.semester == s.id).filter_map(|m| m.ects)), 1)))))
                 .child(table),
         );
@@ -128,7 +129,7 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
     let header = div()
         .flex()
         .items_center()
-        .gap(px(8.))
+        .gap(px(space::S))
         .child(
             div()
                 .id(SharedString::from(format!("expand-{id}")))
@@ -136,13 +137,13 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
                 .min_w_0()
                 .flex()
                 .items_center()
-                .gap(px(8.))
-                .py(px(4.))
-                .px(px(6.))
-                .ml(px(-6.))
-                .rounded(px(6.))
-                .cursor_pointer()
-                .hover(|s| s.bg(t.ink.opacity(0.06)))
+                .gap(px(space::S))
+                .py(px(space::XS))
+                .px(px(space::S))
+                .ml(px(-space::S))
+                .rounded(px(radius::INNER))
+                .cursor_pointer().key_nav()
+                .soft(t.ink.opacity(0.06), radius::INNER)
                 .tooltip(tip(tr("Teilleistungen anzeigen")))
                 .on_click({
                     let id = id.clone();
@@ -153,8 +154,8 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
                         cx.notify();
                     })
                 })
-                .child(icon(if expanded { "chevron-down" } else { "chevron-right" }, 11., t.secondary))
-                .child(div().size(px(9.)).rounded_full().bg(t.palette(&m.color)))
+                .child(motion::chevron("chevron", expanded, t.secondary))
+                .child(div().size(px(space::S)).rounded_full().bg(t.palette(&m.color)))
                 .child(div().font_weight(FontWeight::SEMIBOLD).child(m.code.clone()))
                 .child(div().truncate().text_color(t.secondary).child(m.name.clone()))
                 .when(!m.components.is_empty(), |d| d.child(div().text_size(px(font::CAPTION)).text_color(t.tertiary).child(trf("%lld Teilleistungen", &[&m.components.len()])))),
@@ -174,7 +175,7 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
                 }
             });
         })));
-    div().flex().flex_col().gap(px(8.)).px(px(14.)).py(px(8.)).child(header).when(expanded, |d| d.child(div().pl(px(34.)).child(components_editor(m, system, fields, window, cx, t))))
+    div().flex().flex_col().gap(px(space::S)).px(px(space::L)).py(px(space::S)).child(header).child(motion::reveal(SharedString::from(format!("parts-{}", m.id)), expanded, if expanded { div().pl(px(space::XXL)).child(components_editor(m, system, fields, window, cx, t)) } else { div() }))
 }
 
 fn edit_components(id: &str, cx: &mut App, f: impl FnOnce(&mut Vec<GradeComponent>), system: GradingSystem) {
@@ -190,7 +191,7 @@ fn edit_components(id: &str, cx: &mut App, f: impl FnOnce(&mut Vec<GradeComponen
 }
 
 fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fields: &mut Fields, window: &mut Window, cx: &mut Context<Pages>, t: &Theme) -> Div {
-    let mut col = div().flex().flex_col().gap(px(6.));
+    let mut col = div().flex().flex_col().gap(px(space::S));
     for (j, comp) in m.components.iter().enumerate() {
         let id = m.id.clone();
         let (a, b, cc, d) = (id.clone(), id.clone(), id.clone(), id.clone());
@@ -205,7 +206,7 @@ fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fiel
             div()
                 .flex()
                 .items_center()
-                .gap(px(8.))
+                .gap(px(space::S))
                 .child(div().flex_1().child(Input::new(&name).small()))
                 .child(div().id(SharedString::from(format!("w-{id}-{j}"))).w(px(70.)).tooltip(tip(tr("Gewicht, z. B. 60 für 60 %"))).child(Input::new(&weight).small().text_right()))
                 .when(system.uses_grades(), |r| r.child(div().w(px(80.)).child(Input::new(&grade).small().text_right())))
@@ -219,7 +220,7 @@ fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fiel
         );
     }
     let id = m.id.clone();
-    let mut footer = div().flex().items_center().gap(px(12.)).child(
+    let mut footer = div().flex().items_center().gap(px(space::M)).child(
         Button::new(SharedString::from(format!("add-comp-{id}"))).ghost().small().icon(menu_icon("plus")).label(tr("Teilleistung hinzufügen")).on_click(move |_, _, cx| {
             edit_components(&id, cx, |cs| cs.push(GradeComponent { name: tr("Klausur"), weight: 100., ..Default::default() }), system)
         }),

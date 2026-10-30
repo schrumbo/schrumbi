@@ -8,6 +8,7 @@ use gpui_kit::component::date_picker::{DatePicker, DatePickerEvent, DatePickerSt
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{Disableable, Sizable};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -15,7 +16,7 @@ use super::fields::Fields;
 use super::inspector::{datetime_picker, picked};
 use super::quick::Dismissed;
 use super::state::{self, act};
-use super::theme::{Theme, font, radius};
+use super::theme::{Theme, font, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::ics::{self, CalendarEvent};
@@ -55,16 +56,16 @@ impl Render for Reschedule {
             .w(px(400.))
             .flex()
             .flex_col()
-            .gap(px(16.))
-            .p(px(20.))
+            .gap(px(space::L))
+            .p(px(space::XL))
             .child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).child(tr("Termin verschieben")))
             .child(div().text_color(t.secondary).child(a.title.clone()))
-            .child(div().flex().items_center().gap(px(10.)).child(div().text_color(t.secondary).child(tr("Neuer Termin"))).child(div().flex_1().child(DatePicker::new(&self.date))))
+            .child(div().flex().items_center().gap(px(space::S)).child(div().text_color(t.secondary).child(tr("Neuer Termin"))).child(div().flex_1().child(DatePicker::new(&self.date))))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
+                    .gap(px(space::S))
                     .when(a.is_moved, |d| {
                         d.child(Button::new("rs-reset").ghost().label(tr("Ursprünglicher Termin")).on_click(move |_, _, cx| {
                             act(cx, |l| l.move_occurrence(&id1, None));
@@ -125,7 +126,7 @@ impl Render for ImportCalendar {
         });
         let visible = self.visible();
         let courses: BTreeSet<String> = visible.iter().map(|e| e.course.clone()).collect();
-        let mut list = div().flex().flex_col().px(px(16.)).py(px(8.));
+        let mut list = div().flex().flex_col().px(px(space::L)).py(px(space::S));
         for course in courses {
             let current = self.course_modules.get(&course).cloned().unwrap_or_default();
             let label = modules.iter().find(|m| m.0 == current).map_or_else(|| tr("Nicht importieren"), |m| m.1.clone());
@@ -134,9 +135,9 @@ impl Render for ImportCalendar {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .mt(px(10.))
-                    .py(px(4.))
+                    .gap(px(space::S))
+                    .mt(px(space::S))
+                    .py(px(space::XS))
                     .child(div().flex_1().truncate().font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(if course.is_empty() { tr("Ohne Kurs") } else { course.clone() }))
                     .child(Button::new(SharedString::from(format!("course-{course}"))).small().label(label).dropdown_caret(true).dropdown_menu(move |mut menu, _, _| {
                         let set = |id: String| {
@@ -160,8 +161,8 @@ impl Render for ImportCalendar {
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(10.))
-                        .py(px(4.))
+                        .gap(px(space::S))
+                        .py(px(space::XS))
                         .child(Checkbox::new(SharedString::from(format!("ev-{}", ev.uid))).checked(self.selected.contains(&ev.uid)).on_click(move |v, _, cx| {
                             let (v, uid) = (*v, uid1.clone());
                             e1.update(cx, |i, cx| {
@@ -169,7 +170,7 @@ impl Render for ImportCalendar {
                                 cx.notify();
                             })
                         }))
-                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.)).child(div().truncate().child(ev.title())).child(caption(day::due(ics::local(ev.due), now), &t)))
+                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().truncate().child(ev.title())).child(caption(day::due(ics::local(ev.due), now), &t)))
                         .when(known.contains(&ev.uid), |d| d.child(caption(tr("bereits importiert"), &t)))
                         .child(Button::new(SharedString::from(format!("kind-{}", ev.uid))).small().label(kind.label()).dropdown_caret(true).dropdown_menu(move |mut menu, _, _| {
                             for k in Kind::ALL {
@@ -195,8 +196,8 @@ impl Render for ImportCalendar {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(4.))
-                    .p(px(20.))
+                    .gap(px(space::XS))
+                    .p(px(space::XL))
                     .border_b_1()
                     .border_color(t.separator)
                     .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(tr("Kalender importieren")))
@@ -205,14 +206,14 @@ impl Render for ImportCalendar {
             .child(if self.events.is_empty() {
                 unavailable("calendar-x", tr("Keine Termine gefunden"), tr("Die Datei enthält keine lesbaren Termine."), &t).flex_1().into_any_element()
             } else {
-                div().id("ics-list").flex_1().min_h_0().overflow_y_scroll().child(list).into_any_element()
+                div().id("ics-list").flex_1().min_h_0().overflow_y_scrollbar().child(list).into_any_element()
             })
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .p(px(16.))
+                    .gap(px(space::S))
+                    .p(px(space::L))
                     .border_t_1()
                     .border_color(t.separator)
                     .child(Checkbox::new("include-past").label(tr("Vergangene Termine zeigen")).checked(self.include_past).on_click(move |v, _, cx| {
@@ -288,7 +289,7 @@ impl Setup {
 }
 
 fn form_row(label: String, content: impl IntoElement, t: &Theme) -> Div {
-    div().flex().items_center().gap(px(12.)).px(px(14.)).py(px(8.)).child(div().w(px(170.)).text_color(t.secondary).child(label)).child(div().flex_1().child(content))
+    div().flex().items_center().gap(px(space::M)).px(px(space::L)).py(px(space::S)).child(div().w(px(170.)).text_color(t.secondary).child(label)).child(div().flex_1().child(content))
 }
 
 impl Render for Setup {
@@ -313,8 +314,8 @@ impl Render for Setup {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(16.))
-                    .child(div().flex().items_center().gap(px(14.)).child(super::onboarding::snail(54., &t)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Willkommen"))))
+                    .gap(px(space::L))
+                    .child(div().flex().items_center().gap(px(space::M)).child(super::onboarding::snail(54., &t)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Willkommen"))))
                     .child(div().text_color(t.secondary).child(tr("Drei kurze Schritte, danach erkennt die App deine Abgaben automatisch.")))
                     .child(
                         grouped(&t)
@@ -326,7 +327,7 @@ impl Render for Setup {
                     )
             }
             1 => {
-                let mut col = div().flex().flex_col().gap(px(16.)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Semester"))).child(div().text_color(t.secondary).child(tr("Vorlesungszeitraum und Pausen. Pausen zählen nicht als Vorlesungswochen.")));
+                let mut col = div().flex().flex_col().gap(px(space::L)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Semester"))).child(div().text_color(t.secondary).child(tr("Vorlesungszeitraum und Pausen. Pausen zählen nicht als Vorlesungswochen.")));
                 if let Some(s) = self.draft.semesters.first().cloned() {
                     let e = me.clone();
                     let name = fields.input("setup-semester", &s.name, "", window, cx, move |v, cx| e.update(cx, |st, cx| {
@@ -377,9 +378,9 @@ impl Render for Setup {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(10.))
-                            .px(px(14.))
-                            .py(px(8.))
+                            .gap(px(space::S))
+                            .px(px(space::L))
+                            .py(px(space::S))
                             .child(div().size(px(10.)).rounded_full().bg(t.palette(&m.color)))
                             .child(div().w(px(70.)).child(Input::new(&code).small()))
                             .child(div().flex_1().child(Input::new(&name).small()))
@@ -394,10 +395,10 @@ impl Render for Setup {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(16.))
+                    .gap(px(space::L))
                     .child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Module")))
                     .child(div().text_color(t.secondary).child(tr("Aus deinen Ordnern erkannt. Danach: Termine aus Moodle über „Ablage → Kalender importieren“ übernehmen oder wiederkehrende Abgaben unter Einstellungen → Module anlegen.")))
-                    .child(if empty { unavailable("folder", tr("Keine Ordner gefunden"), tr("Lege für jedes Modul einen Ordner an oder füge Module später hinzu."), &t).h(px(200.)).into_any_element() } else { div().id("setup-modules").max_h(px(260.)).overflow_y_scroll().child(list).into_any_element() })
+                    .child(if empty { unavailable("folder", tr("Keine Ordner gefunden"), tr("Lege für jedes Modul einen Ordner an oder füge Module später hinzu."), &t).h(px(200.)).into_any_element() } else { div().id("setup-modules").max_h(px(260.)).overflow_y_scrollbar().child(list).into_any_element() })
             }
         };
         fields.prune();
@@ -409,14 +410,14 @@ impl Render for Setup {
             .h(px(520.))
             .flex()
             .flex_col()
-            .child(div().flex().gap(px(6.)).px(px(24.)).pt(px(24.)).children((0..3).map(|i| div().flex_1().h(px(4.)).rounded_full().bg(if i <= step { t.accent } else { t.secondary.opacity(0.25) }))))
-            .child(div().id("setup-body").flex_1().min_h_0().overflow_y_scroll().p(px(24.)).child(body))
+            .child(div().flex().gap(px(space::S)).px(px(space::XL)).pt(px(space::XL)).children((0..3).map(|i| div().flex_1().h(px(4.)).rounded_full().bg(if i <= step { t.accent } else { t.secondary.opacity(0.25) }))))
+            .child(div().id("setup-body").flex_1().min_h_0().overflow_y_scrollbar().p(px(space::XL)).child(body))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .p(px(16.))
+                    .gap(px(space::S))
+                    .p(px(space::L))
                     .border_t_1()
                     .border_color(t.separator)
                     .child(Button::new("setup-later").ghost().label(tr("Später einrichten")).on_click(move |_, _, cx| later.update(cx, |s, cx| s.finish(false, cx))))

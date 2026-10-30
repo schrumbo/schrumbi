@@ -3,12 +3,14 @@ use std::path::PathBuf;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::filing_form::{FilingEvent, FilingForm};
 use super::state::{self, act};
-use super::theme::{Theme, font};
+use super::motion::Soft;
+use super::theme::{Theme, font, space, iconsize, radius};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::{tr, trf};
@@ -116,7 +118,7 @@ impl Render for InboxPage {
                 .child(Button::new("inbox-add").label(tr("Dateien hinzufügen…")).on_click(|_, _, cx| add_files(cx)))
                 .into_any_element()
         } else {
-            let mut list = div().flex().flex_col().p(px(6.));
+            let mut list = div().flex().flex_col().p(px(space::S));
             for (i, p) in inbox.iter().enumerate() {
                 let selected = self.selection.contains(p) || (self.selection.is_empty() && i == 0);
                 let created = std::fs::metadata(p).ok().and_then(|m| m.created().or_else(|_| m.modified()).ok()).map(chrono::DateTime::<chrono::Local>::from);
@@ -127,21 +129,21 @@ impl Render for InboxPage {
                         .id(SharedString::from(format!("inbox-{}", p.display())))
                         .flex()
                         .items_center()
-                        .gap(px(10.))
-                        .px(px(8.))
-                        .py(px(5.))
-                        .rounded(px(6.))
-                        .cursor_pointer()
+                        .gap(px(space::S))
+                        .px(px(space::S))
+                        .py(px(space::XS))
+                        .rounded(px(radius::INNER))
+                        .cursor_pointer().key_nav()
                         .when(selected, |d| d.bg(if list_focused { t.accent.opacity(0.32) } else { t.ink.opacity(0.09) }).anchor_scroll(Some(self.anchor.clone())))
-                        .when(!selected, |d| d.hover(move |s| s.bg(hover)))
-                        .child(file_icon(p, 22.))
+                        .when(!selected, |d| d.soft(hover, radius::INNER))
+                        .child(file_icon(p, iconsize::L))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .flex()
                                 .flex_col()
-                                .gap(px(2.))
+                                .gap(px(space::XXS))
                                 .child(div().truncate().child(p.file_name().unwrap_or_default().to_string_lossy().to_string()))
                                 .when_some(created, |d, c| d.child(caption(day::due(c, now), &t))),
                         )
@@ -184,12 +186,12 @@ impl Render for InboxPage {
                         .flex_col()
                         .border_r_1()
                         .border_color(t.separator)
-                        .child(div().id("inbox-list").flex_1().min_h_0().overflow_y_scroll().track_focus(&self.focus).track_scroll(&self.scroll).on_key_down(cx.listener(Self::on_key)).child(list))
+                        .child(div().relative().flex_1().min_h_0().child(div().id("inbox-list").size_full().overflow_y_scroll().track_focus(&self.focus).track_scroll(&self.scroll).on_key_down(cx.listener(Self::on_key)).child(list)).vertical_scrollbar(&self.scroll))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .p(px(8.))
+                                .p(px(space::S))
                                 .border_t_1()
                                 .border_color(t.separator)
                                 .child(Button::new("inbox-add-files").ghost().icon(menu_icon("plus")).label(tr("Dateien hinzufügen…")).on_click(|_, _, cx| add_files(cx)))
@@ -205,7 +207,7 @@ impl Render for InboxPage {
                 div()
                     .absolute()
                     .inset(px(10.))
-                    .rounded(px(12.))
+                    .rounded(px(radius::CARD))
                     .border(px(3.))
                     .border_dashed()
                     .border_color(accent)
@@ -213,11 +215,11 @@ impl Render for InboxPage {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .gap(px(8.))
+                    .gap(px(space::S))
                     .text_size(px(font::TITLE3))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(accent)
-                    .child(icon("inbox", 18., accent))
+                    .child(icon("inbox", iconsize::M, accent))
                     .child(tr("In die Inbox legen")),
             )
         })

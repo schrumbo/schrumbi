@@ -16,6 +16,8 @@ actions!(
         OpenSettings,
         Undo,
         Redo,
+        CommandPalette,
+        ShowShortcuts,
         NewEntry,
         NewFile,
         QuickOpen,
@@ -68,7 +70,10 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &OpenSettings, cx| super::settings::open(cx));
     cx.on_action(|_: &About, cx| super::settings::open_about(cx));
     cx.on_action(|_: &CheckForUpdates, cx| super::updates::check(true, cx));
-    cx.on_action(|_: &Undo, cx| act(cx, |l| l.perform_undo()));
+    cx.on_action(|_: &Undo, cx| act(cx, |l| l.undo()));
+    cx.on_action(|_: &Redo, cx| act(cx, |l| l.redo()));
+    cx.on_action(|_: &CommandPalette, cx| act(cx, |l| if l.root.is_some() { l.show_palette = true }));
+    cx.on_action(|_: &ShowShortcuts, cx| act(cx, |l| if l.root.is_some() { l.show_shortcuts = true }));
     cx.on_action(|_: &NewEntry, cx| act(cx, |l| if l.root.is_some() { l.show_quick_add = true }));
     cx.on_action(|_: &NewFile, cx| {
         act(cx, |l| {
@@ -184,9 +189,13 @@ pub fn cmd(k: &str) -> String {
 pub fn bind_keys(cx: &mut App) {
     let mut b: Vec<KeyBinding> = vec![
         kb(cmd("q"), Quit, None),
+        kb(cmd("k"), CommandPalette, None),
+        kb(cmd("shift-p"), CommandPalette, None),
+        kb(cmd("/"), ShowShortcuts, None),
+        kb(cmd("shift-7"), ShowShortcuts, None),
         kb(cmd(","), OpenSettings, None),
         kb(cmd("z"), Undo, Some("MainWindow")),
-        kb(cmd("shift-z"), Redo, None),
+        kb(cmd("shift-z"), Redo, Some("MainWindow")),
         kb(cmd("s"), Save, None),
         kb(cmd("shift-w"), CloseWindow, None),
         kb(cmd("shift-r"), RevealWorkspace, None),
@@ -223,6 +232,7 @@ pub fn bind_keys(cx: &mut App) {
         .flatten(),
     );
     b.extend(super::editor::key_bindings());
+    b.extend(super::pdf_view::key_bindings());
     cx.bind_keys(b);
 }
 
@@ -253,20 +263,22 @@ pub fn rebuild_menus(cx: &mut App) {
         MenuItem::separator(),
     ];
     go.extend(modules.into_iter().map(|(id, name)| MenuItem::action(name, GoModule(id))));
+    let mut app_menu = vec![
+        MenuItem::action(tr("Über Schrumbi"), About),
+        MenuItem::action(tr("Nach Updates suchen…"), CheckForUpdates),
+        MenuItem::separator(),
+        MenuItem::action(tr("Einstellungen…"), OpenSettings),
+        MenuItem::separator(),
+    ];
+    if cfg!(target_os = "macos") {
+        app_menu.extend([MenuItem::action(tr("Schrumbi ausblenden"), Hide), MenuItem::action(tr("Andere ausblenden"), HideOthers), MenuItem::action(tr("Alle einblenden"), ShowAll), MenuItem::separator()]);
+    }
+    app_menu.push(MenuItem::action(tr("Schrumbi beenden"), Quit));
     cx.set_menus([
-        Menu::new("Schrumbi").items([
-            MenuItem::action(tr("Über Schrumbi"), About),
-            MenuItem::action(tr("Nach Updates suchen…"), CheckForUpdates),
-            MenuItem::separator(),
-            MenuItem::action(tr("Einstellungen…"), OpenSettings),
-            MenuItem::separator(),
-            MenuItem::action(tr("Schrumbi ausblenden"), Hide),
-            MenuItem::action(tr("Andere ausblenden"), HideOthers),
-            MenuItem::action(tr("Alle einblenden"), ShowAll),
-            MenuItem::separator(),
-            MenuItem::action(tr("Schrumbi beenden"), Quit),
-        ]),
+        Menu::new("Schrumbi").items(app_menu),
         Menu::new(tr("Ablage")).items([
+            MenuItem::action(tr("Befehl suchen …"), CommandPalette),
+            MenuItem::separator(),
             MenuItem::action(tr("Neuer Termin…"), NewEntry),
             MenuItem::action(tr("Neue Notiz, Datei oder Ordner…"), NewFile),
             MenuItem::action(tr("Datei schnell öffnen…"), QuickOpen),
@@ -301,6 +313,7 @@ pub fn rebuild_menus(cx: &mut App) {
         ]),
         Menu::new(tr("Gehe zu")).items(go),
         Menu::new(tr("Fenster")).items([MenuItem::action(tr("Im Dock ablegen"), Minimize), MenuItem::action(tr("Zoomen"), Zoom)]),
+        Menu::new(tr("Hilfe")).items([MenuItem::action(tr("Tastenkürzel anzeigen"), ShowShortcuts)]),
     ]);
     super::chrome::sync_menus(cx);
 }

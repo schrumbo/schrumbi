@@ -5,12 +5,14 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, Sizable};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::inspector::{datetime_picker, picked};
 use super::state::{self, act};
-use super::theme::{Theme, font, radius};
+use super::motion::Soft;
+use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::catalog::{self, CatalogFile, FileKind};
 use crate::core::day;
@@ -108,7 +110,7 @@ fn subfolders(module: &str, cx: &App) -> Vec<String> {
 }
 
 fn row(label: String, content: impl IntoElement, t: &Theme) -> Div {
-    div().flex().items_start().gap(px(12.)).child(div().w(px(70.)).pt(px(5.)).text_color(t.secondary).child(label)).child(div().flex_1().child(content))
+    div().flex().items_start().gap(px(space::M)).child(div().w(px(70.)).pt(px(space::XS)).text_color(t.secondary).child(label)).child(div().flex_1().child(content))
 }
 
 impl Render for QuickAdd {
@@ -121,7 +123,7 @@ impl Render for QuickAdd {
         let me = cx.entity();
         let modules: Vec<(String, String)> = state::read(cx, |l| l.semester_modules().iter().map(|m| (m.id.clone(), m.display_name())).collect());
         let current = modules.iter().find(|m| m.0 == self.module).map(|m| m.1.clone()).unwrap_or_default();
-        let mut kinds = div().flex().rounded(px(6.)).bg(t.ink.opacity(0.06)).p(px(2.));
+        let mut kinds = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS));
         for k in Kind::ALL {
             let active = k == self.kind;
             let e = me.clone();
@@ -132,12 +134,12 @@ impl Render for QuickAdd {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .gap(px(5.))
-                    .py(px(4.))
-                    .rounded(px(5.))
-                    .cursor_pointer()
+                    .gap(px(space::XS))
+                    .py(px(space::XS))
+                    .rounded(px(radius::INNER))
+                    .cursor_pointer().key_nav()
                     .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
-                    .child(icon(k.icon(), 13., if active { t.primary } else { t.secondary }))
+                    .child(icon(k.icon(), iconsize::S, if active { t.primary } else { t.secondary }))
                     .child(k.label())
                     .on_click(move |_, window, cx| e.update(cx, |q, cx| q.set_kind(k, window, cx))),
             );
@@ -157,7 +159,7 @@ impl Render for QuickAdd {
         let today = Local::now().date_naive();
         let next_monday = day::monday(today) + Days::new(7);
         let quick: Vec<(String, chrono::NaiveDate)> = vec![(tr("Heute"), today), (tr("Morgen"), today + Days::new(1)), (tr("Nächster Mo"), next_monday), (tr("In 1 Woche"), today + Days::new(7))];
-        let mut chips = div().flex().gap(px(6.));
+        let mut chips = div().flex().gap(px(space::S));
         for (i, (label, d)) in quick.into_iter().enumerate() {
             let e = me.clone();
             chips = chips.child(Button::new(("qa-date", i)).small().label(label).on_click(move |_, window, cx| e.update(cx, |q, cx| {
@@ -170,9 +172,9 @@ impl Render for QuickAdd {
         let mut grid = div()
             .flex()
             .flex_col()
-            .gap(px(12.))
+            .gap(px(space::M))
             .child(row(tr("Modul"), module_menu, &t))
-            .child(row(if self.kind == Kind::Exam { tr("Termin") } else { tr("Fällig") }, div().flex().flex_col().gap(px(8.)).child(div().w(px(240.)).child(DatePicker::new(&self.due))).child(chips).child(caption(countdown, &t)), &t));
+            .child(row(if self.kind == Kind::Exam { tr("Termin") } else { tr("Fällig") }, div().flex().flex_col().gap(px(space::S)).child(div().w(px(240.)).child(DatePicker::new(&self.due))).child(chips).child(caption(countdown, &t)), &t));
         if self.kind == Kind::Submission {
             let folders = subfolders(&self.module, cx);
             let label = if self.folder.is_empty() { tr("Modulordner") } else { self.folder.clone() };
@@ -216,16 +218,16 @@ impl Render for QuickAdd {
             .w(px(520.))
             .flex()
             .flex_col()
-            .gap(px(18.))
-            .p(px(20.))
+            .gap(px(space::L))
+            .p(px(space::XL))
             .child(kinds)
-            .child(Input::new(&self.title).large())
+            .child(Input::new(&self.title))
             .child(grid)
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
+                    .gap(px(space::S))
                     .child(div().flex_1().child(caption(hint, &t)))
                     .child(Button::new("qa-cancel").label(tr("Abbrechen")).on_click(move |_, _, cx| cancel.update(cx, |_, cx| cx.emit(Dismissed))))
                     .child(Button::new("qa-add").primary().label(tr("Hinzufügen")).disabled(!can_add).on_click(move |_, _, cx| add.update(cx, |q, cx| q.add(cx)))),
@@ -297,7 +299,7 @@ impl Render for QuickOpen {
         let items = self.results(cx);
         self.index = self.index.min(items.len().saturating_sub(1));
         let me = cx.entity();
-        let mut list = div().flex().flex_col().gap(px(2.)).p(px(6.));
+        let mut list = div().flex().flex_col().gap(px(space::XXS)).p(px(space::S));
         for (i, (f, is_open)) in items.iter().enumerate() {
             let selected = i == self.index;
             let fg = if selected { white() } else { t.primary };
@@ -309,26 +311,26 @@ impl Render for QuickOpen {
                     .id(("qo", i))
                     .flex()
                     .items_center()
-                    .gap(px(10.))
-                    .px(px(10.))
-                    .py(px(6.))
-                    .rounded(px(radius::CONTROL - 2.))
-                    .cursor_pointer()
+                    .gap(px(space::S))
+                    .px(px(space::M))
+                    .py(px(space::S))
+                    .rounded(px(radius::INNER))
+                    .cursor_pointer().key_nav()
                     .text_color(fg)
                     .when(selected, |d| d.bg(t.accent))
-                    .child(file_icon(f.path(), 15.))
+                    .child(file_icon(f.path(), iconsize::M))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .gap(px(1.))
+                            .gap(px(space::XXS))
                             .child(div().truncate().child(f.name().to_string()))
                             .child(
                                 div()
                                     .flex()
-                                    .gap(px(6.))
+                                    .gap(px(space::S))
                                     .text_size(px(font::CAPTION))
                                     .text_color(sub)
                                     .when_some(module, |d, (code, color)| d.child(module_tag(&code, t.palette(&color))))
@@ -343,7 +345,7 @@ impl Render for QuickOpen {
                     })),
             );
         }
-        let hint = |icon_name: &str, label: String| div().flex().items_center().gap(px(3.)).child(icon(icon_name, 11., t.secondary)).child(label);
+        let hint = |icon_name: &str, label: String| div().flex().items_center().gap(px(space::XS)).child(icon(icon_name, iconsize::XS, t.secondary)).child(label);
         div()
             .w(px(620.))
             .flex()
@@ -357,20 +359,20 @@ impl Render for QuickOpen {
                 q.index = q.index.saturating_sub(1);
                 cx.notify();
             }))
-            .child(div().flex().items_center().gap(px(10.)).p(px(14.)).child(icon("search", 18., t.secondary)).child(div().flex_1().child(Input::new(&self.query).appearance(false).large())))
+            .child(div().flex().items_center().gap(px(space::S)).p(px(space::L)).child(icon("search", iconsize::M, t.secondary)).child(div().flex_1().child(Input::new(&self.query).appearance(false).large())))
             .child(div().h(px(1.)).bg(t.separator))
             .child(if items.is_empty() {
                 unavailable("search", tr("Keine Treffer"), "", &t).h(px(360.)).into_any_element()
             } else {
-                div().id("qo-list").h(px(360.)).overflow_y_scroll().child(list).into_any_element()
+                div().id("qo-list").h(px(360.)).overflow_y_scrollbar().child(list).into_any_element()
             })
             .child(div().h(px(1.)).bg(t.separator))
             .child(
                 div()
                     .flex()
-                    .gap(px(14.))
-                    .px(px(14.))
-                    .py(px(8.))
+                    .gap(px(space::M))
+                    .px(px(space::L))
+                    .py(px(space::S))
                     .text_size(px(font::CAPTION))
                     .text_color(t.secondary)
                     .child(hint("corner-down-left", tr("Öffnen")))
@@ -418,7 +420,7 @@ impl NewNote {
 
     fn valid(&self, cx: &App) -> bool {
         let t = self.title.read(cx).value().trim().to_string();
-        self.folder.is_some() && if self.kind == NewKind::Folder { !t.is_empty() && !t.contains('/') } else { !crate::core::naming::Naming::clean(&t).is_empty() }
+        self.folder.is_some() && if self.kind == NewKind::Folder { !t.is_empty() && !t.contains(['/', '\\']) } else { !crate::core::naming::Naming::clean(&t).is_empty() }
     }
 
     fn create(&mut self, cx: &mut Context<Self>) {
@@ -452,7 +454,7 @@ impl Render for NewNote {
         }
         let t = Theme::get(cx);
         let me = cx.entity();
-        let mut kinds = div().flex().rounded(px(6.)).bg(t.ink.opacity(0.06)).p(px(2.));
+        let mut kinds = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS));
         for (k, label, icon_name) in [(NewKind::Note, tr("Notiz"), "square-pen"), (NewKind::Text, tr("Textdatei"), "file-text"), (NewKind::Folder, tr("Ordner"), "folder-plus")] {
             let active = k == self.kind;
             let e = me.clone();
@@ -461,13 +463,13 @@ impl Render for NewNote {
                     .id(SharedString::from(format!("nk-{label}")))
                     .flex()
                     .items_center()
-                    .gap(px(5.))
-                    .px(px(10.))
-                    .py(px(3.))
-                    .rounded(px(5.))
-                    .cursor_pointer()
+                    .gap(px(space::XS))
+                    .px(px(space::M))
+                    .py(px(space::XS))
+                    .rounded(px(radius::INNER))
+                    .cursor_pointer().key_nav()
                     .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
-                    .child(icon(icon_name, 12., if active { t.primary } else { t.secondary }))
+                    .child(icon(icon_name, iconsize::XS, if active { t.primary } else { t.secondary }))
                     .child(label)
                     .on_click(move |_, window, cx| e.update(cx, |n, cx| {
                         n.kind = k;
@@ -477,7 +479,7 @@ impl Render for NewNote {
                     })),
             );
         }
-        let mut chips = div().flex().flex_wrap().gap(px(6.));
+        let mut chips = div().flex().flex_wrap().gap(px(space::S));
         if let Some(preset) = self.preset.clone().filter(|p| !self.places.iter().take(6).any(|x| &x.path == p)) {
             let selected = self.folder.as_ref() == Some(&preset);
             let e = me.clone();
@@ -501,17 +503,17 @@ impl Render for NewNote {
                     .id(SharedString::from(format!("nn-place-{}", p.path.display())))
                     .flex()
                     .items_center()
-                    .gap(px(6.))
-                    .px(px(10.))
-                    .py(px(6.))
+                    .gap(px(space::S))
+                    .px(px(space::M))
+                    .py(px(space::S))
                     .rounded(px(radius::CONTROL))
                     .bg(fill)
-                    .hover(move |s| s.bg(hover))
-                    .cursor_pointer()
+                    .soft(hover, radius::CONTROL)
+                    .cursor_pointer().key_nav()
                     .when(selected, |d| d.border(px(2.)).border_color(t.accent))
-                    .child(div().size(px(7.)).rounded_full().bg(t.palette(&p.module.color)))
-                    .child(div().flex().flex_col().child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).child(label)).child(div().flex().gap(px(4.)).text_size(px(font::CAPTION2)).text_color(t.secondary).child(p.module.code.clone()).when_some(ctx, |d, c| d.child("·").child(c.day_label()))))
-                    .when(selected, |d| d.child(icon("check", 12., t.accent)))
+                    .child(div().size(px(space::S)).rounded_full().bg(t.palette(&p.module.color)))
+                    .child(div().flex().flex_col().child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).child(label)).child(div().flex().gap(px(space::XS)).text_size(px(font::CAPTION2)).text_color(t.secondary).child(p.module.code.clone()).when_some(ctx, |d, c| d.child("·").child(c.day_label()))))
+                    .when(selected, |d| d.child(icon("check", iconsize::XS, t.accent)))
                     .on_click(move |_, _, cx| e.update(cx, |n, cx| {
                         n.folder = Some(path.clone());
                         cx.notify();
@@ -538,25 +540,25 @@ impl Render for NewNote {
             .w(px(540.))
             .flex()
             .flex_col()
-            .gap(px(16.))
-            .p(px(20.))
+            .gap(px(space::L))
+            .p(px(space::XL))
             .child(div().flex().items_center().child(div().flex_1().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(tr("Neu"))).child(kinds))
-            .child(Input::new(&self.title).large())
+            .child(Input::new(&self.title))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(8.))
-                    .child(div().text_size(px(font::SUBHEADLINE)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(tr("Wohin?")))
+                    .gap(px(space::S))
+                    .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(tr("Wohin?")))
                     .child(chips)
-                    .when_some(rel, |d, r| d.child(div().flex().items_center().gap(px(4.)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", 11., t.secondary)).child(div().truncate().child(r)))),
+                    .when_some(rel, |d, r| d.child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", iconsize::XS, t.secondary)).child(div().truncate().child(r)))),
             )
             .when_some(name, |d, n| d.child(div().truncate().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).text_color(t.secondary).child(n)))
             .child(
                 div()
                     .flex()
                     .justify_end()
-                    .gap(px(8.))
+                    .gap(px(space::S))
                     .child(Button::new("nn-cancel").label(tr("Abbrechen")).on_click(move |_, _, cx| cancel.update(cx, |_, cx| cx.emit(Dismissed))))
                     .child(Button::new("nn-create").primary().label(tr("Erstellen")).disabled(!valid).on_click(move |_, _, cx| create.update(cx, |n, cx| n.create(cx)))),
             )

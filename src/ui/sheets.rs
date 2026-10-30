@@ -1,8 +1,10 @@
 use gpui_kit::component::WindowExt;
+use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::filing_form::{FilingEvent, FilingForm};
+use super::palette::{Palette, ShortcutSheet};
 use super::quick::{Dismissed, NewNote, QuickAdd, QuickOpen};
 use super::wizards::{ImportCalendar, Reschedule, Setup};
 use crate::core::library::Library;
@@ -14,7 +16,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     }
     let pending = {
         let l = lib.read(cx);
-        l.filing_request.is_some() || l.show_quick_add || l.show_quick_open || l.new_note.is_some() || l.import_path.is_some() || l.reschedule_id.is_some() || l.needs_setup
+        l.filing_request.is_some() || l.show_quick_add || l.show_quick_open || l.show_palette || l.show_shortcuts || l.new_note.is_some() || l.import_path.is_some() || l.reschedule_id.is_some() || l.needs_setup
     };
     if pending {
         window.activate_window();
@@ -27,7 +29,18 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
             let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));
         })
         .detach();
-        window.open_dialog(cx, move |d, _, _| d.w(px(560.)).h(px(600.)).p_0().child(form.clone()));
+        window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(560.)).h(px(600.)).p_0().child(form.clone()));
+        return;
+    }
+    let (palette, shortcuts) = lib.update(cx, |l, _| (std::mem::take(&mut l.show_palette), std::mem::take(&mut l.show_shortcuts)));
+    if palette {
+        let view = cx.new(|cx| Palette::new(window, cx));
+        show(view, 620., window, cx);
+        return;
+    }
+    if shortcuts {
+        let view = cx.new(|_| ShortcutSheet);
+        show(view, 760., window, cx);
         return;
     }
     let (quick_add, quick_open, new_note, module, import, reschedule, setup) = lib.update(cx, |l, _| {
@@ -63,5 +76,5 @@ fn show<V: Render + EventEmitter<Dismissed>>(view: Entity<V>, width: f32, window
         let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));
     })
     .detach();
-    window.open_dialog(cx, move |d, _, _| d.w(px(width)).p_0().child(view.clone()));
+    window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(width)).p_0().child(view.clone()));
 }

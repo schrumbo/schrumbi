@@ -32,5 +32,13 @@ jobs:
         run: cargo build --locked
       - name: Test
         run: cargo test --locked
+      - name: Smoke test dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y xvfb mesa-vulkan-drivers
+      - name: Smoke test
+        continue-on-error: true
+        timeout-minutes: 4
+        shell: bash
+        run: .github/smoke.sh
       - name: Clippy
         run: cargo clippy --locked -- -D clippy::correctness

@@ -41,6 +41,27 @@ pub struct Toast {
     pub undo: Option<Undo>,
 }
 
+/// One effect of a step in the undo history; applying it yields the effect that reverses it.
+#[derive(Debug, Clone)]
+pub enum Change {
+    /// Restores deadlines' state. Assignment notes typed since then stay, because undo must not lose text.
+    State(Box<StudyState>),
+    Config(Box<StudyConfig>),
+    Move { from: PathBuf, to: PathBuf },
+    Trash(PathBuf),
+    Restore(PathBuf),
+}
+
+/// What one undo or redo reverts.
+#[derive(Debug, Clone)]
+pub struct Step {
+    pub label: String,
+    pub changes: Vec<Change>,
+}
+
+const HISTORY_LIMIT: usize = 100;
+const COALESCE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// A class the user had recently; `base` is the folder its files live in (e.g. the week's course folder).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassContext {
@@ -160,6 +181,10 @@ pub struct Library {
     pub show_inspector: bool,
     pub show_quick_add: bool,
     pub show_quick_open: bool,
+    /// A PDF about to open and the text to look for in it, set when coming from the file search.
+    pub pdf_query: Option<(PathBuf, String)>,
+    pub show_palette: bool,
+    pub show_shortcuts: bool,
     pub new_note: Option<NewNoteRequest>,
     pub import_path: Option<PathBuf>,
     pub reschedule_id: Option<String>,
@@ -185,6 +210,12 @@ pub struct Library {
     listings: Listings,
     scan_generation: u64,
     toast_counter: u64,
+    /// A step ran since the last check, so lists may have changed order.
+    rows_moved: bool,
+    undo_steps: Vec<Step>,
+    redo_steps: Vec<Step>,
+    /// The kind and time of the last edit that merges with the following ones, e.g. typing in a settings field.
+    coalescing: Option<(&'static str, std::time::Instant)>,
     pub buffers: HashMap<PathBuf, NoteBuffer>,
     weeks_cache: Option<(Semester, Vec<LectureWeek>)>,
     /// Bumped on every change, so views can skip work when nothing changed.
@@ -233,6 +264,9 @@ impl Library {
             show_inspector: false,
             show_quick_add: false,
             show_quick_open: false,
+            pdf_query: None,
+            show_palette: false,
+            show_shortcuts: false,
             new_note: None,
             import_path: None,
             reschedule_id: None,
@@ -257,6 +291,10 @@ impl Library {
             listings: HashMap::new(),
             scan_generation: 0,
             toast_counter: 0,
+            rows_moved: false,
+            undo_steps: Vec::new(),
+            redo_steps: Vec::new(),
+            coalescing: None,
             buffers: HashMap::new(),
             weeks_cache: None,
             revision: 0,
@@ -286,6 +324,9 @@ impl Library {
     }
 
     pub fn close(&mut self) {
+        self.undo_steps.clear();
+        self.redo_steps.clear();
+        self.coalescing = None;
         self.root = None;
         self.config = None;
         self.state = StudyState::default();
@@ -748,7 +789,7 @@ impl Library {
 
     pub fn module_containing(&self, path: &Path) -> Option<&Module> {
         let root = self.root.as_ref()?;
-        let rel = path.strip_prefix(root).ok()?.to_string_lossy().to_string();
+        let rel = super::text::slash_path(path.strip_prefix(root).ok()?);
         self.config.as_ref()?.modules.iter().filter(|m| rel == m.folder || rel.starts_with(&format!("{}/", m.folder))).max_by_key(|m| m.folder.len())
     }
 
@@ -766,7 +807,7 @@ impl Library {
                 !n.starts_with('.') && ![".git", "node_modules", "assets"].contains(&n.as_ref())
             });
             for e in walker.filter_map(Result::ok).filter(|e| e.file_type().is_dir()) {
-                let rel = e.path().strip_prefix(&base).map(|r| r.to_string_lossy().to_string()).unwrap_or_default();
+                let rel = e.path().strip_prefix(&base).map(super::text::slash_path).unwrap_or_default();
                 let top = !rel.contains('/');
                 let this_week = week_token.as_ref().is_some_and(|t| rel.starts_with(t.as_str()));
                 if (top && !week_re.is_match(&rel)) || (this_week && rel.split('/').count() >= 2) {
@@ -906,7 +947,7 @@ impl Library {
         match result {
             Ok(path) => {
                 self.refresh();
-                self.notify(trf("Angelegt: %@", &[&name_of(&path)]), "square-pen", None, None);
+                self.commit(trf("Angelegt: %@", &[&name_of(&path)]), "square-pen", vec![Change::Trash(path.clone())]);
                 Some(path)
             }
             Err(e) => {
@@ -923,6 +964,7 @@ impl Library {
             Ok(()) => {
                 self.refresh();
                 let p = path.clone();
+                self.record(trf("Ordner angelegt: %@", &[&name_of(&path)]), vec![Change::Trash(path.clone())]);
                 self.notify(trf("Ordner angelegt: %@", &[&name_of(&path)]), "folder-plus", Some(tr("Zeigen")), Some(Box::new(move |_: &mut Library| open_path(&p))));
                 Some(path)
             }
@@ -978,7 +1020,7 @@ impl Library {
     }
 
     pub fn relative_path(&self, path: &Path) -> String {
-        self.root.as_ref().and_then(|r| path.strip_prefix(r).ok()).map_or_else(|| path.to_string_lossy().to_string(), |r| r.to_string_lossy().to_string())
+        self.root.as_ref().and_then(|r| path.strip_prefix(r).ok()).map_or_else(|| path.to_string_lossy().to_string(), super::text::slash_path)
     }
 
     pub fn missing_folders(&self) -> Vec<PathBuf> {
@@ -994,11 +1036,138 @@ impl Library {
         self.changed();
     }
 
-    pub fn perform_undo(&mut self) {
-        if let Some(undo) = self.toast.take().and_then(|t| t.undo) {
-            undo(self);
+    /// Runs the action offered by the current toast.
+    pub fn perform_toast_action(&mut self) {
+        if let Some(action) = self.toast.take().and_then(|t| t.undo) {
+            action(self);
         }
         self.changed();
+    }
+
+    // MARK: History
+
+    /// Adds a step to the undo history without announcing it.
+    fn record(&mut self, label: String, changes: Vec<Change>) {
+        self.rows_moved = true;
+        self.redo_steps.clear();
+        self.coalescing = None;
+        self.undo_steps.push(Step { label, changes });
+        if self.undo_steps.len() > HISTORY_LIMIT {
+            self.undo_steps.remove(0);
+        }
+    }
+
+    /// Records a step and shows it as a toast that offers to take it back.
+    fn commit(&mut self, message: String, icon: &'static str, changes: Vec<Change>) {
+        self.record(message.clone(), changes);
+        self.notify(message, icon, None, Some(Box::new(|lib: &mut Library| lib.undo())));
+    }
+
+    /// Records an edit made by continuous input; edits of the same `kind` in quick succession become one step.
+    pub fn record_edit(&mut self, kind: &'static str, label: String, before: Change) {
+        let now = std::time::Instant::now();
+        if self.coalescing.is_some_and(|(k, at)| k == kind && now.duration_since(at) < COALESCE) && !self.undo_steps.is_empty() {
+            self.redo_steps.clear();
+        } else {
+            self.record(label, vec![before]);
+        }
+        self.coalescing = Some((kind, now));
+    }
+
+    pub fn state_snapshot(&self) -> Change {
+        Change::State(Box::new(self.state.clone()))
+    }
+
+    pub fn config_snapshot(&self) -> Option<Change> {
+        self.config.clone().map(|c| Change::Config(Box::new(c)))
+    }
+
+    /// Whether a step ran since the last call.
+    pub fn take_rows_moved(&mut self) -> bool {
+        std::mem::take(&mut self.rows_moved)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo_steps.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo_steps.is_empty()
+    }
+
+    /// Takes back the latest step and offers to repeat it.
+    pub fn undo(&mut self) {
+        let Some(step) = self.undo_steps.pop() else { return };
+        let label = step.label.clone();
+        let inverse = self.apply_step(step);
+        self.redo_steps.push(inverse);
+        self.coalescing = None;
+        self.notify(trf("Rückgängig: %@", &[&label]), "undo-2", Some(tr("Wiederholen")), Some(Box::new(|lib: &mut Library| lib.redo())));
+    }
+
+    /// Repeats the step taken back last and offers to take it back again.
+    pub fn redo(&mut self) {
+        let Some(step) = self.redo_steps.pop() else { return };
+        let label = step.label.clone();
+        let inverse = self.apply_step(step);
+        self.undo_steps.push(inverse);
+        self.coalescing = None;
+        self.notify(trf("Wiederholt: %@", &[&label]), "redo-2", None, Some(Box::new(|lib: &mut Library| lib.undo())));
+    }
+
+    fn apply_step(&mut self, step: Step) -> Step {
+        self.rows_moved = true;
+        let mut inverse: Vec<Change> = step.changes.into_iter().rev().filter_map(|c| self.apply_change(c)).collect();
+        inverse.reverse();
+        self.refresh();
+        Step { label: step.label, changes: inverse }
+    }
+
+    fn apply_change(&mut self, change: Change) -> Option<Change> {
+        let result: Result<Change> = (|| {
+            Ok(match change {
+                Change::State(state) => {
+                    let inverse = self.state_snapshot();
+                    let mut state = *state;
+                    let notes = std::mem::take(&mut self.state.notes);
+                    for (id, text) in notes {
+                        state.notes.insert(id, text);
+                    }
+                    self.state = state;
+                    self.save_state();
+                    inverse
+                }
+                Change::Config(config) => {
+                    let inverse = self.config_snapshot().unwrap_or_else(|| Change::Config(config.clone()));
+                    self.config = Some(*config);
+                    self.write_config();
+                    inverse
+                }
+                Change::Move { from, to } => {
+                    if let Some(parent) = to.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    let target = unique_path(&to);
+                    move_path(&from, &target)?;
+                    Change::Move { from: target, to: from }
+                }
+                Change::Trash(path) => {
+                    trash::delete(&path)?;
+                    Change::Restore(path)
+                }
+                Change::Restore(path) => {
+                    restore_from_trash(&path)?;
+                    Change::Trash(path)
+                }
+            })
+        })();
+        match result {
+            Ok(inverse) => Some(inverse),
+            Err(e) => {
+                self.last_error = Some(trf("Rückgängig fehlgeschlagen: %@", &[&e]));
+                None
+            }
+        }
     }
 
     pub fn dismiss_toast(&mut self, id: u64) {
@@ -1012,7 +1181,7 @@ impl Library {
 
     pub fn set_status(&mut self, status: Option<Status>, id: &str, announce: bool) {
         let Some(a) = self.assignment(id).cloned() else { return };
-        let previous = self.state.overrides.get(id).cloned();
+        let before = self.state_snapshot();
         match status {
             Some(s) => self.state.overrides.insert(id.into(), Override { status: s, date: Utc::now() }),
             None => self.state.overrides.remove(id),
@@ -1023,20 +1192,7 @@ impl Library {
             return;
         }
         let label = status.map_or_else(|| tr("Automatisch"), Status::label);
-        let key = id.to_string();
-        self.notify(
-            trf("%@: %@", &[&a.title, &label]),
-            status.map_or("undo-2", Status::icon),
-            None,
-            Some(Box::new(move |lib: &mut Library| {
-                match previous {
-                    Some(o) => lib.state.overrides.insert(key, o),
-                    None => lib.state.overrides.remove(&key),
-                };
-                lib.save_state();
-                lib.refresh();
-            })),
-        );
+        self.commit(trf("%@: %@", &[&a.title, &label]), status.map_or("undo-2", Status::icon), vec![before]);
     }
 
     pub fn toggle_done(&mut self, id: &str) {
@@ -1046,27 +1202,13 @@ impl Library {
     }
 
     pub fn confirm_all(&mut self, ids: &[String]) {
-        let previous: Vec<(String, Option<Override>)> = ids.iter().map(|id| (id.clone(), self.state.overrides.get(id).cloned())).collect();
+        let before = self.state_snapshot();
         for id in ids {
             self.state.overrides.insert(id.clone(), Override { status: Status::Uploaded, date: Utc::now() });
         }
         self.save_state();
         self.refresh();
-        self.notify(
-            trf("%lld als hochgeladen markiert", &[&ids.len()]),
-            "circle-check-filled",
-            None,
-            Some(Box::new(move |lib: &mut Library| {
-                for (id, o) in previous {
-                    match o {
-                        Some(o) => lib.state.overrides.insert(id, o),
-                        None => lib.state.overrides.remove(&id),
-                    };
-                }
-                lib.save_state();
-                lib.refresh();
-            })),
-        );
+        self.commit(trf("%lld als hochgeladen markiert", &[&ids.len()]), "circle-check", vec![before]);
     }
 
     /// Opens the filing sheet for files headed to an assignment (or anywhere when `None`).
@@ -1098,8 +1240,8 @@ impl Library {
             Ok(target) => {
                 self.refresh();
                 if announce {
-                    let (original, t) = (path.to_path_buf(), target.clone());
-                    self.notify(trf("Abgelegt: %@", &[&name_of(&target)]), "inbox-arrow", None, Some(Box::new(move |lib: &mut Library| lib.undo_filing(&original, &t, inside))));
+                    let change = filing_change(path, &target, inside);
+                    self.commit(trf("Abgelegt: %@", &[&name_of(&target)]), "inbox", vec![change]);
                 }
                 Some(target)
             }
@@ -1112,45 +1254,18 @@ impl Library {
 
     /// Files several items and shows one undoable toast.
     pub fn file_batch(&mut self, items: Vec<(PathBuf, PathBuf, String)>) {
-        let mut done: Vec<(PathBuf, PathBuf, bool)> = Vec::new();
+        let mut done: Vec<Change> = Vec::new();
+        let mut last = None;
         for (path, folder, name) in items {
             let inside = self.inside(&path);
             if let Some(t) = self.file(&path, &folder, &name, false) {
-                done.push((path, t, inside));
+                done.push(filing_change(&path, &t, inside));
+                last = Some(t);
             }
         }
-        if done.is_empty() {
-            return;
-        }
-        let message = if done.len() == 1 { trf("Abgelegt: %@", &[&name_of(&done[0].1)]) } else { trf("%lld Dateien abgelegt", &[&done.len()]) };
-        self.notify(
-            message,
-            "inbox-arrow",
-            None,
-            Some(Box::new(move |lib: &mut Library| {
-                for (o, t, m) in done.iter().rev() {
-                    lib.undo_filing(o, t, *m);
-                }
-            })),
-        );
-    }
-
-    fn undo_filing(&mut self, original: &Path, target: &Path, moved: bool) {
-        let result: Result<()> = (|| {
-            if moved {
-                if let Some(p) = original.parent() {
-                    std::fs::create_dir_all(p)?;
-                }
-                move_path(target, &unique_path(original))?;
-            } else {
-                trash::delete(target)?;
-            }
-            Ok(())
-        })();
-        if let Err(e) = result {
-            self.last_error = Some(trf("Rückgängig fehlgeschlagen: %@", &[&e]));
-        }
-        self.refresh();
+        let Some(last) = last else { return };
+        let message = if done.len() == 1 { trf("Abgelegt: %@", &[&name_of(&last)]) } else { trf("%lld Dateien abgelegt", &[&done.len()]) };
+        self.commit(message, "inbox", done);
     }
 
     /// Renames a file in an assignment folder so it counts as task description (or back as own work).
@@ -1186,51 +1301,32 @@ impl Library {
         match move_path(file, &target) {
             Ok(()) => {
                 self.refresh();
-                let (f, t) = (file.to_path_buf(), target.clone());
-                self.notify(
-                    trf("Umbenannt: %@", &[&name_of(&target)]),
-                    "pencil",
-                    None,
-                    Some(Box::new(move |lib: &mut Library| {
-                        let _ = move_path(&t, &f);
-                        lib.refresh();
-                    })),
-                );
+                let change = Change::Move { from: target.clone(), to: file.to_path_buf() };
+                self.commit(trf("Umbenannt: %@", &[&name_of(&target)]), "pencil", vec![change]);
             }
             Err(e) => self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&e])),
         }
     }
 
     pub fn rename_all(&mut self, items: Vec<(PathBuf, String)>) {
-        let mut done: Vec<(PathBuf, PathBuf)> = Vec::new();
+        let mut done: Vec<Change> = Vec::new();
         for (file, name) in items.into_iter().filter(|(f, n)| *n != name_of(f)) {
             let target = unique_path(&file.with_file_name(&name));
             if move_path(&file, &target).is_ok() {
-                done.push((file, target));
+                done.push(Change::Move { from: target, to: file });
             }
         }
         self.refresh();
-        if done.is_empty() {
-            return;
+        if !done.is_empty() {
+            self.commit(trf("%lld Dateien umbenannt", &[&done.len()]), "pencil", done);
         }
-        self.notify(
-            trf("%lld Dateien umbenannt", &[&done.len()]),
-            "pencil",
-            None,
-            Some(Box::new(move |lib: &mut Library| {
-                for (o, t) in done {
-                    let _ = move_path(&t, &o);
-                }
-                lib.refresh();
-            })),
-        );
     }
 
     pub fn trash(&mut self, path: &Path) {
         match trash::delete(path) {
             Ok(()) => {
                 self.refresh();
-                self.notify(trf("In den Papierkorb: %@", &[&name_of(path)]), "trash-2", None, restore_from_trash(path));
+                self.commit(trf("In den Papierkorb: %@", &[&name_of(path)]), "trash-2", vec![Change::Restore(path.to_path_buf())]);
             }
             Err(e) => self.last_error = Some(e.to_string()),
         }
@@ -1254,27 +1350,19 @@ impl Library {
     }
 
     pub fn add_manual(&mut self, m: ManualAssignment) {
-        let (id, message) = (m.id.clone(), trf("%@ hinzugefügt: %@", &[&m.kind.label(), &m.title]));
+        let before = self.state_snapshot();
+        let message = trf("%@ hinzugefügt: %@", &[&m.kind.label(), &m.title]);
         self.state.manual.push(m);
         self.save_state();
         self.refresh();
-        self.notify(
-            message,
-            "circle-plus",
-            None,
-            Some(Box::new(move |lib: &mut Library| {
-                lib.state.manual.retain(|x| x.id != id);
-                lib.save_state();
-                lib.refresh();
-            })),
-        );
+        self.commit(message, "circle-plus", vec![before]);
     }
 
     /// Adds or updates calendar events; returns how many were added and updated.
     pub fn import_events(&mut self, items: Vec<(CalendarEvent, String, Kind)>) -> (usize, usize) {
         let (Some(root), Some(config)) = (self.root.clone(), self.config.clone()) else { return (0, 0) };
         let (mut added, mut updated) = (0, 0);
-        let previous = self.state.manual.clone();
+        let before = self.state_snapshot();
         for (event, module_id, kind) in items {
             let Some(module) = config.module(&module_id) else { continue };
             let folder = if kind == Kind::Submission && root.join(&module.folder).join("Abgaben").exists() { "Abgaben".to_string() } else { String::new() };
@@ -1301,22 +1389,13 @@ impl Library {
         }
         self.save_state();
         self.refresh();
-        self.notify(
-            trf("%lld neu, %lld aktualisiert", &[&added, &updated]),
-            "calendar-plus",
-            None,
-            Some(Box::new(move |lib: &mut Library| {
-                lib.state.manual = previous;
-                lib.save_state();
-                lib.refresh();
-            })),
-        );
+        self.commit(trf("%lld neu, %lld aktualisiert", &[&added, &updated]), "calendar-plus", vec![before]);
         (added, updated)
     }
 
     /// Moves one generated occurrence; `None` restores the rule's date.
     pub fn move_occurrence(&mut self, id: &str, date: Option<DateTime<Utc>>) {
-        let previous = self.state.moved.get(id).cloned();
+        let before = self.state_snapshot();
         match date {
             Some(d) => self.state.moved.insert(id.into(), d),
             None => self.state.moved.remove(id),
@@ -1324,20 +1403,7 @@ impl Library {
         self.save_state();
         self.refresh();
         let message = date.map_or_else(|| tr("Ursprünglicher Termin"), |d| trf("Verschoben auf %@", &[&day::due(d.with_timezone(&Local), self.now)]));
-        let key = id.to_string();
-        self.notify(
-            message,
-            "calendar",
-            None,
-            Some(Box::new(move |lib: &mut Library| {
-                match previous {
-                    Some(d) => lib.state.moved.insert(key, d),
-                    None => lib.state.moved.remove(&key),
-                };
-                lib.save_state();
-                lib.refresh();
-            })),
-        );
+        self.commit(message, "calendar", vec![before]);
     }
 
     /// Counts existing files inside the workspace towards an assignment without moving them.
@@ -1347,6 +1413,7 @@ impl Library {
             self.last_error = Some(tr("Nur Dateien im Studienordner können zugeordnet werden."));
             return;
         }
+        let before = self.state_snapshot();
         let list = self.state.linked_files.entry(id.into()).or_default();
         for r in &rels {
             if !list.contains(r) {
@@ -1355,7 +1422,7 @@ impl Library {
         }
         self.save_state();
         self.refresh();
-        self.notify(trf("%lld Dateien zugeordnet", &[&rels.len()]), "link", None, None);
+        self.commit(trf("%lld Dateien zugeordnet", &[&rels.len()]), "link", vec![before]);
     }
 
     pub fn is_linked(&self, path: &Path, id: &str) -> bool {
@@ -1363,6 +1430,7 @@ impl Library {
     }
 
     pub fn unlink(&mut self, path: &Path, id: &str) {
+        let before = self.state_snapshot();
         let rel = self.relative_path(path);
         if let Some(l) = self.state.linked_files.get_mut(id) {
             l.retain(|r| *r != rel);
@@ -1372,11 +1440,14 @@ impl Library {
         }
         self.save_state();
         self.refresh();
+        self.commit(tr("Zuordnung entfernt"), "link", vec![before]);
     }
 
     pub fn update_manual(&mut self, m: ManualAssignment) {
+        let before = self.state_snapshot();
         if let Some(x) = self.state.manual.iter_mut().find(|x| x.id == m.id) {
             *x = m;
+            self.record_edit("manual", tr("Eintrag geändert"), before);
             self.save_state();
             self.refresh();
         }
@@ -1389,31 +1460,16 @@ impl Library {
 
     pub fn remove_manual(&mut self, id: &str) {
         let Some(m) = self.assignment(id).and_then(|a| self.manual_for(a)).cloned() else { return };
-        let (o, n) = (self.state.overrides.remove(id), self.state.notes.remove(id));
+        let before = self.state_snapshot();
+        self.state.overrides.remove(id);
+        self.state.notes.remove(id);
         self.state.manual.retain(|x| x.id != m.id);
         if self.selection.as_deref() == Some(id) {
             self.selection = None;
         }
         self.save_state();
         self.refresh();
-        let key = id.to_string();
-        let title = m.title.clone();
-        self.notify(
-            trf("Gelöscht: %@", &[&title]),
-            "trash-2",
-            None,
-            Some(Box::new(move |lib: &mut Library| {
-                lib.state.manual.push(m);
-                if let Some(o) = o {
-                    lib.state.overrides.insert(key.clone(), o);
-                }
-                if let Some(n) = n {
-                    lib.state.notes.insert(key, n);
-                }
-                lib.save_state();
-                lib.refresh();
-            })),
-        );
+        self.commit(trf("Gelöscht: %@", &[&m.title]), "trash-2", vec![before]);
     }
 
     pub fn import_to_inbox(&mut self, paths: &[PathBuf]) {
@@ -1501,7 +1557,7 @@ impl Library {
 
     /// Opens a file as a tab in the main window.
     pub fn open_document(&mut self, path: &Path) {
-        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         if !self.open_documents.contains(&path) {
             match self.active_document.as_ref().and_then(|a| self.open_documents.iter().position(|d| d == a)) {
                 Some(i) => self.open_documents.insert(i + 1, path.clone()),
@@ -1691,31 +1747,30 @@ pub fn reveal(path: &Path) {
     }
 }
 
+/// What takes back filing `original` as `target`: moving it back, or trashing the copy of an outside file.
+fn filing_change(original: &Path, target: &Path, moved: bool) -> Change {
+    if moved { Change::Move { from: target.to_path_buf(), to: original.to_path_buf() } } else { Change::Trash(target.to_path_buf()) }
+}
+
 #[cfg(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-fn restore_from_trash(original: &Path) -> Option<Undo> {
-    let original = original.to_path_buf();
-    Some(Box::new(move |lib: &mut Library| {
-        if let Ok(items) = trash::os_limited::list()
-            && let Some(item) = items.into_iter().filter(|i| i.original_path() == original).max_by_key(|i| i.time_deleted)
-        {
-            let _ = trash::os_limited::restore_all([item]);
-        }
-        lib.refresh();
-    }))
+fn restore_from_trash(original: &Path) -> Result<()> {
+    let item = trash::os_limited::list()?.into_iter().filter(|i| i.original_path() == original).max_by_key(|i| i.time_deleted).ok_or_else(|| anyhow::anyhow!("{} is not in the trash", original.display()))?;
+    trash::os_limited::restore_all([item])?;
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
-fn restore_from_trash(original: &Path) -> Option<Undo> {
-    let original = original.to_path_buf();
-    Some(Box::new(move |lib: &mut Library| {
-        if let Some(home) = dirs::home_dir() {
-            let candidate = home.join(".Trash").join(name_of(&original));
-            if candidate.exists() && !original.exists() {
-                let _ = move_path(&candidate, &original);
-            }
-        }
-        lib.refresh();
-    }))
+fn restore_from_trash(original: &Path) -> Result<()> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home folder"))?;
+    let candidate = home.join(".Trash").join(name_of(original));
+    if !candidate.exists() {
+        anyhow::bail!("{} is not in the trash", name_of(original));
+    }
+    if let Some(parent) = original.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    move_path(&candidate, &unique_path(original))?;
+    Ok(())
 }
 
 /// Zips the whole workspace into `destination`; run off the main thread.

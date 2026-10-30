@@ -5,7 +5,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
-use super::theme::{Theme, font, radius};
+use super::theme::{Theme, font, radius, space, iconsize};
 use crate::core::markdown::{self, Run, TokenKind};
 
 /// Called with the 0-based source line of a clicked task box.
@@ -282,10 +282,10 @@ fn styled_text(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
         }
     }
     if text.trim().is_empty() && !images.is_empty() {
-        return div().flex().flex_col().gap(px(8.)).children(images).into_any_element();
+        return div().flex().flex_col().gap(px(space::S)).children(images).into_any_element();
     }
     let body = div().text_size(px(size)).line_height(relative(1.5)).child(StyledText::new(text).with_highlights(highlights));
-    if images.is_empty() { body.into_any_element() } else { div().flex().flex_col().gap(px(8.)).child(body).children(images).into_any_element() }
+    if images.is_empty() { body.into_any_element() } else { div().flex().flex_col().gap(px(space::S)).child(body).children(images).into_any_element() }
 }
 
 fn image(src: &str, alt: &str, cx: &Ctx) -> AnyElement {
@@ -293,7 +293,7 @@ fn image(src: &str, alt: &str, cx: &Ctx) -> AnyElement {
         return img(SharedString::from(src.to_string())).max_w_full().rounded(px(radius::CONTROL)).into_any_element();
     }
     let path = markdown::percent_decode(src);
-    let p: PathBuf = if path.starts_with('/') { PathBuf::from(&path) } else { cx.base.map(|b| b.join(&path)).unwrap_or_else(|| PathBuf::from(&path)) };
+    let p: PathBuf = if Path::new(&path).is_absolute() { PathBuf::from(&path) } else { cx.base.map(|b| b.join(&path)).unwrap_or_else(|| PathBuf::from(&path)) };
     if p.exists() {
         img(p).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL)).into_any_element()
     } else {
@@ -324,7 +324,7 @@ fn code_block(lang: Option<&str>, code: &str, t: &Theme) -> AnyElement {
         .id(SharedString::from(format!("code-{}", text.len())))
         .w_full()
         .overflow_x_scroll()
-        .p(px(12.))
+        .p(px(space::M))
         .rounded(px(radius::CONTROL))
         .bg(t.secondary_bg)
         .border_1()
@@ -345,24 +345,24 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     1 => font::TITLE,
                     2 => font::TITLE2,
                     3 => font::TITLE3,
-                    _ => font::HEADLINE,
+                    _ => font::BODY,
                 };
-                div().pt(px(if *level <= 2 { 8. } else { 4. })).font_weight(if *level == 1 { FontWeight::BOLD } else { FontWeight::SEMIBOLD }).child(styled_text(inl, cx, size)).into_any_element()
+                div().pt(px(if *level <= 2 { space::S } else { space::XS })).font_weight(if *level == 1 { FontWeight::BOLD } else { FontWeight::SEMIBOLD }).child(styled_text(inl, cx, size)).into_any_element()
             }
             Block::Paragraph(inl) => styled_text(inl, cx, font::BODY),
             Block::Quote(inner) => div()
                 .flex()
-                .gap(px(10.))
-                .child(div().w(px(3.)).flex_none().rounded(px(1.5)).bg(t.accent.opacity(0.6)))
-                .child(div().flex_1().flex().flex_col().gap(px(8.)).text_color(t.secondary).children(render_blocks(inner, cx)))
+                .gap(px(space::S))
+                .child(div().w(px(3.)).flex_none().rounded_full().bg(t.accent.opacity(0.6)))
+                .child(div().flex_1().flex().flex_col().gap(px(space::S)).text_color(t.secondary).children(render_blocks(inner, cx)))
                 .into_any_element(),
             Block::Code(lang, code) => code_block(lang.as_deref(), code, t),
-            Block::Rule => div().h(px(1.)).my(px(4.)).bg(t.separator).into_any_element(),
+            Block::Rule => div().h(px(1.)).my(px(space::XS)).bg(t.separator).into_any_element(),
             Block::Html(h) => div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).text_color(t.secondary).child(h.clone()).into_any_element(),
             Block::List { start, items } => div()
                 .flex()
                 .flex_col()
-                .gap(px(5.))
+                .gap(px(space::XS))
                 .children(items.iter().enumerate().map(|(i, item)| {
                     let marker: AnyElement = match (item.task, start) {
                         (Some(done), _) => {
@@ -370,18 +370,18 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                             let toggle = cx.on_toggle.clone();
                             div()
                                 .id(SharedString::from(format!("task-{line}")))
-                                .mt(px(3.5))
-                                .ml(px(2.))
+                                .mt(px(space::XS))
+                                .ml(px(space::XXS))
                                 .size(px(14.))
                                 .flex_none()
-                                .rounded(px(3.))
+                                .rounded(px(radius::SMALL))
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .when(done, |d| d.bg(t.accent))
                                 .when(!done, |d| d.border_1().border_color(t.secondary))
                                 .when(toggle.is_some(), |d| d.cursor_pointer())
-                                .when(done, |d| d.child(super::widgets::icon("check", 10., white())))
+                                .when(done, |d| d.child(super::widgets::icon("check", iconsize::XS, white())))
                                 .on_click(move |_, _, cx| {
                                     if let Some(f) = &toggle {
                                         f(line, cx);
@@ -396,15 +396,15 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     div()
                         .flex()
                         .items_start()
-                        .gap(px(8.))
+                        .gap(px(space::S))
                         .child(marker)
-                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(5.)).when(done, |d| d.text_color(t.secondary).line_through()).children(render_blocks(&item.blocks, cx)))
+                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XS)).when(done, |d| d.text_color(t.secondary).line_through()).children(render_blocks(&item.blocks, cx)))
                 })
             )
             .into_any_element(),
             Block::Table { head, rows, aligns } => {
                 let cell = |inl: &Vec<Inline>, i: usize, bold: bool| {
-                    let d = div().flex_1().min_w(px(80.)).px(px(8.)).py(px(4.)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD));
+                    let d = div().flex_1().min_w(px(80.)).px(px(space::S)).py(px(space::XS)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD));
                     let d = match aligns.get(i) {
                         Some(pulldown_cmark::Alignment::Center) => d.flex().justify_center(),
                         Some(pulldown_cmark::Alignment::Right) => d.flex().justify_end(),
@@ -430,11 +430,11 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
 /// Renders a parsed note; task boxes call `on_toggle` with their source line.
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
     let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order };
-    let mut col = div().flex().flex_col().gap(px(12.)).children(render_blocks(&note.blocks, &cx));
+    let mut col = div().flex().flex_col().gap(px(space::M)).children(render_blocks(&note.blocks, &cx));
     let used: Vec<_> = note.footnote_order.iter().filter_map(|id| note.footnotes.iter().find(|(f, _)| f == id)).collect();
     if !used.is_empty() {
-        col = col.child(div().h(px(1.)).mt(px(8.)).bg(t.separator)).child(div().flex().flex_col().gap(px(4.)).children(used.iter().enumerate().map(|(n, (_, inl))| {
-            div().flex().gap(px(6.)).text_size(px(font::CALLOUT)).line_height(relative(1.5)).child(div().flex_none().text_color(t.secondary).child(format!("{}.", n + 1))).child(styled_text(inl, &cx, font::CALLOUT))
+        col = col.child(div().h(px(1.)).mt(px(space::S)).bg(t.separator)).child(div().flex().flex_col().gap(px(space::XS)).children(used.iter().enumerate().map(|(n, (_, inl))| {
+            div().flex().gap(px(space::S)).text_size(px(font::CALLOUT)).line_height(relative(1.5)).child(div().flex_none().text_color(t.secondary).child(format!("{}.", n + 1))).child(styled_text(inl, &cx, font::CALLOUT))
         })));
     }
     col

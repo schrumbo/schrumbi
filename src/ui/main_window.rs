@@ -4,17 +4,20 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::WindowExt;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::inspector::Inspector;
+use super::motion;
 use super::pages::Pages;
 use super::state::{self, act};
-use super::theme::{self, Theme, font};
+use super::theme::{self, Theme, font, space, iconsize, radius, control};
 use super::widgets::*;
 use super::{sheets, sidebar, today};
 use crate::core::i18n::tr;
 use crate::core::library::{Library, NewNoteRequest, Route};
+use crate::core::shortcuts::ShortcutAction;
 
 actions!(schrumbi_main, [Dismiss, FocusSearch, ToggleSidebar]);
 
@@ -26,11 +29,10 @@ pub struct MainWindow {
     /// Whether the sidebar shows labels; its icons always stay.
     sidebar_open: bool,
     sidebar_auto_closed: bool,
-    /// The width being drawn and the running transition: its start and starting width.
-    sidebar_shown: f32,
-    sidebar_motion: Option<(std::time::Instant, f32)>,
     syncing_search: bool,
     focus: FocusHandle,
+    focused_once: bool,
+    shown_route: Option<Route>,
     _subs: Vec<Subscription>,
 }
 
@@ -90,10 +92,10 @@ impl MainWindow {
             pages,
             sidebar_open: p.sidebar_open,
             sidebar_auto_closed: false,
-            sidebar_shown: if p.sidebar_open { sidebar::WIDTH } else { sidebar::RAIL },
-            sidebar_motion: None,
             syncing_search: false,
             focus: cx.focus_handle(),
+            focused_once: false,
+            shown_route: None,
             _subs: subs,
         }
     }
@@ -101,32 +103,8 @@ impl MainWindow {
     fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
         self.sidebar_open = open;
         self.sidebar_auto_closed = false;
-        self.start_motion();
         crate::core::prefs::update(|p| p.sidebar_open = open);
         cx.notify();
-    }
-
-    /// Starts the width transition, unless the system asks for reduced motion.
-    fn start_motion(&mut self) {
-        self.sidebar_motion = (!super::platform::reduce_motion()).then(|| (std::time::Instant::now(), self.sidebar_shown));
-    }
-
-    /// The width to draw this frame, easing out over 180 ms towards the target.
-    fn sidebar_frame(&mut self, target: f32, window: &mut Window) -> f32 {
-        self.sidebar_shown = match self.sidebar_motion {
-            Some((start, from)) => {
-                let progress = start.elapsed().as_secs_f32() / 0.18;
-                if progress >= 1. {
-                    self.sidebar_motion = None;
-                    target
-                } else {
-                    window.request_animation_frame();
-                    from + (target - from) * (1. - (1. - progress).powi(3))
-                }
-            }
-            None => target,
-        };
-        self.sidebar_shown
     }
 
     /// One search field for the whole window, so the toolbar never changes between pages:
@@ -165,13 +143,13 @@ impl MainWindow {
         let module = if let Route::Module(id) = lib.route() { Some(id.clone()) } else { None };
         let module2 = module.clone();
         div()
-            .h(px(52.))
+            .h(px(control::BAR))
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(10.))
-            .pl(px(if super::chrome::CUSTOM { 10. } else { (92. - left).max(10.) }))
-            .pr(px(10.))
+            .gap(px(space::S))
+            .pl(px(if super::chrome::CUSTOM { space::M } else { (92. - left).max(space::M) }))
+            .pr(px(space::M))
             .child(div().flex_1().min_w_0().truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)))
             .child(
                 div()
@@ -185,14 +163,14 @@ impl MainWindow {
                         Button::new("new-entry")
                             .ghost()
                             .w(px(36.))
-                            .h(px(28.))
-                            .rounded(px(18.))
+                            .h(px(control::M))
+                            .rounded_full()
                             .icon(menu_icon("plus"))
-                            .tooltip(tr("Klick: Abgabe, Aufgabe oder Prüfung (⌘N) · Gedrückt halten: Notiz, Datei oder Ordner (⇧⌘N)"))
+                            .tooltip(format!("{}{}", tr("Neuer Termin"), ShortcutAction::NewEntry.hint()))
                             .on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)),
                     )
-                    .child(div().w(px(1.)).h(px(18.)).bg(t.ink.opacity(0.12)))
-                    .child(Button::new("new-menu").ghost().w(px(28.)).h(px(28.)).rounded(px(18.)).icon(menu_icon("chevron-down")).dropdown_menu(move |menu, _, _| {
+                    .child(div().w(px(1.)).h(px(iconsize::M)).bg(t.ink.opacity(0.12)))
+                    .child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().icon(menu_icon("chevron-down")).tooltip(tr("Weitere Optionen")).dropdown_menu(move |menu, _, _| {
                         let m = module2.clone();
                         menu.item(PopupMenuItem::new(tr("Neuer Termin…")).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)))
                             .item(PopupMenuItem::new(tr("Neue Notiz, Datei oder Ordner…")).icon(menu_icon("file-plus")).on_click(move |_, _, cx| {
@@ -204,34 +182,44 @@ impl MainWindow {
             .child(
                 Button::new("toggle-inspector")
                     .ghost()
-                    .size(px(30.))
-                    .rounded(px(18.))
+                    .size(px(control::M))
+                    .rounded_full()
                     .bg(t.ink.opacity(if show { 0.14 } else { 0.06 }))
                     .border_1()
                     .border_color(t.ink.opacity(0.1))
                     .icon(menu_icon("panel-right"))
-                    .tooltip(if show { tr("Details ausblenden (⌥⌘I)") } else { tr("Details einblenden (⌥⌘I)") })
+                    .tooltip(format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()))
                     .on_click(|_, _, cx| act(cx, |l| l.toggle_inspector())),
             )
-            .child(div().w(px(325.)).child(Input::new(&self.search).h(px(30.)).prefix(icon("search", 15., t.secondary)).cleanable(true)))
+            .child(div().w(px(325.)).child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true)))
     }
 }
 
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !std::mem::replace(&mut self.focused_once, true) && window.focused(cx).is_none() {
+            window.focus(&self.focus, cx);
+        }
         let t = Theme::get(cx);
         let lib = state::lib(cx);
+        let route = lib.read(cx).route().clone();
+        if self.shown_route.as_ref() != Some(&route) {
+            let typing = self.search.read(cx).focus_handle(cx).is_focused(window);
+            if self.shown_route.is_some() && !typing && !window.has_active_dialog(cx) {
+                window.focus(&self.focus, cx);
+            }
+            motion::forget_rows(cx);
+            self.shown_route = Some(route);
+        }
         let l = lib.read(cx);
         let width = f32::from(window.viewport_size().width);
         let crowded = l.show_inspector && width < if self.sidebar_auto_closed { 1280. } else { 1240. };
         if crowded && self.sidebar_open {
             self.sidebar_open = false;
             self.sidebar_auto_closed = true;
-            self.start_motion();
         } else if !crowded && self.sidebar_auto_closed {
             self.sidebar_open = true;
             self.sidebar_auto_closed = false;
-            self.start_motion();
         }
 
         let base = div()
@@ -245,15 +233,27 @@ impl Render for MainWindow {
             .text_size(px(font::BODY))
             .line_height(relative(1.22))
             .text_color(t.primary)
-            .on_action(cx.listener(|_, _: &Dismiss, _, cx| {
-                act(cx, |l| {
-                    l.show_inspector = false;
-                    l.select(None);
-                    l.show_inspector = false;
-                })
+            .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
+                let typing = window.context_stack().iter().any(|c| c.contains("Input"));
+                if !typing {
+                    act(cx, |l| {
+                        l.show_inspector = false;
+                        l.select(None);
+                    });
+                }
+                window.focus(&this.focus, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.set_open(!this.sidebar_open, cx)));
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.set_open(!this.sidebar_open, cx)))
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                let k = &e.keystroke;
+                let slash = k.key == "/" || k.key_char.as_deref() == Some("/");
+                let typing = window.context_stack().iter().any(|c| c.contains("Input"));
+                if slash && !k.modifiers.platform && !k.modifiers.control && !k.modifiers.alt && !typing && !window.has_active_dialog(cx) {
+                    this.focus_search(window, cx);
+                    cx.stop_propagation();
+                }
+            }));
 
         if l.root.is_none() {
             let error = l.last_error.clone();
@@ -267,15 +267,23 @@ impl Render for MainWindow {
 
         let update = super::updates::available(cx);
         let target = if self.sidebar_open { sidebar::WIDTH } else { sidebar::RAIL };
-        let left = self.sidebar_frame(target, window);
         let inspector_w = if l.show_inspector { 340. } else { 0. };
         let page_width = width - target - inspector_w;
         self.pages.update(cx, |p, _| p.width = page_width);
+        let left = motion::follow("sidebar-width", target, motion::MEDIUM, window, cx);
         let l = lib.read(cx);
         let page = match l.route() {
-            Route::Today => div().id("today-scroll").size_full().overflow_y_scroll().child(today::render(l, page_width, &t)).into_any_element(),
+            Route::Today => div().id("today-scroll").size_full().overflow_y_scrollbar().child(today::render(l, page_width, &t)).into_any_element(),
             _ => self.pages.clone().into_any_element(),
         };
+        let page_key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            l.route().hash(&mut hasher);
+            hasher.finish()
+        };
+        let page_motion = motion::timed(motion::FAST, cx);
+        let toast_id = l.toast.as_ref().map_or(0, |toast| toast.id);
         let toast = l.toast.as_ref().map(|toast| toast_view(toast.message.clone(), toast.icon, toast.undo.is_some().then(|| toast.action_title.clone()), &t));
         let working = (!l.exporting_pdfs.is_empty() && l.toast.is_none()).then(|| toast_view(tr("PDF wird erstellt …"), "loader", None, &t));
         let error = l.last_error.clone();
@@ -305,12 +313,22 @@ impl Render for MainWindow {
                     .flex()
                     .flex_col()
                     .child(self.toolbar(l, left, &t))
-                    .child(div().flex_1().min_h_0().child(page)),
+                    .child(div().flex_1().min_h_0().child(page).with_animation(("page", page_key), Animation::new(page_motion).with_easing(ease_out_quint()), |d, p| d.opacity(0.4 + 0.6 * p))),
             )
             .when(l.show_inspector, |d| {
-                d.child(div().absolute().top_0().bottom_0().right_0().w(px(inspector_w)).border_l_1().border_color(t.separator).bg(t.content).pt(px(52.)).child(self.inspector.clone()))
+                d.child(div().absolute().top_0().bottom_0().right_0().w(px(inspector_w)).border_l_1().border_color(t.separator).bg(t.content).pt(px(control::BAR)).child(self.inspector.clone()))
             })
-            .children(toast.or(working).map(|v| div().absolute().bottom(px(22.)).left_0().right_0().flex().justify_center().child(v)));
+            .children(toast.or(working).map(|v| {
+                let toast_motion = motion::timed(motion::SLOW, cx);
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .justify_center()
+                    .child(v)
+                    .with_animation(("toast", toast_id), Animation::new(toast_motion).with_easing(ease_out_quint()), |d, p| d.bottom(px(10. + 12. * p)).opacity(p))
+            }));
         if let Some(message) = error {
             root = root.child(error_alert(message, broken, config_path, &t));
         }
@@ -327,23 +345,23 @@ fn toast_view(message: String, icon_name: &'static str, action: Option<String>, 
         .max_w(px(560.))
         .flex()
         .items_center()
-        .gap(px(10.))
-        .px(px(16.))
-        .py(px(10.))
+        .gap(px(space::S))
+        .px(px(space::L))
+        .py(px(space::S))
         .rounded_full()
         .bg(t.material)
         .border_1()
         .border_color(t.separator)
         .shadow_lg()
-        .child(icon(icon_name, 14., t.secondary))
+        .child(icon(icon_name, iconsize::S, t.secondary))
         .child(div().min_w_0().truncate().child(message))
         .when_some(action, |d, label| {
-            d.child(div().w(px(1.)).h(px(16.)).bg(t.separator)).child(link_button("toast-undo", label, t).font_weight(FontWeight::SEMIBOLD).tooltip(tip("⌘Z")).on_click(|_, _, cx| act(cx, |l| l.perform_undo())))
+            d.child(div().w(px(1.)).h(px(16.)).bg(t.separator)).child(link_button("toast-undo", label, t).font_weight(FontWeight::SEMIBOLD).on_click(|_, _, cx| act(cx, |l| l.perform_toast_action())))
         })
 }
 
 fn error_alert(message: String, broken: bool, config: Option<PathBuf>, t: &Theme) -> Div {
-    let mut buttons = div().flex().justify_end().gap(px(8.));
+    let mut buttons = div().flex().justify_end().gap(px(space::S));
     if broken {
         buttons = buttons.child(Button::new("restore").label(tr("Letzte Sicherung wiederherstellen")).on_click(|_, _, cx| act(cx, |l| l.restore_config_backup())));
         if let Some(p) = config {
@@ -354,13 +372,13 @@ fn error_alert(message: String, broken: bool, config: Option<PathBuf>, t: &Theme
     div().absolute().inset_0().bg(black().opacity(0.25)).flex().items_center().justify_center().child(
         div()
             .w(px(420.))
-            .p(px(20.))
-            .rounded(px(14.))
+            .p(px(space::XL))
+            .rounded(px(radius::CARD))
             .bg(t.material)
             .shadow_2xl()
             .flex()
             .flex_col()
-            .gap(px(12.))
+            .gap(px(space::M))
             .child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(tr("Fehler")))
             .child(div().text_color(t.secondary).child(message))
             .child(buttons),

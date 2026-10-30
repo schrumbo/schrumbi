@@ -132,21 +132,93 @@ pub fn reveal_workspace_label() -> String {
     }
 }
 
-/// Whether the system asks apps to avoid animations.
+/// The file manager's name for settings labels.
+pub fn markdown_label() -> String {
+    if cfg!(target_os = "macos") { tr("Markdown im Finder") } else { tr("Markdown-Dateien") }
+}
+
 #[cfg(target_os = "macos")]
-pub fn reduce_motion() -> bool {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject, Bool};
-    let Some(class) = AnyClass::get(c"NSWorkspace") else { return false };
-    unsafe {
-        let workspace: *mut AnyObject = msg_send![class, sharedWorkspace];
-        let reduce: Bool = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
-        reduce.as_bool()
+mod markdown_default {
+    use std::ffi::c_void;
+
+    use objc2_foundation::{NSBundle, NSString};
+
+    const MARKDOWN: &str = "net.daringfireball.markdown";
+    const ALL_ROLES: u32 = 0xFFFF_FFFF;
+
+    #[link(name = "CoreServices", kind = "framework")]
+    unsafe extern "C" {
+        fn LSCopyDefaultRoleHandlerForContentType(content_type: *const c_void, role: u32) -> *const NSString;
+        fn LSSetDefaultRoleHandlerForContentType(content_type: *const c_void, role: u32, handler: *const c_void) -> i32;
+    }
+
+    /// `None` outside an app bundle, where there is nothing to register.
+    pub fn get() -> Option<bool> {
+        let own = NSBundle::mainBundle().bundleIdentifier()?;
+        let kind = NSString::from_str(MARKDOWN);
+        let current = unsafe { LSCopyDefaultRoleHandlerForContentType((&*kind as *const NSString).cast(), ALL_ROLES) };
+        Some(unsafe { current.as_ref() }.is_some_and(|c| c.to_string().eq_ignore_ascii_case(&own.to_string())))
+    }
+
+    pub fn set() -> bool {
+        let Some(own) = NSBundle::mainBundle().bundleIdentifier() else { return false };
+        let kind = NSString::from_str(MARKDOWN);
+        unsafe { LSSetDefaultRoleHandlerForContentType((&*kind as *const NSString).cast(), ALL_ROLES, (&*own as *const NSString).cast()) == 0 }
     }
 }
 
-/// Whether the system asks apps to avoid animations.
+#[cfg(all(unix, not(target_os = "macos")))]
+mod markdown_default {
+    /// `None` when `xdg-mime` is missing.
+    pub fn get() -> Option<bool> {
+        let out = std::process::Command::new("xdg-mime").args(["query", "default", "text/markdown"]).output().ok()?;
+        Some(String::from_utf8_lossy(&out.stdout).trim() == "schrumbi.desktop")
+    }
+
+    pub fn set() -> bool {
+        std::process::Command::new("xdg-mime").args(["default", "schrumbi.desktop", "text/markdown"]).status().is_ok_and(|s| s.success())
+    }
+}
+
+#[cfg(windows)]
+mod markdown_default {
+    /// Windows doesn't let apps read or set this; the button opens the system dialog instead.
+    pub fn get() -> Option<bool> {
+        Some(false)
+    }
+
+    pub fn set() -> bool {
+        let _ = opener::open("ms-settings:defaultapps");
+        false
+    }
+}
+
+pub use markdown_default::{get as markdown_is_default, set as set_markdown_default};
+
+/// The app that opens this file by default, for labels like „In Preview öffnen“.
+#[cfg(target_os = "macos")]
+pub fn default_app_name(path: &std::path::Path) -> Option<String> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::NSString;
+    let (workspace, url_class, manager) = (AnyClass::get(c"NSWorkspace")?, AnyClass::get(c"NSURL")?, AnyClass::get(c"NSFileManager")?);
+    let path = NSString::from_str(&path.to_string_lossy());
+    unsafe {
+        let shared: *mut AnyObject = msg_send![workspace, sharedWorkspace];
+        let url: *mut AnyObject = msg_send![url_class, fileURLWithPath: &*path];
+        let app: *mut AnyObject = msg_send![shared, URLForApplicationToOpenURL: url];
+        if app.is_null() {
+            return None;
+        }
+        let app_path: *mut NSString = msg_send![app, path];
+        let files: *mut AnyObject = msg_send![manager, defaultManager];
+        let name: *mut NSString = msg_send![files, displayNameAtPath: app_path];
+        name.as_ref().map(|n| n.to_string().trim_end_matches(".app").to_string())
+    }
+}
+
+/// The app that opens this file by default; only macOS tells apps its name.
 #[cfg(not(target_os = "macos"))]
-pub fn reduce_motion() -> bool {
-    false
+pub fn default_app_name(_: &std::path::Path) -> Option<String> {
+    None
 }

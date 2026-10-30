@@ -1,3 +1,4 @@
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -9,7 +10,8 @@ use super::module_page::{self, ModuleState};
 use super::preview::FilePreview;
 use super::record::{self, RecordState};
 use super::state::{self, act};
-use super::theme::{Theme, font};
+use super::motion::Soft;
+use super::theme::{Theme, font, space, iconsize, radius};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::tr;
@@ -120,9 +122,9 @@ impl Pages {
             div()
                 .flex()
                 .items_center()
-                .gap(px(8.))
-                .px(px(16.))
-                .py(px(6.))
+                .gap(px(space::S))
+                .px(px(space::L))
+                .py(px(space::S))
                 .border_t_1()
                 .border_color(t.separator)
                 .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(tr("Einträge")))
@@ -134,15 +136,15 @@ impl Pages {
                         .id(SharedString::from(format!("entry-{}", a.id)))
                         .flex()
                         .items_center()
-                        .gap(px(5.))
-                        .px(px(8.))
-                        .py(px(4.))
-                        .rounded(px(6.))
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(hover))
+                        .gap(px(space::XS))
+                        .px(px(space::S))
+                        .py(px(space::XS))
+                        .rounded(px(radius::INNER))
+                        .cursor_pointer().key_nav()
+                        .soft(hover, radius::INNER)
                         .text_size(px(font::CAPTION))
                         .tooltip(tip(tr("Details öffnen")))
-                        .child(div().size(px(7.)).rounded_full().bg(color))
+                        .child(div().size(px(space::S)).rounded_full().bg(color))
                         .child(div().truncate().max_w(px(220.)).child(a.title.clone()))
                         .child(div().text_color(t.secondary).child(day::day_label(a.due, lib.now)))
                         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(id.clone()))))
@@ -169,7 +171,7 @@ impl Pages {
             return unavailable("folder-search", tr("Modul nicht gefunden"), "", t).into_any_element();
         };
         let split = two_columns(&self.module_split, width, 900., 820.);
-        let deadlines = div().id("module-deadlines").size_full().overflow_y_scroll().child(module_page::deadlines(lib, &m, &self.module, view.clone(), t));
+        let deadlines = div().id("module-deadlines").size_full().overflow_y_scrollbar().child(module_page::deadlines(lib, &m, &self.module, view.clone(), t));
         let body = if split {
             div().flex_1().min_h_0().flex().child(div().h_full().w(px((width * 0.42).round().clamp(320., 500.))).border_r_1().border_color(t.separator).child(deadlines)).child(div().h_full().flex_1().min_w_0().child(self.module_files.clone()))
         } else if self.module.files_pane {
@@ -186,7 +188,7 @@ impl Pages {
             .relative()
             .flex()
             .flex_col()
-            .child(module_page::header(lib, &m, split, &self.module, view, t))
+            .child(module_page::header(lib, &m, split, width, &self.module, view, t))
             .child(body)
             .on_drag_move::<ExternalPaths>(move |_, _, cx| v1.update(cx, |p, cx| {
                 if !p.module_drop {
@@ -207,7 +209,7 @@ impl Pages {
                     div()
                         .absolute()
                         .inset(px(10.))
-                        .rounded(px(12.))
+                        .rounded(px(radius::CARD))
                         .border(px(3.))
                         .border_dashed()
                         .border_color(accent)
@@ -215,11 +217,11 @@ impl Pages {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .gap(px(8.))
+                        .gap(px(space::S))
                         .text_size(px(font::TITLE3))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(accent)
-                        .child(icon("inbox", 18., accent))
+                        .child(icon("inbox", iconsize::M, accent))
                         .child(crate::core::i18n::trf("In %@ ablegen", &[&code])),
                 )
             })
@@ -268,9 +270,9 @@ impl Render for Pages {
         }
         let mut fields = std::mem::take(&mut self.fields);
         let body: AnyElement = match route {
-            Route::Grid => div().id("grid-scroll").size_full().overflow_y_scroll().child(grid::render(lib.read(cx), &self.grid, view, &t)).into_any_element(),
+            Route::Grid => div().id("grid-scroll").size_full().overflow_y_scrollbar().child(grid::render(lib.read(cx), &self.grid, view, &t)).into_any_element(),
             Route::Record => match lib.read(cx).config.clone() {
-                Some(c) => div().id("record-scroll").size_full().overflow_y_scroll().child(record::render(&c, &self.record, &mut fields, window, cx, &t)).into_any_element(),
+                Some(c) => div().id("record-scroll").size_full().overflow_y_scrollbar().child(record::render(&c, &self.record, &mut fields, window, cx, &t)).into_any_element(),
                 None => div().into_any_element(),
             },
             Route::Checks => {

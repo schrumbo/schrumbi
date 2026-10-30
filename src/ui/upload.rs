@@ -3,11 +3,13 @@ use std::path::{Path, PathBuf};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::{Disableable, Sizable};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
-use super::theme::{Theme, font, radius};
+use super::motion::{self, Soft};
+use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::filing::FileRole;
@@ -69,7 +71,18 @@ fn keep_visible_when_inactive(window: &Window) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows has no floating level for this window kind, so the panel is marked topmost.
+#[cfg(windows)]
+fn keep_visible_when_inactive(window: &Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos};
+    let Ok(RawWindowHandle::Win32(handle)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw()) else { return };
+    unsafe {
+        SetWindowPos(handle.hwnd.get() as _, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn keep_visible_when_inactive(_: &Window) {}
 
 fn size_label(path: &Path) -> String {
@@ -124,11 +137,11 @@ impl UploadPanel {
             .id(SharedString::from(format!("upload-{}", path.display())))
             .flex()
             .items_center()
-            .gap(px(10.))
-            .p(px(8.))
+            .gap(px(space::S))
+            .p(px(space::S))
             .rounded(px(radius::CONTROL))
             .bg(t.ink.opacity(0.05))
-            .hover(move |s| s.bg(hover))
+            .soft(hover, radius::CONTROL)
             .when(CAN_DRAG_OUT, |d| d.cursor_grab())
             .tooltip(tip(if CAN_DRAG_OUT { tr("Ziehen zum Hochladen, Doppelklick öffnet") } else { tr("Doppelklick öffnet") }))
             .on_mouse_down(MouseButton::Left, cx.listener(move |p, e: &MouseDownEvent, _, _| p.pressed = Some((e.position, press.clone()))))
@@ -156,9 +169,9 @@ impl UploadPanel {
                     .item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&b)))
                     .item(PopupMenuItem::new(tr("Pfad kopieren")).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(c.to_string_lossy().to_string()))))
             })
-            .child(file_icon(path, 22.))
+            .child(file_icon(path, iconsize::L))
             .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(path.file_name().unwrap_or_default().to_string_lossy().to_string())).child(caption(size_label(path), t)))
-            .when(CAN_DRAG_OUT, |d| d.child(icon("hand", 14., t.secondary.opacity(0.6))))
+            .when(CAN_DRAG_OUT, |d| d.child(icon("hand", iconsize::S, t.secondary.opacity(0.6))))
     }
 }
 
@@ -177,6 +190,8 @@ impl Render for UploadPanel {
             .on_key_down(cx.listener(|p, e: &KeyDownEvent, window, cx| {
                 if e.keystroke.key == "enter" {
                     p.mark_uploaded(window, cx);
+                } else if e.keystroke.key == "escape" {
+                    window.remove_window();
                 }
             }));
         struct Data {
@@ -213,16 +228,16 @@ impl Render for UploadPanel {
         let (finals, drafts): (Vec<PathBuf>, Vec<PathBuf>) = data.files.iter().cloned().partition(|f| !FileRole::is_draft(f));
         let both = !finals.is_empty() && !drafts.is_empty();
         let main = if finals.is_empty() { drafts.clone() } else { finals };
-        let mut body = div().flex().flex_col().gap(px(14.)).p(px(16.)).child(
+        let mut body = div().flex().flex_col().gap(px(space::M)).p(px(space::L)).child(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(4.))
+                .gap(px(space::XS))
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(6.))
+                        .gap(px(space::S))
                         .when_some(data.code.clone(), |d, (code, color)| d.child(module_chip(&code, color)))
                         .child(text(data.countdown.clone(), font::CAPTION, if data.urgent { t.palette("red") } else { t.secondary })),
                 )
@@ -235,15 +250,15 @@ impl Render for UploadPanel {
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap(px(8.))
-                    .py(px(12.))
-                    .child(icon("file-plus", 22., t.secondary))
+                    .gap(px(space::S))
+                    .py(px(space::M))
+                    .child(icon("file-plus", iconsize::L, t.secondary))
                     .child(div().text_color(t.secondary).child(tr("Noch keine Datei abgelegt.")))
                     .child(Button::new("upload-pick").small().label(tr("Datei ablegen…")).on_click(move |_, _, cx| super::platform::pick_files_for_filing(Some(id.clone()), cx))),
             );
         } else {
             let hint = if CAN_DRAG_OUT { tr("In das Upload-Feld im Browser ziehen:") } else { tr("Im Dateimanager zeigen und von dort in den Browser ziehen:") };
-            body = body.child(caption(hint, &t)).child(div().flex().flex_col().gap(px(6.)).children(main.iter().map(|f| self.row(f, &t, cx)).collect::<Vec<_>>()));
+            body = body.child(caption(hint, &t)).child(div().flex().flex_col().gap(px(space::S)).children(main.iter().map(|f| self.row(f, &t, cx)).collect::<Vec<_>>()));
             if both {
                 let open = self.notes_open;
                 let me = cx.entity();
@@ -252,18 +267,16 @@ impl Render for UploadPanel {
                         .id("upload-notes")
                         .flex()
                         .items_center()
-                        .gap(px(4.))
-                        .cursor_pointer()
+                        .gap(px(space::XS))
+                        .cursor_pointer().key_nav()
                         .on_click(move |_, _, cx| me.update(cx, |p, cx| {
                             p.notes_open = !p.notes_open;
                             cx.notify();
                         }))
-                        .child(icon(if open { "chevron-down" } else { "chevron-right" }, 12., t.secondary))
+                        .child(motion::chevron("chevron", open, t.secondary))
                         .child(caption(trf("Notizen (%lld)", &[&drafts.len()]), &t)),
                 );
-                if open {
-                    body = body.child(div().flex().flex_col().gap(px(6.)).children(drafts.iter().map(|f| self.row(f, &t, cx)).collect::<Vec<_>>()));
-                }
+                body = body.child(motion::reveal("upload-notes-list", open, div().flex().flex_col().gap(px(space::S)).children(drafts.iter().map(|f| self.row(f, &t, cx)).collect::<Vec<_>>())));
             }
         }
         let first = data.files.first().cloned();
@@ -275,7 +288,7 @@ impl Render for UploadPanel {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(4.))
+                    .gap(px(space::XS))
                     .when_some(link, |d, (title, url)| {
                         d.child(Button::new("upload-link").ghost().small().icon(menu_icon("globe")).label(trf("%@ öffnen", &[&title])).on_click(move |_, _, _| {
                             let _ = opener::open(url.as_str());
@@ -292,6 +305,6 @@ impl Render for UploadPanel {
                     })),
             )
             .child(Button::new("upload-done").primary().w_full().icon(menu_icon("check")).label(tr("Hochgeladen")).disabled(data.uploaded).on_click(move |_, window, cx| done.update(cx, |p, cx| p.mark_uploaded(window, cx))));
-        super::chrome::frame(tr("Hochladen"), root.child(div().id("upload-scroll").size_full().overflow_y_scroll().child(body)), &t)
+        super::chrome::frame(tr("Hochladen"), root.child(div().id("upload-scroll").size_full().overflow_y_scrollbar().child(body)), &t)
     }
 }

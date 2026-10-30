@@ -3,17 +3,17 @@ use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::Sizable;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
-use super::theme::{Theme, font};
+use super::theme::{Theme, font, space, iconsize};
 use super::widgets::*;
 use crate::core::i18n::tr;
 use crate::core::library;
 use crate::core::markdown;
 use crate::core::naming::extension;
-use crate::core::pdf_render::PdfDoc;
 
 const IMAGES: [&str; 9] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "svg", "heic"];
 const TEXTS: [&str; 14] = ["txt", "csv", "json", "xml", "yml", "yaml", "css", "js", "ts", "swift", "java", "py", "c", "html"];
@@ -23,7 +23,6 @@ enum Content {
     Markdown(Arc<super::markdown_view::ParsedNote>),
     Text(String),
     Image(PathBuf),
-    Pdf(Vec<(Arc<Image>, f32)>),
     Other,
 }
 
@@ -32,6 +31,7 @@ pub struct FilePreview {
     path: Option<PathBuf>,
     content: Content,
     load: Option<Task<()>>,
+    pdf: Option<Entity<super::pdf_view::PdfView>>,
     /// Shows the header with title, path and actions.
     pub header: bool,
 }
@@ -42,7 +42,7 @@ fn ext(path: &Path) -> String {
 
 impl FilePreview {
     pub fn new(header: bool) -> Self {
-        Self { path: None, content: Content::Other, load: None, header }
+        Self { path: None, content: Content::Other, load: None, pdf: None, header }
     }
 
     pub fn path(&self) -> Option<&PathBuf> {
@@ -55,12 +55,19 @@ impl FilePreview {
             return;
         }
         self.path = path.clone();
+        self.pdf = None;
         let Some(path) = path else {
             self.content = Content::Other;
             cx.notify();
             return;
         };
         let e = ext(&path);
+        if e == "pdf" {
+            self.pdf = Some(cx.new(|cx| super::pdf_view::PdfView::new(&path, cx)));
+            self.content = Content::Other;
+            cx.notify();
+            return;
+        }
         if IMAGES.contains(&e.as_str()) {
             self.content = Content::Image(path);
             cx.notify();
@@ -73,11 +80,6 @@ impl FilePreview {
                 Content::Markdown(Arc::new(super::markdown_view::parse(&std::fs::read_to_string(&path).unwrap_or_default())))
             } else if TEXTS.contains(&e.as_str()) {
                 Content::Text(std::fs::read_to_string(&path).map(|s| s.chars().take(200_000).collect()).unwrap_or_default())
-            } else if e == "pdf" {
-                match PdfDoc::open(&path) {
-                    Some(doc) => Content::Pdf((0..doc.page_count().min(60)).filter_map(|i| Some((Arc::new(Image::from_bytes(ImageFormat::Png, doc.render_png(i, 2.)?)), doc.page_size(i).map_or(0.707, |(w, h)| w / h.max(1.))))).collect()),
-                    None => Content::Other,
-                }
             } else {
                 Content::Other
             }
@@ -100,38 +102,31 @@ impl Render for FilePreview {
         };
         let (title, folder) = state::read(cx, |l| (l.note_title(&path), path.parent().map(|p| l.relative_path(p).replace('/', " › ")).unwrap_or_default()));
         let (reveal, open, default_app) = (path.clone(), path.clone(), path.clone());
-        let body: AnyElement = match &self.content {
-            Content::Loading => div().size_full().flex().items_center().justify_center().child(icon("loader", 18., t.secondary)).into_any_element(),
+        let body: AnyElement = if let Some(pdf) = &self.pdf {
+            pdf.clone().into_any_element()
+        } else {
+            match &self.content {
+            Content::Loading => div().size_full().flex().items_center().justify_center().child(super::motion::loading(iconsize::L, t.secondary)).into_any_element(),
             Content::Markdown(text) => div()
                 .id("preview-md")
                 .size_full()
-                .overflow_y_scroll()
-                .child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(680.)).p(px(24.)).child(super::markdown_view::render(text, self.path.as_deref().and_then(Path::parent), None, &t))))
+                .overflow_y_scrollbar()
+                .child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(680.)).p(px(space::XL)).child(super::markdown_view::render(text, self.path.as_deref().and_then(Path::parent), None, &t))))
                 .into_any_element(),
-            Content::Text(text) => div().id("preview-text").size_full().overflow_y_scroll().p(px(24.)).font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(text.clone()).into_any_element(),
-            Content::Image(p) => div().size_full().p(px(16.)).flex().items_center().justify_center().child(img(p.clone()).max_w_full().max_h_full().object_fit(ObjectFit::Contain)).into_any_element(),
-            Content::Pdf(pages) => div()
-                .id("preview-pdf")
-                .size_full()
-                .overflow_y_scroll()
-                .bg(t.ink.opacity(0.04))
-                .child(div().flex().flex_col().items_center().gap(px(12.)).p(px(16.)).children(pages.iter().map(|(p, ratio)| {
-                    let mut page = div().w_full().max_w(px(820.)).flex_none().shadow_md();
-                    page.style().aspect_ratio = Some(*ratio);
-                    page.child(img(p.clone()).size_full())
-                })))
-                .into_any_element(),
+            Content::Text(text) => div().id("preview-text").size_full().overflow_y_scrollbar().p(px(space::XL)).font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(text.clone()).into_any_element(),
+            Content::Image(p) => div().size_full().p(px(space::L)).flex().items_center().justify_center().child(img(p.clone()).max_w_full().max_h_full().object_fit(ObjectFit::Contain)).into_any_element(),
             Content::Other => div()
                 .size_full()
                 .flex()
                 .flex_col()
                 .items_center()
                 .justify_center()
-                .gap(px(12.))
-                .child(file_icon(&path, 64.))
+                .gap(px(space::M))
+                .child(file_icon(&path, iconsize::PREVIEW))
                 .child(div().text_color(t.secondary).child(path.file_name().unwrap_or_default().to_string_lossy().to_string()))
                 .child(Button::new("open-default").label(tr("Mit Standard-App öffnen")).on_click(move |_, _, _| library::open_path(&default_app)))
                 .into_any_element(),
+            }
         };
         div()
             .size_full()
@@ -143,13 +138,13 @@ impl Render for FilePreview {
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(10.))
-                        .px(px(14.))
-                        .py(px(9.))
+                        .gap(px(space::S))
+                        .px(px(space::L))
+                        .py(px(space::S))
                         .border_b_1()
                         .border_color(t.separator)
-                        .child(file_icon(&path, 20.))
-                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(1.)).child(div().font_weight(FontWeight::BOLD).truncate().child(title)).child(div().text_size(px(font::CAPTION)).text_color(t.secondary).truncate().child(folder)))
+                        .child(file_icon(&path, iconsize::L))
+                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().font_weight(FontWeight::BOLD).truncate().child(title)).child(div().text_size(px(font::CAPTION)).text_color(t.secondary).truncate().child(folder)))
                         .child(Button::new("preview-reveal").ghost().small().icon(menu_icon("folder")).tooltip(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&reveal)))
                         .child(Button::new("preview-open").primary().small().label(tr("Öffnen")).tooltip(tr("Als Tab öffnen (↩ in der Suche, Doppelklick in der Liste)")).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))),
                 )

@@ -1,12 +1,50 @@
 use gpui_kit::component::{Theme as ComponentTheme, ThemeMode};
 use gpui_kit::{App, Global, Hsla, Window, WindowAppearance, px, rgb};
 
+/// Spacing scale for padding, margins and gaps.
+pub mod space {
+    /// Optical inset inside chips and between stacked text lines.
+    pub const XXS: f32 = 2.;
+    pub const XS: f32 = 4.;
+    pub const S: f32 = 8.;
+    pub const M: f32 = 12.;
+    pub const L: f32 = 16.;
+    pub const XL: f32 = 24.;
+    pub const XXL: f32 = 32.;
+}
+
+/// Icon sizes.
+pub mod iconsize {
+    pub const XS: f32 = 12.;
+    pub const S: f32 = 14.;
+    pub const M: f32 = 16.;
+    pub const L: f32 = 20.;
+    /// Empty states.
+    pub const HERO: f32 = 32.;
+    /// File previews.
+    pub const PREVIEW: f32 = 64.;
+}
+
+/// Control heights.
+pub mod control {
+    pub const S: f32 = 24.;
+    pub const M: f32 = 28.;
+    /// The toolbar band.
+    pub const BAR: f32 = 52.;
+}
+
 /// Corner radii used across the app.
 pub mod radius {
-    /// Cards, tiles, grouped containers.
-    pub const CARD: f32 = 12.;
+    /// Keyboard chips, small marks.
+    pub const SMALL: f32 = 4.;
+    /// Buttons, inputs, nested rows.
+    pub const INNER: f32 = 6.;
     /// Chips, deadline cards, inline controls.
     pub const CONTROL: f32 = 8.;
+    /// Cards, tiles, grouped containers.
+    pub const CARD: f32 = 12.;
+    /// Capsules and circles.
+    pub const FULL: f32 = 999.;
 }
 
 /// macOS text styles in points.
@@ -15,10 +53,8 @@ pub mod font {
     pub const TITLE: f32 = 22.;
     pub const TITLE2: f32 = 17.;
     pub const TITLE3: f32 = 15.;
-    pub const HEADLINE: f32 = 13.;
     pub const BODY: f32 = 13.;
     pub const CALLOUT: f32 = 12.;
-    pub const SUBHEADLINE: f32 = 11.;
     pub const CAPTION: f32 = 11.;
     pub const CAPTION2: f32 = 10.;
 }
@@ -142,7 +178,9 @@ pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
     highlight.style.editor_background = Some(t.content);
     highlight.style.editor_active_line = Some(t.ink.opacity(0.05));
     ct.highlight_theme = std::sync::Arc::new(highlight);
-    ct.radius = px(6.);
+    ct.motion.duration_slow = super::motion::SLOW;
+    ct.scrollbar_mode = gpui_kit::base::ScrollbarMode::Hover;
+    ct.radius = px(radius::INNER);
     ct.radius_lg = px(radius::CARD);
     let k = &mut ct.colors;
     k.background = t.content;

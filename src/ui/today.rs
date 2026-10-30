@@ -7,7 +7,8 @@ use gpui_kit::*;
 
 use super::board;
 use super::state::act;
-use super::theme::{Theme, font};
+use super::motion::Soft;
+use super::theme::{Theme, font, space, iconsize, radius};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::{tr, trf};
@@ -22,8 +23,8 @@ pub fn render(lib: &Library, width: f32, t: &Theme) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(24.))
-        .p(px(24.))
+        .gap(px(space::XL))
+        .p(px(space::XL))
         .child(header(lib, t))
         .when(!empty, |d| d.child(stats(lib, width < 4. * 180. + 36. + 48., t)))
         .when(empty, |d| d.child(getting_started(t)))
@@ -33,7 +34,7 @@ pub fn render(lib: &Library, width: f32, t: &Theme) -> Div {
             div()
                 .flex()
                 .flex_col()
-                .gap(px(10.))
+                .gap(px(space::S))
                 .child(div().flex().items_end().child(section_title(tr("Nächste 7 Tage"))).child(div().flex_1()).child(legend(t)))
                 .child(board::render(lib, &days, width < 7. * 112. + 36. + 48., t)),
         )
@@ -53,9 +54,9 @@ fn header(lib: &Library, t: &Theme) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(4.))
+        .gap(px(space::XS))
         .child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(day::long(lib.today())))
-        .child(div().text_size(px(font::BODY + 0.5)).text_color(t.secondary).child(sub.join("  ·  ")))
+        .child(div().text_size(px(font::BODY)).text_color(t.secondary).child(sub.join("  ·  ")))
 }
 
 fn select(id: String) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
@@ -73,13 +74,13 @@ fn stats(lib: &Library, grid: bool, t: &Theme) -> Div {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(4.))
+                    .gap(px(space::XS))
                     .child(div().text_size(px(font::TITLE)).font_weight(FontWeight::BOLD).text_color(tint).child(day::countdown(a.due, lib.now)))
                     .child(
                         div()
                             .flex()
-                            .gap(px(6.))
-                            .text_size(px(font::CALLOUT + 1.))
+                            .gap(px(space::S))
+                            .text_size(px(font::BODY))
                             .child(div().font_weight(FontWeight::SEMIBOLD).child(module_tag(m.map_or("?", |m| m.code.as_str()), tint)))
                             .child(div().truncate().child(a.title.clone())),
                     )
@@ -94,7 +95,7 @@ fn stats(lib: &Library, grid: bool, t: &Theme) -> Div {
         div()
             .flex()
             .flex_col()
-            .gap(px(8.))
+            .gap(px(space::S))
             .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(trf("%lld von %lld", &[&done, &total])))
             .child(progress_bar(done as f32 / total.max(1) as f32, if total > 0 && done == total { t.green } else { t.accent }, t))
             .child(caption(tr("Pflichtabgaben erledigt"), t)),
@@ -105,13 +106,13 @@ fn stats(lib: &Library, grid: bool, t: &Theme) -> Div {
         div()
             .flex()
             .items_center()
-            .gap(px(12.))
+            .gap(px(space::M))
             .child(progress_ring(if p_total > 0 { p_done as f32 / p_total as f32 } else { 0. }, 46., t))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(2.))
+                    .gap(px(space::XXS))
                     .child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).child(format!("{p_done} / {p_total}")))
                     .child(caption(trf("%lld bisher fällig", &[&p_due]), t)),
             ),
@@ -119,7 +120,7 @@ fn stats(lib: &Library, grid: bool, t: &Theme) -> Div {
 
     let streak = lib.streak();
     let streak_tile = tile("streak", tr("Pünktlich in Folge"), "flame", t.orange, false, t).child(
-        div().flex().flex_col().gap(px(4.)).child(div().text_size(px(font::TITLE)).font_weight(FontWeight::BOLD).child(streak.to_string())).child(caption(
+        div().flex().flex_col().gap(px(space::XS)).child(div().text_size(px(font::TITLE)).font_weight(FontWeight::BOLD).child(streak.to_string())).child(caption(
             match streak {
                 0 => tr("Nächste Abgabe startet die Serie"),
                 1 => tr("Abgabe"),
@@ -133,47 +134,48 @@ fn stats(lib: &Library, grid: bool, t: &Theme) -> Div {
         div()
             .flex()
             .flex_col()
-            .gap(px(12.))
-            .child(div().flex().gap(px(12.)).child(next_tile).child(week_tile))
-            .child(div().flex().gap(px(12.)).child(semester_tile).child(streak_tile))
+            .gap(px(space::M))
+            .child(div().flex().gap(px(space::M)).child(next_tile).child(week_tile))
+            .child(div().flex().gap(px(space::M)).child(semester_tile).child(streak_tile))
     } else {
-        div().flex().gap(px(12.)).child(next_tile).child(week_tile).child(semester_tile).child(streak_tile)
+        div().flex().gap(px(space::M)).child(next_tile).child(week_tile).child(semester_tile).child(streak_tile)
     }
 }
 
 fn chips(lib: &Library, items: &[&Assignment], t: &Theme) -> Div {
-    div().flex().flex_wrap().gap(px(8.)).children(items.iter().map(|a| {
+    div().flex().flex_wrap().gap(px(space::S)).children(items.iter().map(|a| {
         let m = lib.module(a);
         let tint = t.palette(m.map_or("blue", |m| m.color.as_str()));
         let selected = lib.is_selected(&a.id);
         let (hover, menu_id) = (t.content.blend(t.ink.opacity(0.1)), a.id.clone());
-        div()
+        let chip = div()
             .id(SharedString::from(format!("chip-{}", a.id)))
             .flex()
             .items_center()
-            .gap(px(6.))
-            .px(px(10.))
-            .py(px(6.))
+            .gap(px(space::S))
+            .px(px(space::M))
+            .py(px(space::S))
             .rounded_full()
             .bg(t.content)
-            .hover(move |s| s.bg(hover))
-            .cursor_pointer()
+            .soft(hover, radius::FULL)
+            .cursor_pointer().key_nav()
             .when(selected, |c| c.border(px(2.)).border_color(t.accent))
             .on_click(select(a.id.clone()))
-            .child(status_toggle(a, lib, 15., t))
+            .child(status_toggle(a, lib, iconsize::M, t))
             .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).child(module_tag(m.map_or("?", |m| m.code.as_str()), tint)))
             .child(div().text_size(px(font::CALLOUT)).child(a.title.clone()))
             .child(caption(day::day_label(a.due, lib.now), t))
-            .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx))
+            .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx));
+        super::motion::flip(format!("chip-{}", a.id), chip)
     }))
 }
 
 fn banner_group(title: String, icon_name: &str, tint: Hsla, accessory: Option<AnyElement>, body: Div) -> Div {
-    banner(tint).flex().flex_col().gap(px(8.)).child(
+    banner(tint).flex().flex_col().gap(px(space::S)).child(
         div()
             .flex()
             .items_center()
-            .child(div().flex().items_center().gap(px(6.)).text_size(px(font::HEADLINE)).font_weight(FontWeight::BOLD).text_color(tint).child(icon(icon_name, 14., tint)).child(title))
+            .child(div().flex().items_center().gap(px(space::S)).text_size(px(font::BODY)).font_weight(FontWeight::BOLD).text_color(tint).child(icon(icon_name, iconsize::S, tint)).child(title))
             .child(div().flex_1())
             .children(accessory),
     )
@@ -186,7 +188,7 @@ fn attention(lib: &Library, t: &Theme) -> Option<Div> {
     if unconfirmed.is_empty() && overdue.is_empty() {
         return None;
     }
-    let mut col = div().flex().flex_col().gap(px(10.));
+    let mut col = div().flex().flex_col().gap(px(space::S));
     if !overdue.is_empty() {
         col = col.child(banner_group(format!("{} ({})", tr("Überfällig"), overdue.len()), "circle-alert", t.red, None, chips(lib, &overdue, t)));
     }
@@ -205,13 +207,13 @@ fn inbox_hint(lib: &Library, t: &Theme) -> Option<Div> {
         banner(t.accent)
             .flex()
             .items_center()
-            .gap(px(12.))
-            .child(icon("inbox", 22., t.accent))
+            .gap(px(space::M))
+            .child(icon("inbox", iconsize::L, t.accent))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(2.))
+                    .gap(px(space::XXS))
                     .child(div().font_weight(FontWeight::BOLD).child(text))
                     .child(div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(tr("Abgabe, Titel und Name werden vorgeschlagen."))),
             )
@@ -222,38 +224,38 @@ fn inbox_hint(lib: &Library, t: &Theme) -> Option<Div> {
 
 fn getting_started(t: &Theme) -> Div {
     let step = |icon_name: &str, title: String, body: String| {
-        div().flex_1().flex().flex_col().gap(px(4.)).child(icon(icon_name, 18., t.accent)).child(div().font_weight(FontWeight::MEDIUM).child(title)).child(div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(body))
+        div().flex_1().flex().flex_col().gap(px(space::XS)).child(icon(icon_name, iconsize::M, t.accent)).child(div().font_weight(FontWeight::MEDIUM).child(title)).child(div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(body))
     };
     banner(t.accent)
-        .p(px(16.))
+        .p(px(space::L))
         .flex()
         .flex_col()
-        .gap(px(12.))
+        .gap(px(space::M))
         .child(div().font_weight(FontWeight::BOLD).child(tr("So kommen deine Deadlines in die App")))
         .child(
             div()
                 .flex()
                 .items_start()
-                .gap(px(12.))
+                .gap(px(space::M))
                 .child(step("calendar-plus", tr("Aus Moodle importieren"), tr("Kalender → Exportieren → .ics, dann „Ablage → Kalender importieren“.")))
                 .child(step("repeat", tr("Wiederkehrende Abgaben"), tr("Einstellungen → Module → Regel hinzufügen, z. B. jeden Montag 18:00.")))
-                .child(step("circle-plus", tr("Einzeln hinzufügen"), tr("⌘N für Aufgaben, Abgaben und Prüfungen."))),
+                .child(step("circle-plus", tr("Einzeln hinzufügen"), trf("%@ für Aufgaben, Abgaben und Prüfungen.", &[&crate::core::shortcuts::ShortcutAction::NewEntry.shortcut().map_or_else(|| tr("Plus"), |s| s.display())]))),
         )
 }
 
 fn legend(t: &Theme) -> Div {
-    let item = |glyph: AnyElement, label: String| div().flex().items_center().gap(px(4.)).child(glyph).child(label);
-    let overdue = div().size(px(11.)).rounded_full().bg(t.red).flex().items_center().justify_center().text_size(px(8.)).font_weight(FontWeight::BLACK).text_color(white()).child("!").into_any_element();
+    let item = |glyph: AnyElement, label: String| div().flex().items_center().gap(px(space::XS)).child(glyph).child(label);
+    let overdue = div().size(px(iconsize::XS)).rounded_full().bg(t.red).flex().items_center().justify_center().text_size(px(font::CAPTION2)).font_weight(FontWeight::BLACK).text_color(white()).child("!").into_any_element();
     div()
         .flex()
         .items_center()
-        .gap(px(12.))
+        .gap(px(space::M))
         .text_size(px(font::CAPTION))
         .text_color(t.secondary)
-        .child(item(status_glyph(Status::Done, crate::core::model::Kind::Submission, false, t.gray, 11., t), tr("Erledigt")))
-        .child(item(status_glyph(Status::Ready, crate::core::model::Kind::Submission, false, t.gray, 11., t), tr("Bereit")))
+        .child(item(status_glyph(Status::Done, crate::core::model::Kind::Submission, false, t.gray, iconsize::XS, t), tr("Erledigt")))
+        .child(item(status_glyph(Status::Ready, crate::core::model::Kind::Submission, false, t.gray, iconsize::XS, t), tr("Bereit")))
         .child(item(overdue, tr("Überfällig")))
-        .child(item(div().w(px(14.)).h(px(10.)).rounded(px(3.)).border_1().border_dashed().border_color(t.secondary).into_any_element(), tr("Optional")))
+        .child(item(div().w(px(14.)).h(px(10.)).rounded(px(radius::SMALL)).border_1().border_dashed().border_color(t.secondary).into_any_element(), tr("Optional")))
 }
 
 fn exams(lib: &Library, t: &Theme) -> Option<Div> {
@@ -261,18 +263,18 @@ fn exams(lib: &Library, t: &Theme) -> Option<Div> {
     if exams.is_empty() {
         return None;
     }
-    let row = div().flex().gap(px(12.)).children(exams.into_iter().take(4).map(|a| {
+    let row = div().flex().gap(px(space::M)).children(exams.into_iter().take(4).map(|a| {
         let m = lib.module(a);
         let tint = t.palette(m.map_or("blue", |m| m.color.as_str()));
         tile(SharedString::from(format!("exam-{}", a.id)), m.map_or(String::new(), |m| m.code.clone()), "graduation-cap", tint, true, t).on_click(select(a.id.clone())).child(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(4.))
+                .gap(px(space::XS))
                 .child(div().font_weight(FontWeight::BOLD).line_clamp(2).child(a.title.clone()))
                 .child(caption(day::due(a.due, lib.now), t))
                 .child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).child(day::countdown(a.due, lib.now))),
         )
     }));
-    Some(div().flex().flex_col().gap(px(10.)).child(section_title(tr("Prüfungen"))).child(row))
+    Some(div().flex().flex_col().gap(px(space::S)).child(section_title(tr("Prüfungen"))).child(row))
 }

@@ -616,9 +616,9 @@ impl Status {
     pub fn icon(self) -> &'static str {
         match self {
             Status::Open => "circle",
-            Status::InProgress => "circle-half",
+            Status::InProgress => "circle-dot",
             Status::Ready => "circle-check",
-            Status::Uploaded | Status::Done => "circle-check-filled",
+            Status::Uploaded | Status::Done => "circle-check",
             Status::Skipped => "circle-minus",
             Status::Overdue => "circle-alert",
         }

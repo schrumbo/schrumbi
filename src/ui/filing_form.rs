@@ -8,11 +8,13 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, Sizable};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
-use super::theme::{Theme, font, radius};
+use super::motion::Soft;
+use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::filing::{self, BRIEF_TAG, FileFacts, FileRole, Suggestion};
@@ -358,7 +360,7 @@ impl FilingForm {
 }
 
 fn section_label(s: String, t: &Theme) -> Div {
-    div().text_size(px(font::SUBHEADLINE)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(s)
+    div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(s)
 }
 
 fn chip(id: SharedString, selected: bool, t: &Theme) -> Stateful<Div> {
@@ -367,19 +369,19 @@ fn chip(id: SharedString, selected: bool, t: &Theme) -> Stateful<Div> {
         .id(id)
         .flex()
         .items_center()
-        .gap(px(6.))
-        .px(px(10.))
-        .py(px(6.))
+        .gap(px(space::S))
+        .px(px(space::M))
+        .py(px(space::S))
         .rounded(px(radius::CONTROL))
         .bg(fill)
-        .hover(move |s| s.bg(hover))
-        .cursor_pointer()
+        .soft(hover, radius::CONTROL)
+        .cursor_pointer().key_nav()
         .when(selected, |d| d.border(px(2.)).border_color(t.accent))
 }
 
 fn suggestion(id: SharedString, label: String, selected: bool, t: &Theme) -> Stateful<Div> {
     let (fill, hover) = if selected { (t.accent.opacity(0.2), t.accent.opacity(0.28)) } else { (t.ink.opacity(0.06), t.ink.opacity(0.1)) };
-    div().id(id).px(px(8.)).py(px(3.)).rounded_full().bg(fill).hover(move |s| s.bg(hover)).cursor_pointer().text_size(px(font::CAPTION)).text_color(if selected { t.accent } else { t.primary }).child(label)
+    div().id(id).px(px(space::S)).py(px(space::XS)).rounded_full().bg(fill).soft(hover, radius::FULL).cursor_pointer().key_nav().text_size(px(font::CAPTION)).text_color(if selected { t.accent } else { t.primary }).child(label)
 }
 
 impl Render for FilingForm {
@@ -402,13 +404,13 @@ impl Render for FilingForm {
         let thumb: AnyElement = match &self.thumbnail {
             Some(i) => img(i.clone()).size_full().object_fit(ObjectFit::Contain).into_any_element(),
             None if ["png", "jpg", "jpeg", "gif", "webp"].contains(&extension(&name_of(&path)).to_lowercase().as_str()) => img(path.clone()).size_full().object_fit(ObjectFit::Cover).into_any_element(),
-            None => file_icon(&path, 36.).into_any_element(),
+            None => file_icon(&path, iconsize::HERO).into_any_element(),
         };
         let p2 = path.clone();
         let header = div()
             .flex()
             .items_start()
-            .gap(px(14.))
+            .gap(px(space::M))
             .child(
                 div()
                     .id("filing-thumb")
@@ -423,7 +425,7 @@ impl Render for FilingForm {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .cursor_pointer()
+                    .cursor_pointer().key_nav()
                     .tooltip(tip(tr("Vorschau (Klick)")))
                     .on_click(move |_, _, cx| super::preview::show(&preview_path, cx))
                     .child(thumb),
@@ -434,11 +436,11 @@ impl Render for FilingForm {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap(px(4.))
+                    .gap(px(space::XS))
                     .when(self.paths.len() > 1, |d| d.child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(trf("%lld von %lld", &[&(self.index + 1), &self.paths.len()]))))
                     .child(div().font_weight(FontWeight::BOLD).line_clamp(2).child(name_of(&path)))
                     .when_some(self.facts.as_ref(), |d, f| d.child(caption(trf("Erstellt %@", &[&day::due(f.created, l.now)]), &t)))
-                    .child(link_button("filing-preview", tr("Vorschau"), &t).flex().items_center().gap(px(3.)).text_size(px(font::CAPTION)).child(icon("eye", 11., t.accent)).on_click(move |_, _, cx| super::preview::show(&p2, cx))),
+                    .child(link_button("filing-preview", tr("Vorschau"), &t).flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).child(icon("eye", iconsize::XS, t.accent)).on_click(move |_, _, cx| super::preview::show(&p2, cx))),
             );
 
         let role_hint = match self.role {
@@ -446,7 +448,7 @@ impl Render for FilingForm {
             FileRole::Brief => tr("Liegt bei der Abgabe, zählt aber nicht als erledigt."),
             FileRole::Material => tr("Folien, Skripte, Handouts – Vorschläge nach deinen letzten Kursen."),
         };
-        let mut roles = div().flex().rounded(px(6.)).bg(t.ink.opacity(0.06)).p(px(2.));
+        let mut roles = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS));
         for r in FileRole::ALL {
             let (label, icon_name) = match r {
                 FileRole::Work => (tr("Meine Abgabe"), "file-up"),
@@ -460,14 +462,14 @@ impl Render for FilingForm {
                     .id(SharedString::from(format!("role-{label}")))
                     .flex()
                     .items_center()
-                    .gap(px(5.))
-                    .px(px(10.))
-                    .py(px(3.))
-                    .rounded(px(5.))
-                    .cursor_pointer()
+                    .gap(px(space::XS))
+                    .px(px(space::M))
+                    .py(px(space::XS))
+                    .rounded(px(radius::INNER))
+                    .cursor_pointer().key_nav()
                     .text_size(px(font::CALLOUT))
                     .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
-                    .child(icon(icon_name, 12., if active { t.primary } else { t.secondary }))
+                    .child(icon(icon_name, iconsize::XS, if active { t.primary } else { t.secondary }))
                     .child(label)
                     .on_click(move |_, window, cx| e.update(cx, |f, cx| f.set_role(r, window, cx))),
             );
@@ -475,19 +477,19 @@ impl Render for FilingForm {
         let role_section = div()
             .flex()
             .flex_col()
-            .gap(px(8.))
+            .gap(px(space::S))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
+                    .gap(px(space::S))
                     .child(section_label(tr("Was ist das?"), &t))
-                    .when(self.guessed == Some(self.role), |d| d.child(div().id("guessed").flex().items_center().gap(px(3.)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("sparkles", 11., t.secondary)).child(tr("erkannt")).tooltip(tip(tr("Aus Dateiname und Inhalt geschätzt"))))),
+                    .when(self.guessed == Some(self.role), |d| d.child(div().id("guessed").flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("sparkles", iconsize::XS, t.secondary)).child(tr("erkannt")).tooltip(tip(tr("Aus Dateiname und Inhalt geschätzt"))))),
             )
             .child(div().flex().child(roles))
             .child(caption(role_hint, &t));
 
-        let mut chips = div().flex().flex_wrap().gap(px(6.));
+        let mut chips = div().flex().flex_wrap().gap(px(space::S));
         if self.role == FileRole::Material {
             for p in self.places.iter().take(4) {
                 let selected = self.target == Some(Target::Folder(p.path.clone()));
@@ -499,15 +501,15 @@ impl Render for FilingForm {
                 chips = chips.child(
                     chip(SharedString::from(format!("place-{}", p.path.display())), selected, &t)
                         .tooltip(tip(l.relative_path(&p.path)))
-                        .child(div().size(px(7.)).rounded_full().bg(t.palette(&p.module.color)))
+                        .child(div().size(px(space::S)).rounded_full().bg(t.palette(&p.module.color)))
                         .child(
                             div()
                                 .flex()
                                 .flex_col()
                                 .child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).truncate().max_w(px(220.)).child(label))
-                                .child(div().flex().gap(px(4.)).text_size(px(font::CAPTION2)).text_color(t.secondary).child(p.module.code.clone()).when_some(ctx, |d, c| d.child("·").child(div().text_color(if c.days_ago == 0 { t.accent } else { t.secondary }).child(c.day_label())))),
+                                .child(div().flex().gap(px(space::XS)).text_size(px(font::CAPTION2)).text_color(t.secondary).child(p.module.code.clone()).when_some(ctx, |d, c| d.child("·").child(div().text_color(if c.days_ago == 0 { t.accent } else { t.secondary }).child(c.day_label())))),
                         )
-                        .when(selected, |d| d.child(icon("check", 12., t.accent)))
+                        .when(selected, |d| d.child(icon("check", iconsize::XS, t.accent)))
                         .on_click(move |_, window, cx| e.update(cx, |form, cx| form.select(Target::Folder(f.clone()), window, cx))),
                 );
             }
@@ -518,7 +520,7 @@ impl Render for FilingForm {
                 let (e, id) = (me.clone(), a.id.clone());
                 chips = chips.child(
                     chip(SharedString::from(format!("target-{}", a.id)), selected, &t)
-                        .child(div().size(px(7.)).rounded_full().bg(t.palette(m.map_or("blue", |m| m.color.as_str()))))
+                        .child(div().size(px(space::S)).rounded_full().bg(t.palette(m.map_or("blue", |m| m.color.as_str()))))
                         .child(
                             div()
                                 .flex()
@@ -526,7 +528,7 @@ impl Render for FilingForm {
                                 .child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).truncate().max_w(px(220.)).child(a.title.clone()))
                                 .child(div().text_size(px(font::CAPTION2)).text_color(t.secondary).child(format!("{} · {}", m.map_or("", |m| m.code.as_str()), day::day_label(a.due, l.now)))),
                         )
-                        .when(selected, |d| d.child(icon("check", 12., t.accent)))
+                        .when(selected, |d| d.child(icon("check", iconsize::XS, t.accent)))
                         .on_click(move |_, window, cx| e.update(cx, |form, cx| form.select(Target::Assignment(id.clone()), window, cx))),
                 );
             }
@@ -587,25 +589,25 @@ impl Render for FilingForm {
         let target_section = div()
             .flex()
             .flex_col()
-            .gap(px(10.))
+            .gap(px(space::S))
             .child(section_label(tr("Wohin?"), &t))
             .child(chips)
             .child(match &folder {
-                Some(f) => div().flex().items_center().gap(px(4.)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", 11., t.secondary)).child(div().truncate().child(l.relative_path(f))),
+                Some(f) => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", iconsize::XS, t.secondary)).child(div().truncate().child(l.relative_path(f))),
                 None => caption(if material { tr("Wähle einen Ordner.") } else { tr("Wähle eine Abgabe oder einen Ordner.") }, &t),
             });
 
-        let mut body = div().flex().flex_col().gap(px(20.)).p(px(22.)).child(header).child(role_section).child(target_section);
+        let mut body = div().flex().flex_col().gap(px(space::XL)).p(px(space::XL)).child(header).child(role_section).child(target_section);
 
         if folder.is_some() {
             let e = me.clone();
-            let mut name = div().flex().flex_col().gap(px(14.)).child(
+            let mut name = div().flex().flex_col().gap(px(space::M)).child(
                 div().flex().items_center().child(section_label(tr("Name"), &t)).child(div().flex_1()).child(
                     div()
                         .id("rename-switch")
                         .flex()
                         .items_center()
-                        .gap(px(6.))
+                        .gap(px(space::S))
                         .text_size(px(font::CAPTION))
                         .child(tr("Nach Konvention benennen"))
                         .child(Switch::new("rename").small().checked(self.rename && module_id.is_some()).on_click(move |v, _, cx| {
@@ -619,7 +621,7 @@ impl Render for FilingForm {
                 ),
             );
             if self.rename && module_id.is_some() {
-                let mut sugg = div().flex().flex_wrap().gap(px(6.));
+                let mut sugg = div().flex().flex_wrap().gap(px(space::S));
                 for (i, s) in self.titles.iter().enumerate() {
                     let (e, value) = (me.clone(), s.title.clone());
                     sugg = sugg.child(suggestion(SharedString::from(format!("title-{i}")), s.title.clone(), title_value == s.title, &t).tooltip(tip(tr(s.source))).on_click(move |_, window, cx| {
@@ -627,24 +629,24 @@ impl Render for FilingForm {
                         e.update(cx, |f, cx| f.title.update(cx, |s, cx| s.set_value(v, window, cx)))
                     }));
                 }
-                name = name.child(div().flex().flex_col().gap(px(6.)).child(Input::new(&self.title)).when(!self.titles.is_empty(), |d| d.child(sugg)));
+                name = name.child(div().flex().flex_col().gap(px(space::S)).child(Input::new(&self.title)).when(!self.titles.is_empty(), |d| d.child(sugg)));
                 match self.role {
                     FileRole::Work => {
-                        let mut row = div().flex().flex_wrap().items_center().gap(px(6.));
+                        let mut row = div().flex().flex_wrap().items_center().gap(px(space::S));
                         for (i, n) in self.coauthors.iter().enumerate() {
                             let (e, n2) = (me.clone(), n.clone());
                             row = row.child(
                                 div()
                                     .flex()
                                     .items_center()
-                                    .gap(px(4.))
-                                    .px(px(8.))
-                                    .py(px(3.))
+                                    .gap(px(space::XS))
+                                    .px(px(space::S))
+                                    .py(px(space::XS))
                                     .rounded_full()
                                     .bg(t.accent.opacity(0.15))
                                     .text_size(px(font::CAPTION))
                                     .child(n.clone())
-                                    .child(div().id(("rm-co", i)).cursor_pointer().child(icon("circle-x", 12., t.secondary)).tooltip(tip(trf("%@ entfernen", &[&n]))).on_click(move |_, _, cx| e.update(cx, |f, cx| {
+                                    .child(div().id(("rm-co", i)).cursor_pointer().key_nav().child(icon("circle-x", iconsize::XS, t.secondary)).tooltip(tip(trf("%@ entfernen", &[&n]))).on_click(move |_, _, cx| e.update(cx, |f, cx| {
                                         f.coauthors.retain(|c| *c != n2);
                                         cx.notify();
                                     }))),
@@ -664,7 +666,7 @@ impl Render for FilingForm {
                     FileRole::Material => {
                         let known = folder.as_ref().map(|f| l.bylines_near(f)).unwrap_or_default();
                         let current = self.byline.read(cx).value().to_string();
-                        let mut sugg = div().flex().flex_wrap().gap(px(6.));
+                        let mut sugg = div().flex().flex_wrap().gap(px(space::S));
                         for (i, b) in known.into_iter().take(4).enumerate() {
                             let selected = current == b || Naming::clean_author(&current, CoauthorStyle::Initial) == b;
                             let (e, v) = (me.clone(), b.clone());
@@ -673,11 +675,11 @@ impl Render for FilingForm {
                                 e.update(cx, |f, cx| f.byline.update(cx, |s, cx| s.set_value(v, window, cx)))
                             }));
                         }
-                        name = name.child(div().flex().flex_col().gap(px(6.)).child(div().max_w(px(320.)).child(Input::new(&self.byline))).child(sugg));
+                        name = name.child(div().flex().flex_col().gap(px(space::S)).child(div().max_w(px(320.)).child(Input::new(&self.byline))).child(sugg));
                     }
                     FileRole::Brief => {}
                 }
-                let mut dates = div().flex().items_center().gap(px(8.)).child(div().w(px(150.)).child(DatePicker::new(&self.date).small()));
+                let mut dates = div().flex().items_center().gap(px(space::S)).child(div().w(px(150.)).child(DatePicker::new(&self.date).small()));
                 let today = l.today();
                 let e = me.clone();
                 dates = dates.child(suggestion("date-today".into(), tr("Heute"), false, &t).on_click(move |_, window, cx| e.update(cx, |f, cx| f.set_date(today, window, cx))));
@@ -695,11 +697,11 @@ impl Render for FilingForm {
                 div()
                     .flex()
                     .items_start()
-                    .gap(px(8.))
-                    .p(px(10.))
+                    .gap(px(space::S))
+                    .p(px(space::M))
                     .rounded(px(radius::CONTROL))
                     .bg(t.secondary_bg)
-                    .child(icon(if valid { "badge-check" } else { "triangle-alert" }, 14., if valid { t.green } else { t.orange }))
+                    .child(icon(if valid { "badge-check" } else { "triangle-alert" }, iconsize::S, if valid { t.green } else { t.orange }))
                     .child(div().flex_1().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).line_clamp(2).child(final_name)),
             );
             body = body.child(name);
@@ -711,8 +713,8 @@ impl Render for FilingForm {
         let footer = div()
             .flex()
             .items_center()
-            .gap(px(8.))
-            .p(px(14.))
+            .gap(px(space::S))
+            .p(px(space::L))
             .border_t_1()
             .border_color(t.separator)
             .when(multi, |d| {
@@ -742,7 +744,7 @@ impl Render for FilingForm {
             .flex_col()
             .key_context("FilingForm")
             .on_action(cx.listener(|f, _: &CommitFiling, window, cx| f.commit(window, cx)))
-            .child(div().id("filing-scroll").flex_1().min_h_0().overflow_y_scroll().child(body))
+            .child(div().id("filing-scroll").flex_1().min_h_0().overflow_y_scrollbar().child(body))
             .child(footer)
             .into_any_element()
     }

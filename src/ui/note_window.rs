@@ -39,7 +39,7 @@ pub fn request_close(window: &mut Window, cx: &mut App) {
 
 /// Opens a note in its own window, or focuses the window already showing it.
 pub fn open(path: &Path, cx: &mut App) {
-    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     for w in cx.windows() {
         if let Some(h) = w.downcast::<Root>()
             && h.update(cx, |root, window, cx| {

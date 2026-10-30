@@ -6,7 +6,8 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::act;
-use super::theme::{Theme, font, radius};
+use super::motion::{self, Soft};
+use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::{tr, trf};
@@ -72,9 +73,9 @@ pub fn render(lib: &Library, st: &GridState, view: Entity<super::pages::Pages>, 
             row_button("past-weeks", t)
                 .flex()
                 .items_center()
-                .gap(px(10.))
-                .px(px(16.))
-                .py(px(12.))
+                .gap(px(space::S))
+                .px(px(space::L))
+                .py(px(space::M))
                 .child(div().w(px(16.)).flex().justify_center().child(chevron(st.show_past, t)))
                 .child(div().font_weight(FontWeight::MEDIUM).child(tr("Vergangene Wochen")))
                 .child(div().text_color(t.secondary).child(past_summary(lib, &past)))
@@ -105,19 +106,19 @@ pub fn render(lib: &Library, st: &GridState, view: Entity<super::pages::Pages>, 
         div()
             .w_full()
             .max_w(px(980.))
-            .px(px(32.))
-            .py(px(24.))
+            .px(px(space::XXL))
+            .py(px(space::XL))
             .flex()
             .flex_col()
-            .gap(px(32.))
+            .gap(px(space::XXL))
             .child(progress_card(lib, &strip, current, t))
-            .child(div().flex().flex_col().gap(px(12.)).child(section_title(tr("Module"))).child(module_list(lib, t)))
-            .child(div().flex().flex_col().gap(px(12.)).child(section_title(tr("Wochen"))).child(weeks)),
+            .child(div().flex().flex_col().gap(px(space::M)).child(section_title(tr("Module"))).child(module_list(lib, t)))
+            .child(div().flex().flex_col().gap(px(space::M)).child(section_title(tr("Wochen"))).child(weeks)),
     )
 }
 
-fn chevron(open: bool, t: &Theme) -> Svg {
-    icon(if open { "chevron-down" } else { "chevron-right" }, 12., t.secondary)
+fn chevron(open: bool, t: &Theme) -> motion::Chevron {
+    motion::chevron("chevron", open, t.secondary)
 }
 
 fn past_summary(lib: &Library, past: &[&Slot]) -> String {
@@ -138,33 +139,33 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
     let first = strip.first().map(|s| day::short_date(s.0.monday)).unwrap_or_default();
     let last = strip.last().map(|s| day::short_date(s.0.monday)).unwrap_or_default();
     grouped(t)
-        .p(px(20.))
-        .gap(px(18.))
+        .p(px(space::XL))
+        .gap(px(space::L))
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(20.))
+                .gap(px(space::XL))
                 .child(progress_ring(if total > 0 { done as f32 / total as f32 } else { 0. }, 56., t))
                 .child(
                     div()
                         .flex_1()
                         .flex()
                         .flex_col()
-                        .gap(px(4.))
+                        .gap(px(space::XS))
                         .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(lib.semester().map_or_else(|| tr("Semester"), |s| s.name.clone())))
                         .child(div().text_color(t.secondary).child(summary)),
                 )
                 .when_some(end, |d, end| {
-                    d.child(div().flex().flex_col().items_end().gap(px(2.)).child(caption(tr("Vorlesungsende"), t)).child(div().font_weight(FontWeight::BOLD).child(day::short_date(end))))
+                    d.child(div().flex().flex_col().items_end().gap(px(space::XXS)).child(caption(tr("Vorlesungsende"), t)).child(div().font_weight(FontWeight::BOLD).child(day::short_date(end))))
                 }),
         )
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(6.))
-                .child(div().flex().items_end().gap(px(3.)).h(px(14.)).children(strip.iter().map(|(s, p)| {
+                .gap(px(space::S))
+                .child(div().flex().items_end().gap(px(space::XS)).h(px(14.)).children(strip.iter().map(|(s, p)| {
                     let is_current = s.monday == current;
                     let is_past = s.monday < current;
                     let color = if s.lecture.is_none() {
@@ -178,7 +179,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                     };
                     let label = s.lecture.map(|w| w.label()).or(s.break_name.clone()).unwrap_or_default();
                     let help = format!("{label} · {}{}", day::short_date(s.monday), p.map(|p| format!(" · {} %", (p * 100.).round())).unwrap_or_default());
-                    div().id(SharedString::from(format!("strip-{}", s.monday))).flex_1().h(px(if is_current { 14. } else { 8. })).rounded(px(3.)).bg(color).tooltip(tip(help))
+                    div().id(SharedString::from(format!("strip-{}", s.monday))).flex_1().h(px(if is_current { 14. } else { 8. })).rounded(px(radius::SMALL)).bg(color).tooltip(tip(help))
                 })))
                 .child(
                     div()
@@ -207,9 +208,9 @@ fn module_list(lib: &Library, t: &Theme) -> Div {
             row_button(SharedString::from(format!("module-row-{}", m.id)), t)
                 .flex()
                 .items_center()
-                .gap(px(14.))
-                .px(px(16.))
-                .py(px(12.))
+                .gap(px(space::M))
+                .px(px(space::L))
+                .py(px(space::M))
                 .on_click(move |_, _, cx| act(cx, |l| l.set_route(Route::Module(id.clone()))))
                 .child(div().size(px(10.)).rounded_full().bg(color))
                 .child(
@@ -218,15 +219,15 @@ fn module_list(lib: &Library, t: &Theme) -> Div {
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .gap(px(2.))
+                        .gap(px(space::XXS))
                         .child(div().font_weight(FontWeight::MEDIUM).child(m.display_name()))
                         .child(caption(next.map_or_else(|| tr("Nichts offen"), |a| trf("Nächste: %@, %@", &[&a.title, &day::due(a.due, lib.now)])), t).truncate()),
                 )
-                .when(overdue > 0, |d| d.child(div().flex().items_center().gap(px(3.)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.red).child(icon("circle-alert", 11., t.red)).child(trf("%lld offen", &[&overdue]))))
+                .when(overdue > 0, |d| d.child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.red).child(icon("circle-alert", iconsize::XS, t.red)).child(trf("%lld offen", &[&overdue]))))
                 .when(total > 0, |d| {
-                    d.child(div().w(px(120.)).child(progress_bar(done as f32 / total as f32, color, t))).child(div().w(px(44.)).text_right().text_size(px(font::CALLOUT)).text_color(t.secondary).child(format!("{done}/{total}")))
+                    d.child(div().w(px(120.)).child(progress_bar(done as f32 / total as f32, color, t))).child(div().font_features(tabular()).w(px(44.)).text_right().text_size(px(font::CALLOUT)).text_color(t.secondary).child(format!("{done}/{total}")))
                 })
-                .child(icon("chevron-right", 11., t.tertiary)),
+                .child(icon("chevron-right", iconsize::XS, t.tertiary)),
         );
     }
     list
@@ -238,10 +239,10 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
         return div()
             .flex()
             .items_center()
-            .gap(px(10.))
-            .px(px(16.))
-            .py(px(10.))
-            .child(div().w(px(16.)).child(icon("sun", 14., t.secondary)))
+            .gap(px(space::S))
+            .px(px(space::L))
+            .py(px(space::S))
+            .child(div().w(px(16.)).child(icon("sun", iconsize::S, t.secondary)))
             .child(div().text_color(t.secondary).child(name.clone()))
             .child(div().text_size(px(font::CAPTION)).text_color(t.tertiary).child(trf("ab %@", &[&day::short_date(slot.monday)])))
             .into_any_element();
@@ -261,12 +262,12 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
         .id(SharedString::from(format!("week-{}", slot.monday)))
         .flex()
         .items_center()
-        .gap(px(10.))
-        .px(px(16.))
-        .py(px(12.))
+        .gap(px(space::S))
+        .px(px(space::L))
+        .py(px(space::M))
         .when(!force_open, |d| {
             let hover = t.ink.opacity(0.06);
-            d.cursor_pointer().hover(move |s| s.bg(hover)).on_click(move |_, _, cx| v1.update(cx, |p, cx| {
+            d.cursor_pointer().key_nav().soft(hover, 0.).on_click(move |_, _, cx| v1.update(cx, |p, cx| {
                 if !p.grid.expanded.remove(&monday) {
                     p.grid.expanded.insert(monday);
                 }
@@ -279,17 +280,17 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
         .when(is_current, |d| d.child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).text_color(t.accent).child(tr("Diese Woche"))))
         .child(div().flex_1())
         .when(!open, |d| {
-            d.child(div().flex().gap(px(3.)).children(entries.iter().filter(|a| !a.optional).take(6).map(|a| {
-                div().size(px(6.)).rounded_full().bg(if lib.is_done(a) { t.ink.opacity(0.2) } else { t.palette(lib.module(a).map_or("blue", |m| m.color.as_str())) })
+            d.child(div().flex().gap(px(space::XS)).children(entries.iter().filter(|a| !a.optional).take(6).map(|a| {
+                div().size(px(space::S)).rounded_full().bg(if lib.is_done(a) { t.ink.opacity(0.2) } else { t.palette(lib.module(a).map_or("blue", |m| m.color.as_str())) })
             })))
         })
         .when(attention > 0, |d| {
-            d.child(div().id(SharedString::from(format!("att-{}", slot.monday))).flex().items_center().gap(px(3.)).text_size(px(font::CALLOUT)).text_color(t.red).child(icon("circle-alert", 12., t.red)).child(attention.to_string()).tooltip(tip(trf("%lld brauchen Aufmerksamkeit", &[&attention]))))
+            d.child(div().id(SharedString::from(format!("att-{}", slot.monday))).flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).text_color(t.red).child(icon("circle-alert", iconsize::XS, t.red)).child(attention.to_string()).tooltip(tip(trf("%lld brauchen Aufmerksamkeit", &[&attention]))))
         })
         .child(if mandatory.is_empty() {
             div().text_size(px(font::CALLOUT)).text_color(t.tertiary).child(if entries.is_empty() { tr("frei") } else { tr("nur optional") })
         } else {
-            div().w(px(40.)).text_right().text_size(px(font::CALLOUT)).text_color(if done == mandatory.len() { t.green } else { t.secondary }).child(format!("{done}/{}", mandatory.len()))
+            div().w(px(40.)).text_right().font_features(tabular()).text_size(px(font::CALLOUT)).text_color(if done == mandatory.len() { t.green } else { t.secondary }).child(format!("{done}/{}", mandatory.len()))
         });
 
     div()
@@ -297,23 +298,25 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
         .flex_col()
         .when(is_current, |d| d.bg(t.accent.opacity(0.06)))
         .child(header)
-        .when(open && !entries.is_empty(), |d| {
-            d.child(
+        .when(!entries.is_empty(), |d| {
+            d.child(motion::reveal(
+                SharedString::from(format!("week-body-{monday}")),
+                open,
                 div()
-                    .pl(px(42.))
-                    .pr(px(16.))
-                    .pb(px(14.))
+                    .pl(px(space::XL + space::L))
+                    .pr(px(space::L))
+                    .pb(px(space::M))
                     .flex()
                     .flex_wrap()
-                    .gap(px(8.))
+                    .gap(px(space::S))
                     .children(shown.into_iter().map(|a| deadline_chip(lib, a, t)))
                     .when(!reveal && hidden > 0, |d| {
-                        d.child(link_button(SharedString::from(format!("more-{}", monday)), format!("+ {hidden} {}", tr("optional")), t).py(px(8.)).text_size(px(font::CALLOUT)).on_click(move |_, _, cx| v2.update(cx, |p, cx| {
+                        d.child(link_button(SharedString::from(format!("more-{}", monday)), format!("+ {hidden} {}", tr("optional")), t).py(px(space::S)).text_size(px(font::CALLOUT)).on_click(move |_, _, cx| v2.update(cx, |p, cx| {
                             p.grid.reveal_optional.insert(monday);
                             cx.notify();
                         })))
                     }),
-            )
+            ))
         })
         .into_any_element()
 }
@@ -340,20 +343,20 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
     let (fill, hover, accent) = (t.ink.opacity(0.05), t.ink.opacity(0.1), t.accent);
     let tracks = a.tracks_files();
     let title = div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).truncate().text_color(if e.status.is_closed() { t.secondary } else { t.primary }).child(a.title.clone());
-    div()
+    let chip = div()
         .id(SharedString::from(format!("chip-{}", a.id)))
         .relative()
         .flex()
         .items_center()
-        .gap(px(8.))
-        .pl(px(10.))
-        .pr(px(12.))
-        .py(px(7.))
+        .gap(px(space::S))
+        .pl(px(space::M))
+        .pr(px(space::M))
+        .py(px(space::S))
         .rounded(px(radius::CONTROL))
         .bg(if selected { hover } else { fill })
-        .hover(move |s| s.bg(hover))
+        .soft(hover, radius::CONTROL)
         .when(selected, |d| d.border(px(2.)).border_color(accent))
-        .cursor_pointer()
+        .cursor_pointer().key_nav()
         .tooltip(tip(format!("{} · {} · {}", a.title, when, e.status.label())))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(sel.clone()))))
         .when(tracks, |c| {
@@ -363,16 +366,16 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
             })
         })
         .child(div().absolute().top_0().bottom_0().left_0().w(px(3.)).rounded_l(px(radius::CONTROL)).bg(tint.opacity(if e.status.is_closed() { 0.35 } else { 1. })))
-        .child(status_toggle(a, lib, 16., t))
+        .child(status_toggle(a, lib, iconsize::M, t))
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(1.))
+                .gap(px(space::XXS))
                 .max_w(px(260.))
                 .child(if e.status == Status::Skipped { title.line_through() } else { title })
                 .child(div().text_size(px(font::CAPTION)).truncate().text_color(if attention { if e.status == Status::Ready { t.blue } else { t.red } } else { t.secondary }).child(subtitle)),
         )
-        .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx))
-        .into_any_element()
+        .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx));
+    motion::flip(format!("chip-{}", a.id), chip).into_any_element()
 }

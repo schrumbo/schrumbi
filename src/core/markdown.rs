@@ -95,7 +95,7 @@ pub fn image_source(source: &str, base: Option<&Path>) -> String {
         return source.to_string();
     }
     let path = percent_decode(source);
-    let p = if path.starts_with('/') { Some(std::path::PathBuf::from(&path)) } else { base.map(|b| b.join(&path)) };
+    let p = if Path::new(&path).is_absolute() { Some(std::path::PathBuf::from(&path)) } else { base.map(|b| b.join(&path)) };
     let Some(data) = p.as_ref().and_then(|p| std::fs::read(p).ok()) else { return source.to_string() };
     let ext = extension(&path).to_lowercase();
     let mime = match ext.as_str() {

@@ -5,11 +5,13 @@ use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, Textar
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::time_field::TimePrecision;
 use gpui_kit::component::Sizable;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
-use super::theme::{Theme, font, radius};
+use super::motion::Soft;
+use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::filing::FileRole;
@@ -106,7 +108,7 @@ impl Inspector {
 }
 
 fn info_row(icon_name: &str, text: String, tint: Option<Hsla>, t: &Theme) -> Div {
-    div().flex().items_center().gap(px(8.)).child(div().w(px(18.)).flex().justify_center().child(icon(icon_name, 14., tint.unwrap_or(t.secondary)))).child(div().text_color(tint.unwrap_or(t.primary)).child(text))
+    div().flex().items_center().gap(px(space::S)).child(div().w(px(18.)).flex().justify_center().child(icon(icon_name, iconsize::S, tint.unwrap_or(t.secondary)))).child(div().text_color(tint.unwrap_or(t.primary)).child(text))
 }
 
 fn status_color(s: Status, t: &Theme) -> Hsla {
@@ -128,19 +130,19 @@ fn file_line(path: &std::path::Path, warning: bool, extra: Vec<(String, Box<dyn 
         .id(SharedString::from(format!("file-{}", path.display())))
         .flex()
         .items_center()
-        .gap(px(8.))
-        .py(px(2.))
-        .rounded(px(4.))
-        .hover(|s| s.bg(t.ink.opacity(0.05)))
+        .gap(px(space::S))
+        .py(px(space::XXS))
+        .rounded(px(radius::SMALL))
+        .soft(t.ink.opacity(0.05), radius::SMALL)
         .tooltip(tip(tr("Doppelklick zum Öffnen")))
         .on_click(move |e, _, cx| {
             if e.click_count() >= 2 {
                 act(cx, |l| l.open_file(&open));
             }
         })
-        .child(file_icon(path, 18.))
+        .child(file_icon(path, iconsize::M))
         .child(div().flex_1().min_w_0().truncate().child(name))
-        .when(warning, |d| d.child(icon("triangle-alert", 12., t.orange)))
+        .when(warning, |d| d.child(icon("triangle-alert", iconsize::XS, t.orange)))
         .context_menu(move |menu, _, _| {
             let mut menu = file_menu(menu, menu_path.clone());
             if !extra.is_empty() {
@@ -164,7 +166,7 @@ impl Render for Inspector {
             return unavailable("panel-right", tr("Nichts ausgewählt"), tr("Wähle eine Abgabe, um Details, Dateien und Notizen zu sehen."), &t).into_any_element();
         };
         let body = details(l, &a, &t, &self.note, self.title.clone(), self.due.clone());
-        div().id("inspector-scroll").size_full().overflow_y_scroll().child(body).into_any_element()
+        div().id("inspector-scroll").size_full().overflow_y_scrollbar().child(body).into_any_element()
     }
 }
 
@@ -174,26 +176,26 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
     let tint = t.palette(module.map_or("blue", |m| m.color.as_str()));
     let id = a.id.clone();
 
-    let mut head = div().flex().items_center().gap(px(6.)).child(module_chip(module.map_or("?", |m| m.code.as_str()), tint));
+    let mut head = div().flex().items_center().gap(px(space::S)).child(module_chip(module.map_or("?", |m| m.code.as_str()), tint));
     if let Some(w) = a.week {
         head = head.child(caption(format!("W{:02} · KW{:02}", w, a.iso_week.unwrap_or(0)), t));
     }
     if a.kind != Kind::Submission {
-        head = head.child(div().flex().items_center().gap(px(3.)).child(icon(a.kind.icon(), 11., t.secondary)).child(caption(a.kind.label(), t)));
+        head = head.child(div().flex().items_center().gap(px(space::XS)).child(icon(a.kind.icon(), iconsize::XS, t.secondary)).child(caption(a.kind.label(), t)));
     }
-    let mut links = div().flex().flex_wrap().items_center().gap(px(10.));
+    let mut links = div().flex().flex_wrap().items_center().gap(px(space::S));
     if let Some(m) = module.filter(|m| m.name != m.code && !m.name.is_empty()) {
         links = links.child(div().text_color(t.secondary).child(m.name.clone()));
     }
     for (i, link) in module.map(|m| m.links.clone()).unwrap_or_default().into_iter().filter(|k| k.url().is_some()).enumerate() {
         let url = link.url().map(|u| u.to_string()).unwrap_or_default();
         let label = if link.title.is_empty() { tr("Link") } else { link.title.clone() };
-        links = links.child(link_button(("link", i), label, t).flex().items_center().gap(px(3.)).child(icon("link", 11., t.accent)).tooltip(tip(link.address.clone())).on_click(move |_, _, _| {
+        links = links.child(link_button(("link", i), label, t).flex().items_center().gap(px(space::XS)).child(icon("link", iconsize::XS, t.accent)).tooltip(tip(link.address.clone())).on_click(move |_, _, _| {
             let _ = opener::open(&url);
         }));
     }
 
-    let mut info = div().flex().flex_col().gap(px(6.)).child(info_row("calendar", day::due(a.due, l.now), None, t)).child(info_row(
+    let mut info = div().flex().flex_col().gap(px(space::S)).child(info_row("calendar", day::due(a.due, l.now), None, t)).child(info_row(
         "clock",
         day::countdown(a.due, l.now),
         l.needs_action(a).then_some(t.red),
@@ -217,7 +219,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         div()
             .flex()
             .flex_1()
-            .gap(px(8.))
+            .gap(px(space::S))
             .child(div().flex_1().child(Button::new("upload").primary().w_full().icon(menu_icon("file-up")).label(tr("Hochladen")).tooltip(help).on_click(move |_, _, cx| super::upload::begin(&up, cx))))
             .child(Button::new("mark-uploaded").icon(menu_icon("check")).tooltip(tr("Als hochgeladen markieren")).on_click(move |_, _, cx| act(cx, |l| l.set_status(Some(Status::Uploaded), &mark, true))))
     } else if !e.status.is_closed() {
@@ -228,20 +230,20 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         div().flex_1().child(Button::new("reset").w_full().icon(menu_icon("undo-2")).label(tr("Zurücksetzen")).on_click(move |_, _, cx| act(cx, |l| l.set_status(None, &reset, true))))
     };
     let menu_id = id.clone();
-    let actions = div().flex().items_center().gap(px(8.)).child(primary).child(Button::new("more").icon(menu_icon("ellipsis")).dropdown_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx)));
+    let actions = div().flex().items_center().gap(px(space::S)).child(primary).child(Button::new("more").icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx)));
 
     let mut col = div()
         .flex()
         .flex_col()
-        .gap(px(18.))
-        .p(px(18.))
-        .child(div().flex().flex_col().gap(px(8.)).child(head).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(a.title.clone())).child(links))
+        .gap(px(space::L))
+        .p(px(space::L))
+        .child(div().flex().flex_col().gap(px(space::S)).child(head).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(a.title.clone())).child(links))
         .child(info)
         .child(actions);
 
     if a.tracks_files() {
         let folder = a.folder.clone();
-        let mut files = div().flex().flex_col().gap(px(8.)).child(
+        let mut files = div().flex().flex_col().gap(px(space::S)).child(
             div()
                 .flex()
                 .items_center()
@@ -253,11 +255,11 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
             let mut briefs = div()
                 .flex()
                 .flex_col()
-                .gap(px(4.))
-                .p(px(10.))
+                .gap(px(space::XS))
+                .p(px(space::M))
                 .rounded(px(radius::CONTROL))
                 .bg(t.accent.opacity(0.06))
-                .child(div().flex().items_center().gap(px(4.)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(icon("clipboard-list", 11., t.secondary)).child(tr("Aufgabenstellung")));
+                .child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(icon("clipboard-list", iconsize::XS, t.secondary)).child(tr("Aufgabenstellung")));
             for p in &e.briefs {
                 let (p2, id2) = (p.clone(), id.clone());
                 briefs = briefs.child(file_line(p, false, vec![(tr("Ist meine Abgabe"), Box::new(move |cx: &mut App| act(cx, |l| l.set_role(FileRole::Work, &p2, &id2))))], t));
@@ -279,8 +281,8 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
                     div()
                         .flex()
                         .items_start()
-                        .gap(px(8.))
-                        .pl(px(26.))
+                        .gap(px(space::S))
+                        .pl(px(space::XL))
                         .child(div().flex_1().text_size(px(font::CAPTION)).font_family(Theme::mono_family()).text_color(t.secondary).line_clamp(2).child(s))
                         .child(Button::new(SharedString::from(format!("rename-{}", p.display()))).small().label(tr("Umbenennen")).on_click(move |_, _, cx| act(cx, |l| l.rename(&p4, &s2)))),
                 );
@@ -291,9 +293,9 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
             link_button("note-for-assignment", tr("Notiz zur Abgabe"), t)
                 .flex()
                 .items_center()
-                .gap(px(4.))
+                .gap(px(space::XS))
                 .text_size(px(font::CALLOUT))
-                .child(icon("square-pen", 12., t.accent))
+                .child(icon("square-pen", iconsize::XS, t.accent))
                 .tooltip(tip(tr("Markdown-Notiz im Abgabeordner anlegen; zählt als „In Arbeit“, nicht als fertig")))
                 .on_click(move |_, _, cx| {
                     if let Some(p) = act(cx, |l| l.create_note(&title_text, &folder2, "md")) {
@@ -305,7 +307,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         col = col.child(files);
     }
 
-    col = col.child(div().flex().flex_col().gap(px(8.)).child(div().font_weight(FontWeight::BOLD).child(tr("Notiz"))).child(Textarea::new(note)));
+    col = col.child(div().flex().flex_col().gap(px(space::S)).child(div().font_weight(FontWeight::BOLD).child(tr("Notiz"))).child(Textarea::new(note)));
 
     if l.manual_for(a).is_some() {
         let remove = id.clone();
@@ -313,10 +315,10 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
             div()
                 .flex()
                 .flex_col()
-                .gap(px(8.))
+                .gap(px(space::S))
                 .child(div().font_weight(FontWeight::BOLD).child(tr("Bearbeiten")))
                 .child(Input::new(&title))
-                .child(div().flex().items_center().gap(px(8.)).child(div().text_color(t.secondary).child(tr("Fällig"))).child(div().flex_1().child(DatePicker::new(&due))))
+                .child(div().flex().items_center().gap(px(space::S)).child(div().text_color(t.secondary).child(tr("Fällig"))).child(div().flex_1().child(DatePicker::new(&due))))
                 .child(div().flex().child(div().flex_1()).child(Button::new("delete-manual").ghost().danger().icon(menu_icon("trash-2")).label(tr("Löschen")).on_click(move |_, _, cx| act(cx, |l| l.remove_manual(&remove))))),
         );
     }
@@ -331,8 +333,8 @@ fn drop_zone(id: String, has_files: bool, t: &Theme) -> impl IntoElement {
         .flex()
         .flex_col()
         .items_center()
-        .gap(px(6.))
-        .py(px(16.))
+        .gap(px(space::S))
+        .py(px(space::L))
         .rounded(px(radius::CARD))
         .border(px(1.5))
         .border_dashed()
@@ -343,7 +345,7 @@ fn drop_zone(id: String, has_files: bool, t: &Theme) -> impl IntoElement {
             let paths = paths.paths().to_vec();
             act(cx, |l| l.request_filing(paths, Some(drop_id.clone())));
         })
-        .child(icon("arrow-down-to-line", 20., secondary))
+        .child(icon("arrow-down-to-line", iconsize::L, secondary))
         .child(div().text_size(px(font::CALLOUT)).child(if has_files { tr("Weitere Datei hierher ziehen") } else { tr("Datei hierher ziehen") }))
         .child(link_button("pick-files", tr("oder auswählen…"), t).text_size(px(font::CAPTION)).on_click(move |_, _, cx| super::platform::pick_files_for_filing(Some(pick_id.clone()), cx)))
 }

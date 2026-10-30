@@ -168,11 +168,17 @@ static NOISE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 
 /// Ordered, de-duplicated candidates: existing convention title, worksheet title, PDF metadata, headline, cleaned file name.
 /// `ignore` holds words that never make a title on their own (course name, module codes, the author's name).
+/// Removes what Office adds to document titles, e.g. "Folien - Compatibility Mode".
+fn strip_office_suffix(title: &str) -> String {
+    static SUFFIX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)[\s\-_–\[(]*(compatibility[\s_-]*mode|kompatibilit(ä|ae)tsmodus)[\])]*\s*$").unwrap());
+    SUFFIX.replace(title, "").into_owned()
+}
+
 pub fn title_suggestions(facts: &FileFacts, namings: &[Naming], ignore: &[String]) -> Vec<Suggestion> {
     let mut out: Vec<Suggestion> = Vec::new();
     let mut add = |raw: Option<String>, source: &'static str| {
         let Some(raw) = raw else { return };
-        let t = Naming::clean(&raw);
+        let t = Naming::clean(&strip_office_suffix(&raw));
         if t.chars().count() < 3 || is_ignored(&t, ignore) || out.iter().any(|s| s.title.to_lowercase() == t.to_lowercase()) {
             return;
         }
@@ -357,6 +363,14 @@ pub fn lecture_week_in_text(text: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removes_office_suffixes_from_titles() {
+        assert_eq!(strip_office_suffix("Ikigai und Team - Compatibility Mode"), "Ikigai und Team");
+        assert_eq!(strip_office_suffix("Ikigai [Kompatibilitätsmodus]"), "Ikigai");
+        assert_eq!(strip_office_suffix("Folien (compatibility-mode)"), "Folien");
+        assert_eq!(strip_office_suffix("Mode und Kompatibilität"), "Mode und Kompatibilität");
+    }
 
     #[test]
     fn recognizes_briefs() {

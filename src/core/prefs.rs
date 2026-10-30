@@ -30,6 +30,16 @@ pub enum FileGrouping {
 }
 
 /// A key plus modifiers, as stored for custom shortcuts.
+/// A reading position in a PDF.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PdfPosition {
+    pub page: usize,
+    pub fraction: f32,
+    pub scale: Option<f32>,
+    pub fit_page: bool,
+    pub used: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Shortcut {
     /// A lowercased character, or a special key name: `up`, `down`, `left`, `right`, `tab`, `return`, `space`, `delete`, `escape`.
@@ -54,6 +64,8 @@ pub struct Prefs {
     /// UI language code; empty follows the system.
     pub language: String,
     pub note_accent: String,
+    /// Where each PDF was last read, by path.
+    pub pdf_positions: std::collections::BTreeMap<String, PdfPosition>,
     pub pdf_header: bool,
     pub pdf_page_numbers: bool,
     pub pdf_extra_css: String,
@@ -89,6 +101,7 @@ impl Default for Prefs {
             reminder_day_before: true,
             language: String::new(),
             note_accent: DEFAULT_ACCENT.into(),
+            pdf_positions: Default::default(),
             pdf_header: true,
             pdf_page_numbers: true,
             pdf_extra_css: String::new(),

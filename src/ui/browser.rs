@@ -6,11 +6,13 @@ use chrono::{Days, NaiveDate};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::Sizable;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
-use super::theme::{Theme, font, radius};
+use super::motion::{self, Soft};
+use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::catalog::{self, CatalogFile, FileKind, Query};
 use crate::core::i18n::{tr, trf};
@@ -304,7 +306,7 @@ impl FileBrowser {
         let current = current_week(l);
         let show_module = self.scope_module.is_none();
         let content = match self.lines.get(ix).copied() {
-            Some(Line::BestHeader) => div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).py(px(4.)).child(tr("Beste Treffer")).into_any_element(),
+            Some(Line::BestHeader) => div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).py(px(space::XS)).child(tr("Beste Treffer")).into_any_element(),
             Some(Line::Best(i)) => self.row(&self.results.best[i], show_module, true, l, &t, &me),
             Some(Line::Group(g)) => {
                 let group = &self.results.groups[g];
@@ -314,7 +316,7 @@ impl FileBrowser {
             Some(Line::OtherKinds) => {
                 let e = me.clone();
                 link_button("other-kinds", trf("%lld weitere Treffer in anderen Dateitypen", &[&self.results.other_kinds]), &t)
-                    .py(px(4.))
+                    .py(px(space::XS))
                     .on_click(move |_, _, cx| {
                         e.update(cx, |b, cx| {
                             b.kind = FileKind::All;
@@ -325,7 +327,7 @@ impl FileBrowser {
             }
             None => return div().into_any_element(),
         };
-        div().w_full().px(px(16.)).child(content).into_any_element()
+        div().w_full().px(px(space::L)).child(content).into_any_element()
     }
 
     fn on_key(&mut self, e: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -424,7 +426,7 @@ fn group(items: Vec<Item>, searching: bool, grouping: FileGrouping, today: Naive
 }
 
 fn badge(text: String, prominent: bool, t: &Theme) -> Div {
-    div().px(px(6.)).py(px(1.)).rounded_full().text_size(px(font::CAPTION2)).font_weight(FontWeight::SEMIBOLD).bg(if prominent { t.accent } else { t.ink.opacity(0.08) }).text_color(if prominent { white() } else { t.secondary }).child(text)
+    div().px(px(space::S)).py(px(space::XXS)).rounded_full().text_size(px(font::CAPTION2)).font_weight(FontWeight::SEMIBOLD).bg(if prominent { t.accent } else { t.ink.opacity(0.08) }).text_color(if prominent { white() } else { t.secondary }).child(text)
 }
 
 pub fn week_badge(text: String, prominent: bool, t: &Theme) -> Div {
@@ -469,7 +471,7 @@ impl FileBrowser {
         let scoped = self.scope_module.is_some();
         let f2 = f.clone();
         let (entity, click) = (entity.clone(), entity.clone());
-        let mut meta = div().flex().items_center().gap(px(6.)).text_size(px(font::CAPTION)).text_color(t.secondary);
+        let mut meta = div().flex().items_center().gap(px(space::S)).text_size(px(font::CAPTION)).text_color(t.secondary);
         if show_module && let Some(m) = f.module_id.as_deref().and_then(|id| lib.module_by_id(id)) {
             meta = meta.child(module_tag(&m.code, t.palette(&m.color)));
         }
@@ -483,20 +485,21 @@ impl FileBrowser {
             meta = meta.child(div().truncate().text_color(t.tertiary).child(f.name().to_string()));
         }
         if f.is_brief {
-            meta = meta.child(div().flex().items_center().gap(px(2.)).child(icon("clipboard-list", 10., t.secondary)).child(tr("Aufgabe")));
+            meta = meta.child(div().flex().items_center().gap(px(space::XXS)).child(icon("clipboard-list", iconsize::XS, t.secondary)).child(tr("Aufgabe")));
         }
         let hover = t.ink.opacity(0.045);
+        let has_snippet = item.snippet.is_some();
         div()
             .id(SharedString::from(format!("file-{}", path.display())))
             .group("file-row")
             .flex()
             .items_start()
-            .gap(px(10.))
-            .py(px(3.))
-            .px(px(6.))
-            .rounded(px(radius::CONTROL - 2.))
+            .gap(px(space::S))
+            .py(px(space::XS))
+            .px(px(space::S))
+            .rounded(px(radius::INNER))
             .when(selected, |d| d.bg(if self.list_focused { t.accent.opacity(0.32) } else { t.ink.opacity(0.09) }))
-            .when(!selected, |d| d.hover(move |s| s.bg(hover)))
+            .when(!selected, |d| d.soft(hover, radius::INNER))
             .tooltip(tip(lib.relative_path(&path)))
             .on_click(move |e: &ClickEvent, window, cx| {
                 click.update(cx, |this, cx| {
@@ -505,18 +508,23 @@ impl FileBrowser {
                     cx.notify();
                 });
                 if e.click_count() >= 2 {
-                    act(cx, |l| l.open_file(&open));
+                    act(cx, |l| {
+                        if has_snippet {
+                            l.pdf_query = Some((open.clone(), l.search_query.clone()));
+                        }
+                        l.open_file(&open)
+                    });
                 }
             })
             .on_drag(DraggedFile(path.clone()), |d, _, _, cx| cx.new(|_| d.clone()))
-            .child(file_icon(&path, 22.))
+            .child(file_icon(&path, iconsize::L))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap(px(3.))
+                    .gap(px(space::XS))
                     .child(div().truncate().child(highlighted(&f.display_name(), &terms, t)))
                     .child(meta)
                     .when_some(item.snippet.clone(), |d, s| d.child(div().text_size(px(font::CAPTION)).text_color(t.secondary).line_clamp(2).child(highlighted(&s, &terms, t)))),
@@ -533,8 +541,8 @@ impl FileBrowser {
                             .flex()
                             .invisible()
                             .group_hover("file-row", |s| s.visible())
-                            .child(Button::new(SharedString::from(format!("pv-{}", path.display()))).ghost().xsmall().icon(menu_icon("eye")).tooltip(tr("Vorschau (Leertaste)")).on_click(move |_, _, cx| super::preview::show(&preview, cx)))
-                            .child(Button::new(SharedString::from(format!("rv-{}", path.display()))).ghost().xsmall().icon(menu_icon("folder")).tooltip(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&reveal))),
+                            .child(Button::new(SharedString::from(format!("pv-{}", path.display()))).ghost().small().icon(menu_icon("eye")).tooltip(tr("Vorschau (Leertaste)")).on_click(move |_, _, cx| super::preview::show(&preview, cx)))
+                            .child(Button::new(SharedString::from(format!("rv-{}", path.display()))).ghost().small().icon(menu_icon("folder")).tooltip(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&reveal))),
                     ),
             )
             .context_menu(move |menu, _, _| {
@@ -578,7 +586,7 @@ impl FileBrowser {
     fn group_header(&self, g: &Group, expanded: bool, lib: &Library, current: Option<u32>, t: &Theme, entity: &Entity<Self>) -> AnyElement {
         let entity = entity.clone();
         let id = g.id();
-        let mut title = div().flex().items_center().gap(px(6.)).min_w_0();
+        let mut title = div().flex().items_center().gap(px(space::S)).min_w_0();
         match &g.kind {
             GroupKind::Week(Some(w)) => {
                 title = title.child(div().font_weight(FontWeight::SEMIBOLD).child(format!("W{w:02}")));
@@ -604,13 +612,13 @@ impl FileBrowser {
             .id(SharedString::from(format!("group-{id}")))
             .flex()
             .items_center()
-            .gap(px(6.))
-            .py(px(3.))
-            .px(px(6.))
-            .mt(px(6.))
-            .rounded(px(6.))
-            .cursor_pointer()
-            .hover(|s| s.bg(t.ink.opacity(0.05)))
+            .gap(px(space::S))
+            .py(px(space::XS))
+            .px(px(space::S))
+            .mt(px(space::S))
+            .rounded(px(radius::INNER))
+            .cursor_pointer().key_nav()
+            .soft(t.ink.opacity(0.05), radius::INNER)
             .on_click(move |_, _, cx| {
                 entity.update(cx, |this, cx| {
                     if !this.toggled.remove(&id) {
@@ -619,7 +627,7 @@ impl FileBrowser {
                     cx.notify();
                 })
             })
-            .child(icon(if expanded { "chevron-down" } else { "chevron-right" }, 10., t.tertiary))
+            .child(motion::chevron("chevron", expanded, t.tertiary))
             .child(title)
             .child(div().flex_1())
             .child(div().text_color(t.tertiary).child(g.items.len().to_string()))
@@ -628,16 +636,16 @@ impl FileBrowser {
 
     fn filter_bar(&self, lib: &Library, current: Option<u32>, t: &Theme, entity: &Entity<Self>) -> Div {
         let e = entity.clone();
-        let kinds = div().flex().rounded(px(6.)).bg(t.ink.opacity(0.06)).p(px(2.)).children(FileKind::ALL.into_iter().map(|k| {
+        let kinds = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS)).children(FileKind::ALL.into_iter().map(|k| {
             let active = k == self.kind;
             let e = e.clone();
             div()
                 .id(SharedString::from(format!("kind-{}", k.key())))
-                .px(px(9.))
-                .py(px(2.))
-                .rounded(px(5.))
+                .px(px(space::S))
+                .py(px(space::XXS))
+                .rounded(px(radius::INNER))
                 .text_size(px(font::CALLOUT))
-                .cursor_pointer()
+                .cursor_pointer().key_nav()
                 .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
                 .child(match k {
                     FileKind::Documents => tr("Dokumente"),
@@ -655,7 +663,7 @@ impl FileBrowser {
                     })
                 })
         }));
-        let mut bar = div().flex().items_center().gap(px(8.)).px(px(16.)).py(px(8.)).border_b_1().border_color(t.separator).child(kinds);
+        let mut bar = div().flex().items_center().gap(px(space::S)).px(px(space::L)).py(px(space::S)).border_b_1().border_color(t.separator).child(kinds);
         if self.scope_module.is_none() {
             let typed = self.results.query.module_id.clone();
             let active = typed.clone().or(self.module_filter.clone());
@@ -725,7 +733,7 @@ impl FileBrowser {
                 }
                 menu
             }))
-            .when(lib.is_indexing, |d| d.child(div().id("indexing").child(icon("loader", 13., t.secondary)).tooltip(tip(tr("Index wird aktualisiert")))))
+            .when(lib.is_indexing, |d| d.child(div().id("indexing").child(motion::spinner(iconsize::S, t.secondary)).tooltip(tip(tr("Index wird aktualisiert")))))
     }
 }
 
@@ -736,7 +744,7 @@ pub struct DraggedFile(pub PathBuf);
 impl Render for DraggedFile {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
-        div().flex().items_center().gap(px(6.)).px(px(8.)).py(px(4.)).rounded(px(6.)).bg(t.material).shadow_md().child(file_icon(&self.0, 16.)).child(self.0.file_name().unwrap_or_default().to_string_lossy().to_string())
+        div().flex().items_center().gap(px(space::S)).px(px(space::S)).py(px(space::XS)).rounded(px(radius::INNER)).bg(t.material).shadow_md().child(file_icon(&self.0, iconsize::M)).child(self.0.file_name().unwrap_or_default().to_string_lossy().to_string())
     }
 }
 
@@ -756,15 +764,15 @@ fn filter_menu(
             .id(id)
             .flex()
             .items_center()
-            .gap(px(4.))
-            .px(px(9.))
-            .py(px(3.))
-            .rounded(px(6.))
+            .gap(px(space::XS))
+            .px(px(space::S))
+            .py(px(space::XS))
+            .rounded(px(radius::INNER))
             .bg(t.accent.opacity(0.18))
             .text_color(t.accent)
             .text_size(px(font::CALLOUT))
             .font_weight(FontWeight::MEDIUM)
-            .child(icon("search", 11., t.accent))
+            .child(icon("search", iconsize::XS, t.accent))
             .child(title)
             .tooltip(tip(tr("Aus der Suche übernommen")))
             .into_any_element();
@@ -777,10 +785,10 @@ fn filter_menu(
     div()
         .flex()
         .items_center()
-        .gap(px(2.))
+        .gap(px(space::XXS))
         .child(b.dropdown_menu(move |menu, _, _| items(menu, e.clone())))
         .when(active, |d| {
-            d.child(Button::new(SharedString::from(format!("{id}-clear"))).ghost().xsmall().icon(menu_icon("circle-x")).tooltip(tr("Filter entfernen")).on_click(move |_, _, cx| entity.update(cx, |b, cx| {
+            d.child(Button::new(SharedString::from(format!("{id}-clear"))).ghost().small().icon(menu_icon("circle-x")).tooltip(tr("Filter entfernen")).on_click(move |_, _, cx| entity.update(cx, |b, cx| {
                 clear(b);
                 b.reload(cx);
             })))
@@ -831,7 +839,7 @@ impl Render for FileBrowser {
                 unavailable("folder", tr("Noch keine Dokumente"), tr("Abgelegte Dateien erscheinen hier, nach Woche sortiert."), &t).into_any_element()
             }
         } else {
-            div().id("browser-list").flex_1().min_h_0().pt(px(8.)).track_focus(&self.focus).on_key_down(cx.listener(Self::on_key)).child(list(self.list.clone(), cx.processor(|this, ix, _, cx| this.render_line(ix, cx))).size_full()).into_any_element()
+            div().id("browser-list").flex_1().min_h_0().pt(px(space::S)).track_focus(&self.focus).on_key_down(cx.listener(Self::on_key)).child(list(self.list.clone(), cx.processor(|this, ix, _, cx| this.render_line(ix, cx))).size_full()).vertical_scrollbar(&self.list).into_any_element()
         };
         div().size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().flex().flex_col().child(body))
     }

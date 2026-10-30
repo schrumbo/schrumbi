@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
 
+use regex::Regex;
 use serde::Deserialize;
 
 /// A translation: one string, or plural forms keyed by CLDR category.
@@ -46,7 +47,54 @@ pub fn trf(key: &str, args: &[&dyn std::fmt::Display]) -> String {
         }
         _ => key.to_string(),
     };
-    fill(&template, &args)
+    for_platform(fill(&template, &args))
+}
+
+/// Texts are written for macOS; elsewhere they name the local shortcuts and file manager.
+fn for_platform(text: String) -> String {
+    if cfg!(target_os = "macos") {
+        return text;
+    }
+    let text = if text.contains(['⌃', '⌥', '⇧', '⌘']) { portable_shortcuts(&text) } else { text };
+    let text = if text == "Im Dock ablegen" { "Minimieren".to_string() } else { text };
+    if !text.contains("Finder") {
+        return text;
+    }
+    let manager = match (cfg!(windows), lang()) {
+        (true, _) => "Explorer",
+        (false, Lang::De) => "Dateimanager",
+        (false, Lang::En) => "File Manager",
+    };
+    text.replace("Finder", manager)
+}
+
+/// `⇧⌘E` → `Ctrl+Shift+E`, `⌥⌘→` → `Ctrl+Alt+→`.
+fn portable_shortcuts(text: &str) -> String {
+    static SHORTCUT: LazyLock<Regex> = LazyLock::new(|| Regex::new("([⌃⌥⇧⌘]+)(.)").unwrap());
+    SHORTCUT
+        .replace_all(text, |c: &regex::Captures| {
+            let glyphs = &c[1];
+            let mut parts: Vec<&str> = Vec::new();
+            if glyphs.contains('⌘') || glyphs.contains('⌃') {
+                parts.push("Ctrl");
+            }
+            if glyphs.contains('⌥') {
+                parts.push("Alt");
+            }
+            if glyphs.contains('⇧') {
+                parts.push("Shift");
+            }
+            let key = match &c[2] {
+                "↩" => "Enter",
+                "⇥" => "Tab",
+                "⌫" => "Backspace",
+                "⎋" => "Esc",
+                k => k,
+            };
+            parts.push(key);
+            parts.join("+")
+        })
+        .into_owned()
 }
 
 fn fill(template: &str, args: &[String]) -> String {
@@ -83,6 +131,13 @@ fn fill(template: &str, args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writes_shortcuts_for_other_platforms() {
+        assert_eq!(portable_shortcuts("Sichern (⇧⌘E im Fenster), ⌘S und ⌥⌘→"), "Sichern (Ctrl+Shift+E im Fenster), Ctrl+S und Ctrl+Alt+→");
+        assert_eq!(portable_shortcuts("⌘↩ erledigt, ⇧⌘, öffnet"), "Ctrl+Enter erledigt, Ctrl+Shift+, öffnet");
+        assert_eq!(portable_shortcuts("ohne Kürzel"), "ohne Kürzel");
+    }
 
     #[test]
     fn keeps_plain_percent_signs() {

@@ -29,6 +29,7 @@ impl AssetSource for Assets {
 }
 
 fn main() {
+    core::crash::install();
     core::i18n::init(&core::prefs::get().language);
     let workspace = core::workspace::resolve();
     let files: Vec<std::path::PathBuf> = std::env::args_os().skip(1).map(std::path::PathBuf::from).filter(|p| core::markdown::is_markdown(p) && p.is_file()).collect();
@@ -65,6 +66,12 @@ fn main() {
             }
         })
         .detach();
+        ui::smoke::run(cx);
+        if let Some(log) = core::crash::take_pending() {
+            ui::state::act(cx, |l| {
+                l.notify(core::i18n::tr("Schrumbi wurde beim letzten Mal unerwartet beendet."), "triangle-alert", Some(core::i18n::tr("Protokoll zeigen")), Some(Box::new(move |_| core::library::reveal(&log))));
+            });
+        }
         cx.activate(true);
     });
 }

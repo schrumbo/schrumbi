@@ -4,7 +4,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state;
-use super::theme::Theme;
+use super::theme::{Theme, space};
 use crate::core::i18n::tr;
 
 /// The snail mark in the variant that reads on the current background.
@@ -30,12 +30,12 @@ pub fn render(error: Option<String>, t: &Theme) -> Div {
         .flex_col()
         .items_center()
         .justify_center()
-        .gap(px(18.))
-        .p(px(40.))
+        .gap(px(space::L))
+        .p(px(space::XXL))
         .child(logo(56., t))
         .child(div().max_w(px(380.)).text_center().text_color(t.secondary).child(tr("Wähle den Ordner mit deinen Unterlagen. Die App liest nur diesen Ordner und legt dort `schrumbi.json` an.").replace('`', "")))
         .when_some(error, |d, e| d.child(div().max_w(px(480.)).text_center().text_color(t.red).child(e)))
-        .child(Button::new("choose").primary().large().label(tr("Ordner wählen…")).on_click(|_, _, cx| {
+        .child(Button::new("choose").primary().label(tr("Ordner wählen…")).on_click(|_, _, cx| {
             super::platform::choose_folder(cx, |path, cx| state::open_workspace(&path, cx));
         }))
 }

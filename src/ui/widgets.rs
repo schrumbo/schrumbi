@@ -6,12 +6,30 @@ use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use super::motion::{self, Soft};
 use super::state::{self, act};
-use super::theme::{Theme, font, radius};
+use super::theme::{Theme, font, radius, space, iconsize};
 use crate::core::i18n::tr;
 use crate::core::library::{self, Library};
 use crate::core::model::{Assignment, Kind, Status};
 use crate::core::naming::extension;
+
+/// Digits of equal width, for numbers that change or stand in columns.
+pub fn tabular() -> FontFeatures {
+    FontFeatures(std::sync::Arc::new(vec![("tnum".to_string(), 1)]))
+}
+
+/// Makes a clickable element reachable with Tab; Enter and Space then click it.
+pub trait KeyNav {
+    fn key_nav(self) -> Self;
+}
+
+impl KeyNav for Stateful<Div> {
+    fn key_nav(self) -> Self {
+        let ring = rgb(0x0A84FF);
+        self.tab_index(0).focus_visible(move |s| s.bg(Hsla::from(ring).opacity(0.28)))
+    }
+}
 
 /// A Lucide icon from `assets/icons`, tinted like an SF Symbol.
 pub fn icon(name: &str, size: f32, color: Hsla) -> Svg {
@@ -77,12 +95,12 @@ pub fn caption(s: impl Into<SharedString>, t: &Theme) -> Div {
 
 /// Module dot plus code.
 pub fn module_tag(code: &str, color: Hsla) -> Div {
-    div().flex().items_center().gap(px(4.)).child(div().size(px(7.)).rounded_full().bg(color)).child(code.to_string())
+    div().flex().items_center().gap(px(space::XS)).child(div().size(px(space::S)).rounded_full().bg(color)).child(code.to_string())
 }
 
 /// Capsule with the module code on a tinted background.
 pub fn module_chip(code: &str, color: Hsla) -> Div {
-    div().px(px(7.)).py(px(2.)).rounded_full().bg(color.opacity(0.18)).text_color(color).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).child(code.to_string())
+    div().px(px(space::S)).py(px(space::XXS)).rounded_full().bg(color.opacity(0.18)).text_color(color).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).child(code.to_string())
 }
 
 /// Left half of a disc, inset like the Swift `Circle().trim(0, 0.5)` in the status glyph.
@@ -145,8 +163,11 @@ pub fn status_toggle(a: &Assignment, lib: &Library, size: f32, t: &Theme) -> Sta
     div()
         .id(SharedString::from(format!("toggle-{}", a.id)))
         .flex_none()
-        .cursor_pointer()
+        .relative()
+        .rounded_full()
+        .cursor_pointer().key_nav()
         .child(status_glyph(status, a.kind, a.optional, tint, size, t))
+        .child(motion::done_pulse("done", status.is_closed() && status != Status::Skipped, size))
         .tooltip(tip(help))
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
@@ -211,10 +232,10 @@ pub fn tile(id: impl Into<SharedString>, title: impl Into<SharedString>, icon_na
         .flex_1()
         .min_w_0()
         .min_h(px(112.))
-        .p(px(14.))
+        .p(px(space::L))
         .flex()
         .flex_col()
-        .gap(px(8.))
+        .gap(px(space::S))
         .rounded(px(radius::CARD))
         .bg(bg)
         .border_1()
@@ -223,15 +244,15 @@ pub fn tile(id: impl Into<SharedString>, title: impl Into<SharedString>, icon_na
             div()
                 .flex()
                 .items_center()
-                .gap(px(5.))
+                .gap(px(space::XS))
                 .text_size(px(font::CAPTION))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(t.secondary)
-                .child(icon(icon_name, 12., tint))
+                .child(icon(icon_name, iconsize::XS, tint))
                 .child(title.into())
-                .when(clickable, |d| d.child(div().flex_1()).child(div().invisible().group_hover("tile", |s| s.visible()).child(icon("chevron-right", 10., t.tertiary)))),
+                .when(clickable, |d| d.child(div().flex_1()).child(div().invisible().group_hover("tile", |s| s.visible()).child(icon("chevron-right", iconsize::XS, t.tertiary)))),
         );
-    if clickable { card.cursor_pointer().hover(move |s| s.bg(bg.blend(ink.opacity(0.04)))) } else { card }
+    if clickable { card.cursor_pointer().key_nav().soft(ink.opacity(0.04), radius::CARD) } else { card }
 }
 
 /// Thin capsule progress bar.
@@ -307,7 +328,7 @@ pub fn divider(t: &Theme) -> Div {
 
 /// Tinted banner with a hairline border, used for hints and attention groups.
 pub fn banner(tint: Hsla) -> Div {
-    div().p(px(14.)).rounded(px(radius::CARD)).bg(tint.opacity(0.08)).border_1().border_color(tint.opacity(0.25))
+    div().p(px(space::L)).rounded(px(radius::CARD)).bg(tint.opacity(0.08)).border_1().border_color(tint.opacity(0.25))
 }
 
 /// Section heading in title3 weight.
@@ -323,9 +344,9 @@ pub fn unavailable(icon_name: &str, title: impl Into<SharedString>, description:
         .flex_col()
         .items_center()
         .justify_center()
-        .gap(px(8.))
-        .p(px(24.))
-        .child(icon(icon_name, 36., t.secondary))
+        .gap(px(space::S))
+        .p(px(space::XL))
+        .child(icon(icon_name, iconsize::HERO, t.secondary))
         .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).child(title.into()))
         .child(div().max_w(px(320.)).text_center().text_color(t.secondary).child(description.into()))
 }
@@ -333,18 +354,18 @@ pub fn unavailable(icon_name: &str, title: impl Into<SharedString>, description:
 /// The label of a plain row button with hover feedback.
 pub fn row_button(id: impl Into<ElementId>, t: &Theme) -> Stateful<Div> {
     let hover = t.ink.opacity(0.06);
-    div().id(id).w_full().cursor_pointer().hover(move |s| s.bg(hover)).active(move |s| s.bg(hover.opacity(2.)))
+    div().id(id).w_full().cursor_pointer().key_nav().soft(hover, 0.)
 }
 
 /// Compact text button styled like `.borderless` / `.link` buttons.
 pub fn link_button(id: impl Into<ElementId>, label: impl Into<SharedString>, t: &Theme) -> Stateful<Div> {
     let accent = t.accent;
-    div().id(id).text_color(accent).cursor_pointer().hover(move |s| s.text_color(accent.opacity(0.8))).child(label.into())
+    div().id(id).text_color(accent).cursor_pointer().key_nav().hover(move |s| s.text_color(accent.opacity(0.8))).child(label.into())
 }
 
 /// Keyboard-shortcut chip.
 pub fn kbd(s: impl Into<SharedString>, t: &Theme) -> Div {
-    div().px(px(5.)).py(px(1.)).rounded(px(4.)).bg(t.ink.opacity(0.08)).text_size(px(font::CAPTION)).text_color(t.secondary).child(s.into())
+    div().px(px(space::XS)).py(px(space::XXS)).rounded(px(radius::SMALL)).bg(t.ink.opacity(0.08)).text_size(px(font::CAPTION)).text_color(t.secondary).child(s.into())
 }
 
 /// Remaining time as the Swift `DueLabel` shows it.
@@ -370,7 +391,7 @@ pub fn assignment_row(lib: &Library, a: &Assignment, show_module: bool, show_dat
     let tint = t.palette(module.map_or("blue", |m| m.color.as_str()));
     let (menu_id, drop_id, sel) = (a.id.clone(), a.id.clone(), a.id.clone());
     let title = div().font_weight(FontWeight::MEDIUM).text_color(if e.status.is_closed() { t.secondary } else { t.primary }).child(a.title.clone());
-    let mut meta = div().flex().items_center().gap(px(6.)).text_size(px(font::CAPTION)).text_color(t.secondary);
+    let mut meta = div().flex().items_center().gap(px(space::S)).text_size(px(font::CAPTION)).text_color(t.secondary);
     if show_module {
         meta = meta.child(module_tag(module.map_or("?", |m| m.code.as_str()), tint));
     }
@@ -379,12 +400,12 @@ pub fn assignment_row(lib: &Library, a: &Assignment, show_module: bool, show_dat
     }
     meta = meta.child(if show_date { crate::core::day::due(a.due, lib.now) } else { crate::core::day::hm(a.due) });
     if !e.files.is_empty() {
-        meta = meta.child(div().flex().items_center().gap(px(2.)).child(icon("file", 10., t.secondary)).child(e.files.len().to_string()));
+        meta = meta.child(div().flex().items_center().gap(px(space::XXS)).child(icon("file", iconsize::XS, t.secondary)).child(e.files.len().to_string()));
     } else if !e.briefs.is_empty() && !e.status.is_closed() {
-        meta = meta.child(div().id(SharedString::from(format!("brief-{}", a.id))).flex().items_center().gap(px(2.)).child(icon("clipboard-list", 10., t.secondary)).child(tr("Aufgabe da")).tooltip(tip(tr("Aufgabenstellung liegt im Ordner, Abgabe fehlt noch"))));
+        meta = meta.child(div().id(SharedString::from(format!("brief-{}", a.id))).flex().items_center().gap(px(space::XXS)).child(icon("clipboard-list", iconsize::XS, t.secondary)).child(tr("Aufgabe da")).tooltip(tip(tr("Aufgabenstellung liegt im Ordner, Abgabe fehlt noch"))));
     }
     if !e.misnamed.is_empty() {
-        meta = meta.child(div().id(SharedString::from(format!("mis-{}", a.id))).child(icon("triangle-alert", 11., t.orange)).tooltip(tip(tr("Dateiname entspricht nicht der Konvention"))));
+        meta = meta.child(div().id(SharedString::from(format!("mis-{}", a.id))).child(icon("triangle-alert", iconsize::XS, t.orange)).tooltip(tip(tr("Dateiname entspricht nicht der Konvention"))));
     }
     let accent = t.accent;
     let tracks = a.tracks_files();
@@ -392,9 +413,9 @@ pub fn assignment_row(lib: &Library, a: &Assignment, show_module: bool, show_dat
         .id(SharedString::from(format!("row-{}", a.id)))
         .flex()
         .items_center()
-        .gap(px(12.))
-        .py(px(4.))
-        .cursor_pointer()
+        .gap(px(space::M))
+        .py(px(space::XS))
+        .cursor_pointer().key_nav()
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(sel.clone()))))
         .when(tracks, |c| {
             c.drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(accent.opacity(0.08))).on_drop(move |p: &ExternalPaths, _, cx| {
@@ -402,22 +423,22 @@ pub fn assignment_row(lib: &Library, a: &Assignment, show_module: bool, show_dat
                 act(cx, |l| l.request_filing(paths, Some(drop_id.clone())));
             })
         })
-        .child(status_toggle(a, lib, 18., t))
+        .child(status_toggle(a, lib, iconsize::M, t))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(3.))
+                .gap(px(space::XS))
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(6.))
-                        .when(a.kind != Kind::Submission, |d| d.child(icon(a.kind.icon(), 11., t.secondary)))
+                        .gap(px(space::S))
+                        .when(a.kind != Kind::Submission, |d| d.child(icon(a.kind.icon(), iconsize::XS, t.secondary)))
                         .child(if e.status == Status::Skipped { title.line_through() } else { title })
-                        .when(a.optional && !e.status.is_closed(), |d| d.child(div().px(px(5.)).py(px(1.)).rounded_full().bg(t.ink.opacity(0.08)).text_size(px(font::CAPTION2)).text_color(t.secondary).child(tr("optional")))),
+                        .when(a.optional && !e.status.is_closed(), |d| d.child(div().px(px(space::XS)).py(px(space::XXS)).rounded_full().bg(t.ink.opacity(0.08)).text_size(px(font::CAPTION2)).text_color(t.secondary).child(tr("optional")))),
                 )
                 .child(meta),
         )

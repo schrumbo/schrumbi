@@ -3,13 +3,15 @@ use std::path::PathBuf;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::Sizable;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::fields::Fields;
 use super::pages::Pages;
 use super::state::act;
-use super::theme::{Theme, font, radius};
+use super::motion;
+use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Library;
@@ -26,8 +28,8 @@ fn card(title: String, subtitle: String, icon_name: &str, tint: Hsla, actions: O
     div()
         .flex()
         .flex_col()
-        .gap(px(12.))
-        .p(px(16.))
+        .gap(px(space::M))
+        .p(px(space::L))
         .rounded(px(radius::CARD))
         .bg(t.secondary_bg)
         .border_1()
@@ -36,9 +38,9 @@ fn card(title: String, subtitle: String, icon_name: &str, tint: Hsla, actions: O
             div()
                 .flex()
                 .items_start()
-                .gap(px(8.))
-                .child(div().pt(px(2.)).child(icon(icon_name, 15., tint)))
-                .child(div().flex_1().flex().flex_col().gap(px(2.)).child(div().font_weight(FontWeight::BOLD).child(title)).child(div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(subtitle)))
+                .gap(px(space::S))
+                .child(div().pt(px(space::XXS)).child(icon(icon_name, iconsize::M, tint)))
+                .child(div().flex_1().flex().flex_col().gap(px(space::XXS)).child(div().font_weight(FontWeight::BOLD).child(title)).child(div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(subtitle)))
                 .children(actions),
         )
         .child(content)
@@ -59,11 +61,11 @@ pub fn render(lib_entity: &Entity<Library>, st: &ChecksState, fields: &mut Field
     let mut col = div()
         .w_full()
         .max_w(px(900.))
-        .p(px(24.))
+        .p(px(space::XL))
         .flex()
         .flex_col()
-        .gap(px(18.))
-        .child(div().flex().flex_col().gap(px(4.)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Prüfen"))).child(div().text_color(t.secondary).child(tr("Hier landet alles, was ein kurzes Aufräumen braucht."))));
+        .gap(px(space::L))
+        .child(div().flex().flex_col().gap(px(space::XS)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Prüfen"))).child(div().text_color(t.secondary).child(tr("Hier landet alles, was ein kurzes Aufräumen braucht."))));
 
     if !issues.is_empty() {
         let view = cx.entity();
@@ -83,7 +85,7 @@ pub fn render(lib_entity: &Entity<Library>, st: &ChecksState, fields: &mut Field
             .collect();
         let lib = lib_entity.read(cx);
         let all = names.clone();
-        let mut rows = div().flex().flex_col().gap(px(10.));
+        let mut rows = div().flex().flex_col().gap(px(space::S));
         for (i, (a, f)) in issues.iter().enumerate() {
             if i > 0 {
                 rows = rows.child(divider(t));
@@ -97,20 +99,20 @@ pub fn render(lib_entity: &Entity<Library>, st: &ChecksState, fields: &mut Field
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(6.))
-                    .child(div().flex().items_center().gap(px(6.)).child(module_chip(module.map_or("?", |m| m.code.as_str()), t.palette(module.map_or("blue", |m| m.color.as_str())))).child(caption(a.title.clone(), t)))
-                    .child(div().flex().items_center().gap(px(8.)).child(file_icon(f, 18.)).child(div().truncate().child(f.file_name().unwrap_or_default().to_string_lossy().to_string())).child(icon("triangle-alert", 12., t.orange)))
+                    .gap(px(space::S))
+                    .child(div().flex().items_center().gap(px(space::S)).child(module_chip(module.map_or("?", |m| m.code.as_str()), t.palette(module.map_or("blue", |m| m.color.as_str())))).child(caption(a.title.clone(), t)))
+                    .child(div().flex().items_center().gap(px(space::S)).child(file_icon(f, iconsize::M)).child(div().truncate().child(f.file_name().unwrap_or_default().to_string_lossy().to_string())).child(icon("triangle-alert", iconsize::XS, t.orange)))
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(8.))
-                            .child(icon("corner-down-right", 13., t.secondary))
+                            .gap(px(space::S))
+                            .child(icon("corner-down-right", iconsize::S, t.secondary))
                             .child(div().flex_1().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(Input::new(field).small()))
                             .child(
                                 div()
                                     .id(SharedString::from(format!("valid-{i}")))
-                                    .child(icon(if valid { "badge-check" } else { "triangle-alert" }, 14., if valid { t.green } else { t.orange }))
+                                    .child(icon(if valid { "badge-check" } else { "triangle-alert" }, iconsize::S, if valid { t.green } else { t.orange }))
                                     .tooltip(tip(if valid { tr("Entspricht der Konvention") } else { tr("Entspricht noch nicht der Konvention") })),
                             )
                             .child(Button::new(SharedString::from(format!("rename-btn-{i}"))).small().label(tr("Umbenennen")).on_click(move |_, _, cx| act(cx, |l| l.rename(&p1, &n1)))),
@@ -131,7 +133,7 @@ pub fn render(lib_entity: &Entity<Library>, st: &ChecksState, fields: &mut Field
     if !unconfirmed.is_empty() {
         let ids: Vec<String> = unconfirmed.iter().map(|a| a.id.clone()).collect();
         let confirm = Button::new("confirm-all-checks").label(tr("Alle bestätigen")).on_click(move |_, _, cx| act(cx, |l| l.confirm_all(&ids)));
-        let rows = div().flex().flex_col().children(unconfirmed.iter().map(|a| assignment_row(lib, a, true, true, true, t)));
+        let rows = div().flex().flex_col().children(unconfirmed.iter().map(|a| motion::flip(format!("check-{}", a.id), assignment_row(lib, a, true, true, true, t))));
         col = col.child(card(tr("Upload bestätigen"), tr("Datei liegt bereit, Deadline ist vorbei"), "circle-check", t.blue, Some(confirm.into_any_element()), rows, t));
     }
 
@@ -141,7 +143,7 @@ pub fn render(lib_entity: &Entity<Library>, st: &ChecksState, fields: &mut Field
             div()
                 .flex()
                 .items_center()
-                .gap(px(8.))
+                .gap(px(space::S))
                 .child(div().flex_1().child(assignment_row(lib, a, true, true, true, t)))
                 .child(Button::new(SharedString::from(format!("up-{}", a.id))).small().label(tr("Abgegeben")).on_click(move |_, _, cx| act(cx, |l| l.set_status(Some(Status::Uploaded), &u, true))))
                 .child(Button::new(SharedString::from(format!("skip-{}", a.id))).small().label(tr("Entfällt")).on_click(move |_, _, cx| act(cx, |l| l.set_status(Some(Status::Skipped), &s, true))))
@@ -154,28 +156,28 @@ pub fn render(lib_entity: &Entity<Library>, st: &ChecksState, fields: &mut Field
             act(cx, |l| l.create_missing_folders());
         });
         let view = view.clone();
-        let mut list = div().flex().flex_col().gap(px(3.)).child(
+        let mut list = div().flex().flex_col().gap(px(space::XS)).child(
             link_button("show-folders", tr("Liste anzeigen"), t)
                 .flex()
                 .items_center()
-                .gap(px(4.))
+                .gap(px(space::XS))
                 .text_size(px(font::CALLOUT))
-                .child(icon(if st.show_folders { "chevron-down" } else { "chevron-right" }, 11., t.accent))
+                .child(motion::chevron("chevron", st.show_folders, t.accent))
                 .on_click(move |_, _, cx| view.update(cx, |p, cx| {
                     p.checks.show_folders = !p.checks.show_folders;
                     cx.notify();
                 })),
         );
-        if st.show_folders {
-            for p in missing.iter().take(40) {
-                list = list.child(div().text_size(px(font::CAPTION)).font_family(Theme::mono_family()).text_color(t.secondary).child(lib.relative_path(p)));
-            }
-            if missing.len() > 40 {
-                list = list.child(caption(trf("… und %lld weitere", &[&(missing.len() - 40)]), t));
-            }
+        let mut folders = div().flex().flex_col().gap(px(space::XS));
+        for p in missing.iter().take(40) {
+            folders = folders.child(div().text_size(px(font::CAPTION)).font_family(Theme::mono_family()).text_color(t.secondary).child(lib.relative_path(p)));
         }
+        if missing.len() > 40 {
+            folders = folders.child(caption(trf("… und %lld weitere", &[&(missing.len() - 40)]), t));
+        }
+        list = list.child(motion::reveal("folder-list", st.show_folders, folders));
         let name = lib.semester().map(|s| s.name.clone()).unwrap_or_default();
         col = col.child(card(tr("Ordnerstruktur"), trf("%lld Ordner für %@ fehlen", &[&missing.len(), &name]), "folder-search", t.secondary, Some(create.into_any_element()), list, t));
     }
-    div().id("checks-scroll").size_full().overflow_y_scroll().child(col).into_any_element()
+    div().id("checks-scroll").size_full().overflow_y_scrollbar().child(col).into_any_element()
 }
