@@ -33,8 +33,8 @@ const PADDING: f32 = space::L;
 const PANEL_WIDTH: f32 = 240.;
 const PREVIEW: u16 = 2;
 const MAX_SHARP_WIDTH: f32 = 4096.;
-const SHARP_BUDGET: usize = 256 * 1024 * 1024;
-const PREVIEW_BUDGET: usize = 96 * 1024 * 1024;
+const SHARP_BUDGET: usize = 128 * 1024 * 1024;
+const PREVIEW_BUDGET: usize = 48 * 1024 * 1024;
 const TEXT_PAGES_KEPT: usize = 32;
 const LINE_STEP: f32 = 48.;
 const MIN_SCALE: f32 = 0.25;
@@ -104,6 +104,7 @@ pub struct PdfView {
     view_bounds: Bounds<Pixels>,
     pending: Option<Anchor>,
     zoom_point: Option<(f32, f32)>,
+    last_mouse: Option<(f32, f32)>,
     sharp_after: Instant,
     glide: Option<(Instant, Point<Pixels>, Point<Pixels>)>,
     last_offset: Point<Pixels>,
@@ -176,6 +177,7 @@ impl PdfView {
             view_bounds: Bounds::default(),
             pending: None,
             zoom_point: None,
+            last_mouse: None,
             sharp_after: Instant::now(),
             glide: None,
             last_offset: point(px(0.), px(0.)),
@@ -394,12 +396,16 @@ impl PdfView {
         }
     }
 
-    /// Keeps memory bounded: the least recently shown pages leave first, never the ones on screen.
+    /// Keeps memory bounded: the least recently shown pages leave first. Pages the view currently asks for
+    /// stay even over budget, otherwise they would be rendered and dropped again in a loop.
     fn evict(&mut self, visible: &Range<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let previews = visible.start.saturating_sub(3)..visible.end + 3;
+        let sharp = visible.start.saturating_sub(1)..visible.end + 1;
+        let needed: Vec<PageKey> = self.cache.keys().filter(|k| if k.1 == PREVIEW { previews.contains(&k.0) || self.thumb_range.contains(&k.0) } else { sharp.contains(&k.0) && k.1 == self.sharp_quarters(k.0, window) }).copied().collect();
         for (is_preview, budget) in [(true, PREVIEW_BUDGET), (false, SHARP_BUDGET)] {
             let mut used: usize = self.cache.iter().filter(|(k, _)| (k.1 == PREVIEW) == is_preview).map(|(_, c)| c.bytes).sum();
             while used > budget {
-                let oldest = self.cache.iter().filter(|(k, _)| (k.1 == PREVIEW) == is_preview && !visible.contains(&k.0)).min_by_key(|(_, c)| c.used).map(|(k, _)| *k);
+                let oldest = self.cache.iter().filter(|(k, _)| (k.1 == PREVIEW) == is_preview && !needed.contains(k)).min_by_key(|(_, c)| c.used).map(|(k, _)| *k);
                 let Some(key) = oldest else { break };
                 if let Some(c) = self.cache.remove(&key) {
                     used -= c.bytes;
@@ -563,6 +569,7 @@ impl PdfView {
     }
 
     fn on_mouse_move(&mut self, e: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.last_mouse = Some(self.to_view(e.position));
         let Some((page, x, y)) = self.locate(e.position) else { return };
         if self.selecting {
             if let (Some((start, _)), Some((text, _))) = (self.selection, self.texts.get(&page)) {
@@ -773,8 +780,8 @@ impl PdfView {
             "f" if command && !m.shift => self.open_search(window, cx),
             "g" if command => self.step_hit(if m.shift { -1 } else { 1 }, cx),
             _ if typing => return,
-            "=" | "+" if command => self.zoom_by(1.25, None, cx),
-            "-" if command => self.zoom_by(0.8, None, cx),
+            "=" | "+" if command => self.zoom_by(1.25, self.last_mouse, cx),
+            "-" if command => self.zoom_by(0.8, self.last_mouse, cx),
             "0" if command => self.set_fit(Fit::Width, None, cx),
             "pagedown" => self.glide_by(0., -page_step, cx),
             "pageup" => self.glide_by(0., page_step, cx),
@@ -975,6 +982,7 @@ impl PdfView {
                             let view = me.clone();
                             div()
                                 .id(("pdf-thumb", page))
+                                .w_full()
                                 .h(px(THUMB_ROW))
                                 .flex()
                                 .flex_col()
@@ -1016,6 +1024,7 @@ impl PdfView {
                         let (page, view) = (entry.page, me.clone());
                         div()
                             .id(("pdf-outline-row", i))
+                            .w_full()
                             .h(px(OUTLINE_ROW))
                             .flex()
                             .items_center()
@@ -1086,6 +1095,7 @@ impl PdfView {
                                     let selected = this.current_hit == Some(i);
                                     div()
                                         .id(("pdf-hit", i))
+                                        .w_full()
                                         .h(px(HIT_ROW))
                                         .flex()
                                         .flex_col()
