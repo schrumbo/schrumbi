@@ -62,16 +62,20 @@ fn fill(template: &str, args: &[String]) -> String {
             continue;
         }
         let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        let (index, after) = match rest[digits.len()..].strip_prefix('$') {
-            Some(after) if !digits.is_empty() => (digits.parse::<usize>().unwrap_or(1) - 1, after),
-            _ => {
-                next += 1;
-                (next - 1, rest)
-            }
+        let positional = rest[digits.len()..].strip_prefix('$').filter(|_| !digits.is_empty());
+        let after = positional.unwrap_or(rest);
+        let Some(spec) = ["@", "lld", "ld", "d", ".1f", ".2f", "f"].iter().find(|s| after.starts_with(**s)) else {
+            out.push('%');
+            continue;
         };
-        let spec_len = ["@", "lld", "ld", "d", "f", ".1f", ".2f"].iter().find(|s| after.starts_with(*s)).map_or(0, |s| s.len());
+        let index = if positional.is_some() {
+            digits.parse::<usize>().unwrap_or(1) - 1
+        } else {
+            next += 1;
+            next - 1
+        };
         out.push_str(args.get(index).map(String::as_str).unwrap_or(""));
-        rest = &after[spec_len..];
+        rest = &after[spec.len()..];
     }
     out + rest
 }
@@ -79,6 +83,14 @@ fn fill(template: &str, args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeps_plain_percent_signs() {
+        assert_eq!(fill("Klausur 60 %, Projekt 40 %.", &[]), "Klausur 60 %, Projekt 40 %.");
+        assert_eq!(fill("%@ von 60 %", &["5".into()]), "5 von 60 %");
+        assert_eq!(fill("100%", &[]), "100%");
+        assert_eq!(fill("%%", &[]), "%");
+    }
 
     #[test]
     fn fills_placeholders() {

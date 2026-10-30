@@ -1,20 +1,60 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 env:
   CARGO_TERM_COLOR: always
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
 
 jobs:
-  macos:
-    runs-on: macos-latest
+  prepare:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+      sha: ${{ steps.version.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Decide whether this version needs a release
+        id: version
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          SHA=$(git rev-parse HEAD)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          DRAFT=$(gh release view "v$VERSION" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+          if [ "$DRAFT" = "false" ]; then
+            echo "v$VERSION is already published, nothing to do."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$DRAFT" = "missing" ]; then
+            gh release create "v$VERSION" --draft --target "$SHA" --title "Schrumbi $VERSION" --generate-notes
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
@@ -27,7 +67,6 @@ jobs:
           lipo -create -output target/release/schrumbi target/aarch64-apple-darwin/release/schrumbi target/x86_64-apple-darwin/release/schrumbi
       - name: Bundle and DMG
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           APP="dist/Schrumbi.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp target/release/schrumbi "$APP/Contents/MacOS/"
@@ -35,63 +74,84 @@ jobs:
           sed "s/VERSION/$VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
           codesign --force --deep --sign - "$APP"
           ln -s /Applications dist/Applications
-          hdiutil create -volname Schrumbi -srcfolder dist -ov -format UDZO "Schrumbi-$VERSION-macos-universal.dmg"
-          shasum -a 256 Schrumbi-*.dmg > "Schrumbi-$VERSION-macos-universal.dmg.sha256"
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: Schrumbi-*.dmg*
+          DMG="Schrumbi-$VERSION-macos-universal.dmg"
+          hdiutil create -volname Schrumbi -srcfolder dist -ov -format UDZO "$DMG"
+          shasum -a 256 "$DMG" > "$DMG.sha256"
+      - name: Upload
+        run: gh release upload "v$VERSION" Schrumbi-*.dmg* --clobber
 
   windows:
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
     runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked
+      - name: Install NSIS
+        shell: bash
+        run: command -v makensis || choco install nsis -y --no-progress
       - name: Installer
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          export PATH="$PATH:/c/Program Files (x86)/NSIS"
           cd packaging/windows
           makensis -DVERSION="$VERSION" installer.nsi
           mv Schrumbi-Setup-*.exe ../../
           cd ../..
-          sha256sum Schrumbi-Setup-*.exe > "Schrumbi-Setup-$VERSION-windows-x64.exe.sha256"
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: Schrumbi-Setup-*
+          SETUP="Schrumbi-Setup-$VERSION-windows-x64.exe"
+          sha256sum "$SETUP" > "$SETUP.sha256"
+      - name: Upload
+        shell: bash
+        run: gh release upload "v$VERSION" Schrumbi-Setup-* --clobber
 
   linux:
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libdbus-1-dev pkg-config libfuse2
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libdbus-1-dev pkg-config
           cargo install cargo-deb --locked
       - run: cargo build --release --locked
       - name: deb
         run: cargo deb --no-build --no-strip -o .
       - name: AppImage
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           D=AppDir
           mkdir -p $D/usr/bin $D/usr/share/applications $D/usr/share/icons/hicolor/512x512/apps
           cp target/release/schrumbi $D/usr/bin/
-          cp packaging/linux/schrumbi.desktop $D/usr/share/applications/ $D/
+          cp packaging/linux/schrumbi.desktop $D/usr/share/applications/
+          cp packaging/linux/schrumbi.desktop $D/
           cp packaging/icons/schrumbi.png $D/usr/share/icons/hicolor/512x512/apps/schrumbi.png
           cp packaging/icons/schrumbi.png $D/schrumbi.png
           printf '#!/bin/sh\nexec "$(dirname "$(readlink -f "$0")")/usr/bin/schrumbi" "$@"\n' > $D/AppRun
           chmod +x $D/AppRun
           curl -sSLo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
-          ARCH=x86_64 ./appimagetool $D "Schrumbi-$VERSION-linux-x86_64.AppImage"
-          sha256sum "Schrumbi-$VERSION-linux-x86_64.AppImage" > "Schrumbi-$VERSION-linux-x86_64.AppImage.sha256"
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            *.deb
-            Schrumbi-*.AppImage*
+          IMAGE="Schrumbi-$VERSION-linux-x86_64.AppImage"
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool $D "$IMAGE"
+          sha256sum "$IMAGE" > "$IMAGE.sha256"
+      - name: Upload
+        run: gh release upload "v$VERSION" *.deb Schrumbi-*.AppImage* --clobber
+
+  publish:
+    needs: [prepare, macos, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish once every installer is attached
+        run: gh release edit "v${{ needs.prepare.outputs.version }}" --draft=false --latest

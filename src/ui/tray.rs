@@ -128,6 +128,35 @@ pub fn init(cx: &mut App) {
     }
 }
 
+/// The popover's height for its current content, capped so it stays a popover.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+fn content_height(l: &Library) -> f32 {
+    const FOOTER: f32 = 56.;
+    const DEADLINE: f32 = 106.;
+    const SECTION: f32 = 40.;
+    const ROW: f32 = 27.;
+    const FREE: f32 = 46.;
+    let today = day::local_date(l.now);
+    let days: Vec<usize> = (0..3).map(|i| l.assignments_on(today + Duration::days(i)).len()).filter(|n| *n > 0).collect();
+    let actions = l.action_items().len().min(4);
+    let mut height = FOOTER;
+    if l.root.is_none() {
+        height += FREE;
+    } else {
+        if l.next_deadline().is_some() {
+            height += DEADLINE;
+        }
+        if actions > 0 {
+            height += SECTION + ROW * actions as f32;
+        }
+        height += days.iter().map(|n| SECTION + ROW * *n as f32).sum::<f32>();
+        if days.is_empty() {
+            height += FREE;
+        }
+    }
+    height.clamp(170., 560.)
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn toggle((x, y): (f64, f64), cx: &mut App) {
     let tray = cx.global::<Tray>();
@@ -141,7 +170,8 @@ fn toggle((x, y): (f64, f64), cx: &mut App) {
         return;
     }
     let scale = cx.windows().iter().find_map(|w| w.update(cx, |_, window, _| window.scale_factor()).ok()).unwrap_or(if cfg!(target_os = "macos") { 2. } else { 1. });
-    let (width, height) = (340., 460.);
+    let width = 340.;
+    let height = state::read(cx, content_height);
     let origin = point(px((x as f32 / scale - width / 2.).max(0.)), px(y as f32 / scale + 4.));
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(origin, size(px(width), px(height))))),

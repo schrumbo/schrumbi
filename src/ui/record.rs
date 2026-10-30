@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::Input;
-use gpui_kit::component::switch::Switch;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::Sizable;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -159,14 +159,14 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
                 .child(div().truncate().text_color(t.secondary).child(m.name.clone()))
                 .when(!m.components.is_empty(), |d| d.child(div().text_size(px(font::CAPTION)).text_color(t.tertiary).child(trf("%lld Teilleistungen", &[&m.components.len()])))),
         )
-        .child(div().w(px(80.)).child(Input::new(&ects).small()))
+        .child(div().w(px(80.)).child(Input::new(&ects).small().text_right()))
         .when(system.uses_grades(), |d| {
             d.child(match grade {
-                Some(g) => div().w(px(90.)).child(Input::new(&g).small()).when(failing, |d| d.text_color(t.red)).into_any_element(),
+                Some(g) => div().w(px(90.)).child(Input::new(&g).small().text_right()).when(failing, |d| d.text_color(t.red)).into_any_element(),
                 None => div().id(SharedString::from(format!("computed-{id}"))).w(px(90.)).text_right().child(m.effective_grade().map_or("–".into(), |g| format_grade(g, system))).tooltip(tip(tr("Aus Teilleistungen berechnet"))).into_any_element(),
             })
         })
-        .child(div().w(px(90.)).flex().justify_center().child(Switch::new(SharedString::from(format!("passed-{id}"))).checked(m.passed).on_click(move |v, _, cx| {
+        .child(div().w(px(90.)).flex().justify_center().child(Checkbox::new(SharedString::from(format!("passed-{id}"))).checked(m.passed).on_click(move |v, _, cx| {
             let (id, v) = (i3.clone(), *v);
             edit_config(cx, |c| {
                 if let Some(m) = c.module_mut(&id) {
@@ -207,8 +207,8 @@ fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fiel
                 .items_center()
                 .gap(px(8.))
                 .child(div().flex_1().child(Input::new(&name).small()))
-                .child(div().id(SharedString::from(format!("w-{id}-{j}"))).w(px(70.)).tooltip(tip(tr("Gewicht, z. B. 60 für 60 %"))).child(Input::new(&weight).small()))
-                .when(system.uses_grades(), |r| r.child(div().w(px(80.)).child(Input::new(&grade).small())))
+                .child(div().id(SharedString::from(format!("w-{id}-{j}"))).w(px(70.)).tooltip(tip(tr("Gewicht, z. B. 60 für 60 %"))).child(Input::new(&weight).small().text_right()))
+                .when(system.uses_grades(), |r| r.child(div().w(px(80.)).child(Input::new(&grade).small().text_right())))
                 .child(Button::new(SharedString::from(format!("rm-{id}-{j}"))).ghost().small().icon(menu_icon("circle-minus")).tooltip(tr("Teilleistung entfernen")).on_click(move |_, _, cx| {
                     edit_components(&d, cx, |cs| {
                         if j < cs.len() {

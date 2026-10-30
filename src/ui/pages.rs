@@ -29,10 +29,18 @@ pub struct Pages {
     module_drop: bool,
     docs: std::collections::HashMap<std::path::PathBuf, AnyView>,
     shown_doc: Option<std::path::PathBuf>,
+    search_split: std::cell::Cell<bool>,
+    module_split: std::cell::Cell<bool>,
     /// Width of the page area, set by the main window each frame.
     pub width: f32,
     fields: Fields,
     _subs: Vec<Subscription>,
+}
+
+/// Switches to two columns at `on` and back at `off`, so resizing near the limit doesn't flicker.
+fn two_columns(state: &std::cell::Cell<bool>, width: f32, on: f32, off: f32) -> bool {
+    state.set(if state.get() { width >= off } else { width >= on });
+    state.get()
 }
 
 impl Pages {
@@ -77,6 +85,8 @@ impl Pages {
             module_drop: false,
             docs: Default::default(),
             shown_doc: None,
+            search_split: Default::default(),
+            module_split: Default::default(),
             width: 1000.,
             fields: Fields::default(),
             _subs: subs,
@@ -95,7 +105,7 @@ impl Pages {
     }
 
     fn search_page(&self, lib: &Library, width: f32, t: &Theme) -> AnyElement {
-        let split = width >= 940.;
+        let split = two_columns(&self.search_split, width, 940., 860.);
         let q = lib.search_query.trim().to_string();
         let entries: Vec<_> = if q.chars().count() >= 2 {
             let needle = fold(&q);
@@ -158,7 +168,7 @@ impl Pages {
         let Some(m) = lib.module_by_id(id).cloned() else {
             return unavailable("folder-search", tr("Modul nicht gefunden"), "", t).into_any_element();
         };
-        let split = width >= 900.;
+        let split = two_columns(&self.module_split, width, 900., 820.);
         let deadlines = div().id("module-deadlines").size_full().overflow_y_scroll().child(module_page::deadlines(lib, &m, &self.module, view.clone(), t));
         let body = if split {
             div().flex_1().min_h_0().flex().child(div().h_full().w(px((width * 0.42).round().clamp(320., 500.))).border_r_1().border_color(t.separator).child(deadlines)).child(div().h_full().flex_1().min_w_0().child(self.module_files.clone()))

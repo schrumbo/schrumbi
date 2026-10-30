@@ -179,7 +179,8 @@ pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
     k.link = t.accent;
     k.link_hover = t.accent.opacity(0.85);
     k.link_active = t.accent.opacity(0.7);
-    k.switch = t.ink.opacity(0.15);
+    k.switch = t.ink.opacity(if dark { 0.22 } else { 0.15 });
+    k.switch_thumb = gpui_kit::white();
     k.list_active = t.accent.opacity(0.15);
     k.list_hover = t.ink.opacity(0.05);
     k.tab_bar = t.secondary_bg;
