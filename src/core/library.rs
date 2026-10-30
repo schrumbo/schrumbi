@@ -1,3 +1,4 @@
+use super::next_action::{self, NextAction};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -184,6 +185,8 @@ pub struct Library {
     /// A PDF about to open and the text to look for in it, set when coming from the file search.
     pub pdf_query: Option<(PathBuf, String)>,
     pub show_palette: bool,
+    pub show_overdue: bool,
+    pub show_unconfirmed: bool,
     pub show_shortcuts: bool,
     pub new_note: Option<NewNoteRequest>,
     pub import_path: Option<PathBuf>,
@@ -266,6 +269,8 @@ impl Library {
             show_quick_open: false,
             pdf_query: None,
             show_palette: false,
+            show_overdue: false,
+            show_unconfirmed: false,
             show_shortcuts: false,
             new_note: None,
             import_path: None,
@@ -716,6 +721,15 @@ impl Library {
 
     pub fn upcoming(&self) -> Vec<&Assignment> {
         self.assignments.iter().filter(|a| a.due >= self.now && !self.is_done(a)).collect()
+    }
+
+    /// What the overview recommends doing now.
+    pub fn next_action(&self) -> NextAction<&Assignment> {
+        let overdue = self.action_items.iter().filter(|a| self.status(a) != Status::Ready).max_by_key(|a| a.due);
+        let unconfirmed = self.unconfirmed().into_iter().max_by_key(|a| a.due);
+        let next = self.next_deadline();
+        let due_soon = next.is_some_and(|a| a.due - self.now < Duration::days(1));
+        next_action::choose(overdue, unconfirmed, next, due_soon, self.inbox.len())
     }
 
     pub fn next_deadline(&self) -> Option<&Assignment> {

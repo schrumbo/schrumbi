@@ -57,6 +57,10 @@ pub struct FilingForm {
     date: Entity<DatePickerState>,
     date_value: NaiveDate,
     rename: bool,
+    grab_focus: bool,
+    details: bool,
+    roomy: bool,
+    focus: FocusHandle,
     load: Option<Task<()>>,
     _subs: Vec<Subscription>,
 }
@@ -77,7 +81,7 @@ pub fn byline_from(author: Option<&str>) -> String {
 }
 
 impl FilingForm {
-    pub fn new(paths: Vec<PathBuf>, preset: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(paths: Vec<PathBuf>, preset: Option<String>, grab_focus: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let title = cx.new(|cx| InputState::new(window, cx).placeholder(tr("z. B. Persona-Board")));
         let byline = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Dozent:in, z. B. Beispiel A (optional)")));
         let draft = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Gruppenarbeit? Nachname V")));
@@ -123,6 +127,10 @@ impl FilingForm {
             date,
             date_value: Local::now().date_naive(),
             rename: true,
+            grab_focus,
+            details: false,
+            roomy: false,
+            focus: cx.focus_handle(),
             load: None,
             _subs: subs,
         };
@@ -130,8 +138,59 @@ impl FilingForm {
         form
     }
 
-    fn path(&self) -> Option<&PathBuf> {
+    /// The file currently being filed.
+    pub fn path(&self) -> Option<&PathBuf> {
         self.paths.get(self.index)
+    }
+
+    /// Gives the preview more room, for forms that fill a page rather than a sheet.
+    pub fn roomy(mut self) -> Self {
+        self.roomy = true;
+        self
+    }
+
+    /// Enter from outside the form: files the suggestion, or moves into the fields when they are open.
+    pub fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.details {
+            self.refocus(window, cx);
+        } else {
+            self.commit(window, cx);
+        }
+    }
+
+    fn refocus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.details {
+            self.title.update(cx, |s, cx| s.focus(window, cx));
+        } else {
+            window.focus(&self.focus, cx);
+        }
+    }
+
+    fn set_details(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.details = open;
+        self.refocus(window, cx);
+        cx.notify();
+    }
+
+    /// Targets offered next to the current suggestion, best first.
+    fn alternatives(&self) -> Vec<Target> {
+        let all: Vec<Target> = if self.role == FileRole::Material { self.places.iter().map(|p| Target::Folder(p.path.clone())).collect() } else { self.ranked.iter().map(|a| Target::Assignment(a.id.clone())).collect() };
+        all.into_iter().filter(|t| Some(t) != self.target.as_ref()).take(3).collect()
+    }
+
+    /// Name, tint and context line of a target.
+    fn describe(&self, target: &Target, l: &Library, t: &Theme) -> (String, Hsla, String) {
+        match target {
+            Target::Assignment(id) => {
+                let a = self.ranked.iter().find(|a| &a.id == id).cloned().or_else(|| l.assignment(id).cloned());
+                let m = a.as_ref().and_then(|a| l.module(a));
+                (a.as_ref().map_or_else(String::new, |a| a.title.clone()), t.palette(m.map_or("blue", |m| m.color.as_str())), a.as_ref().map_or_else(String::new, |a| format!("{} · {}", m.map_or("", |m| m.code.as_str()), day::day_label(a.due, l.now))))
+            }
+            Target::Folder(f) => {
+                let m = l.module_containing(f);
+                (name_of(f), t.palette(m.map_or("blue", |m| m.color.as_str())), l.relative_path(f))
+            }
+        }
     }
 
     fn style(cx: &App) -> CoauthorStyle {
@@ -150,11 +209,12 @@ impl FilingForm {
         let Some(path) = self.path().cloned() else { return };
         self.facts = None;
         self.thumbnail = None;
+        self.details = false;
         let p = path.clone();
         let task = cx.background_spawn(async move {
             let facts = FileFacts::read(&p);
             let thumb = if extension(&name_of(&p)).eq_ignore_ascii_case("pdf") {
-                crate::core::pdf_render::PdfDoc::open(&p).and_then(|d| d.render_png(0, 0.5)).map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png)))
+                crate::core::pdf_render::PdfDoc::open(&p).and_then(|d| d.render_png(0, 1.0)).map(|png| Arc::new(Image::from_bytes(ImageFormat::Png, png)))
             } else {
                 None
             };
@@ -196,7 +256,10 @@ impl FilingForm {
             self.set_date(d, window, cx);
         }
         self.facts = Some(facts);
-        self.title.update(cx, |s, cx| s.focus(window, cx));
+        self.details = self.target.is_none() || (self.rename && self.title.read(cx).value().trim().is_empty());
+        if self.grab_focus {
+            self.refocus(window, cx);
+        }
         cx.notify();
     }
 
@@ -287,7 +350,7 @@ impl FilingForm {
     }
 
     fn can_file(&self, l: &Library, cx: &App) -> bool {
-        self.folder(l).is_some() && (!self.rename || !Naming::clean(&self.title.read(cx).value()).is_empty())
+        self.facts.is_some() && self.folder(l).is_some() && (!self.rename || !Naming::clean(&self.title.read(cx).value()).is_empty())
     }
 
     fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -314,6 +377,10 @@ impl FilingForm {
 
     /// Files the current and all following files into the chosen folder with their best title.
     fn commit_remaining(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.facts.is_none() {
+            return;
+        }
+        let Some(current) = self.path().cloned() else { return };
         let lib = state::lib(cx);
         let (folder, current_name, naming, namings, ignore, week) = {
             let l = lib.read(cx);
@@ -336,7 +403,6 @@ impl FilingForm {
                 })
                 .collect::<Vec<_>>()
         });
-        let current = self.paths[self.index].clone();
         cx.spawn_in(window, async move |this, cx| {
             let others = task.await;
             let _ = this.update(cx, |_, cx| {
@@ -354,8 +420,176 @@ impl FilingForm {
             self.index += 1;
             self.load_current(window, cx);
         } else {
+            self.index = self.paths.len();
             cx.emit(FilingEvent::Finished);
         }
+    }
+}
+
+impl FilingForm {
+    /// The suggestion as one decision: where the file goes and what it will be called.
+    #[allow(clippy::too_many_arguments)]
+    fn summary(&self, me: Entity<Self>, thumb: AnyElement, preview: PathBuf, final_name: &str, valid: bool, can_file: bool, l: &Library, t: &Theme) -> Div {
+        let (preview_w, preview_h) = if self.roomy { (320., 440.) } else { (180., 250.) };
+        let source = self.path().map(|p| name_of(p)).unwrap_or_default();
+        let picture = div().flex().flex_col().gap(px(space::S)).w(px(preview_w)).flex_none().child(
+            div()
+                .id("filing-thumb")
+                .h(px(preview_h))
+                .rounded(px(radius::CONTROL))
+                .overflow_hidden()
+                .bg(t.secondary_bg)
+                .border_1()
+                .border_color(t.separator)
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer().key_nav()
+                .tooltip(tip(tr("Vorschau (Klick)")))
+                .on_click(move |_, _, cx| super::preview::show(&preview, cx))
+                .child(thumb),
+        )
+        .child(caption(source, t));
+
+        let (role_label, role_icon) = match self.role {
+            FileRole::Work => (tr("Meine Abgabe"), "file-up"),
+            FileRole::Brief => (tr("Aufgabenstellung"), "clipboard-list"),
+            FileRole::Material => (tr("Unterlagen"), "library"),
+        };
+        let described = self.target.as_ref().map(|target| self.describe(target, l, t));
+        let folder = self.folder(l);
+        let ready = self.facts.is_some();
+        let multi = self.paths.len() > 1;
+        let last = self.index + 1 >= self.paths.len();
+        let (commit, change) = (me.clone(), me.clone());
+        let mut choice = div().flex_1().min_w_0().flex().flex_col().gap(px(space::M));
+        if multi {
+            choice = choice.child(section_label(trf("%lld von %lld", &[&(self.index + 1), &self.paths.len()]), t));
+        }
+        choice = choice
+            .child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(icon(role_icon, iconsize::XS, t.secondary)).child(role_label))
+            .children(described.map(|(name, tint, context)| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::XS))
+                    .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).line_clamp(2).child(name))
+                    .child(div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(div().size(px(space::S)).flex_none().rounded_full().bg(tint)).child(div().truncate().child(context)))
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(space::S))
+                    .p(px(space::M))
+                    .rounded(px(radius::CONTROL))
+                    .bg(t.secondary_bg)
+                    .child(icon(if valid { "badge-check" } else { "triangle-alert" }, iconsize::S, if valid { t.green } else { t.orange }))
+                    .child(div().flex_1().min_w_0().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).line_clamp(2).child(if ready { final_name.to_string() } else { "…".to_string() })),
+            )
+            .children(folder.map(|f| div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", iconsize::XS, t.secondary)).child(div().truncate().child(l.relative_path(&f)))))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S))
+                    .child(Button::new("file-commit").primary().label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| commit.update(cx, |f, cx| f.commit(window, cx))))
+                    .child(kbd("↩", t))
+                    .child(div().flex_1())
+                    .child(Button::new("filing-change").ghost().label(tr("Ändern")).on_click(move |_, window, cx| change.update(cx, |f, cx| f.set_details(true, window, cx)))),
+            );
+
+        let others = self.alternatives();
+        if !others.is_empty() {
+            let mut rows = div().flex().flex_col().gap(px(space::XS));
+            for (i, target) in others.into_iter().enumerate() {
+                let (name, tint, context) = self.describe(&target, l, t);
+                let e = me.clone();
+                rows = rows.child(
+                    row_button(SharedString::from(format!("filing-other-{i}")), t)
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S))
+                        .px(px(space::S))
+                        .py(px(space::XS))
+                        .rounded(px(radius::INNER))
+                        .child(div().size(px(space::S)).flex_none().rounded_full().bg(tint))
+                        .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).child(name))
+                        .child(div().flex_none().max_w(px(160.)).truncate().text_size(px(font::CAPTION)).text_color(t.secondary).child(context))
+                        .child(kbd((i + 1).to_string(), t))
+                        .on_click(move |_, window, cx| e.update(cx, |f, cx| f.select(target.clone(), window, cx))),
+                );
+            }
+            choice = choice.child(div().flex().flex_col().gap(px(space::XS)).pt(px(space::S)).child(section_label(tr("Andere Ziele"), t)).child(rows));
+        }
+        div().flex().items_start().gap(px(space::XL)).p(px(space::XL)).child(picture).child(choice)
+    }
+
+    fn footer(&self, me: Entity<Self>, has_folder: bool, can_file: bool, primary: bool, t: &Theme) -> Option<Div> {
+        let last = self.index + 1 >= self.paths.len();
+        let multi = self.paths.len() > 1;
+        if !multi && !primary {
+            return None;
+        }
+        let (e1, e2, e3) = (me.clone(), me.clone(), me);
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::S))
+                .p(px(space::L))
+                .border_t_1()
+                .border_color(t.separator)
+                .when(multi, |d| {
+                    d.child(Button::new("skip").label(tr("Überspringen")).on_click(move |_, window, cx| e1.update(cx, |f, cx| f.advance(window, cx)))).when(self.role != FileRole::Work && !last, |d| {
+                        d.child(
+                            Button::new("file-rest")
+                                .label(trf("Alle %lld hier ablegen", &[&(self.paths.len() - self.index)]))
+                                .tooltip(tr("Restliche Dateien mit ihren erkannten Titeln in denselben Ordner legen"))
+                                .disabled(!has_folder || self.facts.is_none())
+                                .on_click(move |_, window, cx| e2.update(cx, |f, cx| f.commit_remaining(window, cx))),
+                        )
+                    })
+                })
+                .child(div().flex_1())
+                .when(primary, |d| d.child(Button::new("file-commit").primary().label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| e3.update(cx, |f, cx| f.commit(window, cx))))),
+        )
+    }
+
+    fn shell(&self, body: Div, footer: Option<Div>, cx: &mut Context<Self>) -> Div {
+        div()
+            .on_key_down(cx.listener(|f, e: &KeyDownEvent, window, cx| {
+                let k = &e.keystroke;
+                if k.key == "right" && k.modifiers.alt && (k.modifiers.platform || k.modifiers.control) && f.paths.len() > 1 {
+                    f.advance(window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+                if f.details || !f.focus.is_focused(window) || e.is_held || k.modifiers.platform || k.modifiers.control || k.modifiers.alt {
+                    return;
+                }
+                match k.key.as_str() {
+                    "enter" => f.commit(window, cx),
+                    "e" => f.set_details(true, window, cx),
+                    "1" | "2" | "3" => {
+                        let index = k.key.parse::<usize>().unwrap_or(1) - 1;
+                        let others = f.alternatives();
+                        if let Some(target) = others.into_iter().nth(index) {
+                            f.select(target, window, cx);
+                        }
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+            }))
+            .track_focus(&self.focus)
+            .size_full()
+            .flex()
+            .flex_col()
+            .key_context("FilingForm")
+            .on_action(cx.listener(|f, _: &CommitFiling, window, cx| f.commit(window, cx)))
+            .child(div().id("filing-scroll").flex_1().min_h_0().overflow_y_scrollbar().child(body))
+            .children(footer)
     }
 }
 
@@ -406,7 +640,13 @@ impl Render for FilingForm {
             None if ["png", "jpg", "jpeg", "gif", "webp"].contains(&extension(&name_of(&path)).to_lowercase().as_str()) => img(path.clone()).size_full().object_fit(ObjectFit::Cover).into_any_element(),
             None => file_icon(&path, iconsize::HERO).into_any_element(),
         };
+        if !self.details {
+            let body = self.summary(me.clone(), thumb, preview_path, &final_name, valid, can_file, l, &t);
+            let footer = self.footer(me, folder.is_some(), can_file, false, &t);
+            return self.shell(body, footer, cx).into_any_element();
+        }
         let p2 = path.clone();
+        let less = me.clone();
         let header = div()
             .flex()
             .items_start()
@@ -441,7 +681,8 @@ impl Render for FilingForm {
                     .child(div().font_weight(FontWeight::BOLD).line_clamp(2).child(name_of(&path)))
                     .when_some(self.facts.as_ref(), |d, f| d.child(caption(trf("Erstellt %@", &[&day::due(f.created, l.now)]), &t)))
                     .child(link_button("filing-preview", tr("Vorschau"), &t).flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).child(icon("eye", iconsize::XS, t.accent)).on_click(move |_, _, cx| super::preview::show(&p2, cx))),
-            );
+            )
+            .when(folder.is_some(), |d| d.child(link_button("filing-less", tr("Weniger"), &t).text_size(px(font::CAPTION)).on_click(move |_, window, cx| less.update(cx, |f, cx| f.set_details(false, window, cx)))));
 
         let role_hint = match self.role {
             FileRole::Work => tr("Zählt als erledigt, sobald sie im Abgabeordner liegt."),
@@ -629,7 +870,7 @@ impl Render for FilingForm {
                         e.update(cx, |f, cx| f.title.update(cx, |s, cx| s.set_value(v, window, cx)))
                     }));
                 }
-                name = name.child(div().flex().flex_col().gap(px(space::S)).child(Input::new(&self.title)).when(!self.titles.is_empty(), |d| d.child(sugg)));
+                name = name.child(div().flex().flex_col().gap(px(space::S)).child(Input::new(&self.title)).when(self.titles.iter().any(|s| s.title != title_value), |d| d.child(sugg)));
                 match self.role {
                     FileRole::Work => {
                         let mut row = div().flex().flex_wrap().items_center().gap(px(space::S));
@@ -682,14 +923,14 @@ impl Render for FilingForm {
                 let mut dates = div().flex().items_center().gap(px(space::S)).child(div().w(px(150.)).child(DatePicker::new(&self.date).small()));
                 let today = l.today();
                 let e = me.clone();
-                dates = dates.child(suggestion("date-today".into(), tr("Heute"), false, &t).on_click(move |_, window, cx| e.update(cx, |f, cx| f.set_date(today, window, cx))));
+                dates = dates.child(suggestion("date-today".into(), tr("Heute"), self.date_value == today, &t).on_click(move |_, window, cx| e.update(cx, |f, cx| f.set_date(today, window, cx))));
                 if let Some(a) = self.target_assignment(l) {
                     let (e, d) = (me.clone(), day::local_date(a.due));
-                    dates = dates.child(suggestion("date-due".into(), tr("Fälligkeit"), false, &t).on_click(move |_, window, cx| e.update(cx, |f, cx| f.set_date(d, window, cx))));
+                    dates = dates.child(suggestion("date-due".into(), tr("Fälligkeit"), self.date_value == d, &t).on_click(move |_, window, cx| e.update(cx, |f, cx| f.set_date(d, window, cx))));
                 }
                 if let Some(f) = &self.facts {
                     let (e, d) = (me.clone(), f.name_date.unwrap_or_else(|| day::local_date(f.created)));
-                    dates = dates.child(suggestion("date-file".into(), tr("Datei"), false, &t).on_click(move |_, window, cx| e.update(cx, |f, cx| f.set_date(d, window, cx))));
+                    dates = dates.child(suggestion("date-file".into(), tr("Datei"), self.date_value == d, &t).on_click(move |_, window, cx| e.update(cx, |f, cx| f.set_date(d, window, cx))));
                 }
                 name = name.child(dates);
             }
@@ -707,46 +948,8 @@ impl Render for FilingForm {
             body = body.child(name);
         }
 
-        let last = self.index + 1 >= self.paths.len();
-        let multi = self.paths.len() > 1;
-        let (e1, e2, e3) = (me.clone(), me.clone(), me.clone());
-        let footer = div()
-            .flex()
-            .items_center()
-            .gap(px(space::S))
-            .p(px(space::L))
-            .border_t_1()
-            .border_color(t.separator)
-            .when(multi, |d| {
-                d.child(Button::new("skip").label(tr("Überspringen")).on_click(move |_, window, cx| e1.update(cx, |f, cx| f.advance(window, cx)))).when(self.role != FileRole::Work && !last, |d| {
-                    d.child(
-                        Button::new("file-rest")
-                            .label(trf("Alle %lld hier ablegen", &[&(self.paths.len() - self.index)]))
-                            .tooltip(tr("Restliche Dateien mit ihren erkannten Titeln in denselben Ordner legen"))
-                            .disabled(folder.is_none())
-                            .on_click(move |_, window, cx| e2.update(cx, |f, cx| f.commit_remaining(window, cx))),
-                    )
-                })
-            })
-            .child(div().flex_1())
-            .child(Button::new("file-commit").primary().label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| e3.update(cx, |f, cx| f.commit(window, cx))));
-
-        div()
-            .on_key_down(cx.listener(|f, e: &KeyDownEvent, window, cx| {
-                let k = &e.keystroke;
-                if k.key == "right" && k.modifiers.alt && (k.modifiers.platform || k.modifiers.control) && f.paths.len() > 1 {
-                    f.advance(window, cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .size_full()
-            .flex()
-            .flex_col()
-            .key_context("FilingForm")
-            .on_action(cx.listener(|f, _: &CommitFiling, window, cx| f.commit(window, cx)))
-            .child(div().id("filing-scroll").flex_1().min_h_0().overflow_y_scrollbar().child(body))
-            .child(footer)
-            .into_any_element()
+        let footer = self.footer(me, folder.is_some(), can_file, true, &t);
+        self.shell(body, footer, cx).into_any_element()
     }
 }
 

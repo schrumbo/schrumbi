@@ -9,6 +9,7 @@ pub mod library;
 pub mod markdown;
 pub mod model;
 pub mod naming;
+pub mod next_action;
 pub mod note_buffer;
 pub mod prefs;
 pub mod scanner;

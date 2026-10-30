@@ -205,6 +205,7 @@ pub fn bind_keys(cx: &mut App) {
         kb(cmd("4"), GoInbox, None),
         kb(cmd("5"), GoChecks, None),
         kb(cmd("m"), Minimize, None),
+        kb(cmd("enter"), super::filing_form::CommitFiling, Some("FilingForm")),
         kb(cmd("b"), super::main_window::ToggleSidebar, Some("MainWindow")),
         kb("down".into(), super::quick::QuickDown, Some("QuickOpen")),
         kb("up".into(), super::quick::QuickUp, Some("QuickOpen")),

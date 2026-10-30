@@ -1,4 +1,4 @@
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate, Utc};
 use gpui_kit::component::menu::ContextMenuExt;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -18,6 +18,47 @@ pub fn render(lib: &Library, days: &[NaiveDate], narrow: bool, t: &Theme) -> Div
         return div().flex().flex_col().gap(px(space::S)).children(days.iter().map(|d| agenda_row(lib, *d, t)));
     }
     div().flex().gap(px(space::S)).children(days.iter().map(|d| column(lib, *d, t)))
+}
+
+/// A deadline card on its way to another day.
+#[derive(Clone)]
+pub struct DraggedCard {
+    id: String,
+    title: String,
+    tint: Hsla,
+}
+
+impl Render for DraggedCard {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::get(cx);
+        div().flex().items_center().gap(px(space::S)).px(px(space::M)).py(px(space::S)).rounded(px(radius::CONTROL)).bg(t.material).shadow_md().child(div().size(px(space::S)).rounded_full().bg(self.tint)).child(self.title.clone())
+    }
+}
+
+/// Moves a deadline to `date` and keeps its time of day.
+fn move_to_day(id: &str, date: NaiveDate, cx: &mut App) {
+    let id = id.to_string();
+    act(cx, |l| {
+        let Some(a) = l.assignment(&id).cloned() else { return };
+        let Some(due) = date.and_time(a.due.time()).and_local_timezone(Local).earliest() else { return };
+        if due.date_naive() == a.due.date_naive() {
+            return;
+        }
+        if a.is_manual() {
+            if let Some(mut manual) = l.manual_for(&a).cloned() {
+                manual.due = due.with_timezone(&Utc);
+                l.update_manual(manual);
+            }
+        } else {
+            l.move_occurrence(&id, Some(due.with_timezone(&Utc)));
+        }
+    });
+}
+
+/// Makes a day accept dragged deadlines.
+fn drop_target(day: Div, date: NaiveDate, t: &Theme) -> Div {
+    let accent = t.accent;
+    day.drag_over::<DraggedCard>(move |s, _, _, _| s.border_color(accent).bg(accent.opacity(0.08))).on_drop(move |card: &DraggedCard, _, cx| move_to_day(&card.id, date, cx))
 }
 
 fn day_label(d: NaiveDate, today: NaiveDate) -> String {
@@ -44,7 +85,7 @@ fn column(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
         .child(div().flex_1())
         .when(open > 0, |h| h.child(div().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).text_color(t.secondary).child(open.to_string())));
 
-    div()
+    drop_target(div(), d, t)
         .flex_1()
         .min_w_0()
         .min_h(px(230.))
@@ -80,7 +121,7 @@ fn agenda_row(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
     let is_today = d == today;
     let items = lib.assignments_on(d);
     let sessions = lib.sessions_on(d);
-    div()
+    drop_target(div(), d, t)
         .flex()
         .items_start()
         .gap(px(space::M))
@@ -172,6 +213,7 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .cursor_pointer().key_nav()
         .tooltip(tip(help))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(select_id.clone()))))
+        .when(!closed, |c| c.on_drag(DraggedCard { id: a.id.clone(), title: a.title.clone(), tint }, |d, _, _, cx| cx.new(|_| d.clone())))
         .when(tracks, |c| {
             c.drag_over::<ExternalPaths>(move |s, _, _, _| s.border_color(accent).border(px(1.5))).on_drop(move |paths: &ExternalPaths, _, cx| {
                 let paths = paths.paths().to_vec();

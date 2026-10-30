@@ -23,7 +23,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     }
     let request = lib.update(cx, |l, _| l.filing_request.take());
     if let Some(r) = request {
-        let form = cx.new(|cx| FilingForm::new(r.paths, r.assignment_id, window, cx));
+        let form = cx.new(|cx| FilingForm::new(r.paths, r.assignment_id, true, window, cx));
         let handle = window.window_handle();
         cx.subscribe(&form, move |_, _: &FilingEvent, cx| {
             let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));
