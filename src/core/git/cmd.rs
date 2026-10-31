@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 
 /// How long local commands may take.
 pub const LOCAL: Duration = Duration::from_secs(30);
+/// How long commands that touch the whole working tree may take; large workspaces need minutes.
+pub const BULK: Duration = Duration::from_secs(600);
 /// How long commands that talk to the remote may take.
 pub const NETWORK: Duration = Duration::from_secs(120);
 
@@ -167,9 +169,19 @@ impl Git {
         }
     }
 
-    /// Git's own folder for this working tree.
+    /// Runs a command that may rewrite the index. If it has to be killed its lock goes too,
+    /// otherwise every later command would fail until someone removes it by hand.
+    pub fn run_bulk(&self, args: &[&str], input: Option<Vec<u8>>) -> Result<String, GitError> {
+        let result = self.checked(args, input, BULK);
+        if result == Err(GitError::Timeout) {
+            let _ = std::fs::remove_file(self.git_dir().join("index.lock"));
+        }
+        result
+    }
+
+    /// Git's own folder for this working tree; a `.git` file points elsewhere in linked worktrees.
     pub fn git_dir(&self) -> PathBuf {
-        self.root.join(".git")
+        self.run(&["rev-parse", "--absolute-git-dir"]).map_or_else(|_| self.root.join(".git"), |dir| PathBuf::from(dir.trim()))
     }
 }
 

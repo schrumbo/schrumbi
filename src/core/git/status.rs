@@ -33,7 +33,7 @@ pub struct RepoStatus {
 impl Git {
     /// Reads the status without taking Git's optional locks.
     pub fn status(&self) -> Result<RepoStatus, GitError> {
-        let out = self.run(&["--no-optional-locks", "status", "--porcelain=v2", "--branch", "-z", "-uall"])?;
+        let out = self.run_bulk(&["--no-optional-locks", "status", "--porcelain=v2", "--branch", "-z", "-uall"], None)?;
         Ok(parse(&out))
     }
 }

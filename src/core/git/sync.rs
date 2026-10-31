@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
-use super::cmd::{Git, GitError, LOCAL};
+use super::cmd::{BULK, Git, GitError};
 use super::status::{ChangeKind, ChangedFile, RepoStatus};
 
 /// GitHub refuses files of 100 MB; these stay local and are reported.
@@ -70,10 +70,10 @@ impl Git {
             list.extend_from_slice(f.path.as_bytes());
             list.push(0);
         }
-        self.checked(&["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], Some(list), LOCAL)?;
+        self.run_bulk(&["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], Some(list))?;
         let text = message(&files);
         let text = if text.trim().is_empty() { "Stand".to_string() } else { text };
-        self.checked(&["commit", "-q", "--cleanup=whitespace", "-F", "-"], Some(text.into_bytes()), LOCAL)?;
+        self.run_bulk(&["commit", "-q", "--cleanup=whitespace", "-F", "-"], Some(text.into_bytes()))?;
         report.committed = files.len();
         Ok(())
     }
@@ -84,7 +84,7 @@ impl Git {
 
     /// Paths with a conflict if the upstream were merged now; the working tree is not touched.
     pub fn preview_merge(&self) -> Result<Vec<String>, GitError> {
-        let out = self.output(&["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", "HEAD", "@{u}"], None, LOCAL)?;
+        let out = self.output(&["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", "HEAD", "@{u}"], None, BULK)?;
         match out.code {
             0 => Ok(Vec::new()),
             1 => Ok(out.stdout.split('\0').skip(1).filter(|p| !p.is_empty()).map(String::from).collect()),
@@ -100,13 +100,13 @@ impl Git {
         }
         let before = self.head();
         if status.ahead == 0 {
-            self.run(&["merge", "-q", "--ff-only", "@{u}"])?;
+            self.run_bulk(&["merge", "-q", "--ff-only", "@{u}"], None)?;
         } else {
             let conflicts = self.preview_merge()?;
             if !conflicts.is_empty() {
                 return Err(GitError::Conflicts(conflicts));
             }
-            self.run(&["merge", "-q", "--no-edit", "@{u}"])?;
+            self.run_bulk(&["merge", "-q", "--no-edit", "@{u}"], None)?;
         }
         if let Some(before) = before {
             report.pulled.extend(self.settle_times(&before)?);
@@ -117,10 +117,10 @@ impl Git {
     /// Gives files changed since `from` the time of their last state, because deadlines are judged by file time
     /// and checking out would stamp them with now. Returns those files.
     fn settle_times(&self, from: &str) -> Result<Vec<PathBuf>, GitError> {
-        let out = self.run(&["log", "--format=%x01%ct", "--name-only", "-z", &format!("{from}..HEAD")])?;
+        let out = self.run_bulk(&["log", "--format=%x01%ct", "--name-only", "-z", &format!("{from}..HEAD")], None)?;
         let mut times: HashMap<String, u64> = HashMap::new();
         parse_log_times(&out, &mut times);
-        let changed = self.run(&["diff", "--name-only", "--no-renames", "-z", from, "HEAD"])?;
+        let changed = self.run_bulk(&["diff", "--name-only", "--no-renames", "-z", from, "HEAD"], None)?;
         let mut files = Vec::new();
         for rel in changed.split('\0').filter(|p| !p.is_empty()) {
             let path = self.root.join(rel);

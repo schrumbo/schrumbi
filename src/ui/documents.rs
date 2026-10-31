@@ -97,9 +97,16 @@ impl NoteView {
                     this.revision = rev;
                     this.syncing = true;
                     this.editor.update(cx, |s, cx| {
+                        let old = s.value().to_string();
+                        let (changed, inserted) = edit_ops::minimal_change(&old, &text);
+                        if changed.is_empty() && inserted.is_empty() {
+                            return;
+                        }
                         let (selected, scroll) = (s.selected_range(), s.scroll_offset());
-                        let (start, end) = (text.floor_char_boundary(selected.start), text.floor_char_boundary(selected.end));
-                        s.set_value(text, window, cx);
+                        let start = edit_ops::shift_offset(selected.start, &changed, inserted.len());
+                        let end = edit_ops::shift_offset(selected.end, &changed, inserted.len());
+                        s.set_selected_range(changed.clone(), cx);
+                        s.replace(inserted.to_string(), window, cx);
                         s.set_selected_range(start..end, cx);
                         s.set_scroll_offset(scroll, cx);
                     });
@@ -614,6 +621,8 @@ pub fn compare_note(path: PathBuf, cx: &mut App) {
     let Some(window) = cx.active_window() else { return };
     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
     let task = cx.background_spawn(async move {
+        let closed = |t: String| if t.ends_with('\n') { t } else { t + "\n" };
+        let (theirs, mine) = (closed(theirs), closed(mine));
         let diff = similar::TextDiff::configure().timeout(Duration::from_secs(2)).diff_lines(&theirs, &mine);
         let patch = diff.unified_diff().header(&name, &name).to_string();
         gpui_kit::component::diff::DiffFile::parse(&patch).unwrap_or_default()
@@ -633,8 +642,8 @@ pub fn compare_note(path: PathBuf, cx: &mut App) {
                         .h(px(480.))
                         .flex()
                         .flex_col()
-                        .child(div().flex_none().px(px(space::L)).py(px(space::M)).flex().justify_between().text_size(px(font::CAPTION)).text_color(t.secondary).child(tr("Version der anderen App")).child(tr("Deine Version")))
-                        .child(div().flex_1().min_h_0().child(gpui_kit::component::diff::Diff::new(&state)))
+                        .child(div().flex_none().py(px(space::M)).flex().border_b_1().border_color(t.separator).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.secondary).child(div().flex_1().px(px(space::L)).child(tr("Version der anderen App"))).child(div().flex_1().px(px(space::L)).child(tr("Deine Version"))))
+                        .child(div().flex_1().min_h_0().child(gpui_kit::component::diff::Diff::new(&state).header_visible(false).hunk_separator(gpui_kit::component::diff::DiffHunkSeparator::Simple)))
                         .child(
                             div()
                                 .flex_none()

@@ -325,7 +325,8 @@ fn decomposed_names_as_macos_may_store_them_work() {
 #[test]
 #[ignore]
 fn scale() {
-    for count in [1_000usize, 10_000, 100_000] {
+    let counts: Vec<usize> = std::env::var("SCALE").map_or(vec![1_000, 10_000, 100_000], |s| s.split(',').filter_map(|n| n.parse().ok()).collect());
+    for count in counts {
         let (a, b) = devices(&format!("scale{count}"));
         for i in 0..count {
             let dir = a.root.join(format!("W{:02}", i % 40)).join(format!("Thema {}", i % 500));

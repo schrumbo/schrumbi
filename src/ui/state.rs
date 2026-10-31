@@ -7,6 +7,9 @@ use notify::{EventKind, RecursiveMode, Watcher};
 use crate::core::library::{Library, Reminder};
 use crate::core::workspace::{CONFIG_NAME, STATE_NAME};
 
+/// Many apps empty a file before writing it; reading in between would show an empty note.
+const RELOAD_SETTLE: u64 = 150;
+
 /// The shared library plus the background work that keeps it current.
 pub struct Store {
     pub lib: Entity<Library>,
@@ -18,6 +21,7 @@ pub struct Store {
     pending_index: Option<Task<()>>,
     pending_config: Option<Task<()>>,
     pending_notes: Option<Task<()>>,
+    pending_reload: Option<Task<()>>,
 }
 
 impl Global for Store {}
@@ -38,6 +42,7 @@ pub fn init(cx: &mut App) {
         pending_index: None,
         pending_config: None,
         pending_notes: None,
+        pending_reload: None,
     });
     cx.spawn(async move |cx| {
         loop {
@@ -215,7 +220,11 @@ fn changed(c: Change, cx: &mut App) {
         });
         cx.global_mut::<Store>().pending_refresh = Some(task);
     } else if c.content {
-        reload_buffers(cx);
+        let task = cx.spawn(async move |cx| {
+            cx.background_executor().timer(Duration::from_millis(RELOAD_SETTLE)).await;
+            cx.update(reload_buffers);
+        });
+        cx.global_mut::<Store>().pending_reload = Some(task);
     }
     if c.structural || c.content {
         let delay = if c.structural { 3 } else { 10 };

@@ -206,9 +206,45 @@ pub fn image_markdown(file_name: &str) -> String {
     format!("![{stem}]({target})")
 }
 
+/// The smallest edit that turns `old` into `new`: the changed range of `old` and what replaces it.
+pub fn minimal_change<'a>(old: &str, new: &'a str) -> (Range<usize>, &'a str) {
+    let prefix: usize = old.chars().zip(new.chars()).take_while(|(a, b)| a == b).map(|(a, _)| a.len_utf8()).sum();
+    let suffix: usize = old[prefix..].chars().rev().zip(new[prefix..].chars().rev()).take_while(|(a, b)| a == b).map(|(a, _)| a.len_utf8()).sum();
+    (prefix..old.len() - suffix, &new[prefix..new.len() - suffix])
+}
+
+/// Where a position in the old text ends up after `minimal_change` replaced `changed` with `inserted` bytes.
+pub fn shift_offset(offset: usize, changed: &Range<usize>, inserted: usize) -> usize {
+    if offset <= changed.start {
+        offset
+    } else if offset >= changed.end {
+        offset - changed.len() + inserted
+    } else {
+        changed.start + inserted
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minimal_change_finds_only_what_differs() {
+        assert_eq!(minimal_change("a\nb\n", "neu\na\nb\n"), (0..0, "neu\n"));
+        assert_eq!(minimal_change("a\nb", "a\nb\nc"), (3..3, "\nc"));
+        assert_eq!(minimal_change("Übung", "Üben"), (3..6, "en"));
+        assert_eq!(minimal_change("gleich", "gleich"), (6..6, ""));
+        assert_eq!(minimal_change("aa", "a"), (1..2, ""));
+        assert_eq!(minimal_change("€€", "€"), (3..6, ""));
+    }
+
+    #[test]
+    fn offsets_follow_the_change() {
+        assert_eq!(shift_offset(5, &(0..0), 3), 8);
+        assert_eq!(shift_offset(1, &(4..6), 9), 1);
+        assert_eq!(shift_offset(5, &(4..6), 9), 13);
+        assert_eq!(shift_offset(8, &(4..6), 9), 15);
+    }
 
     #[test]
     fn image_markdown_keeps_spaces_working() {
