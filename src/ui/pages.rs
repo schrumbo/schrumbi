@@ -97,9 +97,8 @@ impl Pages {
 
     /// Return in the search field opens the selected search result.
     pub fn open_search_selection(&mut self, cx: &mut Context<Self>) {
-        if let Some(p) = self.search.read(cx).selected.clone() {
-            act(cx, |l| l.open_file(&p));
-        }
+        let search = self.search.clone();
+        search.update(cx, |b, cx| b.open_selected(cx));
     }
 
     pub fn move_search_selection(&mut self, step: i64, cx: &mut Context<Self>) {
@@ -270,7 +269,7 @@ impl Render for Pages {
         }
         let mut fields = std::mem::take(&mut self.fields);
         let body: AnyElement = match route {
-            Route::Grid => div().id("grid-scroll").size_full().overflow_y_scrollbar().child(grid::render(lib.read(cx), &self.grid, view, &t)).into_any_element(),
+            Route::Grid => div().relative().size_full().child(div().id("grid-scroll").size_full().overflow_y_scroll().track_scroll(&self.grid.scroll).child(grid::render(lib.read(cx), &self.grid, view, &t))).vertical_scrollbar(&self.grid.scroll).into_any_element(),
             Route::Record => match lib.read(cx).config.clone() {
                 Some(c) => div().id("record-scroll").size_full().overflow_y_scrollbar().child(record::render(&c, &self.record, &mut fields, window, cx, &t)).into_any_element(),
                 None => div().into_any_element(),

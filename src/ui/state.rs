@@ -67,6 +67,9 @@ pub fn act<R>(cx: &mut App, f: impl FnOnce(&mut Library) -> R) -> R {
         let lib = lib.clone();
         cx.spawn(async move |cx| {
             cx.background_executor().timer(Duration::from_secs(if undoable { 6 } else { 3 })).await;
+            while cx.update(|cx| lib.read(cx).toast_hovered) {
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+            }
             cx.update(|cx| lib.update(cx, |l, cx| {
                 l.dismiss_toast(id);
                 cx.notify();

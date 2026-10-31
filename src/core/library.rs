@@ -31,6 +31,9 @@ pub enum Route {
     Doc(PathBuf),
 }
 
+/// How many pages Back remembers.
+const ROUTE_HISTORY: usize = 50;
+
 pub type Undo = Box<dyn FnOnce(&mut Library)>;
 
 /// A short confirmation at the bottom of the window, optionally undoable.
@@ -196,7 +199,10 @@ pub struct Library {
     /// Notes shown in their own window; their buffers outlive the tab.
     pub note_windows: HashSet<PathBuf>,
     route: Route,
-    back_route: Option<Route>,
+    closed_documents: Vec<PathBuf>,
+    back_routes: Vec<Route>,
+    forward_routes: Vec<Route>,
+    pub toast_hovered: bool,
     pub open_documents: Vec<PathBuf>,
     pub active_document: Option<PathBuf>,
     pub search_query: String,
@@ -279,7 +285,10 @@ impl Library {
             exporting_pdfs: HashSet::new(),
             note_windows: HashSet::new(),
             route: Route::Today,
-            back_route: None,
+            closed_documents: Vec::new(),
+            back_routes: Vec::new(),
+            forward_routes: Vec::new(),
+            toast_hovered: false,
             open_documents: Vec::new(),
             active_document: None,
             search_query: String::new(),
@@ -347,6 +356,8 @@ impl Library {
         self.active_document = None;
         self.selection = None;
         self.route = Route::Today;
+        self.back_routes.clear();
+        self.forward_routes.clear();
         self.changed();
     }
 
@@ -564,11 +575,37 @@ impl Library {
     }
 
     pub fn set_route(&mut self, r: Route) {
-        if !matches!(self.route, Route::Doc(_)) && self.route != r {
-            self.back_route = Some(self.route.clone());
+        if self.route != r {
+            self.back_routes.push(std::mem::replace(&mut self.route, r));
+            if self.back_routes.len() > ROUTE_HISTORY {
+                self.back_routes.remove(0);
+            }
+            self.forward_routes.clear();
         }
-        self.route = r;
         self.changed();
+    }
+
+    /// Whether a route can still be shown; closed documents drop out of the history.
+    fn route_exists(&self, r: &Route) -> bool {
+        !matches!(r, Route::Doc(p) if !self.open_documents.contains(p))
+    }
+
+    pub fn can_go_back(&self) -> bool {
+        self.back_routes.iter().any(|r| self.route_exists(r))
+    }
+
+    pub fn can_go_forward(&self) -> bool {
+        self.forward_routes.iter().any(|r| self.route_exists(r))
+    }
+
+    pub fn go_forward(&mut self) {
+        while let Some(r) = self.forward_routes.pop() {
+            if self.route_exists(&r) {
+                self.back_routes.push(std::mem::replace(&mut self.route, r));
+                self.changed();
+                return;
+            }
+        }
     }
 
     pub fn selection(&self) -> Option<&str> {
@@ -1187,6 +1224,7 @@ impl Library {
     pub fn dismiss_toast(&mut self, id: u64) {
         if self.toast.as_ref().is_some_and(|t| t.id == id) {
             self.toast = None;
+            self.toast_hovered = false;
             self.changed();
         }
     }
@@ -1598,7 +1636,7 @@ impl Library {
         if !self.note_windows.contains(path) {
             self.buffers.remove(path);
         }
-        self.open_documents.remove(i);
+        self.closed_documents.push(self.open_documents.remove(i));
         self.save_documents();
         let was_shown = self.route == Route::Doc(path.to_path_buf());
         if self.active_document.as_deref() == Some(path) {
@@ -1613,7 +1651,31 @@ impl Library {
         self.changed();
     }
 
+    /// Opens the most recently closed tab whose file still exists.
+    pub fn reopen_document(&mut self) {
+        while let Some(path) = self.closed_documents.pop() {
+            if path.exists() {
+                self.open_document(&path);
+                return;
+            }
+        }
+    }
+
+    /// Moves a tab in front of `before`, or to the end when `before` is the tab itself or unknown.
+    pub fn move_document(&mut self, path: &Path, before: &Path) {
+        if path == before {
+            return;
+        }
+        let Some(from) = self.open_documents.iter().position(|d| d == path) else { return };
+        let doc = self.open_documents.remove(from);
+        let to = self.open_documents.iter().position(|d| d == before).unwrap_or(self.open_documents.len());
+        self.open_documents.insert(to, doc);
+        self.save_documents();
+        self.changed();
+    }
+
     pub fn close_other_documents(&mut self, path: &Path) {
+        self.closed_documents.extend(self.open_documents.iter().filter(|d| *d != path).cloned());
         let windows = self.note_windows.clone();
         self.buffers.retain(|p, _| p == path || windows.contains(p));
         self.open_documents.retain(|p| p == path);
@@ -1622,6 +1684,7 @@ impl Library {
     }
 
     pub fn close_all_documents(&mut self) {
+        self.closed_documents.extend(self.open_documents.iter().cloned());
         let windows = self.note_windows.clone();
         self.buffers.retain(|p, _| windows.contains(p));
         self.open_documents.clear();
@@ -1651,8 +1714,17 @@ impl Library {
     }
 
     pub fn go_back(&mut self) {
-        self.route = self.back_route.clone().unwrap_or(Route::Today);
-        self.changed();
+        while let Some(r) = self.back_routes.pop() {
+            if self.route_exists(&r) {
+                self.forward_routes.push(std::mem::replace(&mut self.route, r));
+                self.changed();
+                return;
+            }
+        }
+        if !self.route_exists(&self.route) {
+            self.route = Route::Today;
+            self.changed();
+        }
     }
 
     /// Readable name for a note: the convention title, else the file name.

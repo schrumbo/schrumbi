@@ -1,3 +1,4 @@
+use gpui_kit::component::Disableable;
 use std::path::PathBuf;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -19,7 +20,7 @@ use crate::core::i18n::tr;
 use crate::core::library::{Library, NewNoteRequest, Route};
 use crate::core::shortcuts::ShortcutAction;
 
-actions!(schrumbi_main, [Dismiss, FocusSearch, ToggleSidebar]);
+actions!(schrumbi_main, [Dismiss, FocusSearch, ToggleSidebar, SearchUp, SearchDown]);
 
 /// The main window: floating sidebar, toolbar, the routed page and the inspector.
 pub struct MainWindow {
@@ -121,6 +122,12 @@ impl MainWindow {
         }
     }
 
+    fn step_results(&mut self, step: i64, cx: &mut Context<Self>) {
+        if state::read(cx, |l| *l.route() == Route::Search) {
+            self.pages.update(cx, |p, cx| p.move_search_selection(step, cx));
+        }
+    }
+
     pub fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search.update(cx, |s, cx| s.focus(window, cx));
     }
@@ -150,35 +157,17 @@ impl MainWindow {
             .gap(px(space::S))
             .pl(px(if super::chrome::CUSTOM { space::M } else { (92. - left).max(space::M) }))
             .pr(px(space::M))
+            .child(Button::new("go-back").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-left")).disabled(!lib.can_go_back()).tooltip(format!("{}{}", tr("Zurück"), ShortcutAction::GoBack.hint())).on_click(|_, _, cx| act(cx, |l| l.go_back())))
+            .child(Button::new("go-forward").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-right")).disabled(!lib.can_go_forward()).tooltip(tr("Vorwärts")).on_click(|_, _, cx| act(cx, |l| l.go_forward())))
             .child(div().flex_1().min_w_0().truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .rounded_full()
-                    .bg(t.ink.opacity(0.06))
-                    .border_1()
-                    .border_color(t.ink.opacity(0.1))
-                    .child(
-                        Button::new("new-entry")
-                            .ghost()
-                            .w(px(36.))
-                            .h(px(control::M))
-                            .rounded_full()
-                            .icon(menu_icon("plus"))
-                            .tooltip(format!("{}{}", tr("Neuer Termin"), ShortcutAction::NewEntry.hint()))
-                            .on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)),
-                    )
-                    .child(div().w(px(1.)).h(px(iconsize::M)).bg(t.ink.opacity(0.12)))
-                    .child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().icon(menu_icon("chevron-down")).tooltip(tr("Weitere Optionen")).dropdown_menu(move |menu, _, _| {
-                        let m = module2.clone();
-                        menu.item(PopupMenuItem::new(tr("Neuer Termin…")).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)))
-                            .item(PopupMenuItem::new(tr("Neue Notiz, Datei oder Ordner…")).icon(menu_icon("file-plus")).on_click(move |_, _, cx| {
-                                let m = m.clone();
-                                act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: m, folder: None }))
-                            }))
-                    })),
-            )
+            .child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().bg(t.ink.opacity(0.06)).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("plus")).tooltip(tr("Neu")).dropdown_menu(move |menu, _, _| {
+                let m = module2.clone();
+                menu.item(PopupMenuItem::new(format!("{}{}", tr("Neuer Termin…"), ShortcutAction::NewEntry.hint())).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)))
+                    .item(PopupMenuItem::new(tr("Neue Notiz, Datei oder Ordner…")).icon(menu_icon("file-plus")).on_click(move |_, _, cx| {
+                        let m = m.clone();
+                        act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: m, folder: None }))
+                    }))
+            }))
             .child(
                 Button::new("toggle-inspector")
                     .ghost()
@@ -191,7 +180,7 @@ impl MainWindow {
                     .tooltip(format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()))
                     .on_click(|_, _, cx| act(cx, |l| l.toggle_inspector())),
             )
-            .child(div().w(px(325.)).child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true)))
+            .child(div().w(px(325.)).key_context("SearchField").child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true)))
     }
 }
 
@@ -223,6 +212,7 @@ impl Render for MainWindow {
         }
 
         let base = div()
+            .child(gpui_kit::base::TextSelectionLayer)
             .id("main")
             .track_focus(&self.focus)
             .key_context("MainWindow")
@@ -244,6 +234,8 @@ impl Render for MainWindow {
                 window.focus(&this.focus, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
+            .on_action(cx.listener(|this, _: &SearchUp, _, cx| this.step_results(-1, cx)))
+            .on_action(cx.listener(|this, _: &SearchDown, _, cx| this.step_results(1, cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.set_open(!this.sidebar_open, cx)))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
                 let k = &e.keystroke;
@@ -299,7 +291,7 @@ impl Render for MainWindow {
                     .left_0()
                     .bottom_0()
                     .w(px(left))
-                    .child(sidebar::render(l, update, &t)),
+                    .child(sidebar::render(l, update, self.sidebar_open, &t)),
             )
             .child(
                 div()
@@ -340,8 +332,10 @@ impl Render for MainWindow {
     }
 }
 
-fn toast_view(message: String, icon_name: &'static str, action: Option<String>, t: &Theme) -> Div {
+fn toast_view(message: String, icon_name: &'static str, action: Option<String>, t: &Theme) -> Stateful<Div> {
     div()
+        .id("toast")
+        .on_hover(|hovered, _, cx| state::lib(cx).update(cx, |l, _| l.toast_hovered = *hovered))
         .max_w(px(560.))
         .flex()
         .items_center()

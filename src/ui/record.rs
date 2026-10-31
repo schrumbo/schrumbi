@@ -92,7 +92,11 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
                 .child(table),
         );
     }
-    col = col.child(caption(tr("Notensystem und Bezeichnung der Punkte änderst du unter Einstellungen → Allgemein. Teilleistungen (z. B. Klausur 60 %, Projekt 40 %) ergeben die Modulnote automatisch."), t));
+    let grade_keys: Vec<String> = semesters.iter().flat_map(|s| c.modules.iter().filter(|m| m.semester == s.id).map(|m| format!("grade-{}", m.id))).collect();
+    fields.chain(&grade_keys, window, cx);
+    if graded.is_empty() {
+        col = col.child(caption(tr("Notensystem und Bezeichnung der Punkte änderst du unter Einstellungen → Allgemein. Teilleistungen (z. B. Klausur 60 %, Projekt 40 %) ergeben die Modulnote automatisch."), t));
+    }
     div().w_full().flex().justify_center().child(col)
 }
 
@@ -225,6 +229,10 @@ fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fiel
             edit_components(&id, cx, |cs| cs.push(GradeComponent { name: tr("Klausur"), weight: 100., ..Default::default() }), system)
         }),
     );
+    let total: f64 = m.components.iter().map(|x| x.weight).sum();
+    if m.components.len() > 1 && (total - 100.).abs() > 0.01 {
+        footer = footer.child(div().text_size(px(font::CALLOUT)).text_color(t.orange).child(trf("Gewichte ergeben %@ %%", &[&format_number(total, 2)])));
+    }
     if system.uses_grades() && m.components.len() > 1 {
         let id = m.id.clone();
         let target = fields.input(&format!("target-{}", m.id), &m.target_grade.map(|g| format_number(g, 2)).unwrap_or_default(), &tr("Zielnote"), window, cx, move |v, cx| {

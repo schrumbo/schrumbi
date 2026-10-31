@@ -72,6 +72,8 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&go, tr("Prüfen"), "list-checks", Some(fixed_keys("5")), Run::Action(Box::new(app::GoChecks)));
         add(&go, S::SearchFiles.label(), "search", keys(S::SearchFiles), Run::Action(Box::new(app::SearchFiles)));
         add(&go, S::GoBack.label(), "arrow-left", keys(S::GoBack), Run::Action(Box::new(app::GoBack)));
+        add(&go, tr("Vorwärts"), "arrow-right", None, Run::Action(Box::new(app::GoForward)));
+        add(&go, tr("Geschlossenen Tab wieder öffnen"), "rotate-ccw", None, Run::Action(Box::new(app::ReopenTab)));
         for m in l.semester_modules() {
             let route = Route::Module(m.id.clone());
             add(&go, m.display_name(), "book-open", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.set_route(route.clone())))));

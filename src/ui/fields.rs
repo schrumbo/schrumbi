@@ -11,6 +11,7 @@ pub struct Fields {
     map: HashMap<String, (Entity<InputState>, Subscription)>,
     dates: HashMap<String, (Entity<DatePickerState>, Subscription)>,
     used: HashSet<String>,
+    chains: Vec<Subscription>,
 }
 
 impl Fields {
@@ -62,6 +63,22 @@ impl Fields {
         });
         self.dates.insert(key.to_string(), (state.clone(), sub));
         state
+    }
+
+    /// Makes Enter in each field move on to the next one, like rows in a table.
+    pub fn chain<V: 'static>(&mut self, keys: &[String], window: &mut Window, cx: &mut Context<V>) {
+        let states: Vec<Entity<InputState>> = keys.iter().filter_map(|k| self.map.get(k).map(|(s, _)| s.clone())).collect();
+        self.chains = states
+            .windows(2)
+            .map(|pair| {
+                let next = pair[1].clone();
+                cx.subscribe_in(&pair[0], window, move |_, _, e: &InputEvent, window, cx| {
+                    if matches!(e, InputEvent::PressEnter { .. }) {
+                        next.update(cx, |s, cx| s.focus(window, cx));
+                    }
+                })
+            })
+            .collect();
     }
 
     /// Drops fields that were not rendered since the last call.

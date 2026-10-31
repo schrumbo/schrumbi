@@ -419,8 +419,8 @@ impl Render for NoteView {
         } else {
             match self.mode {
                 Mode::Read => self.reader(&text, &t, cx),
-                Mode::Edit => self.editor_view(cx),
-                Mode::Split => div().size_full().flex().child(div().flex_1().min_w_0().h_full().border_r_1().border_color(t.separator).child(self.editor_view(cx))).child(div().flex_1().min_w_0().h_full().child(self.reader(&text, &t, cx))).into_any_element(),
+                Mode::Edit => div().size_full().flex().flex_col().child(div().flex_1().min_h_0().child(self.editor_view(cx))).child(word_count(&text, &t)).into_any_element(),
+                Mode::Split => div().size_full().flex().child(div().flex_1().min_w_0().h_full().flex().flex_col().border_r_1().border_color(t.separator).child(div().flex_1().min_h_0().child(self.editor_view(cx))).child(word_count(&text, &t))).child(div().flex_1().min_w_0().h_full().child(self.reader(&text, &t, cx))).into_any_element(),
             }
         };
         let top = if self.embedded {
@@ -535,6 +535,25 @@ fn close_all_tabs(cx: &mut App) {
     resolve_unsaved(all, cx, |cx| close_all_tabs(cx));
 }
 
+fn word_count(text: &str, t: &Theme) -> Div {
+    let words = text.split_whitespace().count();
+    div().flex_none().flex().justify_end().px(px(space::M)).py(px(space::XS)).border_t_1().border_color(t.separator).text_size(px(font::CAPTION)).text_color(t.secondary).child(if words == 1 { tr("1 Wort") } else { trf("%lld Wörter", &[&words]) })
+}
+
+/// A tab being moved along the tab bar.
+#[derive(Clone)]
+struct DraggedTab {
+    path: PathBuf,
+    title: String,
+}
+
+impl Render for DraggedTab {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::get(cx);
+        div().flex().items_center().gap(px(space::S)).px(px(space::M)).py(px(space::XS)).rounded(px(radius::INNER)).bg(t.material).shadow_md().text_size(px(font::CALLOUT)).child(file_icon(&self.path, iconsize::M)).child(self.title.clone())
+    }
+}
+
 /// One row: open tabs on the left, the shown document's actions on the right.
 pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) -> Div {
     let (docs, titles, dirty) = state::read(cx, |l| {
@@ -546,7 +565,8 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
     let mut tabs = div().flex().gap(px(space::XXS)).py(px(space::S));
     for (i, doc) in docs.iter().enumerate() {
         let active = doc.as_path() == current;
-        let (open, close, menu) = (doc.clone(), doc.clone(), doc.clone());
+        let (open, close, menu, middle, target) = (doc.clone(), doc.clone(), doc.clone(), doc.clone(), doc.clone());
+        let accent = t.accent;
         let is_dirty = dirty[i];
         let hover = t.ink.opacity(0.05);
         let rel = state::read(cx, |l| l.relative_path(doc));
@@ -566,6 +586,13 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
                 .when(!active, |d| d.soft(hover, radius::INNER))
                 .tooltip(tip(rel))
                 .on_click(move |_, _, cx| act(cx, |l| l.open_document(&open)))
+                .on_mouse_down(MouseButton::Middle, move |_, _, cx| close_tab(&middle, cx))
+                .on_drag(DraggedTab { path: doc.clone(), title: titles[i].clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
+                .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(accent.opacity(0.15)))
+                .on_drop(move |dragged: &DraggedTab, _, cx| {
+                    let path = dragged.path.clone();
+                    act(cx, |l| l.move_document(&path, &target));
+                })
                 .child(file_icon(doc, iconsize::M))
                 .child(div().max_w(px(180.)).truncate().text_size(px(font::CALLOUT)).text_color(if active { t.primary } else { t.secondary }).child(titles[i].clone()))
                 .child(
@@ -624,7 +651,7 @@ pub struct FileViewer {
 impl FileViewer {
     pub fn new(path: PathBuf, cx: &mut Context<Self>) -> Self {
         let is_pdf = extension(&path.to_string_lossy()).eq_ignore_ascii_case("pdf");
-        let pdf = is_pdf.then(|| cx.new(|cx| PdfView::new(&path, cx)));
+        let pdf = is_pdf.then(|| cx.new(|cx| PdfView::new(&path, cx).take_focus_on_load()));
         let preview = cx.new(|cx| {
             let mut p = FilePreview::new(false);
             if !is_pdf {

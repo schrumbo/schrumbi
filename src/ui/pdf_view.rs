@@ -141,6 +141,12 @@ pub struct PdfView {
 }
 
 impl PdfView {
+    /// Takes the keyboard once the document is loaded, for views that open it on purpose rather than as a side pane.
+    pub fn take_focus_on_load(mut self) -> Self {
+        self.focused_once = false;
+        self
+    }
+
     pub fn new(path: &Path, cx: &mut Context<Self>) -> Self {
         let (result_tx, result_rx) = async_channel::unbounded();
         let (queue, jobs, search_generation) = pdf_worker::start(path.to_path_buf(), result_tx);
@@ -190,7 +196,7 @@ impl PdfView {
             hover_cursor: CursorStyle::Arrow,
             history: Vec::new(),
             focus: cx.focus_handle(),
-            focused_once: false,
+            focused_once: true,
             panel_open: false,
             panel_tab: PanelTab::Thumbnails,
             thumbs: UniformListScrollHandle::new(),

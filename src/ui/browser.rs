@@ -263,7 +263,21 @@ impl FileBrowser {
         }
         let i = self.selected.as_ref().and_then(|s| v.iter().position(|p| p == s)).map_or(0, |i| (i as i64 + step).clamp(0, v.len() as i64 - 1) as usize);
         self.selected = Some(v[i].clone());
+        self.reveal_selection();
         cx.notify();
+    }
+
+    /// Opens the selected file; a content match opens at its first occurrence.
+    pub fn open_selected(&self, cx: &mut App) {
+        let Some(path) = self.selected.clone() else { return };
+        let r = &self.results;
+        let matched = r.best.iter().chain(r.groups.iter().flat_map(|g| g.items.iter())).any(|i| i.file.file.path == path && i.snippet.is_some());
+        act(cx, |l| {
+            if matched {
+                l.pdf_query = Some((path.clone(), l.search_query.clone()));
+            }
+            l.open_file(&path)
+        });
     }
 
     fn line_list(&self, current: Option<u32>) -> Vec<Line> {
@@ -338,7 +352,6 @@ impl FileBrowser {
         match k.key.as_str() {
             "up" | "down" => {
                 self.move_selection(if k.key == "up" { -1 } else { 1 }, cx);
-                self.reveal_selection();
             }
             "space" => {
                 if let Some(path) = self.selected.clone() {
@@ -347,11 +360,7 @@ impl FileBrowser {
                     super::preview::show_in(files, index, cx);
                 }
             }
-            "enter" => {
-                if let Some(path) = self.selected.clone() {
-                    act(cx, |l| l.open_file(&path));
-                }
-            }
+            "enter" => self.open_selected(cx),
             _ => return,
         }
         cx.stop_propagation();

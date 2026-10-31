@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use serde_json::{Value, json};
 
-use super::library::Library;
+use super::library::{Library, Route};
 
 fn folder(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("schrumbi-edge-{}", std::process::id())).join(name);
@@ -392,4 +392,49 @@ fn quick_config_edits_become_one_undo_step() {
     assert_eq!(lib.config.as_ref(), Some(&original));
     assert!(!lib.can_undo());
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn back_and_forward_walk_the_route_history() {
+    let mut lib = Library::new();
+    lib.set_route(Route::Grid);
+    lib.set_route(Route::Inbox);
+    assert!(lib.can_go_back());
+    lib.go_back();
+    assert_eq!(*lib.route(), Route::Grid);
+    lib.go_forward();
+    assert_eq!(*lib.route(), Route::Inbox);
+    lib.go_back();
+    lib.set_route(Route::Record);
+    assert!(!lib.can_go_forward());
+}
+
+#[test]
+fn back_skips_closed_documents() {
+    let mut lib = Library::new();
+    lib.set_route(Route::Grid);
+    lib.set_route(Route::Doc("/gone.md".into()));
+    lib.set_route(Route::Inbox);
+    lib.go_back();
+    assert_eq!(*lib.route(), Route::Grid);
+}
+
+#[test]
+fn tabs_reorder_and_closed_tabs_reopen() {
+    let root = dunce::canonicalize(folder("tabs")).unwrap();
+    let (a, b, c) = (root.join("a.md"), root.join("b.md"), root.join("c.md"));
+    for p in [&a, &b, &c] {
+        std::fs::write(p, "x").unwrap();
+    }
+    let mut lib = Library::new();
+    for p in [&a, &b, &c] {
+        lib.open_document(p);
+    }
+    lib.move_document(&c, &a);
+    assert_eq!(lib.open_documents, vec![c.clone(), a.clone(), b.clone()]);
+    lib.close_document(&a);
+    std::fs::remove_file(&b).unwrap();
+    lib.close_document(&b);
+    lib.reopen_document();
+    assert_eq!(lib.open_documents, vec![c.clone(), a.clone()]);
 }

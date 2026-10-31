@@ -4,6 +4,7 @@ pub mod main_window;
 pub mod onboarding;
 pub mod pages;
 pub mod platform;
+pub mod selectable;
 pub mod sheets;
 pub mod sidebar;
 pub mod state;

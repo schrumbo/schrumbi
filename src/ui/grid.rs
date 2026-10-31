@@ -21,6 +21,19 @@ pub struct GridState {
     pub expanded: HashSet<NaiveDate>,
     pub show_past: bool,
     pub reveal_optional: HashSet<NaiveDate>,
+    pub scroll: ScrollHandle,
+    target: Option<(NaiveDate, ScrollAnchor)>,
+}
+
+impl GridState {
+    /// Opens a week and scrolls it into view.
+    fn jump_to(&mut self, monday: NaiveDate, current: NaiveDate, window: &mut Window, cx: &mut App) {
+        self.expanded.insert(monday);
+        self.show_past |= monday < current;
+        let anchor = ScrollAnchor::for_handle(self.scroll.clone());
+        self.target = Some((monday, anchor.clone()));
+        window.on_next_frame(move |window, cx| anchor.scroll_to(window, cx));
+    }
 }
 
 #[derive(Clone)]
@@ -66,6 +79,7 @@ pub fn render(lib: &Library, st: &GridState, view: Entity<super::pages::Pages>, 
     let this_week = slots.iter().find(|s| s.monday == current);
     let future: Vec<&Slot> = slots.iter().filter(|s| s.monday > current).collect();
 
+    let strip_view = view.clone();
     let mut weeks = grouped(t);
     if !past.is_empty() {
         let v = view.clone();
@@ -101,6 +115,7 @@ pub fn render(lib: &Library, st: &GridState, view: Entity<super::pages::Pages>, 
         weeks = weeks.child(week_row(lib, st, s, current, false, view.clone(), t));
     }
 
+    let view_for_strip = strip_view;
     let strip: Vec<(Slot, Option<f32>)> = slots.iter().map(|s| (s.clone(), progress(lib, &items(lib, s)))).collect();
     div().w_full().flex().justify_center().child(
         div()
@@ -111,7 +126,7 @@ pub fn render(lib: &Library, st: &GridState, view: Entity<super::pages::Pages>, 
             .flex()
             .flex_col()
             .gap(px(space::XXL))
-            .child(progress_card(lib, &strip, current, t))
+            .child(progress_card(lib, &strip, current, view_for_strip, t))
             .child(div().flex().flex_col().gap(px(space::M)).child(section_title(tr("Module"))).child(module_list(lib, t)))
             .child(div().flex().flex_col().gap(px(space::M)).child(section_title(tr("Wochen"))).child(weeks)),
     )
@@ -128,7 +143,7 @@ fn past_summary(lib: &Library, past: &[&Slot]) -> String {
     if open == 0 { trf("%lld Wochen · alles erledigt", &[&weeks]) } else { trf("%lld Wochen · %lld offen", &[&weeks, &open]) }
 }
 
-fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDate, t: &Theme) -> Div {
+fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDate, view: Entity<super::pages::Pages>, t: &Theme) -> Div {
     let (done, _, total) = lib.progress();
     let weeks = strip.iter().filter(|s| s.0.lecture.is_some()).count();
     let summary = match lib.current_week() {
@@ -179,7 +194,20 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                     };
                     let label = s.lecture.map(|w| w.label()).or(s.break_name.clone()).unwrap_or_default();
                     let help = format!("{label} · {}{}", day::short_date(s.monday), p.map(|p| format!(" · {} %", (p * 100.).round())).unwrap_or_default());
-                    div().id(SharedString::from(format!("strip-{}", s.monday))).flex_1().h(px(if is_current { 14. } else { 8. })).rounded(px(radius::SMALL)).bg(color).tooltip(tip(help))
+                    let (monday, view) = (s.monday, view.clone());
+                    div()
+                        .id(SharedString::from(format!("strip-{}", s.monday)))
+                        .flex_1()
+                        .h(px(if is_current { 14. } else { 8. }))
+                        .rounded(px(radius::SMALL))
+                        .bg(color)
+                        .tooltip(tip(help))
+                        .when(s.lecture.is_some(), |d| {
+                            d.cursor_pointer().on_click(move |_, window, cx| view.update(cx, |p, cx| {
+                                p.grid.jump_to(monday, current, window, cx);
+                                cx.notify();
+                            }))
+                        })
                 })))
                 .child(
                     div()
@@ -293,10 +321,13 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
             div().w(px(40.)).text_right().font_features(tabular()).text_size(px(font::CALLOUT)).text_color(if done == mandatory.len() { t.green } else { t.secondary }).child(format!("{done}/{}", mandatory.len()))
         });
 
+    let anchor = st.target.as_ref().filter(|(m, _)| *m == slot.monday).map(|(_, a)| a.clone());
     div()
+        .id(SharedString::from(format!("week-row-{}", slot.monday)))
         .flex()
         .flex_col()
         .when(is_current, |d| d.bg(t.accent.opacity(0.06)))
+        .when_some(anchor, |d, a| d.anchor_scroll(Some(a)))
         .child(header)
         .when(!entries.is_empty(), |d| {
             d.child(motion::reveal(

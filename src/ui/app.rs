@@ -28,6 +28,7 @@ actions!(
         OpenOtherWorkspace,
         Save,
         CloseTab,
+        ReopenTab,
         CloseWindow,
         TogglePreview,
         SplitPreview,
@@ -35,6 +36,7 @@ actions!(
         ToggleInspector,
         Refresh,
         GoBack,
+        GoForward,
         GoToday,
         GoGrid,
         GoRecord,
@@ -116,6 +118,8 @@ pub fn init(cx: &mut App) {
         state::reindex(cx);
     });
     cx.on_action(|_: &GoBack, cx| act(cx, |l| l.go_back()));
+    cx.on_action(|_: &ReopenTab, cx| act(cx, |l| l.reopen_document()));
+    cx.on_action(|_: &GoForward, cx| act(cx, |l| l.go_forward()));
     cx.on_action(|_: &GoToday, cx| route(Route::Today)(cx));
     cx.on_action(|_: &GoGrid, cx| route(Route::Grid)(cx));
     cx.on_action(|_: &GoRecord, cx| route(Route::Record)(cx));
@@ -205,10 +209,14 @@ pub fn bind_keys(cx: &mut App) {
         kb(cmd("4"), GoInbox, None),
         kb(cmd("5"), GoChecks, None),
         kb(cmd("m"), Minimize, None),
+        kb(cmd("shift-t"), ReopenTab, None),
+        kb(if cfg!(target_os = "macos") { "ctrl-shift--".into() } else { "alt-right".into() }, GoForward, None),
         kb(cmd("enter"), super::filing_form::CommitFiling, Some("FilingForm")),
         kb(cmd("b"), super::main_window::ToggleSidebar, Some("MainWindow")),
         kb("down".into(), super::quick::QuickDown, Some("QuickOpen")),
         kb("up".into(), super::quick::QuickUp, Some("QuickOpen")),
+        kb("down".into(), super::main_window::SearchDown, Some("SearchField > Input")),
+        kb("up".into(), super::main_window::SearchUp, Some("SearchField > Input")),
         KeyBinding::new("escape", super::main_window::Dismiss, Some("MainWindow")),
     ];
     #[cfg(target_os = "macos")]
@@ -249,6 +257,7 @@ pub fn rebuild_menus(cx: &mut App) {
         .collect();
     let mut go: Vec<MenuItem> = vec![
         MenuItem::action(tr("Zurück"), GoBack),
+        MenuItem::action(tr("Vorwärts"), GoForward),
         MenuItem::separator(),
         MenuItem::action(tr("Übersicht"), GoToday),
         MenuItem::action(tr("Semester"), GoGrid),
@@ -293,6 +302,7 @@ pub fn rebuild_menus(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action(tr("Sichern"), Save),
             MenuItem::action(tr("Tab schließen"), CloseTab),
+            MenuItem::action(tr("Geschlossenen Tab wieder öffnen"), ReopenTab),
             MenuItem::action(tr("Fenster schließen"), CloseWindow),
         ]),
         Menu::new(tr("Bearbeiten")).items([

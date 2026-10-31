@@ -5,6 +5,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
+use super::selectable::{LinkAction, selectable};
 use super::theme::{Theme, font, radius, space, iconsize};
 use crate::core::markdown::{self, Run, TokenKind};
 
@@ -14,6 +15,7 @@ pub type OnToggle = Rc<dyn Fn(usize, &mut App)>;
 #[derive(Clone)]
 enum Inline {
     Text(String, Style),
+    Link(String, Style, String),
     Image(String, String),
     FootnoteRef(String),
 }
@@ -60,6 +62,7 @@ fn line_of(src: &str, offset: usize) -> usize {
 pub fn parse(src: &str) -> ParsedNote {
     let mut stack: Vec<(Option<Tag>, Vec<Block>, Vec<Inline>)> = vec![(None, Vec::new(), Vec::new())];
     let mut style = Style::default();
+    let mut link: Option<String> = None;
     let mut items: Vec<Vec<Item>> = Vec::new();
     let mut item_meta: Vec<(Option<bool>, usize)> = Vec::new();
     let mut table: Option<(Vec<Vec<Inline>>, Vec<Vec<Vec<Inline>>>, Vec<pulldown_cmark::Alignment>, bool)> = None;
@@ -131,7 +134,10 @@ pub fn parse(src: &str) -> ParsedNote {
                 Tag::Emphasis => style.italic = true,
                 Tag::Strong => style.bold = true,
                 Tag::Strikethrough => style.strike = true,
-                Tag::Link { .. } => style.link = true,
+                Tag::Link { dest_url, .. } => {
+                    style.link = true;
+                    link = Some(dest_url.to_string());
+                }
                 Tag::Image { dest_url, .. } => image = Some((dest_url.to_string(), String::new())),
                 _ => {}
             },
@@ -193,14 +199,20 @@ pub fn parse(src: &str) -> ParsedNote {
                 TagEnd::Emphasis => style.italic = false,
                 TagEnd::Strong => style.bold = false,
                 TagEnd::Strikethrough => style.strike = false,
-                TagEnd::Link => style.link = false,
+                TagEnd::Link => {
+                    style.link = false;
+                    link = None;
+                }
                 _ => {}
             },
             Event::Text(t) => {
                 for r in markdown::runs(&t) {
                     let target = &mut stack.last_mut().unwrap().2;
                     match r {
-                        Run::Text(s) => target.push(Inline::Text(s, style)),
+                        Run::Text(s) => target.push(match &link {
+                            Some(url) => Inline::Link(s, style, url.clone()),
+                            None => Inline::Text(s, style),
+                        }),
                         Run::Mark(s) => target.push(Inline::Text(s, Style { mark: true, ..style })),
                     }
                 }
@@ -235,6 +247,7 @@ struct Ctx<'a> {
     base: Option<&'a Path>,
     on_toggle: Option<OnToggle>,
     footnote_order: &'a [String],
+    order: std::cell::Cell<u64>,
 }
 
 fn styled_text(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
@@ -242,11 +255,15 @@ fn styled_text(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
     let mut text = String::new();
     let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
     let mut images: Vec<AnyElement> = Vec::new();
+    let mut links: Vec<(std::ops::Range<usize>, LinkAction)> = Vec::new();
     for i in inlines {
         match i {
-            Inline::Text(s, st) => {
+            Inline::Text(s, st) | Inline::Link(s, st, _) => {
                 let start = text.len();
                 text.push_str(s);
+                if let Inline::Link(_, _, url) = i {
+                    links.push((start..text.len(), link_action(url, cx.base)));
+                }
                 let mut h = HighlightStyle::default();
                 if st.bold {
                     h.font_weight = Some(FontWeight::BOLD);
@@ -284,8 +301,26 @@ fn styled_text(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
     if text.trim().is_empty() && !images.is_empty() {
         return div().flex().flex_col().gap(px(space::S)).children(images).into_any_element();
     }
-    let body = div().text_size(px(size)).line_height(relative(1.5)).child(StyledText::new(text).with_highlights(highlights));
+    let order = cx.order.get();
+    cx.order.set(order + 1);
+    let body = div().text_size(px(size)).line_height(relative(1.5)).child(selectable(("md-text", order), text, highlights, order, t.accent.opacity(0.3)).links(links));
     if images.is_empty() { body.into_any_element() } else { div().flex().flex_col().gap(px(space::S)).child(body).children(images).into_any_element() }
+}
+
+/// Web links open in the browser, relative ones as files next to the note.
+fn link_action(url: &str, base: Option<&Path>) -> LinkAction {
+    let url = url.to_string();
+    if url.contains("://") || url.starts_with("mailto:") {
+        return std::rc::Rc::new(move |_| {
+            let _ = opener::open(&url);
+        });
+    }
+    let path = base.map_or_else(|| PathBuf::from(markdown::percent_decode(&url)), |b| b.join(markdown::percent_decode(&url)));
+    std::rc::Rc::new(move |cx| {
+        if path.exists() {
+            super::state::act(cx, |l| l.open_file(&path));
+        }
+    })
 }
 
 fn image(src: &str, alt: &str, cx: &Ctx) -> AnyElement {
@@ -295,7 +330,10 @@ fn image(src: &str, alt: &str, cx: &Ctx) -> AnyElement {
     let path = markdown::percent_decode(src);
     let p: PathBuf = if Path::new(&path).is_absolute() { PathBuf::from(&path) } else { cx.base.map(|b| b.join(&path)).unwrap_or_else(|| PathBuf::from(&path)) };
     if p.exists() {
-        img(p).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL)).into_any_element()
+        let order = cx.order.get();
+        cx.order.set(order + 1);
+        let open = p.clone();
+        div().id(("md-image", order)).cursor_pointer().on_click(move |_, _, cx| super::preview::show(&open, cx)).child(img(p).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL))).into_any_element()
     } else {
         div().text_color(cx.t.secondary).child(format!("[{alt}]")).into_any_element()
     }
@@ -429,7 +467,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
 
 /// Renders a parsed note; task boxes call `on_toggle` with their source line.
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
-    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order };
+    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: std::cell::Cell::new(0) };
     let mut col = div().flex().flex_col().gap(px(space::M)).children(render_blocks(&note.blocks, &cx));
     let used: Vec<_> = note.footnote_order.iter().filter_map(|id| note.footnotes.iter().find(|(f, _)| f == id)).collect();
     if !used.is_empty() {
