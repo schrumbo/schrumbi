@@ -93,6 +93,8 @@ pub struct Prefs {
     pub sidebar_open: bool,
     /// Last position and size of the main window: x, y, width, height.
     pub main_window: Option<[f32; 4]>,
+    /// Last position of the upload panel: x, y.
+    pub upload_window: Option<[f32; 2]>,
 }
 
 impl Default for Prefs {
@@ -126,6 +128,7 @@ impl Default for Prefs {
             calendar_feed: false,
             sidebar_open: true,
             main_window: None,
+            upload_window: None,
         }
     }
 }

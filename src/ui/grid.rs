@@ -27,7 +27,7 @@ pub struct GridState {
 
 impl GridState {
     /// Opens a week and scrolls it into view.
-    fn jump_to(&mut self, monday: NaiveDate, current: NaiveDate, window: &mut Window, cx: &mut App) {
+    fn jump_to(&mut self, monday: NaiveDate, current: NaiveDate, window: &mut Window) {
         self.expanded.insert(monday);
         self.show_past |= monday < current;
         let anchor = ScrollAnchor::for_handle(self.scroll.clone());
@@ -204,7 +204,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                         .tooltip(tip(help))
                         .when(s.lecture.is_some(), |d| {
                             d.cursor_pointer().on_click(move |_, window, cx| view.update(cx, |p, cx| {
-                                p.grid.jump_to(monday, current, window, cx);
+                                p.grid.jump_to(monday, current, window);
                                 cx.notify();
                             }))
                         })

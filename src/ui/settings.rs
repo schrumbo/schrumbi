@@ -16,6 +16,7 @@ use super::state::{self, act, edit_config};
 use super::motion::{self, Soft};
 use super::theme::{self, Theme, font, radius, space, iconsize, control};
 use super::widgets::*;
+use crate::core::text::fold;
 use crate::core::i18n::{tr, trf};
 use crate::core::ics;
 use crate::core::model::*;
@@ -44,6 +45,61 @@ const ACCENTS: [(&str, &str); 8] = [
     ("#334155", "Schiefer"),
 ];
 
+/// Every labelled setting and the tab it lives on, for the search field.
+const SEARCHABLE: &[(&str, Tab)] = &[
+    ("Studium", Tab::General),
+    ("Name", Tab::General),
+    ("Kürzel in Dateinamen", Tab::General),
+    ("Inbox-Ordner", Tab::General),
+    ("Matrikelnummer", Tab::General),
+    ("Mitautor:innen", Tab::General),
+    ("Noten und Zeit", Tab::General),
+    ("Notensystem", Tab::General),
+    ("Bezeichnung der Punkte", Tab::General),
+    ("Zeitzone", Tab::General),
+    ("Suche", Tab::General),
+    ("Ausgeschlossene Ordner", Tab::General),
+    ("Indexierte Dateien", Tab::General),
+    ("Speicherort", Tab::General),
+    ("Ordner", Tab::General),
+    ("Sicherung", Tab::General),
+    ("Konfiguration", Tab::General),
+    ("Sprache", Tab::General),
+    ("Erinnerungen", Tab::General),
+    ("Mitteilungen vor Deadlines", Tab::General),
+    ("Erinnern", Tab::General),
+    ("Zusätzlich am Vortag (Pflichtabgaben)", Tab::General),
+    ("Kalenderdatei aktuell halten", Tab::General),
+    ("System", Tab::General),
+    ("Bei Anmeldung starten", Tab::General),
+    ("Automatisch nach Updates suchen", Tab::General),
+    ("Symbol in der Menüleiste", Tab::General),
+    ("Semester", Tab::Semester),
+    ("Vorlesungsbeginn", Tab::Semester),
+    ("Vorlesungsende", Tab::Semester),
+    ("Vorlesungswochen", Tab::Semester),
+    ("Module", Tab::Semester),
+    ("Pausen", Tab::Semester),
+    ("Feiertage", Tab::Semester),
+    ("Kürzel", Tab::Modules),
+    ("Muster", Tab::Modules),
+    ("Beispiel", Tab::Modules),
+    ("Modul", Tab::Modules),
+    ("Links", Tab::Modules),
+    ("Dateinamen", Tab::Modules),
+    ("Wiederkehrende Deadlines", Tab::Modules),
+    ("Stundenplan", Tab::Modules),
+    ("Editor", Tab::Notes),
+    ("Schriftgröße", Tab::Notes),
+    ("Sichern", Tab::Notes),
+    ("Pause", Tab::Notes),
+    ("Beim Schließen immer sichern", Tab::Notes),
+    ("PDF-Export", Tab::Notes),
+    ("Akzentfarbe", Tab::Notes),
+    ("Kopfzeile mit Modul, Woche, Name und Datum", Tab::Notes),
+    ("Seitenzahlen", Tab::Notes),
+];
+
 /// The settings window: Allgemein, Semester, Module, Notizen, Tastenkürzel.
 pub struct Settings {
     tab: Tab,
@@ -53,9 +109,9 @@ pub struct Settings {
     expanded_rule: Option<String>,
     advanced: HashSet<String>,
     filter: Entity<InputState>,
+    search: Entity<InputState>,
     recording: Option<ShortcutAction>,
     focus: FocusHandle,
-    launch_language: String,
     launch_at_login: bool,
     markdown_default: Option<bool>,
     _subs: Vec<Subscription>,
@@ -202,8 +258,16 @@ fn break_summary(b: &Break) -> String {
 impl Settings {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Befehl suchen")));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Einstellungen suchen")));
         let lib = state::lib(cx);
-        let subs = vec![cx.observe(&lib, |_, _, cx| cx.notify()), cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify())];
+        let subs = vec![cx.observe(&lib, |_, _, cx| cx.notify()), cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()), cx.subscribe_in(&search, window, |s, _, e: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = e
+                && let Some(tab) = s.matches(cx).first().map(|(_, tab)| *tab)
+            {
+                s.open_result(tab, window, cx);
+            }
+            cx.notify();
+        })];
         let (semester, module) = state::read(cx, |l| (l.config.as_ref().and_then(|c| c.current_semester(l.now)).map(|s| s.id.clone()), l.config.as_ref().and_then(|c| c.modules.first()).map(|m| m.id.clone())));
         Self {
             tab: Tab::General,
@@ -213,13 +277,57 @@ impl Settings {
             expanded_rule: None,
             advanced: HashSet::new(),
             filter,
+            search,
             recording: None,
             focus: cx.focus_handle(),
-            launch_language: prefs::get().language,
             launch_at_login: super::platform::launches_at_login(),
             markdown_default: super::platform::markdown_is_default(),
             _subs: subs,
         }
+    }
+
+    fn matches(&self, cx: &App) -> Vec<(String, Tab)> {
+        let query = fold(self.search.read(cx).value().trim());
+        if query.is_empty() {
+            return Vec::new();
+        }
+        SEARCHABLE.iter().map(|(key, tab)| (tr(key), *tab)).filter(|(label, _)| fold(label).contains(&query)).collect()
+    }
+
+    fn open_result(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = tab;
+        self.recording = None;
+        self.search.update(cx, |s, cx| s.set_value("", window, cx));
+        cx.notify();
+    }
+
+    fn search_results(&self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let results = self.matches(cx);
+        if results.is_empty() {
+            return unavailable("search", tr("Keine Treffer"), "", t).into_any_element();
+        }
+        let tab_name = |tab: Tab| match tab {
+            Tab::General => tr("Allgemein"),
+            Tab::Semester => tr("Semester"),
+            Tab::Modules => tr("Module"),
+            Tab::Notes => tr("Notizen"),
+            Tab::Shortcuts => tr("Tastenkürzel"),
+        };
+        let mut list = div().w_full().max_w(px(560.)).flex().flex_col().gap(px(space::XXS));
+        for (i, (label, tab)) in results.into_iter().enumerate() {
+            list = list.child(
+                row_button(("settings-result", i), t)
+                    .flex()
+                    .items_center()
+                    .px(px(space::M))
+                    .py(px(space::S))
+                    .rounded(px(radius::INNER))
+                    .child(div().flex_1().min_w_0().truncate().child(label))
+                    .child(caption(tab_name(tab), t))
+                    .on_click(cx.listener(move |s, _, window, cx| s.open_result(tab, window, cx))),
+            );
+        }
+        div().id("settings-results").size_full().overflow_y_scrollbar().p(px(space::XL)).flex().justify_center().child(list).into_any_element()
     }
 
     fn tab_bar(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
@@ -255,7 +363,7 @@ impl Settings {
                     })),
             );
         }
-        bar
+        div().relative().child(bar).child(div().absolute().top(px(if super::chrome::CUSTOM { space::M } else { space::XXL })).right(px(space::M)).w(px(180.)).child(Input::new(&self.search).small().prefix(icon("search", iconsize::XS, t.secondary))))
     }
 
     fn general(&mut self, c: &StudyConfig, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
@@ -389,7 +497,6 @@ impl Settings {
             t,
         );
         let lang = p.language.clone();
-        let changed = lang != self.launch_language;
         let label = match lang.as_str() {
             "de" => "Deutsch".to_string(),
             "en" => "English".to_string(),
@@ -401,7 +508,14 @@ impl Settings {
             vec![row(
                 tr("Sprache"),
                 picker("g-lang", label, move |m| {
-                    let set = |code: &'static str| move |_: &ClickEvent, _: &mut Window, _: &mut App| prefs::update(|p| p.language = code.into());
+                    let set = |code: &'static str| {
+                        move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                            prefs::update(|p| p.language = code.into());
+                            crate::core::i18n::init(code);
+                            super::app::rebuild_menus(cx);
+                            cx.refresh_windows();
+                        }
+                    };
                     m.item(PopupMenuItem::new(tr("Systemsprache")).checked(lang.is_empty()).on_click(set("")))
                         .item(PopupMenuItem::new("Deutsch").checked(lang == "de").on_click(set("de")))
                         .item(PopupMenuItem::new("English").checked(lang == "en").on_click(set("en")))
@@ -409,7 +523,6 @@ impl Settings {
                 t,
             )]
             .into_iter()
-            .chain(changed.then(|| row(tr("Wird nach einem Neustart übernommen."), Button::new("g-relaunch").label(tr("Jetzt neu starten")).on_click(|_, _, cx| relaunch(cx)), t)))
             .collect(),
             t,
         );
@@ -491,13 +604,6 @@ fn sys_tz() -> String {
 }
 
 /// Starts a new instance and quits this one, so a language change applies.
-fn relaunch(cx: &mut App) {
-    if let Ok(exe) = std::env::current_exe() {
-        let _ = std::process::Command::new(exe).spawn();
-    }
-    super::app::quit(cx);
-}
-
 impl Settings {
     fn master(&self, items: Vec<(String, String, String, Option<Hsla>)>, selected: Option<&str>, on_select: impl Fn(&mut Settings, String) + 'static + Clone, bar: Div, t: &Theme, cx: &mut Context<Self>) -> Div {
         let mut list = div().flex().flex_col().p(px(space::S));
@@ -1440,7 +1546,9 @@ impl Render for Settings {
         let t = Theme::get(cx);
         let config = state::read(cx, |l| l.config.clone());
         let tabs = self.tab_bar(&t, cx);
+        let searching = !self.search.read(cx).value().trim().is_empty();
         let body: AnyElement = match (config, self.tab) {
+            _ if searching => self.search_results(&t, cx),
             (_, Tab::Notes) => div().id("notes-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.notes(window, cx, &t)).into_any_element(),
             (_, Tab::Shortcuts) => div().id("sc-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.shortcuts(&t, cx)).into_any_element(),
             (None, _) => unavailable("folder", tr("Kein Ordner gewählt"), tr("Wähle zuerst im Hauptfenster deinen Studienordner."), &t).into_any_element(),

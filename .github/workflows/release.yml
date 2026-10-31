@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: release
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -42,6 +46,8 @@ jobs:
           fi
           if [ "$DRAFT" = "missing" ]; then
             gh release create "v$VERSION" --draft --target "$SHA" --title "Schrumbi $VERSION" --generate-notes
+          else
+            gh release edit "v$VERSION" --target "$SHA"
           fi
           echo "publish=true" >> "$GITHUB_OUTPUT"
 

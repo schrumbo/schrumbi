@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -16,6 +17,7 @@ use crate::core::filing::FileRole;
 use crate::core::i18n::{Lang, lang, tr, trf};
 use crate::core::library;
 use crate::core::model::Status;
+use crate::core::prefs;
 
 /// Whether files can be dragged out of the app on this platform.
 const CAN_DRAG_OUT: bool = cfg!(any(target_os = "macos", target_os = "windows"));
@@ -41,8 +43,10 @@ fn open(cx: &mut App) {
             return;
         }
     }
+    let panel = size(px(340.), px(420.));
+    let saved = prefs::get().upload_window.map(|[x, y]| Bounds::new(point(px(x), px(y)), panel)).filter(|b| cx.displays().iter().any(|d| d.bounds().intersects(b)));
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(340.), px(420.)), cx))),
+        window_bounds: Some(WindowBounds::Windowed(saved.unwrap_or_else(|| Bounds::centered(None, panel, cx)))),
         window_min_size: Some(size(px(340.), px(220.))),
         titlebar: Some(TitlebarOptions { title: Some(tr("Hochladen").into()), ..Default::default() }),
         kind: WindowKind::Floating,
@@ -51,7 +55,7 @@ fn open(cx: &mut App) {
     let options = super::chrome::window_options(options, tr("Hochladen"));
     let _ = gpui_kit::open_window(options, cx, |window, cx| {
         keep_visible_when_inactive(window);
-        cx.new(UploadPanel::new)
+        cx.new(|cx| UploadPanel::new(window, cx))
     });
 }
 
@@ -97,28 +101,104 @@ fn size_label(path: &Path) -> String {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn start_native_drag(path: &Path, window: &Window) {
-    let item = drag::DragItem::Files(vec![path.to_path_buf()]);
-    let image = drag::Image::Raw(include_bytes!("../../assets/brand/tray.png").to_vec());
+fn start_native_drag(paths: Vec<PathBuf>, preview: Option<Vec<u8>>, window: &Window) {
+    let item = drag::DragItem::Files(paths);
+    let image = drag::Image::Raw(preview.unwrap_or_else(|| include_bytes!("../../assets/brand/tray.png").to_vec()));
     let _ = drag::start_drag(window, item, image, |_, _| {}, drag::Options::default());
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn start_native_drag(_: &Path, _: &Window) {}
+fn start_native_drag(_: Vec<PathBuf>, _: Option<Vec<u8>>, _: &Window) {}
 
 /// Floating helper while uploading: the assignment's files ready to drag into the browser.
 pub struct UploadPanel {
     focus: FocusHandle,
     focused: bool,
     notes_open: bool,
-    pressed: Option<(Point<Pixels>, PathBuf)>,
-    _sub: Subscription,
+    pressed: Option<(Point<Pixels>, Vec<PathBuf>)>,
+    previews: HashMap<PathBuf, Option<Vec<u8>>>,
+    save_position: Option<Task<()>>,
+    _subs: Vec<Subscription>,
 }
 
 impl UploadPanel {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let lib = state::lib(cx);
-        Self { focus: cx.focus_handle(), focused: false, notes_open: false, pressed: None, _sub: cx.observe(&lib, |_, _, cx| cx.notify()) }
+        let subs = vec![
+            cx.observe(&lib, |_, _, cx| cx.notify()),
+            cx.observe_window_bounds(window, |this, window, cx| {
+                let origin = window.bounds().origin;
+                let saved = [f32::from(origin.x), f32::from(origin.y)];
+                this.save_position = Some(cx.spawn(async move |_, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+                    prefs::update(|p| p.upload_window = Some(saved));
+                }));
+            }),
+        ];
+        Self { focus: cx.focus_handle(), focused: false, notes_open: false, pressed: None, previews: HashMap::new(), save_position: None, _subs: subs }
+    }
+
+    /// Renders small first-page images of PDFs in the background, to show while dragging.
+    fn load_previews(&mut self, files: &[PathBuf], cx: &mut Context<Self>) {
+        for file in files {
+            if self.previews.contains_key(file) || !file.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+                continue;
+            }
+            self.previews.insert(file.clone(), None);
+            let path = file.clone();
+            let task = cx.background_spawn(async move { crate::core::pdf_render::PdfDoc::open(&path).and_then(|d| d.render_png(0, 0.2)) });
+            let file = file.clone();
+            cx.spawn(async move |this, cx| {
+                let png = task.await;
+                let _ = this.update(cx, |p, _| {
+                    p.previews.insert(file, png);
+                });
+            })
+            .detach();
+        }
+    }
+
+    fn start_drag(&mut self, window: &Window) {
+        if let Some((_, files)) = self.pressed.take() {
+            let preview = files.first().and_then(|f| self.previews.get(f).cloned().flatten());
+            start_native_drag(files, preview, window);
+        }
+    }
+
+    fn drag_all(&self, files: Vec<PathBuf>, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let count = files.len();
+        div()
+            .id("upload-all")
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(space::S))
+            .p(px(space::S))
+            .rounded(px(radius::CONTROL))
+            .border_1()
+            .border_dashed()
+            .border_color(t.separator)
+            .soft(t.ink.opacity(0.1), radius::CONTROL)
+            .cursor_grab()
+            .text_size(px(font::CALLOUT))
+            .on_mouse_down(MouseButton::Left, cx.listener(move |p, e: &MouseDownEvent, _, _| p.pressed = Some((e.position, files.clone()))))
+            .on_mouse_move(cx.listener(|p, e: &MouseMoveEvent, window, _| p.follow_drag(e, window)))
+            .child(icon("hand", iconsize::S, t.secondary))
+            .child(trf("Alle %lld Dateien ziehen", &[&count]))
+    }
+
+    fn follow_drag(&mut self, e: &MouseMoveEvent, window: &Window) {
+        if e.pressed_button != Some(MouseButton::Left) {
+            self.pressed = None;
+            return;
+        }
+        let moved = self.pressed.as_ref().is_some_and(|(start, _)| {
+            let (dx, dy) = (f32::from(e.position.x - start.x), f32::from(e.position.y - start.y));
+            dx * dx + dy * dy > 16.
+        });
+        if moved {
+            self.start_drag(window);
+        }
     }
 
     fn mark_uploaded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -144,20 +224,8 @@ impl UploadPanel {
             .soft(hover, radius::CONTROL)
             .when(CAN_DRAG_OUT, |d| d.cursor_grab())
             .tooltip(tip(if CAN_DRAG_OUT { tr("Ziehen zum Hochladen, Doppelklick öffnet") } else { tr("Doppelklick öffnet") }))
-            .on_mouse_down(MouseButton::Left, cx.listener(move |p, e: &MouseDownEvent, _, _| p.pressed = Some((e.position, press.clone()))))
-            .on_mouse_move(cx.listener(|p, e: &MouseMoveEvent, window, _| {
-                if e.pressed_button != Some(MouseButton::Left) {
-                    p.pressed = None;
-                    return;
-                }
-                let moved = p.pressed.as_ref().is_some_and(|(start, _)| {
-                    let (dx, dy) = (f32::from(e.position.x - start.x), f32::from(e.position.y - start.y));
-                    dx * dx + dy * dy > 16.
-                });
-                if moved && let Some((_, file)) = p.pressed.take() {
-                    start_native_drag(&file, window);
-                }
-            }))
+            .on_mouse_down(MouseButton::Left, cx.listener(move |p, e: &MouseDownEvent, _, _| p.pressed = Some((e.position, vec![press.clone()]))))
+            .on_mouse_move(cx.listener(|p, e: &MouseMoveEvent, window, _| p.follow_drag(e, window)))
             .on_click(move |e, _, _| {
                 if e.click_count() == 2 {
                     library::open_path(&open_path);
@@ -225,6 +293,7 @@ impl Render for UploadPanel {
         let Some(data) = data else {
             return super::chrome::frame(tr("Hochladen"), root.child(unavailable("file-up", tr("Kein Upload aktiv"), tr("Starte einen Upload über „Hochladen“ bei einer Abgabe."), &t)), &t);
         };
+        self.load_previews(&data.files, cx);
         let (finals, drafts): (Vec<PathBuf>, Vec<PathBuf>) = data.files.iter().cloned().partition(|f| !FileRole::is_draft(f));
         let both = !finals.is_empty() && !drafts.is_empty();
         let main = if finals.is_empty() { drafts.clone() } else { finals };
@@ -258,7 +327,7 @@ impl Render for UploadPanel {
             );
         } else {
             let hint = if CAN_DRAG_OUT { tr("In das Upload-Feld im Browser ziehen:") } else { tr("Im Dateimanager zeigen und von dort in den Browser ziehen:") };
-            body = body.child(caption(hint, &t)).child(div().flex().flex_col().gap(px(space::S)).children(main.iter().map(|f| self.row(f, &t, cx)).collect::<Vec<_>>()));
+            body = body.child(caption(hint, &t)).child(div().flex().flex_col().gap(px(space::S)).children(main.iter().map(|f| self.row(f, &t, cx)).collect::<Vec<_>>()).when(CAN_DRAG_OUT && main.len() > 1, |d| d.child(self.drag_all(main.clone(), &t, cx))));
             if both {
                 let open = self.notes_open;
                 let me = cx.entity();
