@@ -38,6 +38,18 @@ pub struct MainWindow {
     _subs: Vec<Subscription>,
 }
 
+fn main_view(window: &Window, cx: &App) -> Option<Entity<MainWindow>> {
+    let root = window.root::<gpui_kit::base::Root>()??;
+    root.read(cx).view().clone().downcast::<MainWindow>().ok()
+}
+
+/// Shows or hides the sidebar labels (⌘B or a click on the selected tab).
+pub fn toggle_sidebar(window: &mut Window, cx: &mut App) {
+    if let Some(view) = main_view(window, cx) {
+        view.update(cx, |w, cx| w.set_open(!w.sidebar_open, cx));
+    }
+}
+
 impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Suchen")).clean_on_escape());
