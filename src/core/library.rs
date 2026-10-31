@@ -180,6 +180,7 @@ pub struct Library {
     pub is_indexing: bool,
     pub catalog: Vec<CatalogFile>,
     pub search_index: Arc<SearchIndex>,
+    naming_cache: std::sync::Mutex<Option<(String, Arc<Vec<Naming>>)>>,
     pub now: DateTime<Local>,
     pub selected_semester_id: Option<String>,
     selection: Option<String>,
@@ -270,6 +271,7 @@ impl Library {
             is_indexing: false,
             catalog: Vec::new(),
             search_index: Arc::new(SearchIndex::open()),
+            naming_cache: Default::default(),
             now: Local::now(),
             selected_semester_id: None,
             selection: None,
@@ -815,13 +817,23 @@ impl Library {
     }
 
     pub fn naming(&self, module_id: &str) -> Option<Naming> {
-        let c = self.config.as_ref()?;
-        let m = c.module(module_id)?;
-        Some(Naming::new(m, c.semester(&m.semester), c))
+        let index = self.config.as_ref()?.modules.iter().position(|m| m.id == module_id)?;
+        self.namings().get(index).cloned()
     }
 
-    pub fn namings(&self) -> Vec<Naming> {
-        self.config.as_ref().map(|c| c.modules.iter().map(|m| Naming::new(m, c.semester(&m.semester), c)).collect()).unwrap_or_default()
+    /// The naming convention of every module. Their regexes are slow to compile and titles ask for them on every frame, so they stay cached until a convention changes.
+    pub fn namings(&self) -> Arc<Vec<Naming>> {
+        let Some(c) = self.config.as_ref() else { return Arc::default() };
+        let key = format!("{}|{}|{:?}|{}", c.author, c.matrikel, c.coauthor_style, c.modules.iter().map(|m| format!("{}|{}|{:?}", m.code, m.naming, c.semester(&m.semester).map(|s| &s.start))).collect::<Vec<_>>().join("|"));
+        let mut cache = self.naming_cache.lock().unwrap();
+        if let Some((known, namings)) = cache.as_ref()
+            && *known == key
+        {
+            return namings.clone();
+        }
+        let namings: Arc<Vec<Naming>> = Arc::new(c.modules.iter().map(|m| Naming::new(m, c.semester(&m.semester), c)).collect());
+        *cache = Some((key, namings.clone()));
+        namings
     }
 
     /// Words that alone never make a document title.
