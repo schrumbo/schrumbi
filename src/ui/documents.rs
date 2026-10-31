@@ -48,6 +48,8 @@ pub struct NoteView {
     reader_scroll: ScrollHandle,
     heading_anchors: Vec<ScrollAnchor>,
     found: Option<markdown_view::Found>,
+    /// Editor and reader offsets at the last sync of the split view.
+    split_sync: (f32, f32),
     path: PathBuf,
     mode: Mode,
     editor: Entity<EditorState>,
@@ -98,6 +100,11 @@ impl NoteView {
                 }
                 cx.notify();
             }),
+            cx.observe(&editor, |this, _, cx| {
+                if this.mode == Mode::Split {
+                    cx.notify();
+                }
+            }),
             cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
                     this.focus_lost(cx);
@@ -113,7 +120,7 @@ impl NoteView {
         ];
         let mode = if text.trim().chars().count() < 40 { Mode::Edit } else { Mode::Read };
         let revision = state::lib(cx).update(cx, |l, _| l.buffer(&path).revision);
-        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_scroll: ScrollHandle::new(), heading_anchors: Vec::new(), found: None, parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_scroll: ScrollHandle::new(), heading_anchors: Vec::new(), found: None, split_sync: (0., 0.), parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -128,6 +135,33 @@ impl NoteView {
         let anchor = ScrollAnchor::for_handle(self.reader_scroll.clone());
         anchor.scroll_to(window, cx);
         self.found = Some(markdown_view::Found { block: markdown_view::block_at(text, range.start), anchor, token });
+    }
+
+    /// Keeps editor and reader at the same relative position; whichever moved last leads.
+    fn sync_split(&mut self, text: &str, cx: &mut Context<Self>) {
+        let (editor_y, line) = {
+            let e = self.editor.read(cx);
+            (-f32::from(e.scroll_offset().y), e.line_height().map_or(0., f32::from))
+        };
+        let reader_y = -f32::from(self.reader_scroll.offset().y);
+        let reader_max = f32::from(self.reader_scroll.max_offset().y);
+        let (last_editor, last_reader) = self.split_sync;
+        let (editor_moved, reader_moved) = ((editor_y - last_editor).abs() > 1., (reader_y - last_reader).abs() > 1.);
+        if line <= 0. || reader_max <= 0. || !(editor_moved || reader_moved) {
+            return;
+        }
+        let view = self.reader_scroll.bounds().size;
+        let rows = wrapped_rows(text, f32::from(view.width), prefs::get().editor_font_size);
+        let editor_max = (rows * line - f32::from(view.height)).max(1.);
+        if editor_moved {
+            let y = (editor_y / editor_max).clamp(0., 1.) * reader_max;
+            self.reader_scroll.set_offset(point(px(0.), px(-y)));
+            self.split_sync = (editor_y, y);
+        } else {
+            let y = (reader_y / reader_max).clamp(0., 1.) * editor_max;
+            self.editor.update(cx, |e, cx| e.set_scroll_offset(point(px(0.), px(-y)), cx));
+            self.split_sync = (y, reader_y);
+        }
     }
 
     /// Focuses the editor when editing, otherwise the note itself so its shortcuts work.
@@ -457,6 +491,12 @@ impl Focusable for NoteView {
     }
 }
 
+/// Estimated rows of soft-wrapped monospaced text in an editor column of `width`, gutter included.
+fn wrapped_rows(text: &str, width: f32, font_size: f32) -> f32 {
+    let per_row = ((width - 56.) / (font_size * 0.6)).max(20.);
+    text.lines().map(|l| (l.chars().count() as f32 / per_row).ceil().max(1.)).sum()
+}
+
 /// The search match waiting to be shown in this file, if any.
 fn take_find_request(path: &Path, cx: &mut App) -> Option<(String, usize)> {
     state::lib(cx).update(cx, |l, _| {
@@ -493,6 +533,9 @@ impl Render for NoteView {
             }
         }
         let header = self.header(exporting, &t, cx);
+        if self.mode == Mode::Split && !missing {
+            self.sync_split(&text, cx);
+        }
         let content: AnyElement = if missing {
             unavailable("file-question", tr("Datei nicht gefunden"), self.path.file_name().unwrap_or_default().to_string_lossy().to_string(), &t).into_any_element()
         } else {

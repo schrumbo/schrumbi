@@ -144,6 +144,12 @@ pub fn open(cx: &mut App) {
     let _ = gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Settings::new(window, cx)));
 }
 
+fn rules_and_sessions(rules: usize, sessions: usize) -> String {
+    let rules = if rules == 1 { tr("1 Regel") } else { trf("%lld Regeln", &[&rules]) };
+    let sessions = if sessions == 1 { tr("1 Termin") } else { trf("%lld Termine", &[&sessions]) };
+    format!("{rules} · {sessions}")
+}
+
 /// The about panel: logo, version and licenses.
 pub fn open_about(cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(360.), px(300.)), cx);
@@ -169,6 +175,10 @@ impl Render for About {
             .gap(px(space::S))
             .child(super::onboarding::logo(40., &t))
             .child(div().text_color(t.secondary).child(trf("Version %@", &[&env!("CARGO_PKG_VERSION")])))
+            .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).child("© 2026 Schrumbo · GNU AGPL-3.0"))
+            .child(link_button("about-source", tr("Quellcode"), &t).text_size(px(font::CAPTION)).on_click(|_, _, _| {
+                let _ = opener::open(env!("CARGO_PKG_REPOSITORY"));
+            }))
             .child(div().text_size(px(font::CAPTION)).text_color(t.tertiary).child("Lucide (ISC) · Material Icon Theme (MIT)"));
         super::chrome::frame(tr("Über Schrumbi"), content, &t)
     }
@@ -715,17 +725,22 @@ impl Settings {
             breaks.push(
                 div()
                     .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap(px(space::S))
+                    .flex_col()
+                    .gap(px(space::XS))
                     .px(px(space::L))
                     .py(px(space::S))
-                    .child(div().flex_1().min_w(px(160.)).child(Input::new(&n).small()))
-                    .child(div().w(px(120.)).child(gpui_kit::component::date_picker::DatePicker::new(&from).small()))
-                    .child(div().text_color(t.secondary).child(tr("bis")))
-                    .child(div().w(px(120.)).child(gpui_kit::component::date_picker::DatePicker::new(&to).small()))
-                    .child(div().flex_none().text_size(px(font::CAPTION)).text_color(t.secondary).child(break_summary(b)))
-                    .child(minus(SharedString::from(format!("brk-rm-{i}")), tr("Pause entfernen"), move |cx| e(Box::new(move |s| if i < s.breaks.len() { s.breaks.remove(i); }))(cx)))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(space::S))
+                            .child(div().flex_1().min_w_0().child(Input::new(&n).small()))
+                            .child(div().w(px(120.)).flex_none().child(gpui_kit::component::date_picker::DatePicker::new(&from).small()))
+                            .child(div().text_color(t.secondary).child(tr("bis")))
+                            .child(div().w(px(120.)).flex_none().child(gpui_kit::component::date_picker::DatePicker::new(&to).small()))
+                            .child(minus(SharedString::from(format!("brk-rm-{i}")), tr("Pause entfernen"), move |cx| e(Box::new(move |s| if i < s.breaks.len() { s.breaks.remove(i); }))(cx))),
+                    )
+                    .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).child(break_summary(b)))
                     .into_any_element(),
             );
         }
@@ -836,7 +851,7 @@ impl Settings {
         for s in &sems {
             items.push((String::new(), String::new(), s.name.clone(), None));
             for m in c.modules.iter().filter(|m| m.semester == s.id) {
-                items.push((m.id.clone(), m.code.clone(), trf("%lld Regeln · %lld Termine", &[&m.rules.len(), &m.sessions.len()]), Some(t.palette(&m.color))));
+                items.push((m.id.clone(), m.code.clone(), rules_and_sessions(m.rules.len(), m.sessions.len()), Some(t.palette(&m.color))));
             }
         }
         let orphans: Vec<&Module> = c.modules.iter().filter(|m| !c.semesters.iter().any(|s| s.id == m.semester)).collect();
@@ -854,6 +869,7 @@ impl Settings {
             .gap(px(space::XXS))
             .child(Button::new("m-add").ghost().small().icon(menu_icon("plus")).tooltip(tr("Neues Modul")).on_click(move |_, _, cx| {
                 let (current, count) = state::read(cx, |l| (l.semester().map(|s| s.id.clone()).unwrap_or_default(), l.config.as_ref().map_or(0, |c| c.modules.len())));
+                let current = e1.read(cx).semester.clone().unwrap_or(current);
                 let id = format!("m{}", chrono::Utc::now().timestamp());
                 let m = Module { id: id.clone(), code: "NEU".into(), name: tr("Neues Modul"), semester: current, folder: "NEU".into(), color: PALETTE[count % PALETTE.len()].into(), ..Default::default() };
                 edit_config(cx, |c| c.modules.push(m));

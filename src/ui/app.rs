@@ -289,7 +289,7 @@ pub fn rebuild_menus(cx: &mut App) {
         Menu::new(tr("Ablage")).items([
             MenuItem::action(tr("Befehl suchen …"), CommandPalette),
             MenuItem::separator(),
-            MenuItem::action(tr("Neuer Termin…"), NewEntry),
+            MenuItem::action(tr("Neuer Eintrag…"), NewEntry),
             MenuItem::action(tr("Neue Notiz, Datei oder Ordner…"), NewFile),
             MenuItem::action(tr("Datei schnell öffnen…"), QuickOpen),
             MenuItem::separator(),

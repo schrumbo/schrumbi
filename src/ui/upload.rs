@@ -352,7 +352,15 @@ impl Render for UploadPanel {
         let folder = data.folder.clone();
         let link = data.link.clone();
         let done = cx.entity();
-        body = body
+        let footer = div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(space::S))
+            .px(px(space::L))
+            .py(px(space::M))
+            .border_t_1()
+            .border_color(t.separator)
             .child(
                 div()
                     .flex()
@@ -374,6 +382,6 @@ impl Render for UploadPanel {
                     })),
             )
             .child(Button::new("upload-done").primary().w_full().icon(menu_icon("check")).label(tr("Hochgeladen")).disabled(data.uploaded).on_click(move |_, window, cx| done.update(cx, |p, cx| p.mark_uploaded(window, cx))));
-        super::chrome::frame(tr("Hochladen"), root.child(div().id("upload-scroll").size_full().overflow_y_scrollbar().child(body)), &t)
+        super::chrome::frame(tr("Hochladen"), root.flex().flex_col().child(div().flex_1().min_h_0().child(div().id("upload-scroll").size_full().overflow_y_scrollbar().child(body))).child(footer), &t)
     }
 }

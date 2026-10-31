@@ -141,7 +141,7 @@ impl ShortcutAction {
         tr(match self {
             Self::QuickOpen => "Datei schnell öffnen",
             Self::SearchFiles => "In allen Dateien suchen",
-            Self::NewEntry => "Neuer Termin",
+            Self::NewEntry => "Neuer Eintrag",
             Self::NewFile => "Neue Notiz, Datei oder Ordner",
             Self::GoBack => "Zurück",
             Self::ToggleInspector => "Details ein-/ausblenden",

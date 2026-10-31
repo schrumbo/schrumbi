@@ -1374,7 +1374,7 @@ impl Library {
         }
         self.refresh();
         if !done.is_empty() {
-            self.commit(trf("%lld Dateien umbenannt", &[&done.len()]), "pencil", done);
+            self.commit(if done.len() == 1 { tr("1 Datei umbenannt") } else { trf("%lld Dateien umbenannt", &[&done.len()]) }, "pencil", done);
         }
     }
 
@@ -1399,7 +1399,7 @@ impl Library {
         }
         self.refresh();
         if !done.is_empty() {
-            self.commit(trf("%lld Dateien in den Papierkorb", &[&done.len()]), "trash-2", done);
+            self.commit(if done.len() == 1 { tr("1 Datei in den Papierkorb") } else { trf("%lld Dateien in den Papierkorb", &[&done.len()]) }, "trash-2", done);
         }
     }
 
@@ -1493,7 +1493,7 @@ impl Library {
         }
         self.save_state();
         self.refresh();
-        self.commit(trf("%lld Dateien zugeordnet", &[&rels.len()]), "link", vec![before]);
+        self.commit(if rels.len() == 1 { tr("1 Datei zugeordnet") } else { trf("%lld Dateien zugeordnet", &[&rels.len()]) }, "link", vec![before]);
     }
 
     pub fn is_linked(&self, path: &Path, id: &str) -> bool {

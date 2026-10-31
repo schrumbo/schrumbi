@@ -823,7 +823,7 @@ impl FileBrowser {
                     })
                 })
         }));
-        let mut bar = div().flex().items_center().gap(px(space::S)).px(px(space::L)).py(px(space::S)).border_b_1().border_color(t.separator).child(kinds);
+        let mut bar = div().flex().flex_wrap().items_center().gap(px(space::S)).px(px(space::L)).py(px(space::S)).border_b_1().border_color(t.separator).child(kinds);
         if self.scope_module.is_none() {
             let typed = self.results.query.module_id.clone();
             let active = typed.clone().or(self.module_filter.clone());
@@ -992,7 +992,7 @@ impl Render for FileBrowser {
                 unavailable(
                     "search",
                     if self.query.is_empty() { tr("Keine Dateien") } else { trf("Keine Treffer für „%@“", &[&self.query]) },
-                    tr("Gesucht wird in Namen, Ordnern und dem Text von PDFs. Tipp: „w3“ oder „kw44“ filtert nach Woche."),
+                    tr("Gesucht wird in Namen, Ordnern, PDFs und Notizen. Tipp: „w3“ oder „kw44“ filtert nach Woche."),
                     &t,
                 )
                 .when(filtered, |d| {

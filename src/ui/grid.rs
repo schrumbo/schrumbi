@@ -140,7 +140,12 @@ fn past_summary(lib: &Library, past: &[&Slot]) -> String {
     let all: Vec<&Assignment> = past.iter().flat_map(|s| items(lib, s)).filter(|a| !a.optional && lib.status(a) != Status::Skipped).collect();
     let open = all.iter().filter(|a| !lib.is_done(a)).count();
     let weeks = past.iter().filter(|s| s.lecture.is_some()).count();
-    if open == 0 { trf("%lld Wochen · alles erledigt", &[&weeks]) } else { trf("%lld Wochen · %lld offen", &[&weeks, &open]) }
+    match (weeks, open) {
+        (1, 0) => tr("1 Woche · alles erledigt"),
+        (1, _) => trf("1 Woche · %lld offen", &[&open]),
+        (_, 0) => trf("%lld Wochen · alles erledigt", &[&weeks]),
+        _ => trf("%lld Wochen · %lld offen", &[&weeks, &open]),
+    }
 }
 
 fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDate, view: Entity<super::pages::Pages>, t: &Theme) -> Div {

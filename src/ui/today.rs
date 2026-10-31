@@ -96,7 +96,15 @@ fn next_action(lib: &Library, t: &Theme) -> Div {
     };
     let file_button = |a: &Assignment| {
         let id = a.id.clone();
-        (a.kind == Kind::Submission).then(|| Button::new("next-file").primary().label(tr("Datei ablegen…")).on_click(move |_, _, cx| super::platform::pick_files_for_filing(Some(id.clone()), cx)))
+        let has_files = !lib.evaluation(a).files.is_empty();
+        (a.kind == Kind::Submission).then(|| {
+            let button = Button::new("next-file").primary();
+            if has_files {
+                button.label(tr("Hochladen")).on_click(move |_, _, cx| super::upload::begin(&id, cx))
+            } else {
+                button.label(tr("Datei ablegen…")).on_click(move |_, _, cx| super::platform::pick_files_for_filing(Some(id.clone()), cx))
+            }
+        })
     };
     match lib.next_action() {
         NextAction::Overdue(a) => card(t.red).child(status_toggle(a, lib, iconsize::L, t)).child(assignment(a, t.red, day::due(a.due, lib.now))).children(file_button(a)),

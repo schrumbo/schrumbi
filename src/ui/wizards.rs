@@ -60,7 +60,7 @@ impl Render for Reschedule {
             .p(px(space::XL))
             .child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).child(tr("Termin verschieben")))
             .child(div().text_color(t.secondary).child(a.title.clone()))
-            .child(div().flex().items_center().gap(px(space::S)).child(div().text_color(t.secondary).child(tr("Neuer Termin"))).child(div().flex_1().child(DatePicker::new(&self.date))))
+            .child(div().flex().items_center().gap(px(space::S)).child(div().text_color(t.secondary).child(tr("Neuer Eintrag"))).child(div().flex_1().child(DatePicker::new(&self.date))))
             .child(
                 div()
                     .flex()

@@ -265,7 +265,7 @@ fn spots(body: &str, terms: &[String]) -> Vec<Spot> {
 fn excerpt(body: &str, range: &Range<usize>) -> (String, usize) {
     let start = body[..range.start].char_indices().rev().nth(29).map_or(0, |(i, _)| i);
     let end = body[range.end..].char_indices().nth(60).map_or(body.len(), |(i, _)| range.end + i);
-    let line = body[start..end].split_whitespace().collect::<Vec<_>>().join(" ");
+    let line = body[start..end].split_whitespace().filter(|word| !word.chars().all(|c| c == '#')).collect::<Vec<_>>().join(" ");
     (format!("{}{line}{}", if start > 0 { "…" } else { "" }, if end < body.len() { "…" } else { "" }), end)
 }
 

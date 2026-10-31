@@ -125,7 +125,7 @@ pub fn render(lib_entity: &Entity<Library>, st: &ChecksState, fields: &mut Field
             act(cx, |l| l.rename_all(items));
             v.update(cx, |p, _| p.checks.names.clear());
         });
-        col = col.child(card(tr("Dateinamen"), trf("%lld Dateien passen nicht zur Konvention", &[&issues.len()]), "type", t.orange, Some(rename_all.into_any_element()), rows, t));
+        col = col.child(card(tr("Dateinamen"), if issues.len() == 1 { tr("1 Datei passt nicht zur Konvention") } else { trf("%lld Dateien passen nicht zur Konvention", &[&issues.len()]) }, "type", t.orange, Some(rename_all.into_any_element()), rows, t));
     }
 
     let view = cx.entity();
