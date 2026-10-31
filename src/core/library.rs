@@ -780,6 +780,11 @@ impl Library {
         upcoming.iter().find(|a| !a.optional).or(upcoming.first()).copied()
     }
 
+    /// The module's next open entry that takes files, as the target for files dropped on the module.
+    pub fn next_in_module(&self, module_id: &str) -> Option<String> {
+        self.upcoming().into_iter().find(|a| a.tracks_files() && self.module(a).is_some_and(|m| m.id == module_id)).map(|a| a.id.clone())
+    }
+
     pub fn upcoming_days(&self, days: i64) -> Vec<&Assignment> {
         let limit = self.now + Duration::days(days);
         self.assignments.iter().filter(|a| a.due >= self.now && a.due <= limit).collect()

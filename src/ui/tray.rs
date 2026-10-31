@@ -304,7 +304,7 @@ impl Render for TrayPopup {
                     .items_center()
                     .gap(px(space::S))
                     .p(px(space::M))
-                    .child(Button::new("tray-open").primary().small().label(tr("Dashboard öffnen")).on_click(|_, window, cx| {
+                    .child(Button::new("tray-open").primary().small().label(tr("Schrumbi öffnen")).on_click(|_, window, cx| {
                         close_popup(window, cx);
                         cx.defer(super::main_window::show);
                     }))

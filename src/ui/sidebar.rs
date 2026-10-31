@@ -187,17 +187,18 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
         let count = by_module.get(m.id.as_str()).copied().filter(|n| *n > 0).map(|n| (n, t.red));
         let links: Vec<(String, String)> = m.links.iter().filter_map(|k| k.url().map(|u| (if k.title.is_empty() { tr("Link") } else { k.title.clone() }, u.to_string()))).collect();
         let folder = lib.root.as_ref().map(|r| r.join(&m.folder));
+        let (outside, inside) = (m.id.clone(), m.id.clone());
         mods = mods.child(
             tab(SharedString::from(format!("tab-module-{}", m.id)), active, false, chip, m.display_name(), count, wide, m.display_name(), t)
                 .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(color.opacity(0.15)))
                 .drag_over::<super::browser::DraggedFile>(move |s, _, _, _| s.bg(color.opacity(0.15)))
-                .on_drop(|paths: &ExternalPaths, _, cx| {
+                .on_drop(move |paths: &ExternalPaths, _, cx| {
                     let paths = paths.paths().to_vec();
-                    act(cx, |l| l.request_filing(paths, None));
+                    act(cx, |l| l.request_filing(paths, l.next_in_module(&outside)));
                 })
-                .on_drop(|f: &super::browser::DraggedFile, _, cx| {
+                .on_drop(move |f: &super::browser::DraggedFile, _, cx| {
                     let path = f.0.clone();
-                    act(cx, |l| l.request_filing(vec![path], None));
+                    act(cx, |l| l.request_filing(vec![path], l.next_in_module(&inside)));
                 })
                 .on_click(move |_, window, cx| tab_click(route.clone(), window, cx))
                 .context_menu(move |mut menu, _, _| {

@@ -170,6 +170,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                 .child(
                     div()
                         .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .gap(px(space::XS))
@@ -177,7 +178,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                         .child(div().text_color(t.secondary).child(summary)),
                 )
                 .when_some(end, |d, end| {
-                    d.child(div().flex().flex_col().items_end().gap(px(space::XXS)).child(caption(tr("Vorlesungsende"), t)).child(div().font_weight(FontWeight::BOLD).child(day::short_date(end))))
+                    d.child(div().flex_none().flex().flex_col().items_end().gap(px(space::XXS)).child(caption(tr("Vorlesungsende"), t)).child(div().font_weight(FontWeight::BOLD).child(day::short_date(end))))
                 }),
         )
         .child(
@@ -310,7 +311,7 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
         .child(div().w(px(16.)).flex().justify_center().child(if force_open { div().size(px(8.)).rounded_full().bg(t.accent).into_any_element() } else { chevron(open, t).into_any_element() }))
         .child(div().w(px(36.)).font_weight(FontWeight::SEMIBOLD).child(slot.lecture.map_or("–".into(), |w| w.label())))
         .child(div().text_color(t.secondary).child(format!("{} – {}", day::short_date(slot.monday), day::short_date(slot.monday + Days::new(6)))))
-        .when(is_current, |d| d.child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).text_color(t.accent).child(tr("Diese Woche"))))
+        .when(is_current, |d| d.child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).text_color(t.accent_text).child(tr("Diese Woche"))))
         .child(div().flex_1())
         .when(!open, |d| {
             d.child(div().flex().gap(px(space::XS)).children(entries.iter().filter(|a| !a.optional).take(6).map(|a| {

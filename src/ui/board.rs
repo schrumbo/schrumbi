@@ -80,8 +80,8 @@ fn column(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
         .items_baseline()
         .gap(px(space::S))
         .pb(px(space::XXS))
-        .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent } else { t.secondary }).child(day_label(d, today)))
-        .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent } else { t.primary }).child(d.day().to_string()))
+        .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent_text } else { t.secondary }).child(day_label(d, today)))
+        .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent_text } else { t.primary }).child(d.day().to_string()))
         .child(div().flex_1())
         .when(open > 0, |h| h.child(div().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).text_color(t.secondary).child(open.to_string())));
 
@@ -136,8 +136,8 @@ fn agenda_row(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
                 .flex_none()
                 .flex()
                 .flex_col()
-                .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent } else { t.secondary }).child(day_label(d, today)))
-                .child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent } else { t.primary }).child(d.day().to_string())),
+                .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent_text } else { t.secondary }).child(day_label(d, today)))
+                .child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent_text } else { t.primary }).child(d.day().to_string())),
         )
         .child(if items.is_empty() && sessions.is_empty() {
             div().pt(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.tertiary).child(if day::is_weekend(d) { tr("Wochenende") } else { tr("Frei") }).into_any_element()

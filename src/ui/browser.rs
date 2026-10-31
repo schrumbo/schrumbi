@@ -940,7 +940,7 @@ fn filter_menu(
             .py(px(space::XS))
             .rounded(px(radius::INNER))
             .bg(t.accent.opacity(0.18))
-            .text_color(t.accent)
+            .text_color(t.accent_text)
             .text_size(px(font::CALLOUT))
             .font_weight(FontWeight::MEDIUM)
             .child(icon("search", iconsize::XS, t.accent))

@@ -108,7 +108,7 @@ fn next_action(lib: &Library, t: &Theme) -> Div {
     };
     match lib.next_action() {
         NextAction::Overdue(a) => card(t.red).child(status_toggle(a, lib, iconsize::L, t)).child(assignment(a, t.red, day::due(a.due, lib.now))).children(file_button(a)),
-        NextAction::Due(a) => card(t.accent).child(status_toggle(a, lib, iconsize::L, t)).child(assignment(a, t.accent, format!("{} · {}", day::countdown(a.due, lib.now), day::due(a.due, lib.now)))).children(file_button(a)),
+        NextAction::Due(a) => card(t.accent).child(status_toggle(a, lib, iconsize::L, t)).child(assignment(a, t.accent_text, format!("{} · {}", day::countdown(a.due, lib.now), day::due(a.due, lib.now)))).children(file_button(a)),
         NextAction::Unconfirmed(a) => {
             let id = a.id.clone();
             card(t.blue)
@@ -125,7 +125,7 @@ fn next_action(lib: &Library, t: &Theme) -> Div {
                     .flex()
                     .flex_col()
                     .gap(px(space::XS))
-                    .child(label(t.accent))
+                    .child(label(t.accent_text))
                     .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).child(inbox_text(count)))
                     .child(div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(tr("Abgabe, Titel und Name werden vorgeschlagen."))),
             )

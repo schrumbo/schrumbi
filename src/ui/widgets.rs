@@ -385,7 +385,7 @@ pub fn row_button(id: impl Into<ElementId>, t: &Theme) -> Stateful<Div> {
 
 /// Compact text button styled like `.borderless` / `.link` buttons.
 pub fn link_button(id: impl Into<ElementId>, label: impl Into<SharedString>, t: &Theme) -> Stateful<Div> {
-    let accent = t.accent;
+    let accent = t.accent_text;
     div().id(id).text_color(accent).cursor_pointer().key_nav().hover(move |s| s.text_color(accent.opacity(0.8))).child(label.into())
 }
 

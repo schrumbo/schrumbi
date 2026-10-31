@@ -365,7 +365,7 @@ impl Settings {
                     .when(active, |d| d.bg(t.ink.opacity(0.09)))
                     .when(!active, |d| d.soft(hover, radius::CONTROL))
                     .child(icon(icon_name, iconsize::L, if active { t.accent } else { t.secondary }))
-                    .child(div().text_size(px(font::CAPTION)).text_color(if active { t.accent } else { t.primary }).child(label))
+                    .child(div().text_size(px(font::CAPTION)).text_color(if active { t.accent_text } else { t.primary }).child(label))
                     .on_click(cx.listener(move |s, _, _, cx| {
                         s.tab = tab;
                         s.recording = None;
@@ -1464,7 +1464,7 @@ impl Settings {
                 let recording = self.recording == Some(a);
                 let customized = a.is_customized();
                 let caps: AnyElement = if recording {
-                    div().text_size(px(font::CALLOUT)).text_color(t.accent).child(tr("Tasten drücken …")).into_any_element()
+                    div().text_size(px(font::CALLOUT)).text_color(t.accent_text).child(tr("Tasten drücken …")).into_any_element()
                 } else if let Some(s) = a.shortcut() {
                     div().flex().gap(px(space::XS)).children(Shortcut::parts(&s).into_iter().map(|c| div().min_w(px(iconsize::M)).h(px(iconsize::M)).px(px(space::XS)).flex().items_center().justify_center().rounded(px(radius::SMALL)).bg(t.ink.opacity(0.07)).border_1().border_color(t.ink.opacity(0.12)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).child(c))).into_any_element()
                 } else {

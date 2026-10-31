@@ -1063,7 +1063,7 @@ impl PdfView {
                             .cursor_pointer()
                             .key_nav()
                             .soft(t.ink.opacity(0.05), 0.)
-                            .when(active == Some(i), |d| d.text_color(t.accent).font_weight(FontWeight::MEDIUM))
+                            .when(active == Some(i), |d| d.text_color(t.accent_text).font_weight(FontWeight::MEDIUM))
                             .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).child(entry.title.clone()))
                             .child(div().text_size(px(font::CAPTION)).font_features(tabular()).text_color(t.secondary).child((page + 1).to_string()))
                             .on_click(move |_, _, cx| view.update(cx, |v, cx| {

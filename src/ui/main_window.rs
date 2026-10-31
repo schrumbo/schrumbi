@@ -253,6 +253,9 @@ impl Render for MainWindow {
             .on_action(cx.listener(|this, _: &SearchUp, _, cx| this.step_results(-1, cx)))
             .on_action(cx.listener(|this, _: &SearchDown, _, cx| this.step_results(1, cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.set_open(!this.sidebar_open, cx)))
+            .on_action(|_: &super::app::Minimize, window, _| window.minimize_window())
+            .on_action(|_: &super::app::Zoom, window, _| window.zoom_window())
+            .on_action(|_: &super::app::ToggleFullscreen, window, _| window.toggle_fullscreen())
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
                 let k = &e.keystroke;
                 let slash = k.key == "/" || k.key_char.as_deref() == Some("/");

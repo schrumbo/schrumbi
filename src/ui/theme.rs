@@ -73,6 +73,8 @@ pub struct Theme {
     pub tertiary: Hsla,
     pub separator: Hsla,
     pub accent: Hsla,
+    /// The accent for text, which needs more contrast than fills do.
+    pub accent_text: Hsla,
     pub selection: Hsla,
     pub green: Hsla,
     pub blue: Hsla,
@@ -104,6 +106,7 @@ impl Theme {
             tertiary: ink.opacity(if dark { 0.47 } else { 0.56 }),
             separator: ink.opacity(if dark { 0.12 } else { 0.1 }),
             accent: if dark { c(0x0A84FF) } else { c(0x007AFF) },
+            accent_text: if dark { c(0x409CFF) } else { c(0x0062CC) },
             selection: if dark { c(0x3172D4) } else { c(0x0A6CF0) },
             green: if dark { c(0x30D158) } else { c(0x34C759) },
             blue: if dark { c(0x0A84FF) } else { c(0x007AFF) },
@@ -264,6 +267,7 @@ mod tests {
             for background in [t.content, t.sidebar, t.secondary_bg, t.column] {
                 assert!(contrast(t.primary, background) >= 7., "primary, dark {dark}");
                 assert!(contrast(t.secondary, background) >= 4.5, "secondary, dark {dark}: {}", contrast(t.secondary, background));
+                assert!(contrast(t.accent_text, background) >= 4.5, "accent, dark {dark}: {}", contrast(t.accent_text, background));
                 assert!(contrast(t.tertiary, background) >= 3., "tertiary, dark {dark}: {}", contrast(t.tertiary, background));
             }
         }
