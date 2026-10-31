@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use pulldown_cmark::{CodeBlockKind, Event, LinkType, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
 use super::selectable::{LinkAction, selectable};
 use super::theme::{Theme, font, radius, space, iconsize};
@@ -294,7 +294,6 @@ pub fn parse(src: &str) -> ParsedNote {
                 }
                 stack.last_mut().unwrap().2.push(Inline::FootnoteRef(id.to_string()));
             }
-            _ => {}
         }
     }
     flush_inline(&mut stack);
@@ -578,7 +577,7 @@ const IMAGE_TYPES: [&str; 8] = ["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg
 const AUDIO_TYPES: [&str; 7] = ["flac", "m4a", "mp3", "ogg", "wav", "webm", "3gp"];
 const VIDEO_TYPES: [&str; 5] = ["mkv", "mov", "mp4", "ogv", "webm"];
 
-/// Parsed notes that are embedded elsewhere, by file and part; checked against the file's time.
+// Parsed notes that are embedded elsewhere, by file and part; checked against the file's time.
 thread_local! {
     static EMBEDS: RefCell<HashMap<(PathBuf, String), (Option<std::time::SystemTime>, Rc<ParsedNote>)>> = RefCell::new(HashMap::new());
 }

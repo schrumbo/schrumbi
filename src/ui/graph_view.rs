@@ -256,7 +256,7 @@ impl GraphView {
 }
 
 impl Render for GraphView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.rebuild_if_needed(cx);
         let t = Theme::get(cx);
         let count = self.graph.nodes.len();
@@ -377,7 +377,7 @@ impl Render for GraphView {
             .cursor(if self.hover.is_some() { CursorStyle::PointingHand } else { CursorStyle::Arrow })
             .child(view)
             .when(empty, |d| d.child(div().absolute().inset_0().flex().items_center().justify_center().child(unavailable("waypoints", tr("Noch keine Verknüpfungen"), tr("Sobald Notizen sich verlinken, erscheinen sie hier."), &t))))
-            .on_scroll_wheel(cx.listener(|v, e: &ScrollWheelEvent, window, cx| {
+            .on_scroll(cx.listener(|v, e: &ScrollEvent, window, cx| {
                 let delta = e.delta.pixel_delta(px(20.));
                 if e.modifiers.platform || e.modifiers.control {
                     let o = v.bounds.get().origin;

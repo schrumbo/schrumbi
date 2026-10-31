@@ -252,7 +252,7 @@ impl NoteView {
         }
     }
 
-    fn conflict_notice(&self, open: bool, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn conflict_notice(&self, open: bool, t: &Theme) -> impl IntoElement + use<> {
         let (compare, reload, keep) = (self.path.clone(), self.path.clone(), self.path.clone());
         let actions = div()
             .flex()
@@ -719,7 +719,7 @@ impl Render for NoteView {
                     .on_action(|_: &super::app::CloseWindow, window, cx| super::note_window::request_close(window, cx))
             })
             .child(top)
-            .child(self.conflict_notice(conflict, &t, cx))
+            .child(self.conflict_notice(conflict, &t))
             .child(div().flex_1().min_h_0().child(content));
         if self.embedded {
             view.into_any_element()
@@ -1015,9 +1015,7 @@ impl Render for FileViewer {
                 pdf.update(cx, |v, cx| v.search_for(&term, nth, window, cx));
             }
         }
-        let me = cx.entity();
         let (p1, p2, p3, p4) = (self.path.clone(), self.path.clone(), self.path.clone(), self.path.clone());
-        let in_vault = state::read(cx, |l| l.is_vault);
         let mut actions = div().flex().items_center().gap(px(space::S));
         actions = actions
             .child(Button::new("open-default").small().icon(menu_icon("square-arrow-out-up-right")).label(self.app.as_ref().map_or_else(|| tr("Mit Standard-App öffnen"), |a| trf("In %@ öffnen", &[a]))).tooltip(tr("Zum Bearbeiten in der Standard-App öffnen")).on_click(move |_, _, _| library::open_path(&p1)))

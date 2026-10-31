@@ -1,4 +1,6 @@
 {
+  "Ein anderes Programm arbeitet gerade am Verlauf. Versuche es gleich noch einmal. Bleibt das so, liegt noch die Datei .git/index.lock im Ordner, die du dann löschen kannst.": "Another program is working on the history. Try again in a moment. If it stays this way, the file .git/index.lock is left in the folder and you can delete it.",
+  "Git vertraut diesem Ordner noch nicht, oft bei externen Laufwerken. Erlaube ihn einmal mit „git config --global --add safe.directory“ und dem Ordnerpfad.": "Git doesn’t trust this folder yet, often on external drives. Allow it once with “git config --global --add safe.directory” and the folder path.",
   "Stand vom anderen Gerät übernommen": "Took over the state from the other device",
   "Eigenschaft entfernt": "Property removed",
   "Entfernen": "Remove",

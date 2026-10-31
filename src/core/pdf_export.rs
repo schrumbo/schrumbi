@@ -385,7 +385,6 @@ impl<'a> Converter<'a> {
                     };
                     self.out().push_str(&format!("#fnref({n})"));
                 }
-                _ => {}
             }
         }
         let mut out = self.pop();

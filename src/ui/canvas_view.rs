@@ -1062,7 +1062,7 @@ impl Render for CanvasView {
             .on_mouse_up(MouseButton::Left, cx.listener(|v, _, _, cx| v.on_up(cx)))
             .on_mouse_up(MouseButton::Middle, cx.listener(|v, _, _, cx| v.on_up(cx)))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|v, _, _, cx| v.on_up(cx)))
-            .on_scroll_wheel(cx.listener(|v, e: &ScrollWheelEvent, _, cx| {
+            .on_scroll(cx.listener(|v, e: &ScrollEvent, _, cx| {
                 let delta = e.delta.pixel_delta(px(20.));
                 if e.modifiers.platform || e.modifiers.control {
                     let o = v.origin();

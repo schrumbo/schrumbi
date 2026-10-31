@@ -537,13 +537,14 @@ pub fn explain(error: &GitError) -> (String, Option<&'static str>) {
         GitError::Auth => (tr("Der Online-Speicher lehnt die Anmeldung ab. Prüfe deinen SSH-Schlüssel oder deine Zugangsdaten."), Some("retry")),
         GitError::NoRemote => (tr("Dieser Workspace hat noch keinen Online-Speicher."), Some("setup")),
         GitError::NoIdentity => (tr("Git braucht einen Namen und eine E-Mail für deine Stände."), Some("setup")),
-        GitError::Locked => (tr("Ein anderes Programm arbeitet gerade am Verlauf. Versuche es gleich noch einmal."), Some("retry")),
+        GitError::Locked => (tr("Ein anderes Programm arbeitet gerade am Verlauf. Versuche es gleich noch einmal. Bleibt das so, liegt noch die Datei .git/index.lock im Ordner, die du dann löschen kannst."), Some("retry")),
         GitError::Rejected => (tr("Ein anderes Gerät war gerade schneller. Versuche es noch einmal."), Some("retry")),
         GitError::Detached | GitError::ExternalMerge => (tr("Der Verlauf wird gerade anders bearbeitet, zum Beispiel im Terminal. Schrumbi wartet, bis das abgeschlossen ist."), Some("reveal")),
         GitError::Missing => (tr("Für den Sync wird Git benötigt. Installiere es und starte Schrumbi neu."), Some("guide")),
         GitError::TooOld(v) => (trf("Git %@ ist zu alt, nötig ist mindestens 2.38.", &[v]), Some("guide")),
         GitError::Timeout => (tr("Der Online-Speicher antwortet nicht. Deine Änderungen sind lokal gesichert."), Some("retry")),
         GitError::Conflicts(_) => (tr("Dateien wurden auf beiden Geräten geändert."), None),
+        GitError::Other(m) if m.contains("dubious ownership") => (tr("Git vertraut diesem Ordner noch nicht, oft bei externen Laufwerken. Erlaube ihn einmal mit „git config --global --add safe.directory“ und dem Ordnerpfad."), Some("retry")),
         GitError::Other(_) => (tr("Das Synchronisieren hat nicht geklappt."), Some("retry")),
     }
 }
