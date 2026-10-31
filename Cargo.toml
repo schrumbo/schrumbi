@@ -1,6 +1,6 @@
 [package]
 description = "Study planner: deadlines, files and notes"
-license-file = "LICENSE"
+license = "AGPL-3.0-only"
 repository = "https://github.com/schrumbo/schrumbi"
 name = "schrumbi"
 version = "0.1.1"

@@ -67,4 +67,4 @@ Run the tests with `cargo test`.
 
 ## License
 
-Proprietary, all rights reserved. See [LICENSE](LICENSE).
+Copyright (c) 2026 Schrumbo. Licensed under the [GNU Affero General Public License v3.0](LICENSE).
