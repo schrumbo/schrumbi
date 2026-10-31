@@ -14,7 +14,7 @@ Schrumbi is a desktop app built with Rust and [GPUI](https://www.gpui.rs). It re
 - **Semester and grades:** weekly progress per module, grades and the marks you still need
 - **Inbox:** suggests where a file belongs and names it by your convention; press Enter to file it
 - **Search:** full-text search across file names, PDFs and notes, with a jump to each match
-- **PDF viewer:** thumbnails, outline, text search, text selection, links and a remembered position per file
+- **PDF viewer:** thumbnails, outline, text search, highlights, links and a remembered position per file
 - **Notes:** Markdown editor and reader, split view and PDF export
 - **Undo:** step back through filing, renames, status changes and deadlines with `⌘Z`
 - **Keyboard:** command palette and configurable shortcuts

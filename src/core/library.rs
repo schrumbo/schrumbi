@@ -15,6 +15,7 @@ use super::model::*;
 use super::naming::{Naming, Parsed, extension};
 use super::note_buffer::NoteBuffer;
 use super::scanner::{self, Listings};
+use super::highlights::{self, Highlight, Highlights};
 use super::search_index::SearchIndex;
 use super::text::fold;
 use super::workspace::{self, CONFIG_NAME, STATE_NAME};
@@ -55,6 +56,7 @@ pub enum Change {
     Move { from: PathBuf, to: PathBuf },
     Trash(PathBuf),
     Restore(PathBuf),
+    Highlights { key: String, list: Vec<Highlight> },
 }
 
 /// What one undo or redo reverts.
@@ -180,6 +182,7 @@ pub struct Library {
     pub is_indexing: bool,
     pub catalog: Vec<CatalogFile>,
     pub search_index: Arc<SearchIndex>,
+    highlights: Highlights,
     naming_cache: std::sync::Mutex<Option<(String, Arc<Vec<Naming>>)>>,
     pub now: DateTime<Local>,
     pub selected_semester_id: Option<String>,
@@ -271,6 +274,7 @@ impl Library {
             is_indexing: false,
             catalog: Vec::new(),
             search_index: Arc::new(SearchIndex::open()),
+            highlights: Highlights::new(),
             naming_cache: Default::default(),
             now: Local::now(),
             selected_semester_id: None,
@@ -399,7 +403,33 @@ impl Library {
         self.changed();
     }
 
+    fn highlights_path(&self) -> Option<PathBuf> {
+        self.root.as_ref().map(|r| r.join(highlights::FILE_NAME))
+    }
+
+    /// The highlights of a document, by its content key.
+    pub fn highlights_of(&self, key: &str) -> Vec<Highlight> {
+        self.highlights.get(key).cloned().unwrap_or_default()
+    }
+
+    /// Replaces a document's highlights as one step of the undo history.
+    pub fn set_highlights(&mut self, key: &str, list: Vec<Highlight>, message: String) {
+        let before = self.store_highlights(key, list);
+        self.commit(message, "highlighter", vec![Change::Highlights { key: key.to_string(), list: before }]);
+    }
+
+    fn store_highlights(&mut self, key: &str, list: Vec<Highlight>) -> Vec<Highlight> {
+        let before = if list.is_empty() { self.highlights.remove(key) } else { self.highlights.insert(key.to_string(), list) };
+        if let Some(path) = self.highlights_path().filter(|_| !self.read_only)
+            && let Err(e) = workspace::save(&self.highlights, &path)
+        {
+            self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&e]));
+        }
+        before.unwrap_or_default()
+    }
+
     fn load_state(&mut self) {
+        self.highlights = self.highlights_path().and_then(|p| workspace::load::<Highlights>(&p).ok().flatten()).unwrap_or_default();
         let Some(path) = self.state_path() else { return };
         match workspace::load::<StudyState>(&path) {
             Ok(s) => self.state = s.unwrap_or_default(),
@@ -1230,6 +1260,10 @@ impl Library {
                 Change::Restore(path) => {
                     restore_from_trash(&path)?;
                     Change::Trash(path)
+                }
+                Change::Highlights { key, list } => {
+                    let before = self.store_highlights(&key, list);
+                    Change::Highlights { key, list: before }
                 }
             })
         })();

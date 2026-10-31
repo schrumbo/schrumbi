@@ -23,6 +23,7 @@ pub struct Hit {
 
 pub enum Message {
     Opened(Vec<(f32, f32)>),
+    Key(String),
     Failed,
     Page(PageKey, Arc<RenderImage>),
     Meta(PdfMeta),
@@ -160,6 +161,9 @@ pub fn start(path: PathBuf, results: async_channel::Sender<Message>) -> (Arc<Ren
         };
         let sizes = (0..doc.page_count()).filter_map(|i| doc.page_size(i)).collect();
         if results.send_blocking(Message::Opened(sizes)).is_err() {
+            return;
+        }
+        if results.send_blocking(Message::Key(crate::core::highlights::document_key(&data))).is_err() {
             return;
         }
         for _ in 0..RENDER_THREADS {

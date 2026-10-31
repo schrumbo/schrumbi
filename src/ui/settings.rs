@@ -74,6 +74,7 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Bei Anmeldung starten", Tab::General),
     ("Automatisch nach Updates suchen", Tab::General),
     ("Symbol in der Menüleiste", Tab::General),
+    ("Seitenleiste", Tab::General),
     ("Semester", Tab::Semester),
     ("Vorlesungsbeginn", Tab::Semester),
     ("Vorlesungsende", Tab::Semester),
@@ -605,7 +606,20 @@ impl Settings {
             ],
             t,
         );
-        div().flex().flex_col().gap(px(space::XL)).child(studium).child(grades).child(search).child(storage).child(language).child(reminders).child(calendar).child(system)
+        let hidden = p.hidden_tabs.clone();
+        let sidebar = section(
+            Some(tr("Seitenleiste")),
+            Some(tr("Ausgeblendete Einträge bleiben über Kürzel und Befehlspalette erreichbar. Rechtsklick auf einen Eintrag blendet ihn direkt aus.")),
+            [("semester", tr("Semester")), ("record", tr("Leistungen")), ("inbox", tr("Inbox")), ("search", tr("Suche")), ("checks", tr("Prüfen"))]
+                .into_iter()
+                .map(|(key, label)| {
+                    let shown = !hidden.iter().any(|k| k == key);
+                    row(label, Switch::new(SharedString::from(format!("g-tab-{key}"))).checked(shown).on_click(move |v, _, cx| super::sidebar::set_hidden(key, !*v, cx)), t)
+                })
+                .collect(),
+            t,
+        );
+        div().flex().flex_col().gap(px(space::XL)).child(studium).child(grades).child(search).child(sidebar).child(storage).child(language).child(reminders).child(calendar).child(system)
     }
 }
 

@@ -97,6 +97,8 @@ pub struct Prefs {
     /// Keeps `Schrumbi-Kalender.ics` in the workspace up to date for calendar subscriptions.
     pub calendar_feed: bool,
     pub sidebar_open: bool,
+    /// Sidebar entries the user hid; they stay reachable by shortcut and palette.
+    pub hidden_tabs: Vec<String>,
     /// Last position and size of the main window: x, y, width, height.
     pub main_window: Option<[f32; 4]>,
     /// Last position of the upload panel: x, y.
@@ -136,6 +138,7 @@ impl Default for Prefs {
             update_skip: String::new(),
             calendar_feed: false,
             sidebar_open: true,
+            hidden_tabs: Vec::new(),
             main_window: None,
             upload_window: None,
         }

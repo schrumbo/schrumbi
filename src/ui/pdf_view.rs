@@ -17,6 +17,7 @@ use super::motion::{self, Soft};
 use super::pdf_worker::{self, Hit, Message, PageKey, RenderQueue, TextJob};
 use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
+use crate::core::highlights::{Highlight, HighlightPart};
 use crate::core::i18n::{tr, trf};
 use crate::core::pdf_render::{LinkTarget, PageRect, PageText, PdfMeta};
 use crate::core::prefs::{self, PdfPosition};
@@ -31,6 +32,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 const GAP: f32 = space::M;
 const PADDING: f32 = space::L;
 const PANEL_WIDTH: f32 = 240.;
+const MARK_COLORS: [&str; 4] = ["yellow", "green", "blue", "pink"];
+const MARK_BAR_WIDTH: f32 = 148.;
 const PREVIEW: u16 = 2;
 const MAX_SHARP_WIDTH: f32 = 4096.;
 const SHARP_BUDGET: usize = 128 * 1024 * 1024;
@@ -55,6 +58,7 @@ enum PanelTab {
     Thumbnails,
     Outline,
     Search,
+    Marks,
 }
 
 /// A place in the document: a point on a page held at a position in the view, in fractions and pixels.
@@ -65,6 +69,10 @@ struct Anchor {
     y: f32,
     view_x: f32,
     view_y: f32,
+}
+
+fn bar_action(id: &'static str, icon_name: &'static str, help: String, t: &Theme) -> Stateful<Div> {
+    div().id(id).flex().items_center().justify_center().tooltip(tip(help)).child(icon(icon_name, iconsize::S, t.secondary))
 }
 
 #[derive(Default)]
@@ -128,6 +136,10 @@ pub struct PdfView {
     /// The match to show once the search has found it, as when arriving from the file search.
     wanted_hit: Option<(String, usize)>,
     hit_to_reveal: Option<usize>,
+    marks_key: Option<String>,
+    marks: Vec<Highlight>,
+    active_mark: Option<u64>,
+    last_color: &'static str,
     hit_list: UniformListScrollHandle,
     search_progress: usize,
     search_active: bool,
@@ -169,6 +181,7 @@ impl PdfView {
                 let _ = cx.drop_image(c.image, None);
             }
         });
+        let library = cx.observe(&super::state::lib(cx), |_, _, cx| cx.notify());
         Self {
             path: path.to_path_buf(),
             sizes: Vec::new(),
@@ -209,6 +222,10 @@ impl PdfView {
             current_hit: None,
             wanted_hit: None,
             hit_to_reveal: None,
+            marks_key: None,
+            marks: Vec::new(),
+            active_mark: None,
+            last_color: MARK_COLORS[0],
             hit_list: UniformListScrollHandle::new(),
             search_progress: 0,
             search_active: false,
@@ -221,7 +238,7 @@ impl PdfView {
             save_task: None,
             _timer: None,
             _load: Some(load),
-            _subs: vec![release],
+            _subs: vec![release, library],
         }
     }
 
@@ -231,6 +248,7 @@ impl PdfView {
                 self.max_size = sizes.iter().fold((1., 1.), |m, s| (f32::max(m.0, s.0), f32::max(m.1, s.1)));
                 self.sizes = sizes;
             }
+            Message::Key(key) => self.marks_key = Some(key),
             Message::Failed => self.failed = true,
             Message::Page(key, image) => {
                 let size = image.size(0);
@@ -568,12 +586,17 @@ impl PdfView {
 
     fn on_mouse_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
-        let Some((page, x, y)) = self.locate(e.position) else { return };
+        self.active_mark = None;
+        let Some((page, x, y)) = self.locate(e.position) else {
+            cx.notify();
+            return;
+        };
         if let Some(target) = self.link_at(page, x, y).cloned() {
             self.follow_link(target, cx);
             return;
         }
         self.selection = None;
+        self.active_mark = self.marks.iter().rev().find(|h| h.covers(page, x, y)).map(|h| h.id);
         if let Some((text, _)) = self.texts.get(&page) {
             let caret = text.caret_at(x, y);
             if e.click_count == 2 {
@@ -614,6 +637,189 @@ impl PdfView {
             self.hover_cursor = cursor;
             cx.notify();
         }
+    }
+
+    /// The current selection as highlight parts per page, with its text.
+    fn selected_parts(&self) -> Option<(Vec<HighlightPart>, String)> {
+        let (from, to) = self.ordered_selection()?;
+        let (mut parts, mut text) = (Vec::new(), String::new());
+        for page in from.0..=to.0 {
+            let Some((page_text, _)) = self.texts.get(&page) else { continue };
+            let start = if page == from.0 { from.1 } else { 0 };
+            let end = if page == to.0 { to.1 } else { page_text.glyph_count() };
+            let rects: Vec<[f32; 4]> = page_text.rects(start, end).into_iter().map(|r| [r.x, r.y, r.w, r.h]).collect();
+            if rects.is_empty() {
+                continue;
+            }
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(page_text.slice(start, end).trim());
+            parts.push(HighlightPart { page, rects });
+        }
+        (!parts.is_empty()).then_some((parts, text))
+    }
+
+    fn add_mark(&mut self, color: &'static str, cx: &mut Context<Self>) {
+        let (Some(key), Some((parts, text))) = (self.marks_key.clone(), self.selected_parts()) else { return };
+        self.selection = None;
+        self.last_color = color;
+        let mut list = self.marks.clone();
+        let id = list.iter().map(|h| h.id).max().map_or(1, |m| m + 1);
+        list.push(Highlight { id, color: color.to_string(), text, parts });
+        super::state::act(cx, |l| l.set_highlights(&key, list, tr("Markiert")));
+    }
+
+    fn recolor_mark(&mut self, id: u64, color: &'static str, cx: &mut Context<Self>) {
+        let Some(key) = self.marks_key.clone() else { return };
+        self.last_color = color;
+        let mut list = self.marks.clone();
+        if let Some(h) = list.iter_mut().find(|h| h.id == id) {
+            h.color = color.to_string();
+        }
+        super::state::act(cx, |l| l.set_highlights(&key, list, tr("Farbe geändert")));
+    }
+
+    fn remove_mark(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(key) = self.marks_key.clone() else { return };
+        self.active_mark = None;
+        let list = self.marks.iter().filter(|h| h.id != id).cloned().collect();
+        super::state::act(cx, |l| l.set_highlights(&key, list, tr("Markierung entfernt")));
+    }
+
+    fn reveal_mark(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some((page, r)) = self.marks.iter().find(|h| h.id == id).and_then(|h| h.start()) else { return };
+        self.active_mark = Some(id);
+        if !self.geo.tops.is_empty() && page < self.sizes.len() {
+            let (_, _, _, h) = self.page_rect(page);
+            let (ox, _) = self.offset();
+            self.pending = Some(Anchor { page, x: 0., y: r[1] * self.geo.scale / h.max(1.), view_x: ox + (self.geo.content_width - self.sizes[page].0 * self.geo.scale) / 2., view_y: self.geo.view.1 * 0.3 });
+            self.apply_pending();
+        }
+        cx.notify();
+    }
+
+    /// The small bar under a selection or a clicked highlight: colors, plus copying or removing.
+    fn mark_bar(&self, t: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.selecting || self.geo.tops.is_empty() {
+            return None;
+        }
+        let selection = self.selected_parts();
+        let editing = self.active_mark.and_then(|id| self.marks.iter().find(|h| h.id == id)).filter(|_| selection.is_none());
+        let part = selection.as_ref().and_then(|(parts, _)| parts.last()).or_else(|| editing.and_then(|h| h.parts.last()))?;
+        let r = *part.rects.last()?;
+        let (left, top, _, _) = self.page_rect(part.page);
+        let scale = self.geo.scale;
+        let x = (left + r[0] * scale).min(self.geo.content_width - MARK_BAR_WIDTH).max(0.);
+        let y = top + (r[1] + r[3]) * scale + space::XS;
+        let me = cx.entity();
+        let current = editing.map(|h| h.color.clone());
+        let editing_id = editing.map(|h| h.id);
+        let action: Stateful<Div> = match editing_id {
+            Some(id) => {
+                let e = me.clone();
+                bar_action("pdf-mark-remove", "trash-2", tr("Markierung entfernen"), t).on_click(move |_, _, cx| e.update(cx, |v, cx| v.remove_mark(id, cx)))
+            }
+            None => {
+                let e = me.clone();
+                bar_action("pdf-mark-copy", "copy", tr("Kopieren"), t).on_click(move |_, _, cx| e.read(cx).copy_selection())
+            }
+        };
+        Some(
+            div()
+                .id("pdf-mark-bar")
+                .absolute()
+                .left(px(x))
+                .top(px(y))
+                .w(px(MARK_BAR_WIDTH))
+                .h(px(control::M))
+                .flex()
+                .items_center()
+                .justify_between()
+                .px(px(space::S))
+                .rounded(px(radius::CONTROL))
+                .bg(t.material)
+                .border_1()
+                .border_color(t.separator)
+                .shadow_md()
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .children(MARK_COLORS.into_iter().map(|color| {
+                    let e = me.clone();
+                    let selected = current.as_deref() == Some(color);
+                    div()
+                        .id(SharedString::from(format!("pdf-mark-{color}")))
+                        .size(px(iconsize::M))
+                        .rounded_full()
+                        .bg(t.palette(color))
+                        .when(selected, |d| d.border_2().border_color(t.primary))
+                        .tooltip(tip(tr("Markieren (H)")))
+                        .on_click(move |_, _, cx| {
+                            e.update(cx, |v, cx| match editing_id {
+                                Some(id) => v.recolor_mark(id, color, cx),
+                                None => v.add_mark(color, cx),
+                            })
+                        })
+                }))
+                .child(action)
+                .into_any_element(),
+        )
+    }
+
+    fn marks_panel(&self, cx: &mut Context<Self>, t: &Theme) -> AnyElement {
+        if self.marks.is_empty() {
+            return div().p(px(space::L)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(tr("Text auswählen und H drücken, um ihn zu markieren.")).into_any_element();
+        }
+        let mut marks: Vec<&Highlight> = self.marks.iter().collect();
+        marks.sort_by(|a, b| {
+            let (x, y) = (a.start(), b.start());
+            x.map(|s| s.0).cmp(&y.map(|s| s.0)).then(x.map_or(0., |s| s.1[1]).total_cmp(&y.map_or(0., |s| s.1[1])))
+        });
+        let me = cx.entity();
+        let rows = marks.into_iter().map(|h| {
+            let (id, jump, remove) = (h.id, me.clone(), me.clone());
+            let page = h.start().map_or(0, |s| s.0);
+            let active = self.active_mark == Some(id);
+            div()
+                .id(("pdf-mark-row", id as usize))
+                .group("pdf-mark-row")
+                .relative()
+                .flex()
+                .gap(px(space::S))
+                .p(px(space::S))
+                .rounded(px(radius::INNER))
+                .cursor_pointer()
+                .when(active, |d| d.bg(t.ink.opacity(0.08)))
+                .soft(t.ink.opacity(0.05), radius::INNER)
+                .on_click(move |_, _, cx| jump.update(cx, |v, cx| v.reveal_mark(id, cx)))
+                .child(div().flex_none().w(px(space::XS)).rounded_full().bg(t.palette(&h.color)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(space::XXS))
+                        .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).child(trf("Seite %lld", &[&(page + 1)])))
+                        .child(div().text_size(px(font::CALLOUT)).line_clamp(3).child(h.text.clone())),
+                )
+                .child(
+                    div()
+                        .id(("pdf-mark-delete", id as usize))
+                        .absolute()
+                        .top(px(space::XS))
+                        .right(px(space::XS))
+                        .invisible()
+                        .group_hover("pdf-mark-row", |s| s.visible())
+                        .tooltip(tip(tr("Markierung entfernen")))
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            remove.update(cx, |v, cx| v.remove_mark(id, cx));
+                        })
+                        .child(icon("x", iconsize::S, t.secondary)),
+                )
+        });
+        div().id("pdf-marks").size_full().overflow_y_scrollbar().child(div().flex().flex_col().gap(px(space::XS)).p(px(space::S)).children(rows.collect::<Vec<_>>())).into_any_element()
     }
 
     fn ordered_selection(&self) -> Option<(Caret, Caret)> {
@@ -792,7 +998,7 @@ impl PdfView {
             window.focus(&self.focus, cx);
         } else if self.search_active {
             self.close_search(window, cx);
-        } else if self.selection.take().is_none() {
+        } else if self.active_mark.take().is_none() && self.selection.take().is_none() {
             cx.propagate();
         }
         cx.notify();
@@ -809,6 +1015,12 @@ impl PdfView {
             "f" if command && !m.shift => self.open_search(window, cx),
             "g" if command => self.step_hit(if m.shift { -1 } else { 1 }, cx),
             _ if typing => return,
+            "h" if !command && self.ordered_selection().is_some() => self.add_mark(self.last_color, cx),
+            "backspace" | "delete" if self.active_mark.is_some() => {
+                if let Some(id) = self.active_mark {
+                    self.remove_mark(id, cx);
+                }
+            }
             "=" | "+" if command => self.zoom_by(1.25, self.last_mouse, cx),
             "-" if command => self.zoom_by(0.8, self.last_mouse, cx),
             "0" if command => self.set_fit(Fit::Width, None, cx),
@@ -837,6 +1049,12 @@ impl PdfView {
         let mark = |r: PageRect, color: Hsla| div().absolute().left(px(r.x * scale)).top(px(r.y * scale)).w(px(r.w * scale)).h(px(r.h * scale)).bg(color);
         let mut el = div().absolute().left(px(left)).top(px(top)).w(px(w)).h(px(h)).bg(white()).shadow_md().children(image.map(|i| img(i).size_full()));
         let (yellow, orange) = (t.palette("yellow").opacity(0.45), t.orange.opacity(0.6));
+        for h in &self.marks {
+            let opacity = if self.active_mark == Some(h.id) { 0.6 } else { 0.38 };
+            for r in h.parts.iter().filter(|p| p.page == page).flat_map(|p| &p.rects) {
+                el = el.child(mark(PageRect { x: r[0], y: r[1], w: r[2], h: r[3] }, t.palette(&h.color).opacity(opacity)));
+            }
+        }
         for (i, hit) in self.hits.iter().enumerate().filter(|(_, h)| h.page == page) {
             let color = if self.current_hit == Some(i) { orange } else { yellow };
             for r in &hit.rects {
@@ -960,6 +1178,7 @@ impl PdfView {
             PanelTab::Thumbnails => self.thumbnails(cx).into_any_element(),
             PanelTab::Outline => self.outline(cx, t).into_any_element(),
             PanelTab::Search => self.search_panel(cx, t).into_any_element(),
+            PanelTab::Marks => self.marks_panel(cx, t),
         };
         div()
             .w(px(width))
@@ -981,7 +1200,8 @@ impl PdfView {
                             .p(px(space::S))
                             .child(tab("pdf-tab-thumbs", tr("Seiten"), PanelTab::Thumbnails, self.panel_tab == PanelTab::Thumbnails, me.clone()))
                             .child(tab("pdf-tab-outline", tr("Inhalt"), PanelTab::Outline, self.panel_tab == PanelTab::Outline, me.clone()))
-                            .child(tab("pdf-tab-search", tr("Suche"), PanelTab::Search, self.panel_tab == PanelTab::Search, me)),
+                            .child(tab("pdf-tab-search", tr("Suche"), PanelTab::Search, self.panel_tab == PanelTab::Search, me.clone()))
+                            .child(tab("pdf-tab-marks", tr("Marker"), PanelTab::Marks, self.panel_tab == PanelTab::Marks, me)),
                     )
                     .child(div().flex_1().min_h_0().child(body)),
             )
@@ -1212,7 +1432,11 @@ impl Render for PdfView {
         }
         let panel_width = motion::follow("pdf-panel-width", if self.panel_open { PANEL_WIDTH } else { 0. }, motion::MEDIUM, window, cx);
         let panel = (panel_width > 0.).then(|| self.panel(panel_width, window, cx, &t));
+        if let Some(key) = self.marks_key.clone() {
+            self.marks = super::state::read(cx, |l| l.highlights_of(&key));
+        }
         let pages: Vec<AnyElement> = visible.clone().map(|page| self.page_element(page, window, &t)).collect();
+        let mark_bar = self.mark_bar(&t, cx);
         let (total, content_width) = (self.geo.total, self.geo.content_width);
         let badge = (Instant::now() < self.badge_until && self.page_count() > 1).then(|| {
             div()
@@ -1293,7 +1517,7 @@ impl Render for PdfView {
                                 .on_mouse_move(cx.listener(Self::on_mouse_move))
                                 .on_mouse_up(MouseButton::Left, cx.listener(|v, _, _, _| v.selecting = false))
                                 .on_mouse_up_out(MouseButton::Left, cx.listener(|v, _, _, _| v.selecting = false))
-                                .child(div().relative().w(px(content_width)).h(px(total)).children(pages)),
+                                .child(div().relative().w(px(content_width)).h(px(total)).children(pages).children(mark_bar)),
                         )
                         .scrollbar(&self.scroll, gpui_kit::component::scroll::ScrollbarAxis::Both)
                         .children(badge),

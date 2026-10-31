@@ -40,6 +40,8 @@ fn tab_click(route: Route, window: &mut Window, cx: &mut App) {
 }
 
 struct Entry {
+    /// Set on entries that can be hidden.
+    key: Option<&'static str>,
     route: Route,
     icon: &'static str,
     label: String,
@@ -51,17 +53,28 @@ struct Entry {
 fn entries(lib: &Library) -> Vec<Entry> {
     let issues = lib.misnamed().len() + usize::from(lib.missing_folder_count > 0);
     let mut v = vec![
-        Entry { route: Route::Today, icon: "layout-grid", label: tr("Übersicht"), shortcut: Some("1"), badge: lib.action_items().len(), urgent: true },
-        Entry { route: Route::Grid, icon: "table", label: tr("Semester"), shortcut: Some("2"), badge: 0, urgent: false },
-        Entry { route: Route::Record, icon: "award", label: tr("Leistungen"), shortcut: Some("3"), badge: 0, urgent: false },
-        Entry { route: Route::Inbox, icon: "inbox", label: tr("Inbox"), shortcut: Some("4"), badge: lib.inbox.len(), urgent: false },
-        Entry { route: Route::Search, icon: "search", label: tr("Suche"), shortcut: None, badge: 0, urgent: false },
+        Entry { key: None, route: Route::Today, icon: "layout-grid", label: tr("Übersicht"), shortcut: Some("1"), badge: lib.action_items().len(), urgent: true },
+        Entry { key: Some("semester"), route: Route::Grid, icon: "table", label: tr("Semester"), shortcut: Some("2"), badge: 0, urgent: false },
+        Entry { key: Some("record"), route: Route::Record, icon: "award", label: tr("Leistungen"), shortcut: Some("3"), badge: 0, urgent: false },
+        Entry { key: Some("inbox"), route: Route::Inbox, icon: "inbox", label: tr("Inbox"), shortcut: Some("4"), badge: lib.inbox.len(), urgent: false },
+        Entry { key: Some("search"), route: Route::Search, icon: "search", label: tr("Suche"), shortcut: None, badge: 0, urgent: false },
     ];
     if let Some(doc) = lib.active_document.clone().or_else(|| lib.open_documents.first().cloned()) {
-        v.push(Entry { route: Route::Doc(doc), icon: "files", label: tr("Dokumente"), shortcut: None, badge: lib.open_documents.len(), urgent: false });
+        v.push(Entry { key: None, route: Route::Doc(doc), icon: "files", label: tr("Dokumente"), shortcut: None, badge: lib.open_documents.len(), urgent: false });
     }
-    v.push(Entry { route: Route::Checks, icon: "list-checks", label: tr("Prüfen"), shortcut: Some("5"), badge: issues, urgent: false });
+    v.push(Entry { key: Some("checks"), route: Route::Checks, icon: "list-checks", label: tr("Prüfen"), shortcut: Some("5"), badge: issues, urgent: false });
     v
+}
+
+/// Shows or hides a sidebar entry.
+pub fn set_hidden(key: &str, hidden: bool, cx: &mut App) {
+    prefs::update(|p| {
+        p.hidden_tabs.retain(|k| k != key);
+        if hidden {
+            p.hidden_tabs.push(key.to_string());
+        }
+    });
+    super::state::lib(cx).update(cx, |_, cx| cx.notify());
 }
 
 fn shortcut_label(key: &str) -> String {
@@ -129,16 +142,21 @@ fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: Stri
 }
 
 /// An invisible button over a tab, so the row can open a menu and still look like every other tab.
-fn menu_overlay(id: &'static str, help: String) -> Button {
-    Button::new(id).ghost().w_full().h(px(ROW)).tooltip(help)
+fn menu_overlay(id: &'static str) -> Button {
+    Button::new(id).ghost().w_full().h(px(ROW))
 }
 
 /// The sidebar: one column of tabs. The icons always show, the labels sit beside them when wide enough.
 pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> Div {
     let fg = t.primary;
     let mut top = div().flex().flex_col();
+    let hidden = prefs::get().hidden_tabs;
     for e in entries(lib) {
         let active = is_active(lib, &e.route);
+        if !active && e.key.is_some_and(|k| hidden.iter().any(|h| h == k)) {
+            continue;
+        }
+        let (hide_key, hide_label) = (e.key, e.label.clone());
         let help = match e.shortcut {
             Some(k) => format!("{}  {}", e.label, shortcut_label(k)),
             None => e.label.clone(),
@@ -147,19 +165,24 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
         let is_inbox = e.route == Route::Inbox;
         let count = (e.badge > 0).then_some((e.badge, if e.urgent { t.red } else { t.accent }));
         let row = tab(SharedString::from(format!("tab-{:?}", e.route)), active, true, icon(e.icon, iconsize::L, fg).into_any_element(), e.label, count, wide, help, t).on_click(move |_, window, cx| tab_click(route.clone(), window, cx));
-        if is_inbox {
-            let dir = lib.root.as_ref().zip(lib.config.as_ref()).map(|(r, c)| r.join(&c.inbox));
-            top = top.child(row.context_menu(move |menu, _, _| {
-                let dir = dir.clone();
-                menu.item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| {
-                    if let Some(d) = &dir {
-                        library::open_path(d);
-                    }
-                }))
-            }));
-        } else {
+        let Some(key) = hide_key else {
             top = top.child(row);
-        }
+            continue;
+        };
+        let dir = lib.root.as_ref().zip(lib.config.as_ref()).map(|(r, c)| r.join(&c.inbox)).filter(|_| is_inbox);
+        top = top.child(row.context_menu(move |mut menu, _, _| {
+            if let Some(dir) = dir.clone() {
+                menu = menu.item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::open_path(&dir))).separator();
+            }
+            let label = hide_label.clone();
+            menu.item(PopupMenuItem::new(tr("Aus der Seitenleiste ausblenden")).on_click(move |_, _, cx| {
+                set_hidden(key, true, cx);
+                let label = label.clone();
+                act(cx, |l| {
+                    l.notify(trf("%@ ausgeblendet", &[&label]), "eye-off", Some(tr("Einblenden")), Some(Box::new(move |_: &mut Library| prefs::update(|p| p.hidden_tabs.retain(|k| k != key)))));
+                });
+            }))
+        }));
     }
     let modules = lib.semester_modules();
     let mut by_module: HashMap<&str, usize> = HashMap::new();
@@ -230,7 +253,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
             d.child(tab("tab-update".into(), false, false, icon("download", iconsize::L, t.accent).into_any_element(), label.clone(), None, wide, label, t).on_click(|_, window, cx| super::updates::show(window, cx)))
         })
         .when(semesters.len() > 1, |d| {
-            d.child(tab("tab-semester-row".into(), false, true, icon("calendar-range", iconsize::L, fg).into_any_element(), semester.clone(), None, wide, semester.clone(), t).child(div().absolute().inset_0().child(menu_overlay("tab-semester", semester.clone()).dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+            d.child(tab("tab-semester-row".into(), false, true, icon("calendar-range", iconsize::L, fg).into_any_element(), semester.clone(), None, wide, semester.clone(), t).child(div().absolute().inset_0().child(menu_overlay("tab-semester").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
                 for s in &semesters {
                     let id = s.id.clone();
                     menu = menu.item(PopupMenuItem::new(s.name.clone()).checked(selected_id.as_deref() == Some(s.id.as_str())).on_click(move |_, _, cx| {
@@ -243,7 +266,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
                 menu
             }))))
         })
-        .child(tab("tab-workspace-row".into(), false, true, icon("folder-open", iconsize::L, fg).into_any_element(), workspace, None, wide, tr("Arbeitsordner"), t).child(div().absolute().inset_0().child(menu_overlay("tab-workspace", tr("Arbeitsordner")).dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+        .child(tab("tab-workspace-row".into(), false, true, icon("folder-open", iconsize::L, fg).into_any_element(), workspace, None, wide, tr("Arbeitsordner"), t).child(div().absolute().inset_0().child(menu_overlay("tab-workspace").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
             for (i, p) in recents.iter().enumerate() {
                 let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 menu = menu.item(PopupMenuItem::new(name).checked(current.as_ref() == Some(p)).on_click(move |_, window, cx| window.dispatch_action(Box::new(super::app::OpenRecent(i)), cx)));

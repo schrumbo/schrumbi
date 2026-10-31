@@ -480,7 +480,7 @@ impl NoteView {
             .on_action(|_: &ZoomIn, _, cx| NoteView::zoom(1., cx))
             .on_action(|_: &ZoomOut, _, cx| NoteView::zoom(-1., cx))
             .on_action(|_: &ZoomReset, _, cx| NoteView::zoom(0., cx))
-            .child(Editor::new(&self.editor).h_full().bg(Theme::get(cx).content))
+            .child(Editor::new(&self.editor).appearance(false).h_full().bg(Theme::get(cx).content))
             .into_any_element()
     }
 }

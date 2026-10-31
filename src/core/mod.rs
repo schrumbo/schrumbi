@@ -2,6 +2,7 @@ pub mod catalog;
 pub mod crash;
 pub mod day;
 pub mod filing;
+pub mod highlights;
 pub mod i18n;
 pub mod ics;
 pub mod json;
