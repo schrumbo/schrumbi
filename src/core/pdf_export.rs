@@ -457,6 +457,11 @@ pub fn render(markdown_text: &str, base: &Path, meta: Option<&Meta>, o: &Options
     typst_pdf::pdf(&doc, &typst_pdf::PdfOptions::default()).map_err(|errs| errs.iter().map(|e| e.message.to_string()).collect::<Vec<_>>().join("; "))
 }
 
+/// Whether a PDF came from this export. Anything else may be a submission and must not be replaced.
+pub fn is_export(path: &Path) -> bool {
+    std::fs::read(path).is_ok_and(|bytes| bytes.windows(5).any(|w| w == b"Typst"))
+}
+
 /// Renders `markdown_text` and writes it atomically to `target`.
 pub fn export(markdown_text: &str, base: &Path, target: &Path, meta: Option<&Meta>, o: &Options) -> Result<(), String> {
     let bytes = render(markdown_text, base, meta, o)?;
@@ -485,6 +490,18 @@ mod tests {
     fn renders_every_block_type() {
         let pdf = render(SAMPLE, Path::new("/"), Some(&Meta { left: "P1 · Projekt".into(), right: "Name · 30. Oktober 2026".into() }), &opts()).unwrap();
         assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn recognizes_its_own_exports() {
+        let dir = std::env::temp_dir().join(format!("schrumbi-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let own = dir.join("a.pdf");
+        super::export("# Titel", Path::new("/"), &own, None, &opts()).unwrap();
+        assert!(super::is_export(&own));
+        let other = dir.join("b.pdf");
+        std::fs::write(&other, b"%PDF-1.4 Abgabe").unwrap();
+        assert!(!super::is_export(&other));
     }
 
     #[test]

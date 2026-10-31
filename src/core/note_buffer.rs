@@ -14,6 +14,8 @@ pub struct NoteBuffer {
     pub text: String,
     pub dirty: bool,
     pub missing: bool,
+    /// The file is not UTF-8. It shows as unavailable and is never written, so it stays intact.
+    pub undecodable: bool,
     last_saved: String,
     known: Option<SystemTime>,
     /// Bumped whenever the text changes from outside the editor, so editors reload it.
@@ -27,7 +29,7 @@ pub struct NoteBuffer {
 
 impl NoteBuffer {
     pub fn open(path: &Path) -> Self {
-        let mut b = Self { path: path.to_path_buf(), text: String::new(), dirty: false, missing: false, last_saved: String::new(), known: None, revision: 0, conflict: None, held: false, save_wanted: false };
+        let mut b = Self { path: path.to_path_buf(), text: String::new(), dirty: false, missing: false, undecodable: false, last_saved: String::new(), known: None, revision: 0, conflict: None, held: false, save_wanted: false };
         b.load();
         b
     }
@@ -53,14 +55,29 @@ impl NoteBuffer {
                 self.dirty = false;
                 self.conflict = None;
             }
-            Err(_) => self.missing = !self.path.exists(),
+            Err(e) => {
+                self.missing = !self.path.exists();
+                self.undecodable = e.kind() == std::io::ErrorKind::InvalidData;
+                return;
+            }
         }
+        self.undecodable = false;
+    }
+
+    /// Follows a rename or move made by the app itself.
+    pub fn moved_to(&mut self, path: &Path) {
+        self.path = path.to_path_buf();
+        self.known = self.modified();
     }
 
     /// Picks up edits made in another app; with unsaved changes here the other version becomes a conflict.
     pub fn reload_if_changed(&mut self) -> bool {
         if self.held {
             return false;
+        }
+        if self.undecodable {
+            self.load();
+            return !self.undecodable;
         }
         let modified = self.modified();
         if modified.is_none() {
@@ -110,7 +127,7 @@ impl NoteBuffer {
 
     /// Writes the note, unless another app changed the file since it was read: that becomes a `conflict`.
     pub fn save(&mut self) -> std::io::Result<()> {
-        if self.conflict.is_some() {
+        if self.conflict.is_some() || self.undecodable {
             return Ok(());
         }
         if self.held {

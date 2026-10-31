@@ -232,9 +232,7 @@ impl NoteView {
     }
 
     fn focus_lost(&mut self, cx: &mut Context<Self>) {
-        if prefs::get().note_save_mode != NoteSaveMode::Manual {
-            self.save(cx);
-        }
+        self.save(cx);
     }
 
     pub fn save(&mut self, cx: &mut Context<Self>) {
@@ -263,9 +261,7 @@ impl NoteView {
 
     fn export(&mut self, cx: &mut Context<Self>) {
         let text = self.editor.read(cx).value().to_string();
-        if prefs::get().note_save_mode != NoteSaveMode::Manual {
-            self.save(cx);
-        }
+        self.save(cx);
         super::pdf::export(&self.path, Some(text), cx);
     }
 
@@ -374,9 +370,7 @@ impl NoteView {
                 let b = l.buffer(&path);
                 let next = markdown::toggle_task(&b.text, line);
                 b.replace(next);
-                if prefs::get().note_save_mode != NoteSaveMode::Manual {
-                    let _ = b.save();
-                }
+                let _ = b.save();
                 cx.notify();
             });
         });
@@ -563,7 +557,10 @@ impl Render for NoteView {
         if self.mode == Mode::Split && !missing {
             self.sync_split(&text, cx);
         }
-        let content: AnyElement = if missing {
+        let undecodable = state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.undecodable));
+        let content: AnyElement = if undecodable {
+            unavailable("file-warning", tr("Kodierung wird nicht unterstützt"), tr("Die Datei ist nicht in UTF-8 gespeichert. Sie bleibt unverändert, öffne sie in einer anderen App."), &t).into_any_element()
+        } else if missing {
             unavailable("file-question", tr("Datei nicht gefunden"), self.path.file_name().unwrap_or_default().to_string_lossy().to_string(), &t).into_any_element()
         } else {
             match self.mode {
@@ -718,7 +715,7 @@ fn close_other_tabs(path: &Path, cx: &mut App) {
 
 fn close_all_tabs(cx: &mut App) {
     let all = state::read(cx, |l| l.open_documents.clone());
-    resolve_unsaved(all, cx, |cx| close_all_tabs(cx));
+    resolve_unsaved(all, cx, |cx| act(cx, |l| l.close_all_documents()));
 }
 
 fn word_count(text: &str, t: &Theme) -> Div {
@@ -832,7 +829,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
                     m.when(!active, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.set_split(Some(beside.clone()))))))
                         .item(PopupMenuItem::new(tr("Tab schließen")).on_click(move |_, _, cx| close_tab(&a, cx)))
                         .item(PopupMenuItem::new(tr("Andere Tabs schließen")).on_click(move |_, _, cx| close_other_tabs(&b, cx)))
-                        .item(PopupMenuItem::new(tr("Alle Tabs schließen")).on_click(|_, _, cx| act(cx, |l| l.close_all_documents())))
+                        .item(PopupMenuItem::new(tr("Alle Tabs schließen")).on_click(|_, _, cx| close_all_tabs(cx)))
                         .separator()
                         .item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&c)))
                         .item(PopupMenuItem::new(tr("Mit Standard-App öffnen")).on_click(move |_, _, _| library::open_path(&d)))
@@ -910,6 +907,7 @@ impl Render for FileViewer {
 
 /// Saves or asks about every open note, then quits.
 pub fn prepare_to_quit(cx: &mut App) {
+    state::flush_pending(cx);
     let all = state::read(cx, |l| l.buffers.keys().cloned().collect());
     resolve_unsaved(all, cx, |cx| cx.quit());
 }

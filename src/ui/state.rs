@@ -138,6 +138,7 @@ pub fn open_workspace(path: &Path, cx: &mut App) {
 }
 
 pub fn close_workspace(cx: &mut App) {
+    flush_pending(cx);
     let store = cx.global_mut::<Store>();
     store.watcher = None;
     store.watch_task = None;
@@ -208,8 +209,9 @@ fn changed(c: Change, cx: &mut App) {
         let task = cx.spawn(async move |cx| {
             cx.background_executor().timer(Duration::from_millis(300)).await;
             cx.update(|cx| {
-                let config_pending = cx.global::<Store>().pending_config.is_some();
-                if c.config && !config_pending {
+                let store = cx.global::<Store>();
+                let busy = store.pending_config.is_some() || store.pending_notes.is_some();
+                if c.config && !busy {
                     act(cx, |l| l.reload_external());
                 }
                 if c.structural {
@@ -264,9 +266,22 @@ pub fn schedule_config_save(cx: &mut App) {
 pub fn schedule_notes_save(cx: &mut App) {
     let task = cx.spawn(async move |cx| {
         cx.background_executor().timer(Duration::from_millis(700)).await;
-        cx.update(|cx| lib(cx).update(cx, |l, _| l.save_notes()));
+        cx.update(|cx| {
+            lib(cx).update(cx, |l, _| l.save_notes());
+            cx.global_mut::<Store>().pending_notes = None;
+        });
     });
     cx.global_mut::<Store>().pending_notes = Some(task);
+}
+
+/// Writes what is still waiting for its delay, before quitting or leaving a workspace.
+pub fn flush_pending(cx: &mut App) {
+    if cx.global_mut::<Store>().pending_notes.take().is_some() {
+        lib(cx).update(cx, |l, _| l.save_notes());
+    }
+    if cx.global_mut::<Store>().pending_config.take().is_some() {
+        lib(cx).update(cx, |l, _| l.write_config());
+    }
 }
 
 /// Keeps one timer for the next due reminder; rebuilt only when the list changes.

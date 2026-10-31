@@ -12,11 +12,10 @@ pub const DEFAULT_ACCENT: &str = "#0EA5E9";
 pub enum NoteSaveMode {
     /// When the editor loses focus, the window or app goes to the background, or the note is closed.
     #[default]
+    #[serde(alias = "manual")]
     Focus,
     /// A few seconds after the last keystroke, plus everything `Focus` does.
     Delay,
-    /// Only with ⌘S (and on close, if enabled).
-    Manual,
 }
 
 /// How the file browser groups files.

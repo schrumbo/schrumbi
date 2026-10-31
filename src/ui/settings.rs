@@ -1325,12 +1325,10 @@ impl Settings {
         let mode_label = |m: NoteSaveMode| match m {
             NoteSaveMode::Focus => tr("Beim Fokuswechsel"),
             NoteSaveMode::Delay => tr("Nach einer Tipp-Pause"),
-            NoteSaveMode::Manual => tr("Nur manuell (⌘S)"),
         };
         let save_footer = match mode {
             NoteSaveMode::Focus => tr("Gesichert wird, sobald du den Editor, das Fenster oder die App verlässt oder den Tab wechselst. ⌘S sichert sofort."),
             NoteSaveMode::Delay => tr("Zusätzlich wird nach der Pause automatisch gesichert. ⌘S sichert sofort."),
-            NoteSaveMode::Manual => tr("Nur ⌘S sichert. Ein Punkt im Tab zeigt ungesicherte Änderungen."),
         } + " " + &tr("Schließen sichert immer.");
         let stepper = |id: &'static str, label: String, dec: Box<dyn Fn(&mut App)>, inc: Box<dyn Fn(&mut App)>| {
             div()
@@ -1375,7 +1373,7 @@ impl Settings {
         let mut save_rows = vec![row(
             tr("Sichern"),
             picker("n-mode", mode_label(mode), move |mut menu| {
-                for m in [NoteSaveMode::Focus, NoteSaveMode::Delay, NoteSaveMode::Manual] {
+                for m in [NoteSaveMode::Focus, NoteSaveMode::Delay] {
                     menu = menu.item(PopupMenuItem::new(mode_label(m)).checked(m == mode).on_click(move |_, _, _| prefs::update(|p| p.note_save_mode = m)));
                 }
                 menu

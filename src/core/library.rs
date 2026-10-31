@@ -55,7 +55,10 @@ pub enum Change {
     Config(Box<StudyConfig>),
     Move { from: PathBuf, to: PathBuf },
     Trash(PathBuf),
-    Restore(PathBuf),
+    /// Brings a trashed file back from the copy kept for this purpose; macOS does not let apps read the trash.
+    Restore { path: PathBuf, backup: PathBuf },
+    /// Puts back the version of a file from before it was replaced.
+    Replaced { path: PathBuf, backup: PathBuf },
     Highlights { key: String, list: Vec<Highlight> },
     /// Puts a note's text back, as chosen when another app changed the file.
     Note { path: PathBuf, text: String },
@@ -209,6 +212,8 @@ pub struct Library {
     closed_documents: Vec<PathBuf>,
     /// The open document shown beside the current one.
     pub split_document: Option<PathBuf>,
+    /// Where the last rename ended up, for the list that started it.
+    pub last_renamed: Option<PathBuf>,
     back_routes: Vec<Route>,
     forward_routes: Vec<Route>,
     pub toast_hovered: bool,
@@ -302,6 +307,7 @@ impl Library {
             route: Route::Today,
             closed_documents: Vec::new(),
             split_document: None,
+            last_renamed: None,
             back_routes: Vec::new(),
             forward_routes: Vec::new(),
             toast_hovered: false,
@@ -354,6 +360,20 @@ impl Library {
             self.search_index.reset();
             prefs::update(|p| p.indexed_root = Some(root.to_path_buf()));
         }
+    }
+
+    /// Keeps the previous version of a file about to be replaced, for undo.
+    pub fn keep_for_undo(&self, path: &Path) -> Option<PathBuf> {
+        path.exists().then(|| stash(path).ok()).flatten()
+    }
+
+    /// Records an exported file as a step: undo removes it, or brings back the version it replaced.
+    pub fn record_export(&mut self, target: &Path, replaced: Option<PathBuf>) {
+        let change = match replaced {
+            Some(backup) => Change::Replaced { path: target.to_path_buf(), backup },
+            None => Change::Trash(target.to_path_buf()),
+        };
+        self.record(trf("PDF erstellt: %@", &[&name_of(target)]), vec![change]);
     }
 
     pub fn close(&mut self) {
@@ -438,6 +458,7 @@ impl Library {
     }
 
     fn load_state(&mut self) {
+        prune_undo_copies();
         self.highlights = self.highlights_path().and_then(|p| workspace::load::<Highlights>(&p).ok().flatten()).unwrap_or_default();
         let Some(path) = self.state_path() else { return };
         match workspace::load::<StudyState>(&path) {
@@ -1295,9 +1316,15 @@ impl Library {
     pub fn undo(&mut self) {
         let Some(step) = self.undo_steps.pop() else { return };
         let label = step.label.clone();
-        let inverse = self.apply_step(step);
-        self.redo_steps.push(inverse);
+        let (inverse, failed) = self.apply_step(step);
+        if !inverse.changes.is_empty() {
+            self.redo_steps.push(inverse);
+        }
         self.coalescing = None;
+        if !failed.is_empty() {
+            self.undo_steps.push(Step { label, changes: failed });
+            return;
+        }
         self.notify(trf("Rückgängig: %@", &[&label]), "undo-2", Some(tr("Wiederholen")), Some(Box::new(|lib: &mut Library| lib.redo())));
     }
 
@@ -1305,18 +1332,32 @@ impl Library {
     pub fn redo(&mut self) {
         let Some(step) = self.redo_steps.pop() else { return };
         let label = step.label.clone();
-        let inverse = self.apply_step(step);
-        self.undo_steps.push(inverse);
+        let (inverse, failed) = self.apply_step(step);
+        if !inverse.changes.is_empty() {
+            self.undo_steps.push(inverse);
+        }
         self.coalescing = None;
+        if !failed.is_empty() {
+            self.redo_steps.push(Step { label, changes: failed });
+            return;
+        }
         self.notify(trf("Wiederholt: %@", &[&label]), "redo-2", None, Some(Box::new(|lib: &mut Library| lib.undo())));
     }
 
-    fn apply_step(&mut self, step: Step) -> Step {
+    /// Applies a step; returns its reverse and the changes that failed, so they can be tried again.
+    fn apply_step(&mut self, step: Step) -> (Step, Vec<Change>) {
         self.rows_moved = true;
-        let mut inverse: Vec<Change> = step.changes.into_iter().rev().filter_map(|c| self.apply_change(c)).collect();
+        let (mut inverse, mut failed) = (Vec::new(), Vec::new());
+        for change in step.changes.into_iter().rev() {
+            match self.apply_change(change.clone()) {
+                Some(done) => inverse.push(done),
+                None => failed.push(change),
+            }
+        }
         inverse.reverse();
+        failed.reverse();
         self.refresh();
-        Step { label: step.label, changes: inverse }
+        (Step { label: step.label, changes: inverse }, failed)
     }
 
     fn apply_change(&mut self, change: Change) -> Option<Change> {
@@ -1345,15 +1386,21 @@ impl Library {
                     }
                     let target = unique_path(&to);
                     move_path(&from, &target)?;
+                    self.path_moved(&from, &target);
                     Change::Move { from: target, to: from }
                 }
-                Change::Trash(path) => {
-                    trash::delete(&path)?;
-                    Change::Restore(path)
-                }
-                Change::Restore(path) => {
-                    restore_from_trash(&path)?;
+                Change::Trash(path) => trash_with_copy(&path)?,
+                Change::Restore { path, backup } => {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    move_path(&backup, &unique_path(&path))?;
                     Change::Trash(path)
+                }
+                Change::Replaced { path, backup } => {
+                    let current = stash(&path)?;
+                    move_path(&backup, &path)?;
+                    Change::Replaced { path, backup: current }
                 }
                 Change::Highlights { key, list } => {
                     let before = self.store_highlights(&key, list);
@@ -1370,7 +1417,7 @@ impl Library {
         match result {
             Ok(inverse) => Some(inverse),
             Err(e) => {
-                self.last_error = Some(trf("Rückgängig fehlgeschlagen: %@", &[&e]));
+                self.last_error = Some(trf("Rückgängig fehlgeschlagen: %@", &[&explain(&e)]));
                 None
             }
         }
@@ -1445,6 +1492,9 @@ impl Library {
         })();
         match result {
             Ok(target) => {
+                if inside {
+                    self.path_moved(path, &target);
+                }
                 self.refresh();
                 if announce {
                     let change = filing_change(path, &target, inside);
@@ -1504,22 +1554,68 @@ impl Library {
         if name == name_of(file) {
             return;
         }
-        let target = unique_path(&file.with_file_name(name));
+        let target = rename_target(file, name);
         match move_path(file, &target) {
             Ok(()) => {
+                self.path_moved(file, &target);
                 self.refresh();
                 let change = Change::Move { from: target.clone(), to: file.to_path_buf() };
                 self.commit(trf("Umbenannt: %@", &[&name_of(&target)]), "pencil", vec![change]);
+                self.last_renamed = Some(target);
             }
             Err(e) => self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&explain(&e.into())])),
         }
     }
 
+    /// Keeps tabs, open notes, links and remembered positions on a file that moved.
+    fn path_moved(&mut self, from: &Path, to: &Path) {
+        let settled = |p: &Path| p.parent().and_then(|d| dunce::canonicalize(d).ok()).zip(p.file_name()).map_or_else(|| p.to_path_buf(), |(d, n)| d.join(n));
+        let (from, to) = (settled(from), settled(to));
+        let swap = |p: &mut PathBuf| {
+            if *p == from {
+                *p = to.clone();
+            }
+        };
+        self.open_documents.iter_mut().for_each(swap);
+        self.closed_documents.iter_mut().for_each(swap);
+        self.active_document.iter_mut().for_each(swap);
+        self.split_document.iter_mut().for_each(swap);
+        if self.note_windows.remove(&from) {
+            self.note_windows.insert(to.clone());
+        }
+        if let Route::Doc(p) = &mut self.route {
+            swap(p);
+        }
+        if let Some(mut buffer) = self.buffers.remove(&from) {
+            buffer.moved_to(&to);
+            self.buffers.insert(to.clone(), buffer);
+        }
+        let (old, new) = (self.relative_path(&from), self.relative_path(&to));
+        let mut relinked = false;
+        for rel in self.state.linked_files.values_mut().flatten().filter(|r| **r == old) {
+            rel.clone_from(&new);
+            relinked = true;
+        }
+        if relinked {
+            self.save_state();
+        }
+        let (key, moved) = (from.to_string_lossy().to_string(), to.to_string_lossy().to_string());
+        if prefs::get().pdf_positions.contains_key(&key) {
+            prefs::update(|p| {
+                if let Some(position) = p.pdf_positions.remove(&key) {
+                    p.pdf_positions.insert(moved, position);
+                }
+            });
+        }
+        self.save_documents();
+    }
+
     pub fn rename_all(&mut self, items: Vec<(PathBuf, String)>) {
         let mut done: Vec<Change> = Vec::new();
         for (file, name) in items.into_iter().filter(|(f, n)| *n != name_of(f)) {
-            let target = unique_path(&file.with_file_name(&name));
+            let target = rename_target(&file, &name);
             if move_path(&file, &target).is_ok() {
+                self.path_moved(&file, &target);
                 done.push(Change::Move { from: target, to: file });
             }
         }
@@ -1530,10 +1626,10 @@ impl Library {
     }
 
     pub fn trash(&mut self, path: &Path) {
-        match trash::delete(path) {
-            Ok(()) => {
+        match trash_with_copy(path) {
+            Ok(change) => {
                 self.refresh();
-                self.commit(trf("In den Papierkorb: %@", &[&name_of(path)]), "trash-2", vec![Change::Restore(path.to_path_buf())]);
+                self.commit(trf("In den Papierkorb: %@", &[&name_of(path)]), "trash-2", vec![change]);
             }
             Err(_) => self.last_error = Some(tr("Konnte nicht in den Papierkorb gelegt werden. Prüfe, ob die Datei noch existiert und nicht gerade in einer anderen App offen ist.")),
         }
@@ -1543,8 +1639,8 @@ impl Library {
     pub fn trash_all(&mut self, paths: &[PathBuf]) {
         let mut done: Vec<Change> = Vec::new();
         for path in paths {
-            match trash::delete(path) {
-                Ok(()) => done.push(Change::Restore(path.clone())),
+            match trash_with_copy(path) {
+                Ok(change) => done.push(change),
                 Err(_) => self.last_error = Some(tr("Konnte nicht in den Papierkorb gelegt werden. Prüfe, ob die Datei noch existiert und nicht gerade in einer anderen App offen ist.")),
             }
         }
@@ -1998,6 +2094,57 @@ pub fn unique_path(path: &Path) -> PathBuf {
     unreachable!()
 }
 
+/// The folder for copies kept only for undo. It lies outside the workspace, so syncing never sees it.
+fn undo_folder() -> Option<PathBuf> {
+    super::prefs::data_dir().map(|d| d.join("undo"))
+}
+
+/// Keeps a copy of a file for undo; on APFS the copy takes no extra space.
+fn stash(path: &Path) -> Result<PathBuf> {
+    let dir = undo_folder().ok_or_else(|| anyhow::anyhow!("no data folder"))?.join(uuid::Uuid::new_v4().to_string());
+    std::fs::create_dir_all(&dir)?;
+    let copy = dir.join(name_of(path));
+    copy_path(path, &copy)?;
+    Ok(copy)
+}
+
+/// Removes undo copies older than a week; the undo history only lasts one session anyway.
+fn prune_undo_copies() {
+    let Some(entries) = undo_folder().and_then(|d| std::fs::read_dir(d).ok()) else { return };
+    let week = std::time::Duration::from_secs(7 * 24 * 3600);
+    for entry in entries.flatten() {
+        if entry.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|age| age > week)) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+fn trash_with_copy(path: &Path) -> Result<Change> {
+    let backup = stash(path)?;
+    if let Err(e) = trash::delete(path) {
+        let _ = backup.parent().map(std::fs::remove_dir_all);
+        return Err(e.into());
+    }
+    Ok(Change::Restore { path: path.to_path_buf(), backup })
+}
+
+/// Where a rename goes; changing only the case of a name on a case-insensitive disk is not a collision.
+fn rename_target(file: &Path, name: &str) -> PathBuf {
+    let wanted = file.with_file_name(name);
+    if same_file(file, &wanted) { wanted } else { unique_path(&wanted) }
+}
+
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a != b && std::fs::metadata(a).ok().zip(std::fs::metadata(b).ok()).is_some_and(|(x, y)| x.ino() == y.ino() && x.dev() == y.dev())
+}
+
+#[cfg(not(unix))]
+fn same_file(_: &Path, _: &Path) -> bool {
+    false
+}
+
 fn move_path(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::rename(from, to).or_else(|_| {
         copy_path(from, to)?;
@@ -2036,27 +2183,6 @@ pub fn reveal(path: &Path) {
 /// What takes back filing `original` as `target`: moving it back, or trashing the copy of an outside file.
 fn filing_change(original: &Path, target: &Path, moved: bool) -> Change {
     if moved { Change::Move { from: target.to_path_buf(), to: original.to_path_buf() } } else { Change::Trash(target.to_path_buf()) }
-}
-
-#[cfg(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-fn restore_from_trash(original: &Path) -> Result<()> {
-    let item = trash::os_limited::list()?.into_iter().filter(|i| i.original_path() == original).max_by_key(|i| i.time_deleted).ok_or_else(|| anyhow::anyhow!("{} is not in the trash", original.display()))?;
-    trash::os_limited::restore_all([item])?;
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn restore_from_trash(original: &Path) -> Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home folder"))?;
-    let candidate = home.join(".Trash").join(name_of(original));
-    if !candidate.exists() {
-        anyhow::bail!("{} is not in the trash", name_of(original));
-    }
-    if let Some(parent) = original.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    move_path(&candidate, &unique_path(original))?;
-    Ok(())
 }
 
 /// Zips the whole workspace into `destination`; run off the main thread.

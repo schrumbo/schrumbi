@@ -24,10 +24,12 @@ pub fn export(path: &Path, text: Option<String>, cx: &mut App) {
         return;
     }
     let Some(text) = text.or_else(|| std::fs::read_to_string(path).ok()) else { return };
-    let target = path.with_extension("pdf");
+    let beside = path.with_extension("pdf");
+    let target = if beside.exists() && !pdf_export::is_export(&beside) { library::unique_path(&beside) } else { beside };
     let meta = meta(path, cx);
     let options = Options::current();
     let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let replaced = state::read(cx, |l| l.keep_for_undo(&target));
     act(cx, |l| {
         l.exporting_pdfs.insert(source.clone());
     });
@@ -41,6 +43,7 @@ pub fn export(path: &Path, text: Option<String>, cx: &mut App) {
                 match result {
                     Ok(()) => {
                         l.refresh();
+                        l.record_export(&target, replaced);
                         let name = target.file_name().unwrap_or_default().to_string_lossy().to_string();
                         l.notify(trf("PDF erstellt: %@", &[&name]), "file-text", Some(tr("Öffnen")), Some(Box::new(move |l| l.open_file(&target))));
                     }
