@@ -96,6 +96,8 @@ pub struct Prefs {
     pub note_accent: String,
     /// Where each PDF was last read, by path.
     pub pdf_positions: std::collections::BTreeMap<String, PdfPosition>,
+    /// Where reading a note stopped, by its path.
+    pub note_places: std::collections::BTreeMap<String, f32>,
     pub pdf_header: bool,
     pub pdf_page_numbers: bool,
     pub editor_font_size: f32,
@@ -120,6 +122,8 @@ pub struct Prefs {
     pub shortcuts: BTreeMap<String, Shortcut>,
     pub disabled_shortcuts: BTreeSet<String>,
     pub git: BTreeMap<String, GitPrefs>,
+    /// Where notes of a vault are written: `obsidian`, `schrumbi`, or empty for Obsidian whenever it knows the vault.
+    pub edit_notes_in: String,
     /// An Obsidian vault outside the workspace, by workspace path.
     pub vaults: BTreeMap<String, std::path::PathBuf>,
     /// A Git to use instead of the one found automatically.
@@ -149,6 +153,7 @@ impl Default for Prefs {
             language: String::new(),
             note_accent: DEFAULT_ACCENT.into(),
             pdf_positions: Default::default(),
+            note_places: Default::default(),
             pdf_header: true,
             pdf_page_numbers: true,
             editor_font_size: 13.,
@@ -168,6 +173,7 @@ impl Default for Prefs {
             shortcuts: BTreeMap::new(),
             disabled_shortcuts: BTreeSet::new(),
             git: BTreeMap::new(),
+            edit_notes_in: String::new(),
             vaults: BTreeMap::new(),
             git_path: None,
             tray: true,

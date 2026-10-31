@@ -38,6 +38,11 @@ impl Git {
     }
 }
 
+/// Obsidian rewrites its window layout on every click; that is never a change worth keeping.
+fn is_window_state(path: &str) -> bool {
+    path.strip_prefix(".obsidian/").is_some_and(|name| name == "workspace" || (name.starts_with("workspace") && name.ends_with(".json")))
+}
+
 /// Parses `git status --porcelain=v2 --branch -z`.
 pub fn parse(out: &str) -> RepoStatus {
     let mut s = RepoStatus::default();
@@ -100,5 +105,6 @@ pub fn parse(out: &str) -> RepoStatus {
     if !has_counts {
         s.upstream = None;
     }
+    s.changed.retain(|c| !is_window_state(&c.path));
     s
 }

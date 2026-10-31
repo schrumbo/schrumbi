@@ -127,6 +127,55 @@ pub fn unique_notes(root: &Path) -> UniqueNotes {
     read_json(root.join(".obsidian/zk-prefixer.json"))
 }
 
+/// The property types in `.obsidian/types.json`.
+pub fn property_types(root: &Path) -> std::collections::HashMap<String, super::frontmatter::PropertyKind> {
+    use super::frontmatter::PropertyKind as K;
+    let Ok(bytes) = std::fs::read(root.join(".obsidian/types.json")) else { return Default::default() };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return Default::default() };
+    let Some(types) = value.get("types").and_then(|v| v.as_object()) else { return Default::default() };
+    types
+        .iter()
+        .filter_map(|(name, kind)| {
+            let kind = match kind.as_str()? {
+                "text" => K::Text,
+                "multitext" => K::List,
+                "number" => K::Number,
+                "checkbox" => K::Checkbox,
+                "date" => K::Date,
+                "datetime" => K::DateTime,
+                "tags" => K::Tags,
+                _ => return None,
+            };
+            Some((name.clone(), kind))
+        })
+        .collect()
+}
+
+/// Whether Obsidian can be asked to open files of this vault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    Known,
+    /// Obsidian is here, but this folder has never been opened as a vault.
+    UnknownVault,
+    NotInstalled,
+}
+
+/// Decides from Obsidian's own list of vaults.
+pub fn reach(root: &Path, known: &[KnownVault], installed: bool) -> Reach {
+    if known.iter().any(|v| root.starts_with(&v.path) || dunce::canonicalize(&v.path).is_ok_and(|p| root.starts_with(p))) {
+        Reach::Known
+    } else if installed || !known.is_empty() {
+        Reach::UnknownVault
+    } else {
+        Reach::NotInstalled
+    }
+}
+
+/// Whether Obsidian seems to be installed on this device.
+pub fn obsidian_installed() -> bool {
+    obsidian_dir().is_some() || Path::new("/Applications/Obsidian.app").exists() || dirs::home_dir().is_some_and(|h| h.join("Applications/Obsidian.app").exists())
+}
+
 /// A bookmark from Obsidian's own list.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Bookmark {
@@ -288,6 +337,15 @@ mod tests {
         assert_eq!(b[1].subpath.as_deref(), Some("#H"));
         assert_eq!(b[2].query.as_deref(), Some("tag:x"));
         assert!(bookmarks(&dir.join("nichts")).is_empty());
+    }
+
+    #[test]
+    fn knows_whether_obsidian_can_open_a_vault() {
+        let known = vec![KnownVault { name: "V".into(), path: PathBuf::from("/x/V") }];
+        assert_eq!(reach(Path::new("/x/V"), &known, true), Reach::Known);
+        assert_eq!(reach(Path::new("/x/Anders"), &known, true), Reach::UnknownVault);
+        assert_eq!(reach(Path::new("/x/V"), &[], true), Reach::UnknownVault);
+        assert_eq!(reach(Path::new("/x/V"), &[], false), Reach::NotInstalled);
     }
 
     #[test]

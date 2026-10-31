@@ -19,6 +19,7 @@ pub enum ShortcutAction {
     Refresh,
     Sync,
     DailyNote,
+    OpenInObsidian,
     Bold,
     Italic,
     Link,
@@ -62,7 +63,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 32] = [
+    pub const ALL: [ShortcutAction; 33] = [
         Self::QuickOpen,
         Self::SearchFiles,
         Self::NewEntry,
@@ -78,6 +79,7 @@ impl ShortcutAction {
         Self::Refresh,
         Self::Sync,
         Self::DailyNote,
+        Self::OpenInObsidian,
         Self::Bold,
         Self::Italic,
         Self::Link,
@@ -115,6 +117,7 @@ impl ShortcutAction {
             Self::Refresh => "refresh",
             Self::Sync => "syncNow",
             Self::DailyNote => "dailyNote",
+            Self::OpenInObsidian => "openInObsidian",
             Self::Bold => "bold",
             Self::Italic => "italic",
             Self::Link => "link",
@@ -137,7 +140,7 @@ impl ShortcutAction {
 
     pub fn group(self) -> Group {
         match self {
-            Self::Sync | Self::DailyNote | Self::QuickOpen | Self::SearchFiles | Self::NewEntry | Self::NewFile | Self::GoBack | Self::ToggleInspector | Self::Refresh => Group::General,
+            Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::NewEntry | Self::NewFile | Self::GoBack | Self::ToggleInspector | Self::Refresh => Group::General,
             Self::CloseTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf => Group::Documents,
             _ => Group::Editor,
         }
@@ -154,6 +157,7 @@ impl ShortcutAction {
             Self::Refresh => "Aktualisieren",
             Self::Sync => "Jetzt synchronisieren",
             Self::DailyNote => "Tagesnotiz öffnen",
+            Self::OpenInObsidian => "In Obsidian öffnen",
             Self::CloseTab => "Tab schließen",
             Self::NextTab => "Nächster Tab",
             Self::PreviousTab => "Vorheriger Tab",
@@ -199,6 +203,7 @@ impl ShortcutAction {
             Self::Refresh => s("r", true, false, false, false),
             Self::Sync => s("s", true, true, false, false),
             Self::DailyNote => s("d", true, false, true, false),
+            Self::OpenInObsidian => s("o", true, false, true, false),
             Self::CloseTab => s("w", true, false, false, false),
             Self::NextTab => s("tab", false, false, false, true),
             Self::PreviousTab => s("tab", false, true, false, true),

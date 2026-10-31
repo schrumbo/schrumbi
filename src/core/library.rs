@@ -264,6 +264,8 @@ pub struct Library {
     pub note_pick: Option<(bool, PathBuf)>,
     /// The note shown as slides.
     pub slides: Option<PathBuf>,
+    /// Size and time of open files, to recognize them after another app moved them.
+    document_stamps: HashMap<PathBuf, (u64, std::time::SystemTime)>,
     /// Asks the details column to show a note's versions.
     pub show_versions: bool,
     /// The note the graph centers on and how far it reaches; `None` shows the whole vault.
@@ -372,6 +374,7 @@ impl Library {
             is_vault: false,
             note_pick: None,
             slides: None,
+            document_stamps: HashMap::new(),
             show_versions: false,
             graph_focus: None,
             notes_tag: None,
@@ -735,6 +738,31 @@ impl Library {
         }
     }
 
+    /// Changes a note in one step. Reads the file first, so what another app just saved is never overwritten.
+    pub fn edit_note(&mut self, path: &Path, kind: &str, label: String, edit: impl FnOnce(&str) -> String) -> bool {
+        let buffer = self.buffer(path);
+        buffer.reload_if_changed();
+        if buffer.conflict.is_some() {
+            self.last_error = Some(trf("„%@“ wurde auch in einer anderen App geändert. Entscheide zuerst, welche Version bleibt.", &[&name_of(path)]));
+            return false;
+        }
+        let before = buffer.text.clone();
+        let updated = edit(&before);
+        if updated == before {
+            return false;
+        }
+        match self.buffer(path).restore(updated) {
+            Ok(()) => {
+                self.record_edit(kind, label, Change::Note { path: path.to_path_buf(), text: before });
+                true
+            }
+            Err(e) => {
+                self.last_error = Some(explain(&e.into()));
+                false
+            }
+        }
+    }
+
     /// Appends a template to a note, filled for this moment.
     pub fn insert_template(&mut self, note: &Path, template: &Path) {
         let Some(root) = self.vault_root() else { return };
@@ -742,18 +770,20 @@ impl Library {
         let Ok(raw) = std::fs::read_to_string(template) else { return };
         let title = note.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         let filled = super::vault::moment::fill_template(&raw, &title, Local::now(), &settings.templates.date_format, &settings.templates.time_format, super::i18n::is_english());
-        let buffer = self.buffer(note);
-        let before = buffer.text.clone();
-        let separator = if before.is_empty() || before.ends_with('\n') { "" } else { "\n" };
-        match buffer.restore(format!("{before}{separator}{filled}")) {
-            Ok(()) => self.commit(tr("Vorlage eingefügt"), "file-plus", vec![Change::Note { path: note.to_path_buf(), text: before }]),
-            Err(e) => self.last_error = Some(explain(&e.into())),
-        }
+        self.edit_note(note, "template", tr("Vorlage eingefügt"), |before| {
+            let separator = if before.is_empty() || before.ends_with('\n') { "" } else { "\n" };
+            format!("{before}{separator}{filled}")
+        });
     }
 
     /// Moves part of a note into a new note beside it and leaves a link in its place.
     pub fn extract_to_note(&mut self, note: &Path, range: std::ops::Range<usize>) -> Option<PathBuf> {
-        let before = self.buffer(note).text.clone();
+        let buffer = self.buffer(note);
+        buffer.reload_if_changed();
+        if buffer.conflict.is_some() {
+            return None;
+        }
+        let before = buffer.text.clone();
         let selected = before.get(range.clone())?.to_string();
         if selected.trim().is_empty() {
             return None;
@@ -784,6 +814,11 @@ impl Library {
         let text = self.buffers.get(source).map(|b| b.text.clone()).or_else(|| std::fs::read_to_string(source).ok()).unwrap_or_default();
         let body = text[super::vault::frontmatter::body_offset(&text)..].trim_start().to_string();
         let buffer = self.buffer(target);
+        buffer.reload_if_changed();
+        if buffer.conflict.is_some() {
+            self.last_error = Some(trf("„%@“ wurde auch in einer anderen App geändert. Entscheide zuerst, welche Version bleibt.", &[&name_of(target)]));
+            return;
+        }
         let before = buffer.text.clone();
         let separator = if before.is_empty() { "" } else if before.ends_with("\n\n") { "" } else if before.ends_with('\n') { "\n" } else { "\n\n" };
         if let Err(e) = buffer.restore(format!("{before}{separator}{body}")) {
@@ -878,6 +913,9 @@ impl Library {
         let (mut changes, mut count) = (Vec::new(), 0);
         let relative = |p: &Path| p.strip_prefix(&before.root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
         for source in sources {
+            if let Some(buffer) = self.buffers.get_mut(&source) {
+                buffer.reload_if_changed();
+            }
             let open = self.buffers.get(&source).map(|b| b.text.clone());
             let Some(text) = open.clone().or_else(|| std::fs::read_to_string(&source).ok()) else { continue };
             let rewritten = if source.extension().is_some_and(|e| e.eq_ignore_ascii_case("canvas")) {
@@ -1061,6 +1099,7 @@ impl Library {
         }
         self.index_count = count;
         self.is_indexing = false;
+        self.follow_outside_moves();
         self.changed();
     }
 
@@ -1957,6 +1996,43 @@ impl Library {
         }
     }
 
+    /// Notices when another app renamed or moved an open file: same size and time means the same file.
+    /// Returns whether a tab followed. Files that are simply gone stay as they are, shown as missing.
+    pub fn follow_outside_moves(&mut self) -> bool {
+        let stamp = |p: &Path| std::fs::metadata(p).ok().and_then(|m| Some((m.len(), m.modified().ok()?)));
+        let open: Vec<PathBuf> = self.open_documents.iter().chain(self.split_document.iter()).cloned().collect();
+        self.document_stamps.retain(|p, _| open.contains(p));
+        let mut gone = Vec::new();
+        for path in &open {
+            match stamp(path) {
+                Some(now) => {
+                    self.document_stamps.insert(path.clone(), now);
+                }
+                None => gone.extend(self.document_stamps.remove(path).map(|s| (path.clone(), s))),
+            }
+        }
+        if gone.is_empty() {
+            return false;
+        }
+        let roots: Vec<PathBuf> = self.root.iter().cloned().chain(self.external_vault()).collect();
+        let mut files: Vec<PathBuf> = Vec::new();
+        for root in &roots {
+            let root = dunce::canonicalize(root).unwrap_or_else(|_| root.clone());
+            files.extend(walkdir::WalkDir::new(&root).min_depth(1).into_iter().filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.')).filter_map(Result::ok).filter(|e| e.file_type().is_file()).map(|e| e.into_path()));
+        }
+        let mut followed = false;
+        for (from, known) in gone {
+            let matches: Vec<&PathBuf> = files.iter().filter(|f| !open.contains(f) && stamp(f) == Some(known)).collect();
+            if let [to] = matches[..] {
+                let to = to.clone();
+                self.document_stamps.insert(to.clone(), known);
+                self.path_moved(&from, &to);
+                followed = true;
+            }
+        }
+        followed
+    }
+
     /// Keeps tabs, open notes, links and remembered positions on a file that moved.
     fn path_moved(&mut self, from: &Path, to: &Path) {
         let settled = |p: &Path| p.parent().and_then(|d| dunce::canonicalize(d).ok()).zip(p.file_name()).map_or_else(|| p.to_path_buf(), |(d, n)| d.join(n));
@@ -2286,6 +2362,7 @@ impl Library {
             self.split_document = None;
             self.save_documents();
         }
+        self.follow_outside_moves();
         self.active_document = Some(path.clone());
         self.set_route(Route::Doc(path));
     }

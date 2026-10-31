@@ -23,6 +23,8 @@ pub struct NoteFacts {
     pub blocks: Vec<(String, usize)>,
     pub properties: Vec<frontmatter::Property>,
     pub words: usize,
+    /// Footnote definitions: label, text and line.
+    pub footnotes: Vec<(String, String, usize)>,
 }
 
 /// A place where a note is linked or mentioned.
@@ -47,6 +49,11 @@ pub struct VaultIndex {
     pub tags: BTreeMap<String, Vec<PathBuf>>,
     /// Folder of `Mod/Datei` style note ids, for the file tree.
     pub generation: u64,
+    /// Whether Obsidian can open files of this vault on this device.
+    pub reach: Option<super::config::Reach>,
+    pub bookmarks: Vec<super::config::Bookmark>,
+    /// Property types Obsidian remembers, by name.
+    pub types: HashMap<String, frontmatter::PropertyKind>,
 }
 
 static CURRENT: LazyLock<RwLock<Arc<VaultIndex>>> = LazyLock::new(Default::default);
@@ -79,7 +86,9 @@ pub fn facts_of(text: &str, modified: f64) -> NoteFacts {
     tags.extend(frontmatter::tags(text));
     tags.sort();
     tags.dedup();
-    NoteFacts { modified, links, tags, aliases: frontmatter::aliases(text), headings: links::headings(text), blocks: links::block_ids(text), properties: frontmatter::properties(text).unwrap_or_default(), words: text.split_whitespace().count() }
+    static FOOTNOTE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\[\^([^\]]+)\]:\s*(.*)$").unwrap());
+    let footnotes = lines.iter().enumerate().filter_map(|(i, l)| FOOTNOTE.captures(l).map(|c| (c[1].to_string(), c[2].to_string(), i))).collect();
+    NoteFacts { footnotes, modified, links, tags, aliases: frontmatter::aliases(text), headings: links::headings(text), blocks: links::block_ids(text), properties: frontmatter::properties(text).unwrap_or_default(), words: text.split_whitespace().count() }
 }
 
 fn time_of(path: &Path) -> f64 {
@@ -159,7 +168,7 @@ fn assemble(root: PathBuf, files: Vec<PathBuf>, notes: HashMap<PathBuf, NoteFact
     for list in tags.values_mut() {
         list.sort();
     }
-    VaultIndex { config: VaultConfig::read(&root), root, resolver, notes, files, backlinks, missing, tags, generation: 0 }
+    VaultIndex { reach: Some(super::config::reach(&root, &super::config::known_vaults(), super::config::obsidian_installed())), bookmarks: super::config::bookmarks(&root), types: super::config::property_types(&root), config: VaultConfig::read(&root), root, resolver, notes, files, backlinks, missing, tags, generation: 0 }
 }
 
 impl VaultIndex {

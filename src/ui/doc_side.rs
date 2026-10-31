@@ -15,7 +15,6 @@ use super::state::{self, act};
 use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::tr;
-use crate::core::library::Change;
 use crate::core::markdown;
 use crate::core::vault::frontmatter::{self, Property, PropertyKind};
 use crate::core::vault::index::{self, Mention};
@@ -236,7 +235,7 @@ impl DocSide {
                 .into_any_element();
             list = list.child(self.section("side-outline", tr("Gliederung"), count, body, t, cx));
         }
-        let footnotes = footnote_list(path);
+        let footnotes = facts.footnotes.clone();
         if !footnotes.is_empty() {
             let count = footnotes.len();
             let source = from.clone();
@@ -252,12 +251,6 @@ impl DocSide {
         }
         div().id("side-links").size_full().overflow_y_scrollbar().child(list).into_any_element()
     }
-}
-
-fn footnote_list(path: &Path) -> Vec<(String, String, usize)> {
-    static NOTE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^\[\^([^\]]+)\]:\s*(.*)$").unwrap());
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    text.split('\n').enumerate().filter_map(|(i, l)| NOTE.captures(l).map(|c| (c[1].to_string(), c[2].to_string(), i))).collect()
 }
 
 /// Opens a note at a line.
@@ -329,20 +322,9 @@ fn kind_icon(kind: PropertyKind) -> &'static str {
     }
 }
 
-/// Reads the types Obsidian remembers per name; one type per name in the whole vault.
+/// The type Obsidian remembers for a name; one type per name in the whole vault.
 fn known_kind(name: &str) -> Option<PropertyKind> {
-    let root = index::current().root.clone();
-    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join(".obsidian/types.json")).ok()?).ok()?;
-    Some(match value.get("types")?.get(name)?.as_str()? {
-        "text" => PropertyKind::Text,
-        "multitext" => PropertyKind::List,
-        "number" => PropertyKind::Number,
-        "checkbox" => PropertyKind::Checkbox,
-        "date" => PropertyKind::Date,
-        "datetime" => PropertyKind::DateTime,
-        "tags" => PropertyKind::Tags,
-        _ => return None,
-    })
+    index::current().types.get(name).copied()
 }
 
 impl PropertyEditor {
@@ -362,13 +344,7 @@ impl PropertyEditor {
 
     fn write(&mut self, label: String, edit: impl FnOnce(&str) -> String, cx: &mut Context<Self>) {
         let Some(path) = self.path.clone() else { return };
-        act(cx, |l| {
-            let before = l.buffer(&path).text.clone();
-            let updated = edit(&before);
-            if updated != before && l.buffer(&path).restore(updated).is_ok() {
-                l.record_edit("property", label, Change::Note { path: path.clone(), text: before });
-            }
-        });
+        act(cx, |l| l.edit_note(&path, "property", label, edit));
         state::reindex(cx);
         cx.notify();
     }

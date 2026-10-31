@@ -76,7 +76,7 @@ impl NoteCompletion {
             return facts.headings.iter().enumerate().filter(|(_, (_, h, _))| score(h, sub).is_some()).map(|(i, (level, h, _))| item(h.clone(), Some("#".repeat(*level as usize)), format!("{i:05}"), range, format!("[[{prefix}#{h}{close}"))).collect();
         }
         let folder = self.note.parent().map(PathBuf::from);
-        let mut found: Vec<(i64, String, String, String)> = Vec::new();
+        let mut found: Vec<(i64, String, Option<String>, &PathBuf)> = Vec::new();
         for path in &vault.files {
             let is_note = crate::core::markdown::is_markdown(path);
             let name = if is_note { path.file_stem() } else { path.file_name() }.map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -94,17 +94,24 @@ impl NoteCompletion {
             } else {
                 0
             };
-            let link = vault.link_path(from, path);
-            let relative = path.strip_prefix(&vault.root).ok().and_then(|p| p.parent()).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
-            let (label, new_text) = match by_alias.filter(|(s, _)| by_name.is_none_or(|n| *s < n)) {
-                Some((_, alias)) => (format!("{alias} → {name}"), format!("[[{link}|{alias}{close}")),
-                None => (name.clone(), format!("[[{link}{close}")),
-            };
-            found.push((best + near + i64::from(!is_note) * 300, label, relative, new_text));
+            let alias = by_alias.filter(|(s, _)| by_name.is_none_or(|n| *s < n)).map(|(_, a)| a);
+            found.push((best + near + i64::from(!is_note) * 300, name, alias, path));
         }
-        found.sort();
+        found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         found.truncate(40);
-        let mut items: Vec<CompletionItem> = found.into_iter().enumerate().map(|(i, (_, label, detail, text))| item(label, (!detail.is_empty()).then_some(detail), format!("{i:05}"), range, text)).collect();
+        let mut items: Vec<CompletionItem> = found
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, name, alias, path))| {
+                let link = vault.link_path(from, path);
+                let detail = path.strip_prefix(&vault.root).ok().and_then(|p| p.parent()).map(|p| p.to_string_lossy().replace('\\', "/")).filter(|d| !d.is_empty());
+                let (label, text) = match alias {
+                    Some(alias) => (format!("{alias} → {name}"), format!("[[{link}|{alias}{close}")),
+                    None => (name, format!("[[{link}{close}")),
+                };
+                item(label, detail, format!("{i:05}"), range, text)
+            })
+            .collect();
         let exact = typed.trim();
         if !exact.is_empty() && vault.resolve(exact, from).is_none() && !exact.contains('|') {
             items.push(item(format!("{} „{exact}“", tr("Neue Notiz")), None, "99999".into(), range, format!("[[{exact}{close}")));

@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -166,6 +167,19 @@ fn plugin_block(plugin: &str, code: &str, id: u64, t: &Theme) -> AnyElement {
         .into_any_element()
 }
 
+/// The plugin a whole note belongs to, by its front matter or name.
+pub fn note_plugin(path: &Path, text: &str) -> Option<&'static str> {
+    let name = path.file_name()?.to_string_lossy().to_lowercase();
+    let head = &text[..crate::core::vault::frontmatter::body_offset(text)];
+    if name.ends_with(".excalidraw.md") || head.contains("excalidraw-plugin") {
+        Some("Excalidraw")
+    } else if head.contains("kanban-plugin") {
+        Some("Kanban")
+    } else {
+        None
+    }
+}
+
 #[derive(IntoElement)]
 struct QueryBlock {
     query: String,
@@ -222,23 +236,62 @@ struct BaseBlock {
     id: u64,
 }
 
+type BaseTable = Result<(Vec<String>, Vec<bases::ResultRow>), String>;
+
+thread_local! {
+    static BASE_TABLES: RefCell<HashMap<(String, Option<PathBuf>, u64), Rc<BaseTable>>> = RefCell::new(HashMap::new());
+    static FILE_TEXTS: RefCell<HashMap<PathBuf, (Option<std::time::SystemTime>, Rc<String>)>> = RefCell::new(HashMap::new());
+}
+
+/// A file's text, read again only when its time changed.
+fn cached_text(path: &Path) -> Rc<String> {
+    let time = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    FILE_TEXTS.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some((known, text)) = c.get(path)
+            && *known == time
+        {
+            return text.clone();
+        }
+        let text = Rc::new(std::fs::read_to_string(path).unwrap_or_default());
+        c.insert(path.to_path_buf(), (time, text.clone()));
+        text
+    })
+}
+
+/// A table only changes with its source or the vault, so scrolling past it costs nothing.
+fn base_table(source: &str, this: Option<&Path>, vault: &index::VaultIndex) -> Rc<BaseTable> {
+    let key = (source.to_string(), this.map(PathBuf::from), vault.generation);
+    if let Some(known) = BASE_TABLES.with(|c| c.borrow().get(&key).cloned()) {
+        return known;
+    }
+    let table: BaseTable = bases::Base::parse(source).and_then(|base| {
+        let view = base.views.first().cloned().unwrap_or_default();
+        base.rows(&view, vault, this, chrono::Local::now()).map(|rows| (base.columns(&view).iter().map(|c| base.column_label(c)).collect(), rows))
+    });
+    let table = Rc::new(table);
+    BASE_TABLES.with(|c| {
+        let mut c = c.borrow_mut();
+        c.retain(|k, _| k.2 == vault.generation);
+        c.insert(key, table.clone());
+    });
+    table
+}
+
 impl RenderOnce for BaseBlock {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let t = Theme::get(cx);
         let vault = index::current();
-        let table = bases::Base::parse(&self.source).map_err(|e| e).and_then(|base| {
-            let view = base.views.first().cloned().unwrap_or_default();
-            base.rows(&view, &vault, self.this.as_deref(), chrono::Local::now()).map(|rows| (base.columns(&view).iter().map(|c| base.column_label(c)).collect::<Vec<_>>(), rows))
-        });
-        let body: AnyElement = match table {
-            Err(e) => notice("triangle-alert", t.orange, tr("Diese Ansicht lässt sich nicht lesen."), Some(e), div(), &t).into_any_element(),
+        let table = base_table(&self.source, self.this.as_deref(), &vault);
+        let body: AnyElement = match table.as_ref() {
+            Err(e) => notice("triangle-alert", t.orange, tr("Diese Ansicht lässt sich nicht lesen."), Some(e.clone()), div(), &t).into_any_element(),
             Ok((columns, rows)) if rows.is_empty() => {
                 let _ = columns;
                 div().p(px(space::M)).child(caption(tr("Keine Notizen passen zu diesem Filter"), &t)).into_any_element()
             }
             Ok((columns, rows)) => {
                 let head = div().flex().bg(t.secondary_bg).font_weight(FontWeight::SEMIBOLD).text_size(px(font::CALLOUT)).children(columns.iter().map(|c| div().flex_1().min_w_0().truncate().px(px(space::S)).py(px(space::XS)).child(c.clone())));
-                let lines = rows.into_iter().take(100).enumerate().map(|(i, row)| {
+                let lines = rows.iter().take(100).enumerate().map(|(i, row)| {
                     let open = row.path.clone();
                     let hover = t.ink.opacity(0.05);
                     div().id(("base-row", (self.id as usize) * 1000 + i)).flex().border_t_1().border_color(t.separator).cursor_pointer().hover(move |s| s.bg(hover)).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).children(row.cells.iter().map(|(_, v)| div().flex_1().min_w_0().truncate().px(px(space::S)).py(px(space::XS)).text_size(px(font::CALLOUT)).child(v.display())))
@@ -252,7 +305,7 @@ impl RenderOnce for BaseBlock {
 
 /// `![[x.base]]`.
 pub fn base_file(path: PathBuf, id: u64, t: &Theme) -> AnyElement {
-    let source = std::fs::read_to_string(&path).unwrap_or_default();
+    let source = cached_text(&path).to_string();
     let open = path.clone();
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     div()
@@ -284,7 +337,7 @@ pub fn pdf_page(path: &std::path::Path, page: usize, cx: &mut App) -> Option<Arc
 
 /// `![[x.canvas]]`: the cards as shapes, as Obsidian does; a click opens it.
 pub fn canvas_file(path: PathBuf, id: u64, t: &Theme) -> AnyElement {
-    let doc = std::fs::read_to_string(&path).ok().and_then(|s| canvas::Canvas::parse(&s)).unwrap_or_default();
+    let doc = canvas::Canvas::parse(&cached_text(&path)).unwrap_or_default();
     let Some((x0, y0, x1, y1)) = doc.bounds() else { return div().p(px(space::M)).child(caption(tr("Leeres Canvas"), t)).into_any_element() };
     let (width, height) = ((x1 - x0).max(1.) as f32, (y1 - y0).max(1.) as f32);
     let scale = (640_f32 / width).min(240. / height).min(1.);

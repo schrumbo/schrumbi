@@ -63,7 +63,7 @@ pub struct Output {
 /// Sorts Git's English error text; `Git` forces that language with `LC_ALL=C`.
 pub fn classify(stderr: &str) -> GitError {
     let has = |needles: &[&str]| needles.iter().any(|n| stderr.contains(n));
-    if has(&["index.lock", "Another git process"]) {
+    if has(&["index.lock", "Another git process", "would be overwritten by merge"]) {
         GitError::Locked
     } else if has(&["Please tell me who you are", "empty ident name", "unable to auto-detect email"]) {
         GitError::NoIdentity

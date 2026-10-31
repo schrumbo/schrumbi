@@ -133,6 +133,7 @@ impl Git {
         if untrack_backups {
             self.run(&["rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ".schrumbi-backup"])?;
         }
+        self.run(&["rm", "-q", "--cached", "--ignore-unmatch", "--", ".obsidian/workspace.json", ".obsidian/workspace-mobile.json", ".obsidian/workspace"])?;
         let staged = self.output(&["diff", "--cached", "--quiet"], None, LOCAL)?;
         if staged.code == 0 {
             return Ok(None);

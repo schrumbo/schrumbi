@@ -37,6 +37,8 @@ actions!(
     ]
 );
 
+const NOTE_PLACES: usize = 500;
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
     Read,
@@ -54,6 +56,7 @@ pub struct NoteView {
     /// Editor and reader offsets at the last sync of the split view.
     split_sync: (f32, f32),
     link_focus: markdown_view::LinkFocus,
+    place_restored: bool,
     path: PathBuf,
     mode: Mode,
     editor: Entity<EditorState>,
@@ -140,7 +143,7 @@ impl NoteView {
         let revision = state::lib(cx).update(cx, |l, _| l.buffer(&path).revision);
         let reader_scroll = ScrollHandle::new();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_scroll: reader_scroll.clone(), heading_anchors: Vec::new(), found: None, split_sync: (0., 0.), link_focus: markdown_view::LinkFocus { index: None, anchor: ScrollAnchor::for_handle(reader_scroll.clone()), found: Rc::default(), note: Some(own_path) }, parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_scroll: reader_scroll.clone(), heading_anchors: Vec::new(), found: None, split_sync: (0., 0.), link_focus: markdown_view::LinkFocus { index: None, anchor: ScrollAnchor::for_handle(reader_scroll.clone()), found: Rc::default(), note: Some(own_path) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -238,6 +241,23 @@ impl NoteView {
 
     fn focus_lost(&mut self, cx: &mut Context<Self>) {
         self.save(cx);
+        self.remember_place();
+    }
+
+    /// Keeps where reading stopped, for coming back to it after a restart.
+    fn remember_place(&self) {
+        let offset = f32::from(-self.reader_scroll.offset().y);
+        let key = self.path.to_string_lossy().to_string();
+        let known = prefs::get().note_places.get(&key).copied().unwrap_or(0.);
+        if self.place_restored && (known - offset).abs() > 1. {
+            prefs::update(|p| {
+                p.note_places.insert(key, offset);
+                while p.note_places.len() > NOTE_PLACES {
+                    let Some(first) = p.note_places.keys().next().cloned() else { break };
+                    p.note_places.remove(&first);
+                }
+            });
+        }
     }
 
     pub fn save(&mut self, cx: &mut Context<Self>) {
@@ -379,7 +399,12 @@ impl NoteView {
         }
         let (e1, path, p2, p3) = (me.clone(), self.path.clone(), self.path.clone(), self.path.clone());
         let embedded = self.embedded;
-        let in_vault = state::read(cx, |l| l.is_vault) && self.path.starts_with(&index::current().root);
+        let in_vault = super::vault_tools::in_vault(&self.path, cx);
+        let writes_there = super::vault_tools::writes_in_obsidian(&self.path, cx);
+        let hand_over = in_vault.then(|| {
+            let button = super::vault_tools::obsidian_button("note-obsidian", self.path.clone());
+            if writes_there { button.icon(menu_icon("pencil")).label(tr("In Obsidian bearbeiten")) } else { button }
+        });
         let headings = self.parsed.as_ref().filter(|_| self.mode != Mode::Edit).map(|(_, p)| p.headings()).unwrap_or_default();
         let anchors = self.heading_anchors.clone();
         let toc = (headings.len() >= 2 && anchors.len() == headings.len()).then(|| {
@@ -397,7 +422,8 @@ impl NoteView {
             .flex()
             .items_center()
             .gap(px(space::S))
-            .child(modes)
+            .when(!writes_there || self.mode != Mode::Read, |d| d.child(modes))
+            .children(hand_over)
             .children(toc)
             .child(Button::new("note-pdf").small().icon(menu_icon("share")).label("PDF").tooltip(tr("Als PDF neben der Notiz sichern (⇧⌘E)")).disabled(exporting).on_click(move |_, _, cx| e1.update(cx, |n, cx| n.export(cx))))
             .child(Button::new("note-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, _, _| {
@@ -413,9 +439,8 @@ impl NoteView {
                     .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| library::reveal(&b)))
                     .item(PopupMenuItem::new(tr("Mit Standard-App öffnen")).icon(menu_icon("square-arrow-out-up-right")).on_click(move |_, _, _| library::open_path(&c)));
                 if in_vault {
-                    let (o, h, g) = (d.clone(), d.clone(), d.clone());
+                    let (h, g) = (d.clone(), d.clone());
                     menu = menu
-                        .item(PopupMenuItem::new(tr("In Obsidian öffnen")).icon(menu_icon("external-link")).on_click(move |_, _, cx| cx.open_url(&crate::core::vault::config::open_uri(&o))))
                         .item(PopupMenuItem::new(tr("Graph um diese Notiz")).icon(menu_icon("waypoints")).on_click(move |_, _, cx| {
                             let p = g.clone();
                             act(cx, |l| l.show_graph(Some(p)));
@@ -437,9 +462,18 @@ impl NoteView {
             .into_any_element()
     }
 
-    fn reader(&mut self, lib_text: &str, t: &Theme, _cx: &mut Context<Self>) -> AnyElement {
+    fn reader(&mut self, lib_text: &str, t: &Theme, window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
         if lib_text.trim().is_empty() {
             return div().p(px(space::XXL)).text_color(t.secondary).child(tr("Leere Notiz. Zum Schreiben auf „Bearbeiten“ wechseln.")).into_any_element();
+        }
+        if !std::mem::replace(&mut self.place_restored, true)
+            && let Some(offset) = prefs::get().note_places.get(&self.path.to_string_lossy().to_string()).copied()
+        {
+            let scroll = self.reader_scroll.clone();
+            window.on_next_frame(move |window, _| {
+                scroll.set_offset(point(px(0.), px(-offset)));
+                window.refresh();
+            });
         }
         let parsed = match &self.parsed {
             Some((rev, p)) if *rev == self.revision => p.clone(),
@@ -453,20 +487,20 @@ impl NoteView {
         let path = self.path.clone();
         let toggle: markdown_view::OnToggle = Rc::new(move |line, cx: &mut App| {
             let path = path.clone();
-            state::lib(cx).update(cx, |l, cx| {
-                let b = l.buffer(&path);
-                let next = markdown::toggle_task(&b.text, line);
-                b.replace(next);
-                let _ = b.save();
-                cx.notify();
+            act(cx, |l| {
+                l.edit_note(&path, "task", tr("Aufgabe geändert"), |text| markdown::toggle_task(text, line));
             });
         });
         let base = self.path.parent().map(Path::to_path_buf);
+        let plugin = super::embeds::note_plugin(&self.path, lib_text).map(|name| {
+            let path = self.path.clone();
+            div().pb(px(space::L)).child(notice("puzzle", t.blue, trf("Diese Notiz gehört zum Obsidian-Plugin %@", &[&name.to_string()]), Some(tr("Hier siehst du nur ihren Text. Darstellen kann sie Obsidian.")), Button::new("plugin-open").small().label(tr("In Obsidian öffnen")).on_click(move |_, _, cx| super::vault_tools::open_in_obsidian(&path, cx)), t))
+        });
         div()
             .relative()
             .size_full()
             .bg(t.content)
-            .child(div().id("note-reader").size_full().overflow_y_scroll().track_scroll(&self.reader_scroll).child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).py(px(space::XL)).child(markdown_view::render_with_anchors(&parsed, base.as_deref(), Some(toggle), &self.heading_anchors, self.found.as_ref(), Some(&self.link_focus), t)))))
+            .child(div().id("note-reader").size_full().overflow_y_scroll().track_scroll(&self.reader_scroll).child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).py(px(space::XL)).children(plugin).child(markdown_view::render_with_anchors(&parsed, base.as_deref(), Some(toggle), &self.heading_anchors, self.found.as_ref(), Some(&self.link_focus), t)))))
             .vertical_scrollbar(&self.reader_scroll)
             .into_any_element()
     }
@@ -651,10 +685,13 @@ impl Render for NoteView {
         }
         let t = Theme::get(cx);
         let lib = state::lib(cx);
-        let (missing, text, conflict) = lib.update(cx, |l, _| {
+        let (missing, text, conflict, dirty) = lib.update(cx, |l, _| {
             let b = l.buffer(&self.path);
-            (b.missing, b.text.clone(), b.conflict.is_some())
+            (b.missing, b.text.clone(), b.conflict.is_some(), b.dirty)
         });
+        if self.mode != Mode::Read && !dirty && !conflict && !self.editor.read(cx).focus_handle(cx).is_focused(window) && super::vault_tools::writes_in_obsidian(&self.path, cx) {
+            self.mode = Mode::Read;
+        }
         let request = take_find_request(&self.path, cx);
         if let Some((term, nth)) = request {
             self.reveal(&term, nth, &text, window, cx);
@@ -679,12 +716,13 @@ impl Render for NoteView {
         let content: AnyElement = if undecodable {
             unavailable("file-warning", tr("Kodierung wird nicht unterstützt"), tr("Die Datei ist nicht in UTF-8 gespeichert. Sie bleibt unverändert, öffne sie in einer anderen App."), &t).into_any_element()
         } else if missing {
-            unavailable("file-question", tr("Datei nicht gefunden"), self.path.file_name().unwrap_or_default().to_string_lossy().to_string(), &t).into_any_element()
+            let closing = self.path.clone();
+            unavailable("file-question", tr("Datei nicht gefunden"), trf("„%@“ wurde gelöscht oder außerhalb dieses Ordners verschoben.", &[&self.path.file_name().unwrap_or_default().to_string_lossy()]), &t).child(div().pt(px(space::M)).child(Button::new("missing-close").small().label(tr("Tab schließen")).on_click(move |_, _, cx| close_tab(&closing, cx)))).into_any_element()
         } else {
             match self.mode {
-                Mode::Read => self.reader(&text, &t, cx),
+                Mode::Read => self.reader(&text, &t, window, cx),
                 Mode::Edit => div().size_full().flex().flex_col().child(div().flex_1().min_h_0().child(self.editor_view(cx))).child(word_count(&text, &t)).into_any_element(),
-                Mode::Split => div().size_full().flex().child(div().flex_1().min_w_0().h_full().flex().flex_col().border_r_1().border_color(t.separator).child(div().flex_1().min_h_0().child(self.editor_view(cx))).child(word_count(&text, &t))).child(div().flex_1().min_w_0().h_full().child(self.reader(&text, &t, cx))).into_any_element(),
+                Mode::Split => div().size_full().flex().child(div().flex_1().min_w_0().h_full().flex().flex_col().border_r_1().border_color(t.separator).child(div().flex_1().min_h_0().child(self.editor_view(cx))).child(word_count(&text, &t))).child(div().flex_1().min_w_0().h_full().child(self.reader(&text, &t, window, cx))).into_any_element(),
             }
         };
         let top = if self.embedded {
@@ -701,10 +739,17 @@ impl Render for NoteView {
             .track_focus(&self.focus)
             .key_context("NoteView")
             .on_action(cx.listener(|n, _: &super::app::TogglePreview, w, cx| {
+                if super::vault_tools::writes_in_obsidian(&n.path, cx) {
+                    super::vault_tools::open_in_obsidian(&n.path, cx);
+                    return;
+                }
                 let m = if n.mode == Mode::Read { Mode::Edit } else { Mode::Read };
                 n.set_mode(m, w, cx)
             }))
             .on_action(cx.listener(|n, _: &super::app::SplitPreview, w, cx| {
+                if super::vault_tools::writes_in_obsidian(&n.path, cx) {
+                    return;
+                }
                 let m = if n.mode == Mode::Split { Mode::Edit } else { Mode::Split };
                 n.set_mode(m, w, cx)
             }))

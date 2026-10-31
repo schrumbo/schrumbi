@@ -331,6 +331,7 @@ impl QuickOpen {
                 this.index = 0;
                 cx.notify();
             }
+            InputEvent::PressEnter { secondary: true, .. } => this.hand_over(cx),
             InputEvent::PressEnter { .. } => this.open(cx),
             _ => {}
         })];
@@ -354,6 +355,19 @@ impl QuickOpen {
             scored.sort_by(|a, b| if a.1 == b.1 { b.0.date.cmp(&a.0.date) } else { b.1.total_cmp(&a.1) });
             scored.into_iter().take(40).map(|(f, _)| (f.clone(), open.contains(&&f.file.path))).collect()
         })
+    }
+
+    /// ⌘↩: straight to Obsidian, for the file that would have opened here.
+    fn hand_over(&mut self, cx: &mut Context<Self>) {
+        let files = self.results(cx);
+        let target = files.get(self.index).map(|(f, _)| f.file.path.clone()).or_else(|| {
+            let q = self.query.read(cx).value().to_string();
+            vault_hits(&q).get(self.index.saturating_sub(files.len())).and_then(|h| h.open.as_ref().map(|(p, _)| p.clone()))
+        });
+        if let Some(path) = target.filter(|p| super::vault_tools::in_vault(p, cx)) {
+            cx.emit(Dismissed);
+            super::vault_tools::open_in_obsidian(&path, cx);
+        }
     }
 
     fn open(&mut self, cx: &mut Context<Self>) {
@@ -495,6 +509,7 @@ impl Render for QuickOpen {
                     .text_size(px(font::CAPTION))
                     .text_color(t.secondary)
                     .child(hint("corner-down-left", tr("Öffnen")))
+                    .when(state::read(cx, |l| l.is_vault), |d| d.child(hint("external-link", tr("⌘↩ In Obsidian"))))
                     .child(hint("arrow-down-up", tr("Auswählen")))
                     .child(hint("x", tr("Schließen"))),
             )
@@ -559,6 +574,9 @@ impl NewNote {
                 if let Some(p) = act(cx, |l| l.create_note(&title, &folder, ext)) {
                     cx.emit(Dismissed);
                     act(cx, |l| l.open_file(&p));
+                    if super::vault_tools::writes_in_obsidian(&p, cx) {
+                        super::vault_tools::open_in_obsidian(&p, cx);
+                    }
                 }
             }
         }

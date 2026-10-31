@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -15,7 +16,7 @@ use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::NewNoteRequest;
-use crate::core::vault::{config, index};
+use crate::core::vault::index;
 
 /// Every note of the vault: tree on the left, list on the right.
 pub struct NotesPage {
@@ -23,12 +24,22 @@ pub struct NotesPage {
     open_folders: BTreeSet<String>,
     query: Entity<InputState>,
     selected: usize,
+    /// The same note stays selected when new ones arrive from Obsidian.
+    selected_path: Option<PathBuf>,
     tree_width: f32,
     show_all_tags: bool,
     tree_open: bool,
+    cache: Option<Cache>,
     focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
     _subs: Vec<Subscription>,
+}
+
+struct Cache {
+    key: (u64, String, Option<String>, Option<String>),
+    lines: Rc<Vec<Line>>,
+    children: Rc<BTreeMap<String, BTreeSet<String>>>,
+    tags: Rc<Vec<(String, usize)>>,
 }
 
 struct Line {
@@ -37,6 +48,18 @@ struct Line {
     folder: String,
     tags: Vec<String>,
     modified: f64,
+}
+
+/// When a note last changed, short enough for a row.
+pub fn changed_ago(seconds: f64) -> String {
+    let minutes = (seconds.max(0.) / 60.) as i64;
+    match minutes {
+        0 => tr("Gerade eben"),
+        1..=59 => trf("Vor %@ Min.", &[&minutes.to_string()]),
+        60..=1439 => trf("Vor %@ Std.", &[&(minutes / 60).to_string()]),
+        1440..=2879 => tr("Gestern"),
+        _ => trf("Vor %@ Tagen", &[&(minutes / 1440).to_string()]),
+    }
 }
 
 #[derive(Clone)]
@@ -51,13 +74,18 @@ impl Render for NotesSplit {
 impl NotesPage {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let query = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Notizen filtern")));
-        let subs = vec![cx.subscribe(&query, |this, _, e: &InputEvent, cx| {
-            if matches!(e, InputEvent::Change) {
-                this.selected = 0;
-                cx.notify();
-            }
-        })];
-        Self { folder: None, open_folders: BTreeSet::new(), query, selected: 0, tree_width: crate::core::prefs::get().notes_column.unwrap_or(240.), show_all_tags: false, tree_open: false, focus: cx.focus_handle(), list_scroll: UniformListScrollHandle::new(), _subs: subs }
+        let lib = state::lib(cx);
+        let subs = vec![
+            cx.subscribe(&query, |this, _, e: &InputEvent, cx| {
+                if matches!(e, InputEvent::Change) {
+                    this.selected = 0;
+                    this.selected_path = None;
+                    cx.notify();
+                }
+            }),
+            cx.observe(&lib, |_, _, cx| cx.notify()),
+        ];
+        Self { folder: None, open_folders: BTreeSet::new(), query, selected: 0, selected_path: None, tree_width: crate::core::prefs::get().notes_column.unwrap_or(240.), show_all_tags: false, tree_open: false, cache: None, focus: cx.focus_handle(), list_scroll: UniformListScrollHandle::new(), _subs: subs }
     }
 
     fn lines(&self, tag: Option<&str>, cx: &App) -> Vec<Line> {
@@ -136,20 +164,39 @@ impl NotesPage {
         self.selected = 0;
     }
 
+    /// What the page shows, worked out once per vault state and filter: scrolling draws often.
+    fn refresh_cache(&mut self, tag: Option<String>, cx: &App) {
+        let vault = index::current();
+        let key = (vault.generation, self.query.read(cx).value().to_string(), self.folder.clone(), tag.clone());
+        if self.cache.as_ref().is_some_and(|c| c.key == key) {
+            return;
+        }
+        let same_vault = self.cache.as_ref().is_some_and(|c| c.key.0 == vault.generation);
+        let lines = Rc::new(self.lines(tag.as_deref(), cx));
+        let (children, tags) = match self.cache.take().filter(|_| same_vault) {
+            Some(old) => (old.children, old.tags),
+            None => {
+                let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+                for path in vault.notes.keys() {
+                    let Ok(rel) = path.strip_prefix(&vault.root) else { continue };
+                    let rel = rel.to_string_lossy().replace('\\', "/");
+                    let mut parent = String::new();
+                    let parts: Vec<&str> = rel.split('/').collect();
+                    for part in &parts[..parts.len().saturating_sub(1)] {
+                        let full = if parent.is_empty() { part.to_string() } else { format!("{parent}/{part}") };
+                        children.entry(parent.clone()).or_default().insert(full.clone());
+                        parent = full;
+                    }
+                }
+                (Rc::new(children), Rc::new(vault.tag_tree()))
+            }
+        };
+        self.cache = Some(Cache { key, lines, children, tags });
+    }
+
     fn tree(&self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let vault = index::current();
-        let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        for path in vault.notes.keys() {
-            let Ok(rel) = path.strip_prefix(&vault.root) else { continue };
-            let rel = rel.to_string_lossy().replace('\\', "/");
-            let mut parent = String::new();
-            let parts: Vec<&str> = rel.split('/').collect();
-            for part in &parts[..parts.len().saturating_sub(1)] {
-                let full = if parent.is_empty() { part.to_string() } else { format!("{parent}/{part}") };
-                children.entry(parent.clone()).or_default().insert(full.clone());
-                parent = full;
-            }
-        }
+        let children = self.cache.as_ref().map(|c| c.children.clone()).unwrap_or_default();
         let hover = t.ink.opacity(0.05);
         let mut list = div().py(px(space::S)).flex().flex_col();
         let all_selected = self.folder.is_none();
@@ -221,7 +268,7 @@ impl NotesPage {
                     })),
             );
         }
-        let marks = config::bookmarks(&vault.root);
+        let marks = vault.bookmarks.clone();
         if !marks.is_empty() {
             list = list.child(div().px(px(space::M)).pt(px(space::L)).pb(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(tr("Lesezeichen")));
             for (i, mark) in marks.into_iter().enumerate() {
@@ -269,7 +316,11 @@ impl Render for NotesPage {
         let t = Theme::get(cx);
         let vault = index::current();
         let tag = state::read(cx, |l| l.notes_tag.clone());
-        let lines = self.lines(tag.as_deref(), cx);
+        self.refresh_cache(tag.clone(), cx);
+        let lines = self.cache.as_ref().map(|c| c.lines.clone()).unwrap_or_default();
+        if let Some(at) = self.selected_path.as_ref().and_then(|p| lines.iter().position(|l| l.path == *p)) {
+            self.selected = at;
+        }
         self.selected = self.selected.min(lines.len().saturating_sub(1));
         let narrow = window.bounds().size.width < px(1100.);
         let toggle_tree = narrow.then(|| {
@@ -286,7 +337,7 @@ impl Render for NotesPage {
             s.tree_width = f32::from(e.event.position.x - left).clamp(160., 420.);
             cx.notify();
         }));
-        let tags = vault.tag_tree();
+        let tags = self.cache.as_ref().map(|c| c.tags.clone()).unwrap_or_default();
         let shown_tags = if self.show_all_tags { tags.len() } else { tags.len().min(12) };
         let more = tags.len() - shown_tags;
         let current_tag = tag.clone();
@@ -340,7 +391,8 @@ impl Render for NotesPage {
             });
         let count = lines.len();
         let selected = self.selected;
-        let rows: Vec<(PathBuf, String, String, Vec<String>)> = lines.into_iter().map(|l| (l.path, l.name, l.folder, l.tags)).collect();
+        let now = chrono::Local::now().timestamp() as f64;
+        let rows = lines;
         let body: AnyElement = if rows.is_empty() {
             if tag.is_some() || !self.query.read(cx).value().is_empty() {
                 unavailable("search", tr("Keine Notiz passt"), tr("Ändere den Filter oder wähle ein anderes Tag."), &t).into_any_element()
@@ -354,7 +406,8 @@ impl Render for NotesPage {
                 let hover = t.ink.opacity(0.05);
                 range
                     .map(|i| {
-                        let (path, name, folder, tags) = keyed[i].clone();
+                        let line = &keyed[i];
+                        let (path, name, folder, tags, ago) = (line.path.clone(), line.name.clone(), line.folder.clone(), line.tags.clone(), changed_ago(now - line.modified));
                         let (open, menu) = (path.clone(), path.clone());
                         div()
                             .id(("notes-row", i))
@@ -369,8 +422,9 @@ impl Render for NotesPage {
                             .when(i == selected, |d| d.bg(t.ink.opacity(0.08)))
                             .when(i != selected, |d| d.soft(hover, 0.))
                             .child(file_icon(&path, iconsize::M))
-                            .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(name)).child(caption(folder, &t).truncate()))
+                            .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(name)).when(!folder.is_empty(), |d| d.child(caption(folder, &t).truncate())))
                             .children(tags.first().map(|tag| div().flex_none().px(px(space::S)).py(px(space::XXS)).rounded(px(radius::FULL)).bg(t.ink.opacity(0.08)).text_size(px(font::CAPTION)).text_color(t.secondary).child(format!("#{tag}"))))
+                            .child(caption(ago, &t).flex_none().font_features(tabular()))
                             .on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
                             .context_menu(move |m, _, _| file_menu(m, menu.clone()))
                             .into_any_element()
@@ -381,7 +435,7 @@ impl Render for NotesPage {
             .size_full()
             .into_any_element()
         };
-        let keys = rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>();
+        let keys = rows.clone();
         div()
             .id("notes-page")
             .track_focus(&self.focus)
@@ -410,11 +464,17 @@ impl Render for NotesPage {
                     return;
                 }
                 match e.keystroke.key.as_str() {
-                    "down" => s.selected = (s.selected + 1).min(keys.len().saturating_sub(1)),
-                    "up" => s.selected = s.selected.saturating_sub(1),
+                    "down" => {
+                        s.selected = (s.selected + 1).min(keys.len().saturating_sub(1));
+                        s.selected_path = keys.get(s.selected).map(|l| l.path.clone());
+                    }
+                    "up" => {
+                        s.selected = s.selected.saturating_sub(1);
+                        s.selected_path = keys.get(s.selected).map(|l| l.path.clone());
+                    }
                     "enter" => {
-                        if let Some(p) = keys.get(s.selected) {
-                            let p = p.clone();
+                        if let Some(line) = keys.get(s.selected) {
+                            let p = line.path.clone();
                             act(cx, |l| l.open_file(&p));
                         }
                         return;

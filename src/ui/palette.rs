@@ -154,7 +154,7 @@ fn commands(cx: &App) -> Vec<Command> {
                 let p = d.clone();
                 act(cx, |l| l.slides = Some(p));
             })));
-            add(&vault, tr("In Obsidian öffnen"), "external-link", None, Run::Call(Rc::new(move |cx| cx.open_url(&crate::core::vault::config::open_uri(&e)))));
+            add(&vault, tr("In Obsidian öffnen"), "external-link", keys(S::OpenInObsidian), Run::Call(Rc::new(move |cx| super::vault_tools::open_in_obsidian(&e, cx))));
             add(&vault, tr("Auswahl in neue Notiz auslagern"), "scissors", None, Run::Action(Box::new(super::documents::ExtractSelection)));
         }
     }

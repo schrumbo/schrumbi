@@ -48,6 +48,7 @@ pub struct BaseView {
     focus: FocusHandle,
     list: UniformListScrollHandle,
     version: u64,
+    seen_generation: u64,
     task: Option<Task<()>>,
     _subs: Vec<Subscription>,
 }
@@ -75,7 +76,7 @@ impl BaseView {
         let source = std::fs::read_to_string(&path).unwrap_or_default();
         let parsed = Base::parse(&source);
         let sort = bases::view_sort(&source, 0);
-        Self { path, source, parsed, view: 0, table: None, built: None, sort, filters_open: false, filter_rows: Vec::new(), filter_error: None, cursor: (0, 0), editing: None, closed_groups: Default::default(), focus: cx.focus_handle(), list: UniformListScrollHandle::new(), version: 0, task: None, _subs: Vec::new() }
+        Self { path, source, parsed, view: 0, table: None, built: None, sort, filters_open: false, filter_rows: Vec::new(), filter_error: None, cursor: (0, 0), editing: None, closed_groups: Default::default(), focus: cx.focus_handle(), list: UniformListScrollHandle::new(), version: 0, seen_generation: index::current().generation, task: None, _subs: Vec::new() }
     }
 
     /// Gives the keyboard to the table.
@@ -102,6 +103,10 @@ impl BaseView {
     }
 
     fn reload_if_changed(&mut self) {
+        let generation = index::current().generation;
+        if std::mem::replace(&mut self.seen_generation, generation) == generation {
+            return;
+        }
         let Ok(text) = std::fs::read_to_string(&self.path) else { return };
         if text != self.source {
             self.source = text;
@@ -267,15 +272,8 @@ impl BaseView {
         let Some(table) = &self.table else { return };
         let (Some(row), Some((_, column))) = (table.rows.get(row), table.columns.get(col)) else { return };
         let (path, column) = (row.path.clone(), column.clone());
-        state::lib(cx).update(cx, |l, cx| {
-            let text = l.buffer(&path).text.clone();
-            if let Some(updated) = bases::write_cell(&text, &column, &value) {
-                let buffer = l.buffer(&path);
-                buffer.replace(updated);
-                let _ = buffer.save();
-                l.record_edit("cell", tr("Eigenschaft geändert"), Change::Note { path: path.clone(), text });
-            }
-            cx.notify();
+        act(cx, |l| {
+            l.edit_note(&path, "cell", tr("Eigenschaft geändert"), |text| bases::write_cell(text, &column, &value).unwrap_or_else(|| text.to_string()));
         });
         state::reindex(cx);
         window_focus_after(self, cx);
@@ -510,7 +508,8 @@ impl Render for BaseView {
             let n = tb.rows.len();
             div().flex_none().px(px(space::L)).py(px(space::XS)).flex().gap(px(space::L)).border_t_1().border_color(t.separator).child(caption(if n == 1 { tr("1 Ergebnis") } else { trf("%@ Ergebnisse", &[&n.to_string()]) }, &t)).child(div().flex_1()).children(tb.summaries.iter().map(|(c, name, v)| caption(format!("{c} · {name}: {v}"), &t).font_features(tabular())))
         });
-        let tabs = super::documents::document_bar(&self.path, div().into_any_element(), &t, cx);
+        let hand_over = super::vault_tools::in_vault(&self.path, cx).then(|| super::vault_tools::obsidian_button("base-obsidian", self.path.clone()));
+        let tabs = super::documents::document_bar(&self.path, div().children(hand_over).into_any_element(), &t, cx);
         div()
             .id("base-page")
             .track_focus(&self.focus)

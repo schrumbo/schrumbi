@@ -242,8 +242,11 @@ pub fn status_menu(menu: PopupMenu, id: &str, cx: &App) -> PopupMenu {
 
 /// Common file actions for context menus.
 pub fn file_menu(menu: PopupMenu, path: PathBuf) -> PopupMenu {
-    let (p1, p2, p3) = (path.clone(), path.clone(), path);
+    let root = crate::core::vault::index::current().root.clone();
+    let in_obsidian = !root.as_os_str().is_empty() && root.join(".obsidian").is_dir() && path.starts_with(&root);
+    let (p1, p2, p3, p4) = (path.clone(), path.clone(), path.clone(), path);
     menu.item(PopupMenuItem::new(tr("Öffnen")).on_click(move |_, _, cx| act(cx, |l| l.open_file(&p1))))
+        .when(in_obsidian, |m| m.item(PopupMenuItem::new(tr("In Obsidian öffnen")).icon(menu_icon("external-link")).on_click(move |_, _, cx| super::vault_tools::open_in_obsidian(&p4, cx))))
         .item(PopupMenuItem::new(tr("Mit Standard-App öffnen")).on_click(move |_, _, _| library::open_path(&p2)))
         .item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&p3)))
 }

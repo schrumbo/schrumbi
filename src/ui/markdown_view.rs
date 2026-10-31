@@ -981,7 +981,17 @@ impl RenderOnce for Properties {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let open = window.use_keyed_state(self.id.clone(), cx, |_, _| false);
         let is_open = *open.read(cx);
-        let summary = self.items.iter().take(4).map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(" · ");
+        let summary = self
+            .items
+            .iter()
+            .filter(|(k, _)| !k.ends_with("-plugin") && k != "aliases")
+            .take(4)
+            .map(|(k, v)| {
+                let value: String = v.chars().take(28).collect();
+                if value.is_empty() { k.clone() } else { format!("{k}: {value}") }
+            })
+            .collect::<Vec<_>>()
+            .join(" · ");
         let chevron_id = ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "chevron".into());
         let reveal_id = ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "body".into());
         let head_id = ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "head".into());

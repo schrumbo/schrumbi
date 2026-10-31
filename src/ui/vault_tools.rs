@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use gpui_kit::component::Sizable;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
@@ -12,6 +14,43 @@ use super::theme::{Theme, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::vault::{config::VaultConfig, index};
+
+/// Whether a file belongs to the vault this workspace works with.
+pub fn in_vault(path: &Path, cx: &App) -> bool {
+    state::read(cx, |l| l.is_vault) && {
+        let root = index::current().root.clone();
+        !root.as_os_str().is_empty() && dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).starts_with(root)
+    }
+}
+
+/// Whether writing in this note happens in Obsidian, with Schrumbi for reading and managing.
+pub fn writes_in_obsidian(path: &Path, cx: &App) -> bool {
+    use crate::core::vault::config::Reach;
+    if !in_vault(path, cx) {
+        return false;
+    }
+    match crate::core::prefs::get().edit_notes_in.as_str() {
+        "obsidian" => true,
+        "schrumbi" => false,
+        _ => index::current().reach == Some(Reach::Known),
+    }
+}
+
+/// Opens a file in Obsidian, or says why that cannot work here.
+pub fn open_in_obsidian(path: &Path, cx: &mut App) {
+    use crate::core::vault::config::{self, Reach};
+    let root = index::current().root.clone();
+    match config::reach(&root, &config::known_vaults(), config::obsidian_installed()) {
+        Reach::Known => cx.open_url(&config::open_uri(&dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))),
+        Reach::UnknownVault => act(cx, |l| l.notify(tr("Obsidian kennt diesen Ordner noch nicht. Öffne ihn dort einmal mit „Ordner als Vault öffnen“."), "info", None, None)),
+        Reach::NotInstalled => act(cx, |l| l.notify(tr("Obsidian ist auf diesem Gerät nicht installiert."), "info", None, None)),
+    }
+}
+
+/// The button that hands a file over to Obsidian.
+pub fn obsidian_button(id: &'static str, path: PathBuf) -> Button {
+    Button::new(id).small().icon(menu_icon("external-link")).label("Obsidian").tooltip(tr("In Obsidian öffnen")).on_click(move |_, _, cx| open_in_obsidian(&path, cx))
+}
 
 /// What choosing a note in the picker does.
 #[derive(Clone)]

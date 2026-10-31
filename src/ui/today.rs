@@ -8,7 +8,7 @@ use gpui_kit::*;
 use super::board;
 use super::state::act;
 use super::motion::Soft;
-use super::theme::{Theme, font, space, iconsize, radius};
+use super::theme::{Theme, control, font, space, iconsize, radius};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::{tr, trf};
@@ -40,6 +40,42 @@ pub fn render(lib: &Library, width: f32, t: &Theme) -> Div {
                 .child(board::render(lib, &days, width < 7. * 100. + 36. + 48., t)),
         )
         .children(exams(lib, t))
+        .children(recent_notes(lib, t))
+}
+
+/// Back from Obsidian: what was written last, one click away.
+fn recent_notes(lib: &Library, t: &Theme) -> Option<Div> {
+    if !lib.is_vault {
+        return None;
+    }
+    let vault = crate::core::vault::index::current();
+    let mut notes: Vec<(&std::path::PathBuf, f64)> = vault.notes.iter().filter(|(p, _)| crate::core::markdown::is_markdown(p)).map(|(p, f)| (p, f.modified)).collect();
+    notes.sort_by(|a, b| b.1.total_cmp(&a.1));
+    notes.truncate(5);
+    if notes.is_empty() {
+        return None;
+    }
+    let now = chrono::Local::now().timestamp() as f64;
+    let hover = t.ink.opacity(0.05);
+    let rows = notes.into_iter().enumerate().map(|(i, (path, modified))| {
+        let (open, menu) = (path.clone(), path.clone());
+        div()
+            .id(("recent-note", i))
+            .h(px(control::M))
+            .px(px(space::M))
+            .flex()
+            .items_center()
+            .gap(px(space::S))
+            .cursor_pointer()
+            .key_nav()
+            .soft(hover, 0.)
+            .child(file_icon(path, iconsize::S))
+            .child(div().flex_1().min_w_0().truncate().child(path.file_stem().unwrap_or_default().to_string_lossy().to_string()))
+            .child(caption(super::notes_page::changed_ago(now - modified), t).flex_none())
+            .on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
+            .context_menu(move |m, _, _| file_menu(m, menu.clone()))
+    });
+    Some(div().flex().flex_col().gap(px(space::S)).child(section_title(tr("Zuletzt geschrieben"))).child(grouped(t).children(rows)))
 }
 
 fn header(lib: &Library, t: &Theme) -> Div {

@@ -757,6 +757,8 @@ impl FileBrowser {
                     }));
                 }
                 let module = f2.module_id.clone();
+                let hand_over = p.clone();
+                let menu = if super::vault_tools::in_vault(&p, cx) { menu.item(PopupMenuItem::new(tr("In Obsidian öffnen")).icon(menu_icon("external-link")).on_click(move |_, _, cx| super::vault_tools::open_in_obsidian(&hand_over, cx))) } else { menu };
                 let mut menu = menu
                     .item(PopupMenuItem::new(tr("Öffnen")).on_click(move |_, _, cx| act(cx, |l| l.open_file(&p1))))
                     .item(PopupMenuItem::new(tr("Vorschau")).on_click(move |_, _, cx| super::preview::show(&p2, cx)))

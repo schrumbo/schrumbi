@@ -15,7 +15,7 @@ fn exe() -> PathBuf {
 }
 
 fn raw(dir: &Path, args: &[&str]) {
-    let out = Command::new(exe()).current_dir(dir).args(args).env("LC_ALL", "C").output().unwrap();
+    let out = Command::new(exe()).current_dir(dir).args(args).env("LC_ALL", "C").env("GIT_CONFIG_COUNT", "1").env("GIT_CONFIG_KEY_0", "core.autocrlf").env("GIT_CONFIG_VALUE_0", "false").output().unwrap();
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
 
@@ -31,6 +31,7 @@ fn configure(dir: &Path) {
     raw(dir, &["config", "user.email", "muster@example.invalid"]);
     raw(dir, &["config", "commit.gpgsign", "false"]);
     raw(dir, &["config", "core.hooksPath", "/dev/null"]);
+    raw(dir, &["config", "core.autocrlf", "false"]);
 }
 
 /// A bare remote with one commit and two clones standing for two devices.
@@ -628,6 +629,38 @@ u UU N... 100644 100644 100644 100644 a b c k.md\0\
     let kinds: Vec<(&str, &ChangeKind)> = s.changed.iter().map(|c| (c.path.as_str(), &c.kind)).collect();
     assert_eq!(kinds, [("m.md", &ChangeKind::Modified), ("mit leer zeichen.md", &ChangeKind::Deleted), ("neu.md", &ChangeKind::New), ("ziel.md", &ChangeKind::Renamed { from: "quelle.md".into() }), ("k.md", &ChangeKind::Conflicted), ("frei.md", &ChangeKind::New)]);
     assert_eq!(parse("# branch.head (detached)\0").branch, None);
+}
+
+#[test]
+fn obsidians_window_state_leaves_the_repository_when_setting_up() {
+    let (a, _b) = devices("workspace");
+    std::fs::create_dir_all(a.root.join(".obsidian")).unwrap();
+    std::fs::write(a.root.join(".obsidian/workspace.json"), "{}").unwrap();
+    std::fs::write(a.root.join(".obsidian/app.json"), "{}").unwrap();
+    raw(&a.root, &["add", "-f", ".obsidian"]);
+    raw(&a.root, &["commit", "-q", "-m", "vault"]);
+    a.clean_up(&[".obsidian/workspace*.json".to_string()], &[], false, "Aufräumen").unwrap();
+    let tracked = a.run(&["ls-files", ".obsidian"]).unwrap();
+    assert!(tracked.contains("app.json"), "{tracked}");
+    assert!(!tracked.contains("workspace.json"), "{tracked}");
+    assert!(a.root.join(".obsidian/workspace.json").exists(), "the file itself stays");
+}
+
+#[test]
+fn obsidians_window_state_never_becomes_a_change() {
+    let (a, _b) = devices("windowstate");
+    std::fs::create_dir_all(a.root.join(".obsidian")).unwrap();
+    std::fs::write(a.root.join(".obsidian/workspace.json"), "{}").unwrap();
+    std::fs::write(a.root.join(".obsidian/workspace-mobile.json"), "{}").unwrap();
+    std::fs::write(a.root.join(".obsidian/app.json"), "{}").unwrap();
+    let paths: Vec<String> = a.status().unwrap().changed.into_iter().map(|c| c.path).collect();
+    assert!(paths.iter().any(|p| p == ".obsidian/app.json"), "{paths:?}");
+    assert!(!paths.iter().any(|p| p.contains("workspace")), "{paths:?}");
+}
+
+#[test]
+fn a_file_saved_during_a_merge_counts_as_busy() {
+    assert_eq!(classify("error: Your local changes to the following files would be overwritten by merge:\n\ta.md"), GitError::Locked);
 }
 
 #[test]

@@ -37,6 +37,7 @@ actions!(
         Refresh,
         SyncNow,
         DailyNote,
+        OpenInObsidian,
         SyncSetup,
         ResolveConflicts,
         GoBack,
@@ -77,6 +78,12 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &OpenSettings, cx| super::settings::open(cx));
     cx.on_action(|_: &About, cx| super::settings::open_about(cx));
     cx.on_action(|_: &CheckForUpdates, cx| super::updates::check(true, cx));
+    cx.on_action(|_: &OpenInObsidian, cx| {
+        let open = state::read(cx, |l| l.active_document.clone().filter(|_| matches!(l.route(), crate::core::library::Route::Doc(_))));
+        if let Some(path) = open.filter(|p| super::vault_tools::in_vault(p, cx)) {
+            super::vault_tools::open_in_obsidian(&path, cx);
+        }
+    });
     cx.on_action(|_: &DailyNote, cx| {
         if state::read(cx, |l| l.is_vault) {
             act(cx, |l| l.open_daily_note());
@@ -258,6 +265,7 @@ pub fn bind_keys(cx: &mut App) {
             binding(ShortcutAction::Refresh, Refresh, None),
             binding(ShortcutAction::Sync, SyncNow, None),
             binding(ShortcutAction::DailyNote, DailyNote, None),
+            binding(ShortcutAction::OpenInObsidian, OpenInObsidian, None),
             Some(gpui_kit::KeyBinding::new("tab", super::canvas_view::NextItem, Some("WalkItems"))),
             Some(gpui_kit::KeyBinding::new("shift-tab", super::canvas_view::PreviousItem, Some("WalkItems"))),
             binding(ShortcutAction::CloseTab, CloseTab, None),

@@ -103,6 +103,10 @@ fn tick(cx: &mut App) {
         return;
     }
     let quiet = Duration::from_secs(settings.idle_minutes.max(1) as u64 * 60);
+    if automatic && s.error == Some(GitError::Locked) && s.started.is_some_and(|at| now.duration_since(at) > Duration::from_secs(20)) {
+        run(None, false, cx);
+        return;
+    }
     if automatic && s.conflicts.is_empty() && s.error.is_none() && s.last_change.is_some_and(|c| now.duration_since(c) >= quiet) {
         run(None, false, cx);
         return;

@@ -93,6 +93,11 @@ impl MainWindow {
                     }));
                 }
             }),
+            cx.observe_window_activation(window, |_, window, cx| {
+                if window.is_window_active() {
+                    state::came_back(cx);
+                }
+            }),
             cx.observe_window_appearance(window, |_, window, cx| {
                 theme::apply(theme::is_dark(window.appearance()), Some(window), cx);
                 cx.notify();

@@ -75,6 +75,9 @@ pub struct CanvasView {
     redo: Vec<String>,
     last_edit: Option<std::time::Instant>,
     save_task: Option<Task<()>>,
+    seen_generation: u64,
+    /// Texts of note cards, read again when the vault changed.
+    card_texts: std::cell::RefCell<std::collections::HashMap<PathBuf, (u64, String)>>,
     focus: FocusHandle,
     _subs: Vec<Subscription>,
 }
@@ -83,7 +86,7 @@ impl CanvasView {
     pub fn new(path: PathBuf, _: &mut Window, cx: &mut Context<Self>) -> Self {
         let source = std::fs::read_to_string(&path).unwrap_or_default();
         let doc = Canvas::parse(&source);
-        Self { path, doc, source, pan: (0., 0.), zoom: 1., fitted: false, selection: BTreeSet::new(), selected_edge: None, gesture: None, guides: Vec::new(), edge_mode: false, space_down: false, editing: None, bounds: Default::default(), undo: Vec::new(), redo: Vec::new(), last_edit: None, save_task: None, focus: cx.focus_handle(), _subs: Vec::new() }
+        Self { path, doc, source, pan: (0., 0.), zoom: 1., fitted: false, selection: BTreeSet::new(), selected_edge: None, gesture: None, guides: Vec::new(), edge_mode: false, space_down: false, editing: None, bounds: Default::default(), undo: Vec::new(), redo: Vec::new(), last_edit: None, save_task: None, seen_generation: index::current().generation, card_texts: Default::default(), focus: cx.focus_handle(), _subs: Vec::new() }
     }
 
     /// Gives the keyboard to the canvas.
@@ -92,7 +95,8 @@ impl CanvasView {
     }
 
     fn reload_if_changed(&mut self) {
-        if self.save_task.is_some() || self.gesture.is_some() {
+        let generation = index::current().generation;
+        if self.save_task.is_some() || self.gesture.is_some() || std::mem::replace(&mut self.seen_generation, generation) == generation {
             return;
         }
         let Ok(text) = std::fs::read_to_string(&self.path) else { return };
@@ -730,7 +734,15 @@ impl CanvasView {
                         None => div().p(px(space::S * zoom)).child(file_icon(&full, 28. * zoom)).into_any_element(),
                     }
                 } else if crate::core::markdown::is_markdown(&full) {
-                    let text = std::fs::read_to_string(&full).unwrap_or_default();
+                    let generation = index::current().generation;
+                    let text = {
+                        let mut cards = self.card_texts.borrow_mut();
+                        let entry = cards.entry(full.clone()).or_insert_with(|| (generation, std::fs::read_to_string(&full).unwrap_or_default()));
+                        if entry.0 != generation {
+                            *entry = (generation, std::fs::read_to_string(&full).unwrap_or_default());
+                        }
+                        entry.1.clone()
+                    };
                     let shown = match subpath.as_deref() {
                         Some(sub) => crate::core::vault::links::section(&text, &crate::core::vault::links::LinkTarget::parse(sub)),
                         None => text,
@@ -1034,7 +1046,8 @@ impl Render for CanvasView {
             })));
         let edge_hint = self.edge_mode.then(|| div().absolute().top(px(space::M)).right(px(space::M)).px(px(space::S)).py(px(space::XS)).rounded(px(radius::CONTROL)).bg(t.column).border_1().border_color(accent).text_size(px(font::CALLOUT)).child(tr("Kante: Tab wählt das Ziel")));
         let empty = doc.nodes.is_empty();
-        let bar = super::documents::document_bar(&self.path, div().into_any_element(), &t, cx);
+        let hand_over = super::vault_tools::in_vault(&self.path, cx).then(|| super::vault_tools::obsidian_button("canvas-obsidian", self.path.clone()));
+        let bar = super::documents::document_bar(&self.path, div().children(hand_over).into_any_element(), &t, cx);
         let surface = div()
             .id("canvas-page")
             .track_focus(&self.focus)

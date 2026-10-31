@@ -101,6 +101,7 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Sync ausschalten", Tab::Sync),
     ("Editor", Tab::Notes),
     ("Obsidian", Tab::Notes),
+    ("Notizen bearbeiten", Tab::Notes),
     ("Schriftgröße", Tab::Notes),
     ("Sichern", Tab::Notes),
     ("Pause", Tab::Notes),
@@ -1425,6 +1426,18 @@ impl Settings {
                 row(tr("Linkformat"), value(format!("{format} · {style}")), t),
                 row(tr("Vorlagen"), value(if read.templates.folder.is_empty() { tr("Kein Ordner") } else { read.templates.folder.clone() }), t),
             ];
+            let choice = prefs::get().edit_notes_in;
+            let label = match choice.as_str() {
+                "obsidian" => tr("Immer in Obsidian"),
+                "schrumbi" => tr("In Schrumbi"),
+                _ => tr("Automatisch"),
+            };
+            rows.push(row(tr("Notizen bearbeiten"), picker("edit-notes-in", label, |menu| {
+                let pick = |value: &'static str| move |_: &ClickEvent, _: &mut Window, _: &mut App| prefs::update(|p| p.edit_notes_in = value.to_string());
+                menu.item(PopupMenuItem::new(tr("Automatisch")).on_click(pick("")))
+                    .item(PopupMenuItem::new(tr("Immer in Obsidian")).on_click(pick("obsidian")))
+                    .item(PopupMenuItem::new(tr("In Schrumbi")).on_click(pick("schrumbi")))
+            }), t));
             if external.is_some() {
                 for module in modules {
                     let id = module.id.clone();
@@ -1446,7 +1459,7 @@ impl Settings {
                     state::reindex(cx);
                 }), t));
             }
-            return section(Some(tr("Obsidian")), Some(tr("Diese Werte kommen aus Obsidian und lassen sich dort ändern.")), rows, t);
+            return section(Some(tr("Obsidian")), Some(tr("Diese Werte kommen aus Obsidian und lassen sich dort ändern. Automatisch heißt: Kennt Obsidian den Ordner, wird dort geschrieben und hier gelesen und sortiert.")), rows, t);
         }
         let connect = |path: std::path::PathBuf, cx: &mut App| {
             act(cx, |l| l.connect_vault(Some(path)));

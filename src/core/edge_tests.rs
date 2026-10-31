@@ -671,3 +671,43 @@ fn a_vault_outside_the_workspace_is_searched_and_filed_under_its_module() {
     assert!(vault_index.backlinks.contains_key(&vault.join("Notizen/Mathe/Beweis.md")));
     assert!(index.content_search(&["pythagoras".to_string()], None, 10).iter().any(|h| h.file.path == vault.join("Notizen/Mathe/Satz.md")));
 }
+
+#[test]
+fn a_change_from_another_app_is_never_overwritten_by_an_edit_here() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, mut lib) = vault_folder("stale");
+    let note = root.join("N.md");
+    std::fs::write(&note, "---\nstatus: alt\n---\n- [ ] Aufgabe\n").unwrap();
+    lib.buffer(&note);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&note, "---\nstatus: alt\n---\n- [ ] Aufgabe\nAus Obsidian\n").unwrap();
+    assert!(lib.edit_note(&note, "task", "x".into(), |t| crate::core::markdown::toggle_task(t, 3)));
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "---\nstatus: alt\n---\n- [x] Aufgabe\nAus Obsidian\n");
+    lib.undo();
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "---\nstatus: alt\n---\n- [ ] Aufgabe\nAus Obsidian\n");
+    lib.buffer(&note).edited("Hier ungesichert".to_string());
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&note, "Dort gesichert\n").unwrap();
+    assert!(!lib.edit_note(&note, "task", "x".into(), |t| format!("{t}!")));
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "Dort gesichert\n");
+}
+
+#[test]
+fn a_tab_follows_a_rename_made_in_another_app() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, mut lib) = vault_folder("follow");
+    let (old, new) = (root.join("Alt.md"), root.join("Vorlagen/Neu.md"));
+    std::fs::write(&old, "Inhalt").unwrap();
+    std::fs::write(root.join("Anders.md"), "Anderer Inhalt, andere Größe").unwrap();
+    lib.open_document(&old);
+    lib.buffer(&old);
+    assert!(!lib.follow_outside_moves());
+    std::fs::rename(&old, &new).unwrap();
+    assert!(lib.follow_outside_moves());
+    assert_eq!(lib.active_document.as_ref(), Some(&new));
+    assert_eq!(lib.open_documents, vec![new.clone()]);
+    assert_eq!(lib.buffer(&new).text, "Inhalt");
+    std::fs::remove_file(&new).unwrap();
+    assert!(!lib.follow_outside_moves(), "a deleted file has nowhere to go");
+    assert_eq!(lib.open_documents, vec![new]);
+}

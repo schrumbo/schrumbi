@@ -14,7 +14,7 @@ const RELOAD_SETTLE: u64 = 150;
 pub struct Store {
     pub lib: Entity<Library>,
     watcher: Option<notify::RecommendedWatcher>,
-    vault_watcher: Option<notify::RecommendedWatcher>,
+    index_again: bool,
     watch_task: Option<Task<()>>,
     reminder_task: Option<Task<()>>,
     reminders: Vec<Reminder>,
@@ -39,7 +39,7 @@ pub fn init(cx: &mut App) {
     cx.set_global(Store {
         lib,
         watcher: None,
-        vault_watcher: None,
+        index_again: false,
         watch_task: None,
         reminder_task: None,
         reminders: Vec::new(),
@@ -128,7 +128,10 @@ pub fn scan(cx: &mut App) {
 /// Updates the search index and catalog in the background.
 pub fn reindex(cx: &mut App) {
     let lib = lib(cx);
-    let Some(job) = lib.update(cx, |l, _| l.index_job()) else { return };
+    let Some(job) = lib.update(cx, |l, _| l.index_job()) else {
+        cx.global_mut::<Store>().index_again = true;
+        return;
+    };
     let task = cx.background_spawn(async move { job.run() });
     cx.spawn(async move |cx| {
         let (count, catalog) = task.await;
@@ -136,7 +139,10 @@ pub fn reindex(cx: &mut App) {
             lib.update(cx, |l, cx| {
                 l.apply_index(count, catalog);
                 cx.notify();
-            })
+            });
+            if std::mem::take(&mut cx.global_mut::<Store>().index_again) {
+                reindex(cx);
+            }
         });
     })
     .detach();
@@ -157,7 +163,6 @@ pub fn close_workspace(cx: &mut App) {
     flush_pending(cx);
     let store = cx.global_mut::<Store>();
     store.watcher = None;
-    store.vault_watcher = None;
     store.watch_task = None;
     crate::core::vault::index::reset();
     super::sync::workspace_closed(cx);
@@ -170,9 +175,11 @@ struct Change {
     content: bool,
     config: bool,
     history: bool,
+    /// Obsidian's own settings changed, which only the vault index reads.
+    vault_settings: bool,
 }
 
-fn classify(event: &notify::Event) -> Change {
+fn classify(event: &notify::Event, roots: &[PathBuf]) -> Change {
     let mut c = Change::default();
     for p in &event.paths {
         let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -185,7 +192,12 @@ fn classify(event: &notify::Event) -> Change {
             c.config = true;
             continue;
         }
-        if p.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')) || name.starts_with('~') {
+        let inside = roots.iter().find_map(|r| p.strip_prefix(r).ok()).unwrap_or(p);
+        if inside.starts_with(".obsidian") && name.ends_with(".json") && !name.starts_with("workspace") {
+            c.vault_settings = true;
+            continue;
+        }
+        if inside.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')) || name.starts_with('~') {
             continue;
         }
         match event.kind {
@@ -201,10 +213,15 @@ fn classify(event: &notify::Event) -> Change {
 /// (e.g. note autosaves) only refresh the search index, later and without touching deadlines.
 fn watch(root: PathBuf, cx: &mut App) {
     let (tx, rx) = async_channel::unbounded::<Change>();
+    let vault = read(cx, |l| l.external_vault());
+    let mut roots = vec![dunce::canonicalize(&root).unwrap_or_else(|_| root.clone())];
+    roots.extend(vault.iter().map(|v| dunce::canonicalize(v).unwrap_or_else(|_| v.clone())));
+    roots.push(root.clone());
+    roots.extend(vault.clone());
     let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(e) = res {
-            let c = classify(&e);
-            if c.structural || c.content || c.config || c.history {
+            let c = classify(&e, &roots);
+            if c.structural || c.content || c.config || c.history || c.vault_settings {
                 let _ = tx.send_blocking(c);
             }
         }
@@ -212,6 +229,9 @@ fn watch(root: PathBuf, cx: &mut App) {
     let Ok(mut watcher) = watcher else { return };
     if watcher.watch(&root, RecursiveMode::Recursive).is_err() {
         return;
+    }
+    if let Some(vault) = &vault {
+        let _ = watcher.watch(vault, RecursiveMode::Recursive);
     }
     let task = cx.spawn(async move |cx| {
         while let Ok(change) = rx.recv().await {
@@ -221,6 +241,7 @@ fn watch(root: PathBuf, cx: &mut App) {
                 c.content |= more.content;
                 c.config |= more.config;
                 c.history |= more.history;
+                c.vault_settings |= more.vault_settings;
             }
             cx.update(|cx| changed(c, cx));
         }
@@ -228,35 +249,22 @@ fn watch(root: PathBuf, cx: &mut App) {
     let store = cx.global_mut::<Store>();
     store.watcher = Some(watcher);
     store.watch_task = Some(task);
-    watch_vault(cx);
 }
 
-/// Watches a connected vault as well, so changes made in Obsidian arrive.
+/// Watches a newly connected or removed vault too.
 pub fn watch_vault(cx: &mut App) {
-    cx.global_mut::<Store>().vault_watcher = None;
-    let Some(vault) = read(cx, |l| l.external_vault()) else { return };
-    let (tx, rx) = async_channel::unbounded::<()>();
-    let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if res.is_ok() {
-            let _ = tx.try_send(());
-        }
-    });
-    let Ok(mut watcher) = watcher else { return };
-    if watcher.watch(&vault, RecursiveMode::Recursive).is_err() {
-        return;
+    if let Some(root) = read(cx, |l| l.root.clone()) {
+        watch(root, cx);
     }
-    cx.spawn(async move |cx| {
-        while rx.recv().await.is_ok() {
-            cx.background_executor().timer(Duration::from_millis(500)).await;
-            while rx.try_recv().is_ok() {}
-            cx.update(|cx| {
-                reindex(cx);
-                super::sync::touched(cx);
-            });
-        }
-    })
-    .detach();
-    cx.global_mut::<Store>().vault_watcher = Some(watcher);
+}
+
+/// Coming back from another app: what happened there shows right away.
+pub fn came_back(cx: &mut App) {
+    reload_buffers(cx);
+    if read(cx, |l| l.is_vault) {
+        cx.global_mut::<Store>().pending_index = None;
+        reindex(cx);
+    }
 }
 
 fn changed(c: Change, cx: &mut App) {
@@ -288,11 +296,23 @@ fn changed(c: Change, cx: &mut App) {
         });
         cx.global_mut::<Store>().pending_reload = Some(task);
     }
-    if c.structural || c.content {
-        let delay = if c.structural { 3 } else { 10 };
+    if c.structural || c.content || c.vault_settings {
+        let vault = read(cx, |l| l.is_vault);
+        let delay = match (vault, c.structural) {
+            (true, _) => 2,
+            (false, true) => 3,
+            (false, false) => 10,
+        };
+        let store = cx.global_mut::<Store>();
+        if vault && store.pending_index.is_some() {
+            return;
+        }
         let task = cx.spawn(async move |cx| {
             cx.background_executor().timer(Duration::from_secs(delay)).await;
-            cx.update(reindex);
+            cx.update(|cx| {
+                cx.global_mut::<Store>().pending_index = None;
+                reindex(cx);
+            });
         });
         cx.global_mut::<Store>().pending_index = Some(task);
     }
@@ -302,6 +322,9 @@ fn changed(c: Change, cx: &mut App) {
 fn reload_buffers(cx: &mut App) {
     let lib = lib(cx);
     lib.update(cx, |l, cx| {
+        if l.follow_outside_moves() {
+            cx.notify();
+        }
         if l.buffers.values_mut().fold(false, |any, b| b.reload_if_changed() || any) {
             cx.notify();
         }
