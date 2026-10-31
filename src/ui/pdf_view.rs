@@ -162,6 +162,11 @@ impl PdfView {
         self
     }
 
+    pub fn take_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focused_once = true;
+        window.focus(&self.focus, cx);
+    }
+
     pub fn new(path: &Path, cx: &mut Context<Self>) -> Self {
         let (result_tx, result_rx) = async_channel::unbounded();
         let (queue, jobs, search_generation) = pdf_worker::start(path.to_path_buf(), result_tx);

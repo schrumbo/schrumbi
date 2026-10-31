@@ -221,7 +221,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                         .text_size(px(font::CAPTION2))
                         .text_color(t.tertiary)
                         .child(first)
-                        .child(div().flex_1().text_center().child(tr("Grün: Woche erledigt · Rot: offen geblieben · Blau: jetzt · Grau: Pause oder kommend")))
+                        .child(div().flex_1())
                         .child(last),
                 ),
         )

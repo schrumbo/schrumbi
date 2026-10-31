@@ -157,7 +157,12 @@ pub fn data_dir() -> Option<PathBuf> {
 }
 
 static PREFS: LazyLock<RwLock<Prefs>> = LazyLock::new(|| {
-    let loaded = config_dir().and_then(|d| std::fs::read(d.join("settings.json")).ok()).and_then(|b| serde_json::from_slice(&b).ok());
+    let file = config_dir().map(|d| d.join("settings.json"));
+    let bytes = file.as_ref().and_then(|f| std::fs::read(f).ok());
+    let loaded = bytes.as_ref().and_then(|b| serde_json::from_slice(b).ok());
+    if let (None, Some(_), Some(f)) = (&loaded, &bytes, &file) {
+        let _ = std::fs::copy(f, f.with_extension("defekt.json"));
+    }
     RwLock::new(loaded.unwrap_or_default())
 });
 

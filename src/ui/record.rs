@@ -59,7 +59,7 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
                 .child(caption(tr("bestanden"), t)),
         );
 
-    let mut col = div().w_full().max_w(px(980.)).px(px(space::XXL)).py(px(space::XL)).flex().flex_col().gap(px(space::XL)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Leistungen"))).child(tiles);
+    let mut col = div().w_full().max_w(px(980.)).px(px(space::XXL)).py(px(space::XL)).flex().flex_col().gap(px(space::XL)).child(tiles);
 
     for s in &semesters {
         let ms: Vec<_> = c.modules.iter().filter(|m| m.semester == s.id).collect();
@@ -110,7 +110,7 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
         let id = i1.clone();
         edit_config(cx, |c| {
             if let Some(m) = c.module_mut(&id) {
-                m.ects = parse_number(&v);
+                m.ects = parse_number(&v).filter(|e| (0. ..=999.).contains(e));
             }
         });
     });
@@ -120,11 +120,13 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
             let id = i2.clone();
             edit_config(cx, |c| {
                 let (lo, hi) = system.range();
-                if let Some(m) = c.module_mut(&id) {
-                    m.grade = parse_number(&v).map(|g| g.clamp(lo, hi));
-                    if let Some(g) = m.grade {
-                        m.passed = system.passes(g);
-                    }
+                let Some(m) = c.module_mut(&id) else { return };
+                if v.trim().is_empty() {
+                    m.grade = None;
+                    m.passed = false;
+                } else if let Some(g) = parse_number(&v).filter(|g| (lo..=hi).contains(g)) {
+                    m.grade = Some(g);
+                    m.passed = system.passes(g);
                 }
             });
         })
@@ -204,7 +206,11 @@ fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fiel
             edit_components(&b, cx, |cs| if let Some(x) = cs.get_mut(j) { x.weight = parse_number(&v).unwrap_or(0.).max(0.) }, system)
         });
         let grade = fields.input(&format!("comp-grade-{id}-{j}"), &comp.grade.map(|g| format_number(g, 2)).unwrap_or_default(), &tr("Note"), window, cx, move |v, cx| {
-            edit_components(&cc, cx, |cs| if let Some(x) = cs.get_mut(j) { x.grade = parse_number(&v) }, system)
+            let (lo, hi) = system.range();
+            let parsed = parse_number(&v).filter(|g| (lo..=hi).contains(g));
+            if parsed.is_some() || v.trim().is_empty() {
+                edit_components(&cc, cx, |cs| if let Some(x) = cs.get_mut(j) { x.grade = parsed }, system)
+            }
         });
         col = col.child(
             div()
@@ -239,7 +245,7 @@ fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fiel
             let id = id.clone();
             edit_config(cx, |c| {
                 if let Some(m) = c.module_mut(&id) {
-                    m.target_grade = parse_number(&v);
+                    m.target_grade = parse_number(&v).filter(|g| (system.range().0..=system.range().1).contains(g));
                 }
             })
         });

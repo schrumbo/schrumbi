@@ -1,3 +1,4 @@
+use gpui_kit::component::WindowExt;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -28,10 +29,14 @@ pub struct Pages {
     preview: Entity<FilePreview>,
     module_files: Entity<FileBrowser>,
     inbox: Entity<super::inbox::InboxPage>,
-    module_drop: bool,
     docs: std::collections::HashMap<std::path::PathBuf, AnyView>,
     split_share: f32,
     shown_doc: Option<std::path::PathBuf>,
+    /// The shown document gets the keyboard once no dialog holds it any more.
+    doc_needs_focus: bool,
+    inbox_shown: bool,
+    /// Tabs by last use; only the latest keep their view, a PDF view holds pages and threads.
+    doc_recent: Vec<std::path::PathBuf>,
     search_split: std::cell::Cell<bool>,
     module_split: std::cell::Cell<bool>,
     /// Width of the page area, set by the main window each frame.
@@ -85,10 +90,12 @@ impl Pages {
             preview,
             module_files,
             inbox,
-            module_drop: false,
             docs: Default::default(),
             split_share: crate::core::prefs::get().split_share,
             shown_doc: None,
+            doc_needs_focus: false,
+            inbox_shown: false,
+            doc_recent: Vec::new(),
             search_split: Default::default(),
             module_split: Default::default(),
             width: 1000.,
@@ -203,39 +210,31 @@ impl Pages {
         };
         let accent = t.accent;
         let code = m.code.clone();
-        let (v1, v2) = (view.clone(), view.clone());
         div()
             .id("module-page")
+            .group("module-page")
             .size_full()
             .relative()
             .flex()
             .flex_col()
             .child(module_page::header(lib, &m, split, width, &self.module, view, t))
             .child(body)
-            .on_drag_move::<ExternalPaths>(move |_, _, cx| v1.update(cx, |p, cx| {
-                if !p.module_drop {
-                    p.module_drop = true;
-                    cx.notify();
-                }
-            }))
             .on_drop(move |paths: &ExternalPaths, _, cx| {
                 let paths = paths.paths().to_vec();
-                v2.update(cx, |p, cx| {
-                    p.module_drop = false;
-                    cx.notify();
-                });
                 act(cx, |l| l.request_filing(paths, None));
             })
-            .when(self.module_drop, |d| {
-                d.child(
+            .child(
                     div()
                         .absolute()
                         .inset(px(10.))
+                        .invisible()
+                        .hover(|s| s)
+                        .group_drag_over::<ExternalPaths>("module-page", |s| s.visible())
                         .rounded(px(radius::CARD))
                         .border(px(3.))
                         .border_dashed()
                         .border_color(accent)
-                        .bg(accent.opacity(0.06))
+                        .bg(t.content.blend(accent.opacity(0.12)).opacity(0.94))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -245,14 +244,20 @@ impl Pages {
                         .text_color(accent)
                         .child(icon("inbox", iconsize::M, accent))
                         .child(crate::core::i18n::trf("In %@ ablegen", &[&code])),
-                )
-            })
+            )
             .into_any_element()
     }
 }
 
+const KEPT_VIEWS: usize = 8;
+
 impl Pages {
     fn doc_view(&mut self, path: &std::path::Path, window: &mut Window, cx: &mut Context<Self>) -> AnyView {
+        if self.doc_recent.first().map(|p| p.as_path()) != Some(path) {
+            self.doc_recent.retain(|p| p != path);
+            self.doc_recent.insert(0, path.to_path_buf());
+            self.doc_recent.truncate(KEPT_VIEWS);
+        }
         self.docs
             .entry(path.to_path_buf())
             .or_insert_with(|| {
@@ -271,9 +276,18 @@ impl Pages {
         let beside = state::read(cx, |l| l.split_document.clone()).filter(|p| *p != path);
         if self.shown_doc.as_ref() != Some(&path) {
             self.shown_doc = Some(path);
-            if let Ok(note) = view.clone().downcast::<super::documents::NoteView>() {
-                window.defer(cx, move |window, cx| note.update(cx, |n, cx| n.activate(window, cx)));
-            }
+            self.doc_needs_focus = true;
+        }
+        if self.doc_needs_focus && !window.has_active_dialog(cx) {
+            self.doc_needs_focus = false;
+            let target = view.clone();
+            window.on_next_frame(move |window, cx| {
+                if let Ok(note) = target.clone().downcast::<super::documents::NoteView>() {
+                    note.update(cx, |n, cx| n.activate(window, cx));
+                } else if let Ok(file) = target.downcast::<super::documents::FileViewer>() {
+                    file.update(cx, |f, cx| f.activate(window, cx));
+                }
+            });
         }
         match beside {
             Some(other) => {
@@ -310,15 +324,22 @@ impl Render for Pages {
         if !matches!(state::read(cx, |l| l.route().clone()), Route::Doc(_)) {
             self.shown_doc = None;
         }
-        self.docs.retain(|p, _| open.contains(p));
+        self.doc_recent.retain(|p| open.contains(p));
+        let recent = &self.doc_recent;
+        self.docs.retain(|p, _| recent.contains(p));
         let t = Theme::get(cx);
         let lib = state::lib(cx);
         let view = cx.entity();
         let width = self.width;
         let route = lib.read(cx).route().clone();
-        if !matches!(route, Route::Module(_)) {
-            self.module_drop = false;
+        let on_inbox = route == Route::Inbox;
+        let focus_back = state::take_page_focus_request(cx);
+        self.doc_needs_focus |= focus_back;
+        if on_inbox && (!self.inbox_shown || focus_back) && !window.has_active_dialog(cx) {
+            let inbox = self.inbox.clone();
+            window.on_next_frame(move |window, cx| inbox.update(cx, |i, cx| i.activate(window, cx)));
         }
+        self.inbox_shown = on_inbox;
         let mut fields = std::mem::take(&mut self.fields);
         let body: AnyElement = match route {
             Route::Grid => div().relative().size_full().child(div().id("grid-scroll").size_full().overflow_y_scroll().track_scroll(&self.grid.scroll).child(grid::render(lib.read(cx), &self.grid, view, &t))).vertical_scrollbar(&self.grid.scroll).into_any_element(),

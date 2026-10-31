@@ -554,6 +554,23 @@ impl FilingForm {
         )
     }
 
+    /// The short form's keys: `e` opens all fields, `1` to `3` pick another target. False when nothing happened.
+    pub fn quick_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.details {
+            return false;
+        }
+        match key {
+            "e" => self.set_details(true, window, cx),
+            "1" | "2" | "3" => {
+                let index = key.parse::<usize>().unwrap_or(1) - 1;
+                let Some(target) = self.alternatives().into_iter().nth(index) else { return false };
+                self.select(target, window, cx);
+            }
+            _ => return false,
+        }
+        true
+    }
+
     fn shell(&self, body: Div, footer: Option<Div>, cx: &mut Context<Self>) -> Div {
         div()
             .on_key_down(cx.listener(|f, e: &KeyDownEvent, window, cx| {
@@ -563,20 +580,21 @@ impl FilingForm {
                     cx.stop_propagation();
                     return;
                 }
+                if k.key == "escape" && f.details {
+                    f.set_details(false, window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
                 if f.details || !f.focus.is_focused(window) || e.is_held || k.modifiers.platform || k.modifiers.control || k.modifiers.alt {
                     return;
                 }
                 match k.key.as_str() {
                     "enter" => f.commit(window, cx),
-                    "e" => f.set_details(true, window, cx),
-                    "1" | "2" | "3" => {
-                        let index = k.key.parse::<usize>().unwrap_or(1) - 1;
-                        let others = f.alternatives();
-                        if let Some(target) = others.into_iter().nth(index) {
-                            f.select(target, window, cx);
+                    key => {
+                        if !f.quick_key(key, window, cx) {
+                            return;
                         }
                     }
-                    _ => return,
                 }
                 cx.stop_propagation();
             }))

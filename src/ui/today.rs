@@ -36,8 +36,8 @@ pub fn render(lib: &Library, width: f32, t: &Theme) -> Div {
                 .flex()
                 .flex_col()
                 .gap(px(space::S))
-                .child(div().flex().items_end().child(section_title(tr("Nächste 7 Tage"))).child(div().flex_1()).child(legend(t)))
-                .child(board::render(lib, &days, width < 7. * 112. + 36. + 48., t)),
+                .child(section_title(tr("Nächste 7 Tage")))
+                .child(board::render(lib, &days, width < 7. * 100. + 36. + 48., t)),
         )
         .children(exams(lib, t))
 }
@@ -304,21 +304,6 @@ fn getting_started(t: &Theme) -> Div {
                 .child(step("repeat", tr("Wiederkehrende Abgaben"), tr("Einstellungen → Module → Regel hinzufügen, z. B. jeden Montag 18:00.")))
                 .child(step("circle-plus", tr("Einzeln hinzufügen"), trf("%@ für Aufgaben, Abgaben und Prüfungen.", &[&crate::core::shortcuts::ShortcutAction::NewEntry.shortcut().map_or_else(|| tr("Plus"), |s| s.display())]))),
         )
-}
-
-fn legend(t: &Theme) -> Div {
-    let item = |glyph: AnyElement, label: String| div().flex().items_center().gap(px(space::XS)).child(glyph).child(label);
-    let overdue = div().size(px(iconsize::XS)).rounded_full().bg(t.red).flex().items_center().justify_center().text_size(px(font::CAPTION2)).font_weight(FontWeight::BLACK).text_color(white()).child("!").into_any_element();
-    div()
-        .flex()
-        .items_center()
-        .gap(px(space::M))
-        .text_size(px(font::CAPTION))
-        .text_color(t.secondary)
-        .child(item(status_glyph(Status::Done, crate::core::model::Kind::Submission, false, t.gray, iconsize::XS, t), tr("Erledigt")))
-        .child(item(status_glyph(Status::Ready, crate::core::model::Kind::Submission, false, t.gray, iconsize::XS, t), tr("Bereit")))
-        .child(item(overdue, tr("Überfällig")))
-        .child(item(div().w(px(14.)).h(px(10.)).rounded(px(radius::SMALL)).border_1().border_dashed().border_color(t.secondary).into_any_element(), tr("Optional")))
 }
 
 fn exams(lib: &Library, t: &Theme) -> Option<Div> {

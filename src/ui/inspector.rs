@@ -177,8 +177,9 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
     let id = a.id.clone();
 
     let mut head = div().flex().items_center().gap(px(space::S)).child(module_chip(module.map_or("?", |m| m.code.as_str()), tint));
-    if let Some(w) = a.week {
-        head = head.child(caption(format!("W{:02} · KW{:02}", w, a.iso_week.unwrap_or(0)), t));
+    if let Some(w) = l.due_week(a) {
+        let origin = a.week.filter(|o| *o != w).map(|o| format!(" · {}", trf("für W%@", &[&format!("{o:02}")]))).unwrap_or_default();
+        head = head.child(caption(format!("W{w:02}{origin}"), t));
     }
     if a.kind != Kind::Submission {
         head = head.child(div().flex().items_center().gap(px(space::XS)).child(icon(a.kind.icon(), iconsize::XS, t.secondary)).child(caption(a.kind.label(), t)));
@@ -296,7 +297,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         }
         let (title_text, folder2) = (a.title.clone(), a.folder.clone());
         files = files.child(
-            link_button("note-for-assignment", tr("Notiz zur Abgabe"), t)
+            link_button("note-for-assignment", tr("Markdown-Datei anlegen"), t)
                 .flex()
                 .items_center()
                 .gap(px(space::XS))
@@ -313,7 +314,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         col = col.child(files);
     }
 
-    col = col.child(div().flex().flex_col().gap(px(space::S)).child(div().flex().items_baseline().gap(px(space::S)).child(div().font_weight(FontWeight::BOLD).child(tr("Notiz"))).child(caption(tr("wird automatisch gesichert"), t))).child(Textarea::new(note)));
+    col = col.child(div().flex().flex_col().gap(px(space::S)).child(div().flex().items_baseline().gap(px(space::S)).child(div().font_weight(FontWeight::BOLD).child(tr("Kurznotiz"))).child(caption(tr("wird automatisch gesichert"), t))).child(Textarea::new(note)));
 
     if l.manual_for(a).is_some() {
         let remove = id.clone();

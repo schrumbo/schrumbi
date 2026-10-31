@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gpui_kit::{App, AppContext, Entity, Global, Task};
+use gpui_kit::{App, AppContext, Entity, Global, ScrollHandle, Task};
 use notify::{EventKind, RecursiveMode, Watcher};
 
 use crate::core::library::{Library, Reminder};
@@ -21,6 +21,9 @@ pub struct Store {
     pending_index: Option<Task<()>>,
     pending_config: Option<Task<()>>,
     pending_notes: Option<Task<()>>,
+    tab_scroll: ScrollHandle,
+    page_wants_focus: bool,
+    shown_tab: std::cell::RefCell<Option<std::path::PathBuf>>,
     pending_reload: Option<Task<()>>,
 }
 
@@ -42,6 +45,9 @@ pub fn init(cx: &mut App) {
         pending_index: None,
         pending_config: None,
         pending_notes: None,
+        tab_scroll: ScrollHandle::new(),
+        page_wants_focus: false,
+        shown_tab: Default::default(),
         pending_reload: None,
     });
     cx.spawn(async move |cx| {
@@ -274,6 +280,35 @@ pub fn schedule_notes_save(cx: &mut App) {
     cx.global_mut::<Store>().pending_notes = Some(task);
 }
 
+/// A closing dialog takes the keyboard back to where it was when it opened, also after its exit animation.
+/// So the page asks for it twice: right away, and once the animation is over.
+pub fn return_focus_to_page(cx: &mut App) {
+    cx.global_mut::<Store>().page_wants_focus = true;
+    lib(cx).update(cx, |_, cx| cx.notify());
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(Duration::from_millis(300)).await;
+        cx.update(|cx| {
+            cx.global_mut::<Store>().page_wants_focus = true;
+            lib(cx).update(cx, |_, cx| cx.notify());
+        });
+    })
+    .detach();
+}
+
+pub fn take_page_focus_request(cx: &mut App) -> bool {
+    std::mem::take(&mut cx.global_mut::<Store>().page_wants_focus)
+}
+
+/// The tab bar's scroll position; scrolls to the tab at `index` when `current` just became the shown one.
+pub fn tab_scroll(current: &std::path::Path, index: usize, cx: &App) -> ScrollHandle {
+    let store = cx.global::<Store>();
+    if store.shown_tab.borrow().as_deref() != Some(current) {
+        *store.shown_tab.borrow_mut() = Some(current.to_path_buf());
+        store.tab_scroll.scroll_to_item(index);
+    }
+    store.tab_scroll.clone()
+}
+
 /// Writes what is still waiting for its delay, before quitting or leaving a workspace.
 pub fn flush_pending(cx: &mut App) {
     if cx.global_mut::<Store>().pending_notes.take().is_some() {
@@ -319,6 +354,15 @@ pub fn sync_reminders(cx: &mut App) {
     store.reminder_task = Some(task);
 }
 
+thread_local! {
+    /// The input field being edited, so undo groups typing per field and not across fields.
+    static EDITED_FIELD: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+pub fn set_edited_field(key: &str) {
+    EDITED_FIELD.with(|f| key.clone_into(&mut f.borrow_mut()));
+}
+
 /// Changes the config in memory right away and writes it to disk shortly after.
 pub fn edit_config(cx: &mut App, f: impl FnOnce(&mut crate::core::model::StudyConfig)) {
     let Some(mut c) = read(cx, |l| l.config.clone()) else { return };
@@ -327,7 +371,8 @@ pub fn edit_config(cx: &mut App, f: impl FnOnce(&mut crate::core::model::StudyCo
         let before = l.config_snapshot();
         let changed = l.update_config(c);
         if let (true, Some(before)) = (changed, before) {
-            l.record_edit("config", crate::core::i18n::tr("Einstellung geändert"), before);
+            let field = EDITED_FIELD.with(|f| f.borrow().clone());
+            l.record_edit(&format!("config:{field}"), crate::core::i18n::tr("Einstellung geändert"), before);
         }
         cx.notify();
         changed

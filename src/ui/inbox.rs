@@ -28,7 +28,6 @@ pub struct InboxPage {
     peak: usize,
     cleared: usize,
     form: Option<(Vec<PathBuf>, Entity<FilingForm>, Subscription)>,
-    drop: bool,
     focus: FocusHandle,
     scroll: ScrollHandle,
     anchor: ScrollAnchor,
@@ -39,7 +38,13 @@ impl InboxPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let lib = state::lib(cx);
         let scroll = ScrollHandle::new();
-        Self { selection: HashSet::new(), range_start: None, shown: Vec::new(), leaving: Vec::new(), peak: 0, cleared: 0, form: None, drop: false, focus: cx.focus_handle(), anchor: ScrollAnchor::for_handle(scroll.clone()), scroll, _sub: cx.observe(&lib, |_, _, cx| cx.notify()) }
+        Self { selection: HashSet::new(), range_start: None, shown: Vec::new(), leaving: Vec::new(), peak: 0, cleared: 0, form: None, focus: cx.focus_handle(), anchor: ScrollAnchor::for_handle(scroll.clone()), scroll, _sub: cx.observe(&lib, |_, _, cx| cx.notify()) }
+    }
+
+    /// Takes the keyboard when the page is entered, so its keys work without a click first.
+    pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
 
     fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -76,6 +81,12 @@ impl InboxPage {
             "enter" if !e.is_held => {
                 if let Some((_, form, _)) = &self.form {
                     form.update(cx, |f, cx| f.confirm(window, cx));
+                }
+            }
+            "e" | "1" | "2" | "3" if !e.is_held => {
+                let Some(form) = self.form.as_ref().map(|(_, form, _)| form.clone()) else { return };
+                if !form.update(cx, |f, cx| f.quick_key(&k.key, window, cx)) {
+                    return;
                 }
             }
             _ => return,
@@ -160,23 +171,13 @@ impl Render for InboxPage {
             });
         }
         let accent = t.accent;
-        let (m1, m2) = (me.clone(), me.clone());
         let base = div()
             .id("inbox")
+            .group("inbox")
             .size_full()
             .relative()
-            .on_drag_move::<ExternalPaths>(move |_, _, cx| m1.update(cx, |p, cx| {
-                if !p.drop {
-                    p.drop = true;
-                    cx.notify();
-                }
-            }))
             .on_drop(move |paths: &ExternalPaths, _, cx| {
                 let paths = paths.paths().to_vec();
-                m2.update(cx, |p, cx| {
-                    p.drop = false;
-                    cx.notify();
-                });
                 act(cx, |l| l.import_to_inbox(&paths));
             });
         let content: AnyElement = if inbox.is_empty() {
@@ -323,16 +324,18 @@ impl Render for InboxPage {
                 .child(div().flex_1().min_w_0().h_full().children(self.form.as_ref().map(|(_, f, _)| f.clone())))
                 .into_any_element()
         };
-        base.child(content).when(self.drop, |d| {
-            d.child(
+        base.child(content).child(
                 div()
                     .absolute()
                     .inset(px(10.))
+                    .invisible()
+                    .hover(|s| s)
+                    .group_drag_over::<ExternalPaths>("inbox", |s| s.visible())
                     .rounded(px(radius::CARD))
                     .border(px(3.))
                     .border_dashed()
                     .border_color(accent)
-                    .bg(accent.opacity(0.06))
+                    .bg(t.content.blend(accent.opacity(0.12)).opacity(0.94))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -342,7 +345,6 @@ impl Render for InboxPage {
                     .text_color(accent)
                     .child(icon("inbox", iconsize::M, accent))
                     .child(tr("In die Inbox legen")),
-            )
-        })
+        )
     }
 }

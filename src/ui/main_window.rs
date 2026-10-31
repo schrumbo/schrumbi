@@ -35,6 +35,8 @@ pub struct MainWindow {
     focus: FocusHandle,
     focused_once: bool,
     shown_route: Option<Route>,
+    search_needs_focus: bool,
+    error_shown: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -104,6 +106,8 @@ impl MainWindow {
             sidebar_open: p.sidebar_open,
             save_bounds: None,
             sidebar_auto_closed: false,
+            search_needs_focus: false,
+            error_shown: false,
             syncing_search: false,
             focus: cx.focus_handle(),
             focused_once: false,
@@ -128,7 +132,8 @@ impl MainWindow {
             self.search.update(cx, |s, cx| s.set_value(wanted, window, cx));
             self.syncing_search = false;
         }
-        if state::read(cx, |l| *l.route() == Route::Search) && !self.search.read(cx).focus_handle(cx).is_focused(window) && state::read(cx, |l| l.search_query.is_empty()) {
+        if self.search_needs_focus && !window.has_active_dialog(cx) {
+            self.search_needs_focus = false;
             self.search.update(cx, |s, cx| s.focus(window, cx));
         }
     }
@@ -150,7 +155,7 @@ impl MainWindow {
             Route::Record => tr("Leistungen"),
             Route::Inbox => tr("Inbox"),
             Route::Search => tr("Suche"),
-            Route::Checks => tr("Prüfen"),
+            Route::Checks => tr("Aufräumen"),
             Route::Module(id) => lib.module_by_id(id).map_or(id.clone(), |m| m.display_name()),
             Route::Doc(p) => lib.note_title(p),
         }
@@ -202,6 +207,11 @@ impl Render for MainWindow {
         }
         let t = Theme::get(cx);
         let lib = state::lib(cx);
+        let has_error = lib.read(cx).last_error.is_some();
+        if has_error && !self.error_shown {
+            window.focus(&self.focus, cx);
+        }
+        self.error_shown = has_error;
         let route = lib.read(cx).route().clone();
         if self.shown_route.as_ref() != Some(&route) {
             let typing = self.search.read(cx).focus_handle(cx).is_focused(window);
@@ -209,6 +219,7 @@ impl Render for MainWindow {
                 window.focus(&self.focus, cx);
             }
             motion::forget_rows(cx);
+            self.search_needs_focus = route == Route::Search && state::read(cx, |l| l.search_query.is_empty());
             self.shown_route = Some(route);
         }
         let l = lib.read(cx);
@@ -258,6 +269,11 @@ impl Render for MainWindow {
             .on_action(|_: &super::app::ToggleFullscreen, window, _| window.toggle_fullscreen())
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
                 let k = &e.keystroke;
+                if matches!(k.key.as_str(), "enter" | "escape") && state::read(cx, |l| l.last_error.is_some()) {
+                    act(cx, |l| l.last_error = None);
+                    cx.stop_propagation();
+                    return;
+                }
                 let slash = k.key == "/" || k.key_char.as_deref() == Some("/");
                 let typing = window.context_stack().iter().any(|c| c.contains("Input"));
                 if slash && !k.modifiers.platform && !k.modifiers.control && !k.modifiers.alt && !typing && !window.has_active_dialog(cx) {
@@ -373,7 +389,7 @@ fn toast_view(message: String, icon_name: &'static str, action: Option<String>, 
         })
 }
 
-fn error_alert(message: String, broken: bool, config: Option<PathBuf>, t: &Theme) -> Div {
+fn error_alert(message: String, broken: bool, config: Option<PathBuf>, t: &Theme) -> Stateful<Div> {
     let mut buttons = div().flex().justify_end().gap(px(space::S));
     if broken {
         buttons = buttons.child(Button::new("restore").label(tr("Letzte Sicherung wiederherstellen")).on_click(|_, _, cx| act(cx, |l| l.restore_config_backup())));
@@ -382,7 +398,7 @@ fn error_alert(message: String, broken: bool, config: Option<PathBuf>, t: &Theme
         }
     }
     buttons = buttons.child(Button::new("ok").primary().label("OK").on_click(|_, _, cx| act(cx, |l| l.last_error = None)));
-    div().absolute().inset_0().bg(black().opacity(0.25)).flex().items_center().justify_center().child(
+    div().id("error-alert").absolute().inset_0().bg(black().opacity(0.25)).occlude().flex().items_center().justify_center().child(
         div()
             .w(px(420.))
             .p(px(space::XL))

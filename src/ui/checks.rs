@@ -65,7 +65,7 @@ pub fn render(lib_entity: &Entity<Library>, st: &ChecksState, fields: &mut Field
         .flex()
         .flex_col()
         .gap(px(space::L))
-        .child(div().flex().flex_col().gap(px(space::XS)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Prüfen"))).child(div().text_color(t.secondary).child(tr("Hier landet alles, was ein kurzes Aufräumen braucht."))));
+        .child(div().text_color(t.secondary).child(tr("Hier landet alles, was ein kurzes Aufräumen braucht.")));
 
     if !issues.is_empty() {
         let view = cx.entity();

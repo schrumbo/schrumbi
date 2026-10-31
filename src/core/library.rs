@@ -238,7 +238,7 @@ pub struct Library {
     undo_steps: Vec<Step>,
     redo_steps: Vec<Step>,
     /// The kind and time of the last edit that merges with the following ones, e.g. typing in a settings field.
-    coalescing: Option<(&'static str, std::time::Instant)>,
+    coalescing: Option<(String, std::time::Instant)>,
     pub buffers: HashMap<PathBuf, NoteBuffer>,
     /// A sync is rewriting the workspace; writes wait until `finish_sync`.
     sync_gate: bool,
@@ -916,13 +916,19 @@ impl Library {
         let overdue = self.action_items.iter().filter(|a| self.status(a) != Status::Ready).max_by_key(|a| a.due);
         let unconfirmed = self.unconfirmed().into_iter().max_by_key(|a| a.due);
         let next = self.next_deadline();
-        let due_soon = next.is_some_and(|a| a.due - self.now < Duration::days(1));
+        let due_soon = next.is_some_and(|a| a.due - self.now < Duration::days(3));
         next_action::choose(overdue, unconfirmed, next, due_soon, self.inbox.len())
     }
 
     pub fn next_deadline(&self) -> Option<&Assignment> {
         let upcoming = self.upcoming();
         upcoming.iter().find(|a| !a.optional).or(upcoming.first()).copied()
+    }
+
+    /// The lecture week a deadline falls into, so every view sorts it by the same date.
+    pub fn due_week(&self, a: &Assignment) -> Option<u32> {
+        let date = day::local_date(a.due);
+        self.weeks().iter().find(|w| w.monday <= date && date < w.monday + Days::new(7)).map(|w| w.index).or(a.week)
     }
 
     /// The module's next open entry that takes files, as the target for files dropped on the module.
@@ -1281,14 +1287,14 @@ impl Library {
     }
 
     /// Records an edit made by continuous input; edits of the same `kind` in quick succession become one step.
-    pub fn record_edit(&mut self, kind: &'static str, label: String, before: Change) {
+    pub fn record_edit(&mut self, kind: &str, label: String, before: Change) {
         let now = std::time::Instant::now();
-        if self.coalescing.is_some_and(|(k, at)| k == kind && now.duration_since(at) < COALESCE) && !self.undo_steps.is_empty() {
+        if self.coalescing.as_ref().is_some_and(|(k, at)| k == kind && now.duration_since(*at) < COALESCE) && !self.undo_steps.is_empty() {
             self.redo_steps.clear();
         } else {
             self.record(label, vec![before]);
         }
-        self.coalescing = Some((kind, now));
+        self.coalescing = Some((kind.to_string(), now));
     }
 
     pub fn state_snapshot(&self) -> Change {
@@ -1795,8 +1801,8 @@ impl Library {
         let inbox = root.join(&c.inbox);
         let _ = std::fs::create_dir_all(&inbox);
         let mut count = 0;
-        for p in paths {
-            match copy_path(p, &unique_path(&inbox.join(name_of(p)))) {
+        for file in paths.iter().flat_map(|p| files_within(p)) {
+            match copy_path(&file, &unique_path(&inbox.join(name_of(&file)))) {
                 Ok(()) => count += 1,
                 Err(e) => self.last_error = Some(trf("Import fehlgeschlagen: %@", &[&explain(&e.into())])),
             }
@@ -1887,10 +1893,6 @@ impl Library {
             match self.active_document.as_ref().and_then(|a| self.open_documents.iter().position(|d| d == a)) {
                 Some(i) => self.open_documents.insert(i + 1, path.clone()),
                 None => self.open_documents.push(path.clone()),
-            }
-            if self.open_documents.len() > 15 {
-                let extra = self.open_documents.len() - 15;
-                self.open_documents.drain(..extra);
             }
             self.save_documents();
         }
@@ -2031,7 +2033,10 @@ impl Library {
 
     /// Notes, PDFs, Office files, images and text open as tabs in the app; everything else in its default app.
     pub fn open_file(&mut self, path: &Path) {
-        if Self::opens_in_app(path) {
+        if !path.exists() {
+            self.last_error = Some(trf("„%@“ gibt es nicht mehr. Vielleicht wurde die Datei verschoben oder gelöscht.", &[&name_of(path)]));
+            self.refresh();
+        } else if Self::opens_in_app(path) {
             self.open_document(path);
         } else {
             open_path(path);
@@ -2119,6 +2124,14 @@ fn prune_undo_copies() {
     }
 }
 
+/// The files a dropped item stands for: the file itself, or everything visible inside a folder.
+fn files_within(path: &Path) -> Vec<PathBuf> {
+    if !path.is_dir() {
+        return vec![path.to_path_buf()];
+    }
+    walkdir::WalkDir::new(path).into_iter().filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.')).filter_map(Result::ok).filter(|e| e.file_type().is_file()).map(|e| e.into_path()).collect()
+}
+
 fn trash_with_copy(path: &Path) -> Result<Change> {
     let backup = stash(path)?;
     if let Err(e) = trash::delete(path) {
@@ -2167,9 +2180,12 @@ fn copy_path(from: &Path, to: &Path) -> std::io::Result<()> {
 
 /// Opens a file or folder in its default app.
 pub fn open_path(path: &Path) {
-    if path.is_dir() || !path.exists() {
-        let _ = std::fs::create_dir_all(path);
-    }
+    let _ = opener::open(path);
+}
+
+/// Opens a folder in Finder / Explorer / the file manager, creating it first if needed.
+pub fn open_folder(path: &Path) {
+    let _ = std::fs::create_dir_all(path);
     let _ = opener::open(path);
 }
 

@@ -87,6 +87,8 @@ pub struct FileBrowser {
     picked: HashSet<PathBuf>,
     range_start: Option<PathBuf>,
     renaming: Option<(PathBuf, Entity<InputState>, Subscription)>,
+    /// Enter that confirms a rename must not also open the file.
+    renamed_at: Option<std::time::Instant>,
     toggled: HashSet<String>,
     results: Results,
     key: String,
@@ -115,7 +117,7 @@ impl FileBrowser {
             selected: None,
             picked: HashSet::new(),
             range_start: None,
-            renaming: None,
+            renaming: None, renamed_at: None,
             toggled: HashSet::new(),
             results: Results::default(),
             key: String::new(),
@@ -323,8 +325,12 @@ impl FileBrowser {
                     let name = if ext.is_empty() { stem } else { format!("{stem}.{ext}") };
                     let file = target.clone();
                     act(cx, |l| l.rename(&file, &name));
+                    if let Some(new) = state::lib(cx).update(cx, |l, _| l.last_renamed.take()) {
+                        this.pick_only(&new);
+                    }
                 }
                 this.renaming = None;
+                this.renamed_at = Some(std::time::Instant::now());
                 window.focus(&this.focus, cx);
                 cx.notify();
             }
@@ -466,6 +472,7 @@ impl FileBrowser {
                     super::preview::show_in(files, index, cx);
                 }
             }
+            "enter" if self.renaming.is_some() || self.renamed_at.is_some_and(|at| at.elapsed() < Duration::from_millis(200)) => {}
             "enter" => self.open_selected(cx),
             _ => return,
         }

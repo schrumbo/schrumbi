@@ -29,9 +29,11 @@ impl Fields {
         }
         let placeholder = placeholder.to_string();
         let initial = value.to_string();
+        let field = key.to_string();
         let state = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(initial));
         let sub = cx.subscribe(&state, move |_, s, e: &InputEvent, cx| {
             if matches!(e, InputEvent::Change) {
+                super::state::set_edited_field(&field);
                 on_change(s.read(cx).value().to_string(), cx);
             }
         });

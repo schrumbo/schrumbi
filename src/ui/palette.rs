@@ -76,7 +76,7 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&go, tr("Semester"), "table", Some(fixed_keys("2")), Run::Action(Box::new(app::GoGrid)));
         add(&go, tr("Leistungen"), "award", Some(fixed_keys("3")), Run::Action(Box::new(app::GoRecord)));
         add(&go, tr("Inbox"), "inbox", Some(fixed_keys("4")), Run::Action(Box::new(app::GoInbox)));
-        add(&go, tr("Prüfen"), "list-checks", Some(fixed_keys("5")), Run::Action(Box::new(app::GoChecks)));
+        add(&go, tr("Aufräumen"), "list-checks", Some(fixed_keys("5")), Run::Action(Box::new(app::GoChecks)));
         add(&go, S::SearchFiles.label(), "search", keys(S::SearchFiles), Run::Action(Box::new(app::SearchFiles)));
         add(&go, S::GoBack.label(), "arrow-left", keys(S::GoBack), Run::Action(Box::new(app::GoBack)));
         add(&go, tr("Vorwärts"), "arrow-right", None, Run::Action(Box::new(app::GoForward)));
@@ -297,7 +297,7 @@ impl Render for ShortcutSheet {
             shortcut_row(tr("Semester"), fixed_parts("2"), &t),
             shortcut_row(tr("Leistungen"), fixed_parts("3"), &t),
             shortcut_row(tr("Inbox"), fixed_parts("4"), &t),
-            shortcut_row(tr("Prüfen"), fixed_parts("5"), &t),
+            shortcut_row(tr("Aufräumen"), fixed_parts("5"), &t),
         ];
         general.extend(group(Group::General));
         let close = cx.entity();

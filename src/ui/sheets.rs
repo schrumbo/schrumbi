@@ -27,6 +27,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
         let handle = window.window_handle();
         cx.subscribe(&form, move |_, _: &FilingEvent, cx| {
             let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));
+            super::state::return_focus_to_page(cx);
         })
         .detach();
         window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(560.)).h(px(600.)).p_0().child(form.clone()));
@@ -74,6 +75,7 @@ fn show<V: Render + EventEmitter<Dismissed>>(view: Entity<V>, width: f32, window
     let handle = window.window_handle();
     cx.subscribe(&view, move |_, _: &Dismissed, cx| {
         let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));
+            super::state::return_focus_to_page(cx);
     })
     .detach();
     window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(width)).p_0().child(view.clone()));

@@ -145,7 +145,7 @@ pub fn deadlines(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     let past: Vec<_> = items.iter().filter(|a| d(a) < monday && lib.is_done(a)).copied().collect();
     let mut groups: BTreeMap<u32, Vec<&Assignment>> = BTreeMap::new();
     for a in &soon {
-        groups.entry(a.week.unwrap_or(0)).or_default().push(a);
+        groups.entry(lib.due_week(a).unwrap_or(0)).or_default().push(a);
     }
     let current = lib.current_week().map(|w| w.index);
     let mut col = div().flex().flex_col().px(px(space::L)).py(px(space::S));
@@ -211,12 +211,13 @@ pub fn header(lib: &Library, m: &Module, split: bool, width: f32, st: &ModuleSta
         if icon_only { b } else { b.label(label) }
     };
     let (f1, code, mid) = (folder.clone(), m.code.clone(), m.id.clone());
+    let next_entry = lib.next_in_module(&m.id);
     let mut actions = div()
         .flex()
         .items_center()
         .gap(px(space::S))
-        .child(button("module-folder", "folder", tr("Ordner"), tr("Modulordner im Finder öffnen")).on_click(move |_, _, _| library::open_path(&f1)))
-        .child(button("module-file", "inbox", tr("Ablegen"), trf("Dateien in %@ ablegen", &[&code])).on_click(|_, _, cx| super::platform::pick_files_for_filing(None, cx)))
+        .child(button("module-folder", "folder", tr("Ordner"), tr("Modulordner im Finder öffnen")).on_click(move |_, _, _| library::open_folder(&f1)))
+        .child(button("module-file", "inbox", tr("Ablegen"), trf("Dateien in %@ ablegen", &[&code])).on_click(move |_, _, cx| super::platform::pick_files_for_filing(next_entry.clone(), cx)))
         .child(button("module-new", "file-plus", tr("Neue Datei"), trf("Notiz, Textdatei oder Ordner in %@ anlegen", &[&m.code])).on_click(move |_, _, cx| {
             let id = mid.clone();
             act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: Some(id), folder: None }))

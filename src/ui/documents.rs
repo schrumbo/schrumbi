@@ -845,7 +845,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
         .min_h(px(40.))
         .border_b_1()
         .border_color(t.separator)
-        .child(div().id("doc-tabs").flex_1().min_w_0().overflow_x_scroll().child(tabs))
+        .child(tabs.id("doc-tabs").flex_1().min_w_0().overflow_x_scroll().track_scroll(&state::tab_scroll(current, docs.iter().position(|d| d == current).unwrap_or(0), cx)))
         .children(overflow)
         .child(div().flex_none().child(actions))
 }
@@ -871,6 +871,15 @@ impl FileViewer {
         });
                 let app = super::platform::default_app_name(&path);
         Self { path, pdf, preview, app }
+    }
+}
+
+impl FileViewer {
+    /// Gives the keyboard to the document, so its shortcuts work right after opening.
+    pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pdf) = self.pdf.clone() {
+            pdf.update(cx, |v, cx| v.take_focus(window, cx));
+        }
     }
 }
 

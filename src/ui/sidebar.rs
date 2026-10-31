@@ -59,10 +59,12 @@ fn entries(lib: &Library) -> Vec<Entry> {
         Entry { key: Some("inbox"), route: Route::Inbox, icon: "inbox", label: tr("Inbox"), shortcut: Some("4"), badge: lib.inbox.len(), urgent: false },
         Entry { key: Some("search"), route: Route::Search, icon: "search", label: tr("Suche"), shortcut: None, badge: 0, urgent: false },
     ];
-    if let Some(doc) = lib.active_document.clone().or_else(|| lib.open_documents.first().cloned()) {
-        v.push(Entry { key: None, route: Route::Doc(doc), icon: "files", label: tr("Dokumente"), shortcut: None, badge: lib.open_documents.len(), urgent: false });
+    let mut doc = None;
+    if let Some(doc_path) = lib.active_document.clone().or_else(|| lib.open_documents.first().cloned()) {
+        doc = Some(Entry { key: None, route: Route::Doc(doc_path), icon: "files", label: tr("Dokumente"), shortcut: None, badge: lib.open_documents.len(), urgent: false });
     }
-    v.push(Entry { key: Some("checks"), route: Route::Checks, icon: "list-checks", label: tr("Prüfen"), shortcut: Some("5"), badge: issues, urgent: false });
+    v.push(Entry { key: Some("checks"), route: Route::Checks, icon: "list-checks", label: tr("Aufräumen"), shortcut: Some("5"), badge: issues, urgent: false });
+    v.extend(doc);
     v
 }
 
@@ -138,7 +140,7 @@ fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: Stri
         )
         .child(label_view(label, count.filter(|_| wide).map(|(n, tint)| count_pill(n, tint))))
         .when(dim && !active, |d| d.opacity(0.65))
-        .tooltip(tip(help))
+        .when(!wide || help.contains("  "), |d| d.tooltip(tip(help)))
 }
 
 /// An invisible button over a tab, so the row can open a menu and still look like every other tab.
@@ -172,7 +174,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
         let dir = lib.root.as_ref().zip(lib.config.as_ref()).map(|(r, c)| r.join(&c.inbox)).filter(|_| is_inbox);
         top = top.child(row.context_menu(move |mut menu, _, _| {
             if let Some(dir) = dir.clone() {
-                menu = menu.item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::open_path(&dir))).separator();
+                menu = menu.item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::open_folder(&dir))).separator();
             }
             let label = hide_label.clone();
             menu.item(PopupMenuItem::new(tr("Aus der Seitenleiste ausblenden")).on_click(move |_, _, cx| {
@@ -232,7 +234,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
                         }));
                     }
                     if let Some(f) = folder.clone() {
-                        menu = menu.item(PopupMenuItem::new(tr("Ordner öffnen")).on_click(move |_, _, _| library::open_path(&f)));
+                        menu = menu.item(PopupMenuItem::new(tr("Ordner öffnen")).on_click(move |_, _, _| library::open_folder(&f)));
                     }
                     menu
                 }),

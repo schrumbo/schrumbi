@@ -265,7 +265,7 @@ pub fn rebuild_menus(cx: &mut App) {
         MenuItem::action(tr("Semester"), GoGrid),
         MenuItem::action(tr("Leistungen"), GoRecord),
         MenuItem::action(tr("Inbox"), GoInbox),
-        MenuItem::action(tr("Prüfen"), GoChecks),
+        MenuItem::action(tr("Aufräumen"), GoChecks),
         MenuItem::separator(),
         MenuItem::action(tr("In allen Dateien suchen"), SearchFiles),
         MenuItem::action(tr("Datei schnell öffnen…"), QuickOpen),
