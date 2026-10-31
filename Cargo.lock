@@ -7250,7 +7250,6 @@ dependencies = [
  "glob",
  "gpui-kit",
  "hayro 0.8.0",
- "iana-time-zone",
  "image",
  "lopdf",
  "notify",

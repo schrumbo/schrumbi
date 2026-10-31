@@ -602,42 +602,12 @@ fn save_buffer(path: &Path, cx: &mut App) -> bool {
     }
 }
 
-/// Saves the given notes, or asks about each when saving on close is off, then runs `done`.
-/// Cancelling a question or a failed save keeps everything open.
+/// Saves the given notes, then runs `done`. A failed save keeps everything open.
 pub fn resolve_unsaved(paths: Vec<PathBuf>, cx: &mut App, done: impl FnOnce(&mut App) + 'static) {
     let dirty: Vec<PathBuf> = state::read(cx, |l| paths.into_iter().filter(|p| l.buffers.get(p).is_some_and(|b| b.dirty)).collect());
-    if prefs::get().note_save_on_close {
-        if dirty.iter().all(|p| save_buffer(p, cx)) {
-            done(cx);
-        }
-        return;
+    if dirty.iter().all(|p| save_buffer(p, cx)) {
+        done(cx);
     }
-    cx.spawn(async move |cx| {
-        for path in dirty {
-            let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
-            let answers = [tr("Sichern"), tr("Abbrechen"), tr("Nicht sichern")];
-            let answers: Vec<&str> = answers.iter().map(String::as_str).collect();
-            let question = cx.update(|cx| {
-                if cx.windows().is_empty() {
-                    super::main_window::open(cx);
-                }
-                let window = cx.active_window().or_else(|| cx.windows().first().copied())?;
-                window.update(cx, |_, window, cx| window.prompt(PromptLevel::Warning, &trf("Änderungen an „%@“ sichern?", &[&name]), Some(&tr("Ohne Sichern gehen die Änderungen verloren.")), &answers, cx)).ok()
-            });
-            let Some(question) = question else { return };
-            match question.await {
-                Ok(0) => {
-                    if !cx.update(|cx| save_buffer(&path, cx)) {
-                        return;
-                    }
-                }
-                Ok(2) => {}
-                _ => return,
-            }
-        }
-        cx.update(done);
-    })
-    .detach();
 }
 
 /// Saves or asks about the note behind a tab, then closes the tab.

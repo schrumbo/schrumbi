@@ -53,10 +53,9 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Inbox-Ordner", Tab::General),
     ("Matrikelnummer", Tab::General),
     ("Mitautor:innen", Tab::General),
-    ("Noten und Zeit", Tab::General),
+    ("Noten", Tab::General),
     ("Notensystem", Tab::General),
     ("Bezeichnung der Punkte", Tab::General),
-    ("Zeitzone", Tab::General),
     ("Suche", Tab::General),
     ("Ausgeschlossene Ordner", Tab::General),
     ("Indexierte Dateien", Tab::General),
@@ -94,7 +93,6 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Schriftgröße", Tab::Notes),
     ("Sichern", Tab::Notes),
     ("Pause", Tab::Notes),
-    ("Beim Schließen immer sichern", Tab::Notes),
     ("PDF-Export", Tab::Notes),
     ("Akzentfarbe", Tab::Notes),
     ("Kopfzeile mit Modul, Woche, Name und Datum", Tab::Notes),
@@ -415,8 +413,6 @@ impl Settings {
         let (root, index_count, config_path, exporting) = state::read(cx, |l| (l.root.clone(), l.index_count, l.config_path(), l.is_exporting));
         let style = c.coauthor_style;
         let grading = c.grading;
-        let tz = c.time_zone.clone();
-        let system_tz = sys_tz();
 
         let studium = section(
             Some(tr("Studium")),
@@ -438,7 +434,7 @@ impl Settings {
             t,
         );
         let grades = section(
-            Some(tr("Noten und Zeit")),
+            Some(tr("Noten")),
             None,
             vec![
                 row(
@@ -452,19 +448,6 @@ impl Settings {
                     t,
                 ),
                 row(tr("Bezeichnung der Punkte"), div().w(px(200.)).child(Input::new(&credit)), t),
-                row(
-                    tr("Zeitzone"),
-                    picker("g-tz", if tz.is_empty() { trf("System (%@)", &[&system_tz]) } else { tz.clone() }, move |mut m| {
-                        m = m.max_h(px(420.)).scrollable(true).item(PopupMenuItem::new(trf("System (%@)", &[&system_tz])).checked(tz.is_empty()).on_click(|_, _, cx| edit_config(cx, |c| c.time_zone.clear()))).separator();
-                        for z in chrono_tz::TZ_VARIANTS {
-                            let name = z.name().to_string();
-                            let n2 = name.clone();
-                            m = m.item(PopupMenuItem::new(name.clone()).checked(tz == name).on_click(move |_, _, cx| edit_config(cx, |c| c.time_zone = n2.clone())));
-                        }
-                        m
-                    }),
-                    t,
-                ),
             ],
             t,
         );
@@ -645,10 +628,6 @@ impl Settings {
         );
         div().flex().flex_col().gap(px(space::XL)).child(studium).child(grades).child(search).child(sidebar).child(storage).child(language).child(reminders).child(calendar).child(system)
     }
-}
-
-fn sys_tz() -> String {
-    iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".into())
 }
 
 /// Starts a new instance and quits this one, so a language change applies.
@@ -1348,12 +1327,11 @@ impl Settings {
             NoteSaveMode::Delay => tr("Nach einer Tipp-Pause"),
             NoteSaveMode::Manual => tr("Nur manuell (⌘S)"),
         };
-        let close = if p.note_save_on_close { tr("Schließen sichert immer.") } else { tr("Beim Schließen wird bei ungesicherten Änderungen gefragt.") };
         let save_footer = match mode {
             NoteSaveMode::Focus => tr("Gesichert wird, sobald du den Editor, das Fenster oder die App verlässt oder den Tab wechselst. ⌘S sichert sofort."),
             NoteSaveMode::Delay => tr("Zusätzlich wird nach der Pause automatisch gesichert. ⌘S sichert sofort."),
             NoteSaveMode::Manual => tr("Nur ⌘S sichert. Ein Punkt im Tab zeigt ungesicherte Änderungen."),
-        } + " " + &close;
+        } + " " + &tr("Schließen sichert immer.");
         let stepper = |id: &'static str, label: String, dec: Box<dyn Fn(&mut App)>, inc: Box<dyn Fn(&mut App)>| {
             div()
                 .flex()
@@ -1416,10 +1394,6 @@ impl Settings {
                 t,
             ));
         }
-        save_rows.push(row(tr("Beim Schließen immer sichern"), Switch::new("n-close").checked(p.note_save_on_close).on_click(|v, _, _| {
-            let v = *v;
-            prefs::update(|p| p.note_save_on_close = v);
-        }), t));
         let current = p.note_accent.to_uppercase();
         let mut swatches = div().flex().items_center().gap(px(space::S));
         for (hex, name) in ACCENTS {
