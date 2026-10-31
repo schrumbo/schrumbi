@@ -199,9 +199,22 @@ pub fn apply(s: &str, e: &Edit) -> String {
     format!("{}{}{}", &s[..e.range.start], e.text, &s[e.range.end..])
 }
 
+/// The Markdown for an image file next to the note; angle brackets keep spaces in the name working.
+pub fn image_markdown(file_name: &str) -> String {
+    let stem = file_name.rsplit_once('.').map_or(file_name, |(stem, _)| stem);
+    let target = if file_name.contains(' ') { format!("<{file_name}>") } else { file_name.to_string() };
+    format!("![{stem}]({target})")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_markdown_keeps_spaces_working() {
+        assert_eq!(image_markdown("a.png"), "![a](a.png)");
+        assert_eq!(image_markdown("Foto 1.png"), "![Foto 1](<Foto 1.png>)");
+    }
 
     #[test]
     fn wraps_and_links() {

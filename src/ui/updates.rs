@@ -96,6 +96,7 @@ pub fn show(window: &mut Window, cx: &mut App) {
 enum Phase {
     Offer,
     Downloading(f32),
+    Installing,
     Failed(String),
 }
 
@@ -137,14 +138,25 @@ impl UpdateSheet {
     fn install(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let me = cx.entity().downgrade();
         let all = super::state::read(cx, |l| l.buffers.keys().cloned().collect());
-        super::documents::resolve_unsaved(all, cx, move |cx| match update::install(&path) {
-            Ok(()) => cx.quit(),
-            Err(e) => {
-                let _ = me.update(cx, |s, cx| {
-                    s.phase = Phase::Failed(e);
-                    cx.notify();
+        super::documents::resolve_unsaved(all, cx, move |cx| {
+            let _ = me.update(cx, |s, cx| {
+                s.phase = Phase::Installing;
+                cx.notify();
+            });
+            let task = cx.background_spawn(async move { update::install(&path) });
+            cx.spawn(async move |cx| {
+                let result = task.await;
+                cx.update(|cx| match result {
+                    Ok(()) => cx.quit(),
+                    Err(e) => {
+                        let _ = me.update(cx, |s, cx| {
+                            s.phase = Phase::Failed(e);
+                            cx.notify();
+                        });
+                    }
                 });
-            }
+            })
+            .detach();
         });
     }
 
@@ -179,6 +191,7 @@ impl Render for UpdateSheet {
                 .when(!automatic, |d| d.child(page_button("update-page")))
                 .into_any_element(),
             Phase::Downloading(p) => div().flex().flex_col().gap(px(space::S)).child(progress_bar(*p, t.accent, &t)).child(caption(tr("Wird geladen und geprüft …"), &t)).into_any_element(),
+            Phase::Installing => div().flex().items_center().gap(px(space::S)).child(super::motion::spinner(super::theme::iconsize::S, t.secondary)).child(caption(tr("Wird installiert, Schrumbi startet gleich neu …"), &t)).into_any_element(),
             Phase::Failed(_) => div()
                 .flex()
                 .items_center()

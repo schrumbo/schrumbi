@@ -195,7 +195,13 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         }));
     }
 
-    let mut info = div().flex().flex_col().gap(px(space::S)).child(info_row("calendar", day::due(a.due, l.now), None, t)).child(info_row(
+    let due_row: AnyElement = if a.is_manual() {
+        info_row("calendar", day::due(a.due, l.now), None, t).into_any_element()
+    } else {
+        let move_id = id.clone();
+        row_button("due-row", t).rounded(px(radius::INNER)).tooltip(tip(tr("Termin verschieben"))).on_click(move |_, _, cx| act(cx, |l| l.reschedule_id = Some(move_id.clone()))).child(info_row("calendar", day::due(a.due, l.now), None, t)).into_any_element()
+    };
+    let mut info = div().flex().flex_col().gap(px(space::S)).child(due_row).child(info_row(
         "clock",
         day::countdown(a.due, l.now),
         l.needs_action(a).then_some(t.red),

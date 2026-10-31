@@ -100,8 +100,8 @@ impl Theme {
             secondary_bg: if dark { c(0x2A2A2A) } else { c(0xF5F5F7) },
             column: if dark { c(0x262626) } else { c(0xF7F7F9) },
             primary: ink.opacity(0.88),
-            secondary: ink.opacity(if dark { 0.55 } else { 0.5 }),
-            tertiary: ink.opacity(0.26),
+            secondary: ink.opacity(if dark { 0.6 } else { 0.62 }),
+            tertiary: ink.opacity(if dark { 0.47 } else { 0.56 }),
             separator: ink.opacity(if dark { 0.12 } else { 0.1 }),
             accent: if dark { c(0x0A84FF) } else { c(0x007AFF) },
             selection: if dark { c(0x3172D4) } else { c(0x0A6CF0) },
@@ -234,4 +234,38 @@ pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
     k.title_bar_border = t.separator;
     k.window_border = t.separator;
     ct.tokens = ct.colors.into();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::Rgba;
+
+    fn over(top: Hsla, bottom: Hsla) -> Rgba {
+        let (t, b) = (Rgba::from(top), Rgba::from(bottom));
+        let mix = |a: f32, z: f32| a * t.a + z * (1. - t.a);
+        Rgba { r: mix(t.r, b.r), g: mix(t.g, b.g), b: mix(t.b, b.b), a: 1. }
+    }
+
+    fn luminance(c: Rgba) -> f32 {
+        let f = |v: f32| if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b)
+    }
+
+    fn contrast(text: Hsla, background: Hsla) -> f32 {
+        let (a, b) = (luminance(over(text, background)), luminance(over(background, background)));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn text_is_readable_on_every_background() {
+        for dark in [false, true] {
+            let t = Theme::new(dark);
+            for background in [t.content, t.sidebar, t.secondary_bg, t.column] {
+                assert!(contrast(t.primary, background) >= 7., "primary, dark {dark}");
+                assert!(contrast(t.secondary, background) >= 4.5, "secondary, dark {dark}: {}", contrast(t.secondary, background));
+                assert!(contrast(t.tertiary, background) >= 3., "tertiary, dark {dark}: {}", contrast(t.tertiary, background));
+            }
+        }
+    }
 }

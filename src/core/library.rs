@@ -1384,7 +1384,7 @@ impl Library {
                 self.refresh();
                 self.commit(trf("In den Papierkorb: %@", &[&name_of(path)]), "trash-2", vec![Change::Restore(path.to_path_buf())]);
             }
-            Err(e) => self.last_error = Some(e.to_string()),
+            Err(_) => self.last_error = Some(tr("Konnte nicht in den Papierkorb gelegt werden. Prüfe, ob die Datei noch existiert und nicht gerade in einer anderen App offen ist.")),
         }
     }
 
@@ -1394,7 +1394,7 @@ impl Library {
         for path in paths {
             match trash::delete(path) {
                 Ok(()) => done.push(Change::Restore(path.clone())),
-                Err(e) => self.last_error = Some(e.to_string()),
+                Err(_) => self.last_error = Some(tr("Konnte nicht in den Papierkorb gelegt werden. Prüfe, ob die Datei noch existiert und nicht gerade in einer anderen App offen ist.")),
             }
         }
         self.refresh();

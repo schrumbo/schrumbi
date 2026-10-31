@@ -317,10 +317,40 @@ impl NoteView {
             .into_any_element()
     }
 
+    /// Copies dropped images next to the note and links them at the cursor.
+    fn drop_images(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let Some(folder) = self.path.parent().map(Path::to_path_buf) else { return };
+        let mut lines = Vec::new();
+        for image in paths.iter().filter(|p| ["png", "jpg", "jpeg", "gif", "webp", "svg"].contains(&extension(&p.to_string_lossy()).to_lowercase().as_str())) {
+            let name = image.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let target = library::unique_path(&folder.join(&name));
+            if *image == target || image.parent() == Some(folder.as_path()) {
+                lines.push(edit_ops::image_markdown(&name));
+            } else if std::fs::copy(image, &target).is_ok() {
+                lines.push(edit_ops::image_markdown(&target.file_name().unwrap_or_default().to_string_lossy()));
+            } else {
+                act(cx, |l| l.last_error = Some(trf("Bild konnte nicht kopiert werden: %@", &[&name])));
+            }
+        }
+        if lines.is_empty() {
+            return;
+        }
+        let text = lines.join("\n\n");
+        let (_, range) = self.with_text(cx);
+        let end = range.start + text.len();
+        self.apply(edit_ops::Edit { range, text, select: end..end }, window, cx);
+    }
+
     fn editor_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let accent = Theme::get(cx).accent;
         div()
             .size_full()
             .key_context("NoteEditor")
+            .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(accent.opacity(0.08)))
+            .on_drop(cx.listener(|n, paths: &ExternalPaths, window, cx| {
+                let paths = paths.paths().to_vec();
+                n.drop_images(&paths, window, cx);
+            }))
             .on_action(cx.listener(|n, _: &Bold, w, cx| {
                 let (s, r) = n.with_text(cx);
                 n.apply(edit_ops::wrap(&s, r, "**"), w, cx)
