@@ -30,15 +30,6 @@ fn navigate(route: Route, cx: &mut App) {
     act(cx, |l| if let Route::Doc(_) = route { l.show_documents() } else { l.set_route(route.clone()) });
 }
 
-/// Clicking the selected tab shows or hides the labels, any other tab just navigates.
-fn tab_click(route: Route, window: &mut Window, cx: &mut App) {
-    if super::state::read(cx, |l| is_active(l, &route)) {
-        super::main_window::toggle_sidebar(window, cx);
-    } else {
-        navigate(route, cx);
-    }
-}
-
 struct Entry {
     /// Set on entries that can be hidden.
     key: Option<&'static str>,
@@ -164,7 +155,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
         let route = e.route.clone();
         let is_inbox = e.route == Route::Inbox;
         let count = (e.badge > 0).then_some((e.badge, if e.urgent { t.red } else { t.accent }));
-        let row = tab(SharedString::from(format!("tab-{:?}", e.route)), active, true, icon(e.icon, iconsize::L, fg).into_any_element(), e.label, count, wide, help, t).on_click(move |_, window, cx| tab_click(route.clone(), window, cx));
+        let row = tab(SharedString::from(format!("tab-{:?}", e.route)), active, true, icon(e.icon, iconsize::L, fg).into_any_element(), e.label, count, wide, help, t).on_click(move |_, _, cx| navigate(route.clone(), cx));
         let Some(key) = hide_key else {
             top = top.child(row);
             continue;
@@ -223,7 +214,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
                     let path = f.0.clone();
                     act(cx, |l| l.request_filing(vec![path], l.next_in_module(&inside)));
                 })
-                .on_click(move |_, window, cx| tab_click(route.clone(), window, cx))
+                .on_click(move |_, _, cx| navigate(route.clone(), cx))
                 .context_menu(move |mut menu, _, _| {
                     for (title, url) in &links {
                         let url = url.clone();

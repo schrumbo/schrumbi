@@ -229,6 +229,8 @@ pub fn header(lib: &Library, m: &Module, split: bool, width: f32, st: &ModuleSta
             let _ = opener::open(&url);
         }));
     }
+    let edit_id = m.id.clone();
+    actions = actions.child(Button::new("module-edit").small().icon(menu_icon("settings")).tooltip(tr("Modul bearbeiten")).on_click(move |_, _, cx| super::settings::open_module(&edit_id, cx)));
     let pane = (!split).then(|| {
         let (v1, v2) = (view.clone(), view);
         div()

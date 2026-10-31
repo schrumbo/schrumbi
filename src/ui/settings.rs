@@ -120,14 +120,27 @@ pub struct Settings {
 
 /// Opens the settings window, or brings the open one to the front.
 pub fn open(cx: &mut App) {
+    show(None, cx);
+}
+
+/// Opens the settings on the page of one module.
+pub fn open_module(id: &str, cx: &mut App) {
+    show(Some(id.to_string()), cx);
+}
+
+fn show(module: Option<String>, cx: &mut App) {
     for w in cx.windows() {
         if let Some(h) = w.downcast::<gpui_kit::base::Root>()
-            && h.update(cx, |root, window, _cx| {
-                let is_settings = root.view().clone().downcast::<Settings>().is_ok();
-                if is_settings {
-                    window.activate_window();
+            && h.update(cx, |root, window, cx| {
+                let Ok(view) = root.view().clone().downcast::<Settings>() else { return false };
+                window.activate_window();
+                if let Some(id) = module.clone() {
+                    view.update(cx, |s, cx| {
+                        s.show_module(id);
+                        cx.notify();
+                    });
                 }
-                is_settings
+                true
             })
             .unwrap_or(false)
         {
@@ -142,7 +155,13 @@ pub fn open(cx: &mut App) {
         ..Default::default()
     };
     let options = super::chrome::window_options(options, tr("Einstellungen"));
-    let _ = gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Settings::new(window, cx)));
+    let _ = gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| {
+        let mut settings = Settings::new(window, cx);
+        if let Some(id) = module {
+            settings.show_module(id);
+        }
+        settings
+    }));
 }
 
 fn rules_and_sessions(rules: usize, sessions: usize) -> String {
@@ -303,6 +322,11 @@ impl Settings {
             return Vec::new();
         }
         SEARCHABLE.iter().map(|(key, tab)| (tr(key), *tab)).filter(|(label, _)| fold(label).contains(&query)).collect()
+    }
+
+    fn show_module(&mut self, id: String) {
+        self.tab = Tab::Modules;
+        self.module = Some(id);
     }
 
     fn open_result(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
@@ -1310,7 +1334,6 @@ impl Settings {
     fn notes(&mut self, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
         let p = prefs::get();
         let mut fields = std::mem::take(&mut self.fields);
-        let css = fields.input("n-css", &p.pdf_extra_css, "h2 { color: var(--accent); }", window, cx, |v, _| prefs::update(|p| p.pdf_extra_css = v));
         let accent = fields.input("n-accent", &p.note_accent, "#0EA5E9", window, cx, |v, _| {
             if v.len() == 7 && v.starts_with('#') && u32::from_str_radix(&v[1..], 16).is_ok() {
                 prefs::update(|p| p.note_accent = v.to_uppercase());
@@ -1420,7 +1443,7 @@ impl Settings {
         swatches = swatches.child(div().w(px(90.)).child(Input::new(&accent).small()));
         let pdf = section(
             Some(tr("PDF-Export")),
-            Some(trf("Notizen werden als A4-PDF neben der Markdown-Datei gesichert (%@ im Notizfenster). Eigenes CSS ändert Farben, Schriften, Größen und Ausrichtung; die Akzentfarbe steht als var(--accent) bereit.", &[&ShortcutAction::ExportPdf.shortcut().map_or_else(String::new, |s| s.display())])),
+            Some(trf("Notizen werden als A4-PDF neben der Markdown-Datei gesichert (%@ im Notizfenster).", &[&ShortcutAction::ExportPdf.shortcut().map_or_else(String::new, |s| s.display())])),
             vec![
                 row(tr("Akzentfarbe"), swatches, t),
                 row(tr("Kopfzeile mit Modul, Woche, Name und Datum"), Switch::new("n-header").checked(p.pdf_header).on_click(|v, _, _| {
@@ -1431,7 +1454,6 @@ impl Settings {
                     let v = *v;
                     prefs::update(|p| p.pdf_page_numbers = v);
                 }), t),
-                div().flex().flex_col().gap(px(space::S)).px(px(space::L)).py(px(space::S)).child(tr("Eigenes CSS")).child(div().font_family(Theme::mono_family()).child(Input::new(&css))).into_any_element(),
                 div()
                     .flex()
                     .px(px(space::L))
@@ -1441,7 +1463,6 @@ impl Settings {
                             p.note_accent = prefs::DEFAULT_ACCENT.into();
                             p.pdf_header = true;
                             p.pdf_page_numbers = true;
-                            p.pdf_extra_css.clear();
                         })
                     }))
                     .child(div().flex_1())

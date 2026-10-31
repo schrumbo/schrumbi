@@ -31,14 +31,13 @@ pub struct Options {
     pub accent: String,
     pub header: bool,
     pub page_numbers: bool,
-    pub extra_css: String,
     pub lang: String,
 }
 
 impl Options {
     pub fn current() -> Self {
         let p = super::prefs::get();
-        Self { accent: p.note_accent.clone(), header: p.pdf_header, page_numbers: p.pdf_page_numbers, extra_css: p.pdf_extra_css.clone(), lang: if super::i18n::lang() == super::i18n::Lang::En { "en".into() } else { "de".into() } }
+        Self { accent: p.note_accent.clone(), header: p.pdf_header, page_numbers: p.pdf_page_numbers, lang: if super::i18n::lang() == super::i18n::Lang::En { "en".into() } else { "de".into() } }
     }
 }
 
@@ -373,9 +372,6 @@ impl<'a> Converter<'a> {
 
 fn preamble(o: &Options, meta: Option<&Meta>) -> String {
     let accent = if valid_hex(&o.accent) { o.accent.trim().to_string() } else { DEFAULT_ACCENT.to_string() };
-    let css = css::Sheet::parse(&o.extra_css);
-    let var = |name: &str, default: &str| css.vars.get(name).cloned().unwrap_or_else(|| format!("rgb(\"{default}\")"));
-    let accent = css.vars.get("accent").cloned().unwrap_or_else(|| format!("rgb(\"{accent}\")"));
     let lang = if o.lang.starts_with("en") { "en" } else { "de" };
     let footer = if o.page_numbers {
         r##"context { let total = counter(page).final().first(); if total > 1 { align(right, text(size: 8pt, weight: 500, fill: rgb("#646d76"), counter(page).display("1 / 1", both: true))) } }"##
@@ -391,15 +387,15 @@ fn preamble(o: &Options, meta: Option<&Meta>) -> String {
         _ => String::new(),
     };
     format!(
-        r##"#let accent = {accent}
-#let ink = {text}
-#let muted = {muted}
-#let rule = {rule}
-#let soft = {soft}
-#let headc = {heading}
-#let marker = {marker}
-#let code-fill = {code_fill}
-#let pre-fill = {pre_fill}
+        r##"#let accent = rgb("{accent}")
+#let ink = rgb("#1d2125")
+#let muted = rgb("#646d76")
+#let rule = rgb("#e2e5e9")
+#let soft = rgb("#f5f7f9")
+#let headc = rgb("#111417")
+#let marker = rgb("#8a939c")
+#let code-fill = soft
+#let pre-fill = soft
 #set document(title: none)
 #set page(paper: "a4", margin: 56pt, footer: {footer}, footer-descent: 18pt)
 #set text(font: {SANS}, size: 10.5pt, fill: ink, lang: "{lang}", hyphenate: true)
@@ -434,17 +430,7 @@ fn preamble(o: &Options, meta: Option<&Meta>) -> String {
 #let fnref(n) = super(size: 7pt, text(fill: accent, str(n)))
 #let footnotes(..cells) = block(width: 100%, above: 8mm, stroke: (top: 0.75pt + rule), inset: (top: 3mm), {{ set text(size: 8.5pt, fill: muted); grid(columns: (5mm, 1fr), row-gutter: 1.2em, ..cells) }})
 #let fitimg(path) = layout(size => {{ let img = image(path); let w = measure(img).width; if w > size.width {{ image(path, width: 100%) }} else {{ img }} }})
-{rules}
 {header}"##,
-        text = var("text", "#1d2125"),
-        muted = var("muted", "#646d76"),
-        rule = var("rule", "#e2e5e9"),
-        soft = var("soft", "#f5f7f9"),
-        heading = var("heading", "#111417"),
-        marker = var("marker", "#8a939c"),
-        code_fill = css.code_fill.clone().unwrap_or_else(|| "soft".into()),
-        pre_fill = css.pre_fill.clone().unwrap_or_else(|| "soft".into()),
-        rules = css.rules.join("\n"),
     )
 }
 
@@ -483,229 +469,28 @@ pub fn export(markdown_text: &str, base: &Path, target: &Path, meta: Option<&Met
     })
 }
 
-/// The supported subset of the "Eigenes CSS" setting, mapped onto Typst rules.
-mod css {
-    use std::collections::HashMap;
-    use std::sync::LazyLock;
-
-    use regex::Regex;
-
-    #[derive(Default)]
-    pub struct Sheet {
-        pub vars: HashMap<String, String>,
-        pub rules: Vec<String>,
-        pub code_fill: Option<String>,
-        pub pre_fill: Option<String>,
-    }
-
-    fn color(v: &str, vars: &HashMap<String, String>) -> Option<String> {
-        static VAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^var\(--([\w-]+)\)$").unwrap());
-        static RGB: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)(?:[\s,/]+([\d.]+%?))?\s*\)$").unwrap());
-        let v = v.trim().trim_end_matches("!important").trim();
-        if let Some(c) = VAR.captures(v) {
-            let name = &c[1];
-            return vars.get(name).cloned().or_else(|| matches!(name, "accent" | "text" | "muted" | "rule" | "soft" | "heading" | "marker").then(|| if name == "text" { "ink".into() } else if name == "heading" { "headc".into() } else { name.into() }));
-        }
-        if super::valid_hex(v) {
-            return Some(format!("rgb(\"{v}\")"));
-        }
-        if let Some(c) = RGB.captures(v) {
-            let a = c.get(4).map(|a| {
-                let s = a.as_str();
-                if let Some(p) = s.strip_suffix('%') { p.parse::<f32>().unwrap_or(100.) / 100. } else { s.parse::<f32>().unwrap_or(1.) }
-            });
-            let (r, g, b) = (c[1].parse::<u8>().ok()?, c[2].parse::<u8>().ok()?, c[3].parse::<u8>().ok()?);
-            return Some(match a {
-                Some(a) => format!("rgb({r}, {g}, {b}, {}%)", (a.clamp(0., 1.) * 100.).round()),
-                None => format!("rgb({r}, {g}, {b})"),
-            });
-        }
-        let hex = match v.to_ascii_lowercase().as_str() {
-            "black" => "#000000",
-            "white" => "#ffffff",
-            "red" => "#ff0000",
-            "green" => "#008000",
-            "blue" => "#0000ff",
-            "gray" | "grey" => "#808080",
-            "orange" => "#ffa500",
-            "purple" => "#800080",
-            "navy" => "#000080",
-            "teal" => "#008080",
-            "maroon" => "#800000",
-            "transparent" => return Some("none".into()),
-            _ => return None,
-        };
-        Some(format!("rgb(\"{hex}\")"))
-    }
-
-    fn length(v: &str) -> Option<String> {
-        static LEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(-?[\d.]+)(pt|px|em|rem|mm|cm|%)$").unwrap());
-        let c = LEN.captures(v.trim())?;
-        let n: f32 = c[1].parse().ok()?;
-        Some(match &c[2] {
-            "px" => format!("{}pt", n * 0.75),
-            "rem" => format!("{}pt", n * 10.5),
-            "%" => format!("{}em", n / 100.),
-            u => format!("{n}{u}"),
-        })
-    }
-
-    fn fonts(v: &str) -> Option<String> {
-        let names: Vec<String> = v
-            .split(',')
-            .map(|f| f.trim().trim_matches(['"', '\'']).to_string())
-            .filter(|f| !f.is_empty() && !matches!(f.as_str(), "sans-serif" | "serif" | "monospace" | "system-ui" | "-apple-system" | "BlinkMacSystemFont" | "ui-sans-serif" | "ui-monospace" | "inherit"))
-            .collect();
-        (!names.is_empty()).then(|| format!("({},)", names.iter().map(|n| format!("{n:?}")).collect::<Vec<_>>().join(", ")))
-    }
-
-    fn targets(selector: &str) -> Vec<&'static str> {
-        selector
-            .split(',')
-            .filter_map(|s| match s.trim() {
-                "html" | "body" | "*" => Some("body"),
-                "h1" => Some("heading.where(level: 1)"),
-                "h2" => Some("heading.where(level: 2)"),
-                "h3" => Some("heading.where(level: 3)"),
-                "h4" => Some("heading.where(level: 4)"),
-                "h5" => Some("heading.where(level: 5)"),
-                "h6" => Some("heading.where(level: 6)"),
-                "h1, h2, h3, h4, h5, h6" => Some("heading"),
-                "p" => Some("par"),
-                "a" => Some("link"),
-                "strong" | "b" => Some("strong"),
-                "em" | "i" => Some("emph"),
-                "code" => Some("raw"),
-                "pre" | "pre code" => Some("raw.where(block: true)"),
-                "blockquote" => Some("quote"),
-                "mark" => Some("highlight"),
-                "table" | "td" => Some("table"),
-                "th" => Some("table.header"),
-                _ => None,
-            })
-            .collect()
-    }
-
-    impl Sheet {
-        pub fn parse(src: &str) -> Self {
-            static COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)/\*.*?\*/").unwrap());
-            static BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"([^{}]+)\{([^{}]*)\}").unwrap());
-            let src = COMMENT.replace_all(src, "");
-            let mut sheet = Sheet::default();
-            for b in BLOCK.captures_iter(&src) {
-                let selector = b[1].trim();
-                let decls: Vec<(String, String)> = b[2].split(';').filter_map(|d| d.split_once(':')).map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().trim_end_matches("!important").trim().to_string())).collect();
-                if selector == ":root" {
-                    for (k, v) in &decls {
-                        if let Some(name) = k.strip_prefix("--")
-                            && let Some(c) = color(v, &sheet.vars)
-                        {
-                            sheet.vars.insert(name.to_string(), c);
-                        }
-                    }
-                }
-                for target in targets(selector) {
-                    let mut text = Vec::new();
-                    for (k, v) in &decls {
-                        match k.as_str() {
-                            "color" => {
-                                if let Some(c) = color(v, &sheet.vars) {
-                                    text.push(format!("fill: {c}"));
-                                }
-                            }
-                            "font-size" => {
-                                if let Some(l) = length(v) {
-                                    text.push(format!("size: {l}"));
-                                }
-                            }
-                            "font-family" | "font" if k == "font-family" => {
-                                if let Some(f) = fonts(v) {
-                                    text.push(format!("font: {f}"));
-                                }
-                            }
-                            "font-weight" => match v.as_str() {
-                                "bold" | "bolder" => text.push("weight: 700".into()),
-                                "normal" | "lighter" => text.push("weight: 400".into()),
-                                n => {
-                                    if let Ok(n) = n.parse::<u16>() {
-                                        text.push(format!("weight: {}", n.clamp(100, 900)));
-                                    }
-                                }
-                            },
-                            "font-style" if v == "italic" || v == "oblique" => text.push("style: \"italic\"".into()),
-                            "font-style" if v == "normal" => text.push("style: \"normal\"".into()),
-                            "letter-spacing" => {
-                                if let Some(l) = length(v) {
-                                    text.push(format!("tracking: {l}"));
-                                }
-                            }
-                            "text-transform" if v == "uppercase" && target != "body" => sheet.rules.push(format!("#show {target}: upper")),
-                            "text-align" => {
-                                let rule = match v.as_str() {
-                                    "justify" => Some("set par(justify: true)".to_string()),
-                                    "center" | "right" | "left" => Some(format!("set align({v})")),
-                                    _ => None,
-                                };
-                                if let Some(r) = rule {
-                                    sheet.rules.push(if target == "body" { format!("#{r}") } else { format!("#show {target}: {r}") });
-                                }
-                            }
-                            "background" | "background-color" => {
-                                if let Some(c) = color(v, &sheet.vars) {
-                                    match target {
-                                        "raw" => sheet.code_fill = Some(c),
-                                        "raw.where(block: true)" => sheet.pre_fill = Some(c),
-                                        "highlight" => sheet.rules.push(format!("#set highlight(fill: {c})")),
-                                        _ => {}
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    if !text.is_empty() {
-                        let args = text.join(", ");
-                        sheet.rules.push(if target == "body" { format!("#set text({args})") } else { format!("#show {target}: set text({args})") });
-                    }
-                }
-            }
-            sheet
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{Meta, Options, render, source};
+    use super::{Meta, Options, render};
 
-    fn opts(css: &str) -> Options {
-        Options { accent: "#0EA5E9".into(), header: true, page_numbers: true, extra_css: css.into(), lang: "de".into() }
+    fn opts() -> Options {
+        Options { accent: "#0EA5E9".into(), header: true, page_numbers: true, lang: "de".into() }
     }
 
     const SAMPLE: &str = "# Titel \"mit\" #Zeichen\n\nText mit **fett**, *kursiv*, `code`, ==mark==, [Link](https://a.b) und $5 \\ Backslash.[^1]\n\n## Aufgaben\n\n- [x] fertig\n- [ ] offen\n  - verschachtelt\n\n1. eins\n2. zwei\n\n| A | B |\n|:-:|--:|\n| 1 | 2 |\n| 3 | 4 |\n\n> Zitat\n\n```rust\nfn main() {}\n```\n\n---\n\n<!-- Kommentar --><br>\n\n![fehlt](nicht-da.png)\n\n[^1]: Fußnote.\n";
 
     #[test]
     fn renders_every_block_type() {
-        let pdf = render(SAMPLE, Path::new("/"), Some(&Meta { left: "P1 · Projekt".into(), right: "Name · 30. Oktober 2026".into() }), &opts("")).unwrap();
+        let pdf = render(SAMPLE, Path::new("/"), Some(&Meta { left: "P1 · Projekt".into(), right: "Name · 30. Oktober 2026".into() }), &opts()).unwrap();
         assert!(pdf.starts_with(b"%PDF"));
     }
 
     #[test]
-    fn applies_css_subset_and_survives_garbage() {
-        let css = ":root { --accent: #ff0000; } h2 { color: var(--accent); font-size: 18px; text-transform: uppercase } body { font-family: Georgia, serif; text-align: justify } code { background: rgba(0,0,0,0.1) } }}} nonsense {";
-        let (src, _) = source(SAMPLE, Path::new("/"), None, &opts(css));
-        assert!(src.contains("#let accent = rgb(\"#ff0000\")"));
-        assert!(src.contains("#show heading.where(level: 2): set text(fill: rgb(\"#ff0000\"), size: 13.5pt)"));
-        assert!(src.contains("#set par(justify: true)"));
-        assert!(render(SAMPLE, Path::new("/"), None, &opts(css)).unwrap().starts_with(b"%PDF"));
-    }
-
-    #[test]
     fn renders_empty_and_huge_notes() {
-        assert!(render("", Path::new("/"), None, &opts("")).unwrap().starts_with(b"%PDF"));
+        assert!(render("", Path::new("/"), None, &opts()).unwrap().starts_with(b"%PDF"));
         let long = (0..400).map(|i| format!("## Abschnitt {i}\n\n- [ ] Aufgabe {i}\n\nText {i} ")).collect::<String>();
-        assert!(render(&long, Path::new("/"), None, &opts("")).unwrap().starts_with(b"%PDF"));
+        assert!(render(&long, Path::new("/"), None, &opts()).unwrap().starts_with(b"%PDF"));
     }
 }
