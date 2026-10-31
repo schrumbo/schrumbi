@@ -390,12 +390,6 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .cursor_pointer().key_nav()
         .tooltip(tip(format!("{} · {} · {}", a.title, when, e.status.label())))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(sel.clone()))))
-        .when(tracks, |c| {
-            c.drag_over::<ExternalPaths>(move |s, _, _, _| s.border(px(1.5)).border_color(accent)).on_drop(move |p: &ExternalPaths, _, cx| {
-                let paths = p.paths().to_vec();
-                act(cx, |l| l.request_filing(paths, Some(drop_id.clone())));
-            })
-        })
         .child(div().absolute().top_0().bottom_0().left_0().w(px(3.)).rounded_l(px(radius::CONTROL)).bg(tint.opacity(if e.status.is_closed() { 0.35 } else { 1. })))
         .child(status_toggle(a, lib, iconsize::M, t))
         .child(
@@ -407,6 +401,7 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
                 .child(if e.status == Status::Skipped { title.line_through() } else { title })
                 .child(div().text_size(px(font::CAPTION)).truncate().text_color(if attention { if e.status == Status::Ready { t.blue } else { t.red } } else { t.secondary }).child(subtitle)),
         )
+        .when(tracks, |c| file_target(c, a, t))
         .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx));
     motion::flip(format!("chip-{}", a.id), chip).into_any_element()
 }

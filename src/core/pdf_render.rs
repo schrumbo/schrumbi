@@ -78,7 +78,7 @@ pub struct PageText {
     folded_glyph: Vec<u32>,
 }
 
-fn fold(c: char, out: &mut String) {
+pub fn fold(c: char, out: &mut String) {
     match c {
         '\n' | '\u{a0}' | '\t' => out.push(' '),
         'ß' => out.push_str("ss"),

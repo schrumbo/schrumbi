@@ -187,7 +187,7 @@ pub struct Library {
     pub show_quick_add: bool,
     pub show_quick_open: bool,
     /// A PDF about to open and the text to look for in it, set when coming from the file search.
-    pub pdf_query: Option<(PathBuf, String)>,
+    pub find_in_file: Option<(PathBuf, String, usize)>,
     pub show_palette: bool,
     pub show_overdue: bool,
     pub show_unconfirmed: bool,
@@ -276,7 +276,7 @@ impl Library {
             show_inspector: false,
             show_quick_add: false,
             show_quick_open: false,
-            pdf_query: None,
+            find_in_file: None,
             show_palette: false,
             show_overdue: false,
             show_unconfirmed: false,

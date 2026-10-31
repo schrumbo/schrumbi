@@ -492,26 +492,67 @@ fn plain_text(inlines: &[Inline]) -> String {
         .collect()
 }
 
+/// Index of the top-level block containing a source offset, counted like `ParsedNote`'s blocks.
+pub fn block_at(src: &str, offset: usize) -> usize {
+    let (mut depth, mut next, mut at) = (0, 0, 0);
+    for (event, range) in Parser::new_ext(src, markdown::options()).into_offset_iter() {
+        let starts_block = depth == 0 && !matches!(event, Event::End(_) | Event::Start(Tag::FootnoteDefinition(_)));
+        match event {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth -= 1,
+            _ => {}
+        }
+        if starts_block {
+            if range.start > offset {
+                break;
+            }
+            at = next;
+            next += 1;
+        }
+    }
+    at
+}
+
+/// A block to scroll to and mark briefly, after arriving from a search match.
+#[derive(Clone)]
+pub struct Found {
+    pub block: usize,
+    pub anchor: ScrollAnchor,
+    pub token: usize,
+}
+
 /// Renders a note with `anchors` on its top-level headings, one per entry of `ParsedNote::headings`.
-pub fn render_with_anchors(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, anchors: &[ScrollAnchor], t: &Theme) -> Div {
-    build(note, base, on_toggle, anchors, t)
+pub fn render_with_anchors(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, anchors: &[ScrollAnchor], found: Option<&Found>, t: &Theme) -> Div {
+    build(note, base, on_toggle, anchors, found, t)
 }
 
 /// Renders a parsed note; task boxes call `on_toggle` with their source line.
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
-    build(note, base, on_toggle, &[], t)
+    build(note, base, on_toggle, &[], None, t)
 }
 
-fn build(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, anchors: &[ScrollAnchor], t: &Theme) -> Div {
+fn build(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, anchors: &[ScrollAnchor], found: Option<&Found>, t: &Theme) -> Div {
     let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: std::cell::Cell::new(0) };
     let mut heading = 0;
-    let blocks = note.blocks.iter().zip(render_blocks(&note.blocks, &cx)).map(|(block, element)| {
-        if !matches!(block, Block::Heading(..)) {
-            return element;
-        }
-        heading += 1;
-        match anchors.get(heading - 1) {
-            Some(anchor) => div().id(("md-heading", heading)).anchor_scroll(Some(anchor.clone())).child(element).into_any_element(),
+    let accent = t.accent;
+    let blocks = note.blocks.iter().zip(render_blocks(&note.blocks, &cx)).enumerate().map(|(i, (block, element))| {
+        let element = if matches!(block, Block::Heading(..)) {
+            heading += 1;
+            match anchors.get(heading - 1) {
+                Some(anchor) => div().id(("md-heading", heading)).anchor_scroll(Some(anchor.clone())).child(element).into_any_element(),
+                None => element,
+            }
+        } else {
+            element
+        };
+        match found.filter(|f| f.block == i) {
+            Some(f) => div()
+                .id(("md-found", f.token))
+                .anchor_scroll(Some(f.anchor.clone()))
+                .rounded(px(radius::INNER))
+                .child(element)
+                .with_animation(("md-found-mark", f.token), Animation::new(std::time::Duration::from_millis(1800)).with_easing(ease_in_out), move |d, p| d.bg(accent.opacity(0.28 * (1. - p))))
+                .into_any_element(),
             None => element,
         }
     });
@@ -527,6 +568,16 @@ fn build(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, an
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn block_at_counts_like_the_parser() {
+        use super::{block_at, parse};
+        let src = "# Titel\n\nErster Absatz\n\n- a\n- b\n\n---\n\n```\ncode\n```\n\n| x |\n|---|\n| y |\n\nLetzter Absatz[^1]\n\n[^1]: Fuß\n";
+        let note = parse(src);
+        assert_eq!(block_at(src, src.find("Letzter").unwrap()), note.blocks.len() - 1);
+        assert_eq!(block_at(src, src.find("Erster").unwrap()), 1);
+        assert_eq!(block_at(src, src.find("code").unwrap()), 4);
+    }
+
     use super::{Block, parse};
 
     #[test]

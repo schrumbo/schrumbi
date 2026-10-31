@@ -333,7 +333,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
 
 fn drop_zone(id: String, has_files: bool, t: &Theme) -> impl IntoElement {
     let (accent, secondary) = (t.accent, t.secondary);
-    let (drop_id, pick_id) = (id.clone(), id);
+    let (drop_id, list_id, pick_id) = (id.clone(), id.clone(), id);
     div()
         .id("drop-zone")
         .flex()
@@ -347,9 +347,14 @@ fn drop_zone(id: String, has_files: bool, t: &Theme) -> impl IntoElement {
         .border_color(secondary.opacity(0.4))
         .text_color(secondary)
         .drag_over::<ExternalPaths>(move |s, _, _, _| s.border_color(accent).bg(accent.opacity(0.08)).text_color(accent))
+        .drag_over::<super::browser::DraggedFile>(move |s, _, _, _| s.border_color(accent).bg(accent.opacity(0.08)).text_color(accent))
         .on_drop(move |paths: &ExternalPaths, _, cx| {
             let paths = paths.paths().to_vec();
             act(cx, |l| l.request_filing(paths, Some(drop_id.clone())));
+        })
+        .on_drop(move |f: &super::browser::DraggedFile, _, cx| {
+            let path = f.0.clone();
+            act(cx, |l| l.request_filing(vec![path], Some(list_id.clone())));
         })
         .child(icon("arrow-down-to-line", iconsize::L, secondary))
         .child(div().text_size(px(font::CALLOUT)).child(if has_files { tr("Weitere Datei hierher ziehen") } else { tr("Datei hierher ziehen") }))

@@ -258,7 +258,7 @@ fn break_summary(b: &Break) -> String {
 impl Settings {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Befehl suchen")));
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Einstellungen suchen")));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Suchen")));
         let lib = state::lib(cx);
         let subs = vec![cx.observe(&lib, |_, _, cx| cx.notify()), cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()), cx.subscribe_in(&search, window, |s, _, e: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = e
@@ -363,7 +363,7 @@ impl Settings {
                     })),
             );
         }
-        div().relative().child(bar).child(div().absolute().top(px(if super::chrome::CUSTOM { space::M } else { space::XXL })).right(px(space::M)).w(px(180.)).child(Input::new(&self.search).small().prefix(icon("search", iconsize::XS, t.secondary))))
+        div().relative().child(bar).child(div().absolute().top(px(if super::chrome::CUSTOM { space::M } else { space::XXL })).right(px(space::M)).w(px(130.)).child(Input::new(&self.search).small().prefix(icon("search", iconsize::XS, t.secondary))))
     }
 
     fn general(&mut self, c: &StudyConfig, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
@@ -715,16 +715,16 @@ impl Settings {
             breaks.push(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap(px(space::S))
                     .px(px(space::L))
                     .py(px(space::S))
-                    .child(div().w(px(150.)).child(Input::new(&n).small()))
-                    .child(div().flex_1())
+                    .child(div().flex_1().min_w(px(160.)).child(Input::new(&n).small()))
                     .child(div().w(px(120.)).child(gpui_kit::component::date_picker::DatePicker::new(&from).small()))
                     .child(div().text_color(t.secondary).child(tr("bis")))
                     .child(div().w(px(120.)).child(gpui_kit::component::date_picker::DatePicker::new(&to).small()))
-                    .child(div().w(px(130.)).text_size(px(font::CAPTION)).text_color(t.secondary).child(break_summary(b)))
+                    .child(div().flex_none().text_size(px(font::CAPTION)).text_color(t.secondary).child(break_summary(b)))
                     .child(minus(SharedString::from(format!("brk-rm-{i}")), tr("Pause entfernen"), move |cx| e(Box::new(move |s| if i < s.breaks.len() { s.breaks.remove(i); }))(cx)))
                     .into_any_element(),
             );

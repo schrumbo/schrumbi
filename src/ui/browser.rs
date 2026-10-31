@@ -21,12 +21,13 @@ use crate::core::library::{self, Library, NewNoteRequest};
 use crate::core::markdown;
 use crate::core::naming::extension;
 use crate::core::prefs::{self, FileGrouping};
+use crate::core::search_index::Spot;
 use crate::core::text::fold;
 
 #[derive(Clone, PartialEq)]
 pub struct Item {
     pub file: CatalogFile,
-    pub snippet: Option<String>,
+    pub spots: Vec<Spot>,
     pub score: f64,
 }
 
@@ -171,9 +172,9 @@ impl FileBrowser {
         let searching = !q.terms.is_empty();
         let scoped: Vec<CatalogFile> = l.catalog.iter().filter(|f| module.as_ref().is_none_or(|m| f.module_id.as_ref() == Some(m)) && week.is_none_or(|w| f.week == Some(w))).cloned().collect();
         let mut items: Vec<Item> = if searching {
-            scoped.iter().filter_map(|f| catalog::score(f, &q.terms, current).map(|s| Item { file: f.clone(), snippet: None, score: s })).collect()
+            scoped.iter().filter_map(|f| catalog::score(f, &q.terms, current).map(|s| Item { file: f.clone(), spots: Vec::new(), score: s })).collect()
         } else {
-            scoped.iter().filter(|f| !f.in_project).map(|f| Item { file: f.clone(), snippet: None, score: 0. }).collect()
+            scoped.iter().filter(|f| !f.in_project).map(|f| Item { file: f.clone(), spots: Vec::new(), score: 0. }).collect()
         };
         let kind = self.kind;
         let grouping = prefs::get().file_grouping;
@@ -182,7 +183,7 @@ impl FileBrowser {
         let finish = move |items: Vec<Item>, scoped: &[CatalogFile]| -> Results {
             let mut items = items;
             if searching && items.is_empty() {
-                items = scoped.iter().filter_map(|f| catalog::fuzzy_score(f, &q.terms, current).map(|s| Item { file: f.clone(), snippet: None, score: s })).collect();
+                items = scoped.iter().filter_map(|f| catalog::fuzzy_score(f, &q.terms, current).map(|s| Item { file: f.clone(), spots: Vec::new(), score: s })).collect();
             }
             let total_all = items.len();
             let mut matching: Vec<Item> = items.into_iter().filter(|i| kind.matches(i.file.name())).collect();
@@ -208,13 +209,14 @@ impl FileBrowser {
         self.load = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(120)).await;
             let hits = cx.background_spawn(async move { index.content_search(&terms, prefix.as_deref(), 150) }).await;
-            let seen: HashSet<PathBuf> = items.iter().map(|i| i.file.file.path.clone()).collect();
+            let mut by_name: HashMap<PathBuf, usize> = items.iter().enumerate().map(|(i, item)| (item.file.file.path.clone(), i)).collect();
             let by_path: HashMap<PathBuf, &CatalogFile> = scoped.iter().map(|f| (f.file.path.clone(), f)).collect();
             for h in hits {
-                if !seen.contains(&h.file.path)
-                    && let Some(f) = by_path.get(&h.file.path)
-                {
-                    items.push(Item { file: (*f).clone(), snippet: h.snippet, score: 0.5 + catalog::recency(f.week, current) });
+                if let Some(i) = by_name.get(&h.file.path) {
+                    items[*i].spots = h.spots;
+                } else if let Some(f) = by_path.get(&h.file.path) {
+                    by_name.insert(h.file.path.clone(), items.len());
+                    items.push(Item { file: (*f).clone(), spots: h.spots, score: 0.5 + catalog::recency(f.week, current) });
                 }
             }
             let results = finish(items, &scoped);
@@ -353,13 +355,8 @@ impl FileBrowser {
     pub fn open_selected(&self, cx: &mut App) {
         let Some(path) = self.selected.clone() else { return };
         let r = &self.results;
-        let matched = r.best.iter().chain(r.groups.iter().flat_map(|g| g.items.iter())).any(|i| i.file.file.path == path && i.snippet.is_some());
-        act(cx, |l| {
-            if matched {
-                l.pdf_query = Some((path.clone(), l.search_query.clone()));
-            }
-            l.open_file(&path)
-        });
+        let spot = r.best.iter().chain(r.groups.iter().flat_map(|g| g.items.iter())).find(|i| i.file.file.path == path).and_then(|i| i.spots.first().cloned());
+        open_at(&path, spot, cx);
     }
 
     fn line_list(&self, current: Option<u32>) -> Vec<Line> {
@@ -553,21 +550,27 @@ pub fn week_badge(text: String, prominent: bool, t: &Theme) -> Div {
 
 /// Text with every search term bold and tinted.
 fn highlighted(s: &str, terms: &[String], t: &Theme) -> StyledText {
-    let folded = fold(s);
+    let mut fchars: Vec<char> = Vec::with_capacity(s.len());
+    let mut map: Vec<usize> = Vec::with_capacity(s.len());
+    for (at, c) in s.char_indices() {
+        for f in fold(c.encode_utf8(&mut [0; 4])).chars() {
+            fchars.push(f);
+            map.push(at);
+        }
+    }
+    let end_of = |i: usize| map.get(i).copied().unwrap_or(s.len());
     let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
-    if folded.chars().count() == s.chars().count() {
-        let map: Vec<usize> = s.char_indices().map(|(i, _)| i).chain([s.len()]).collect();
-        let fchars: Vec<char> = folded.chars().collect();
-        for term in terms.iter().filter(|t| t.chars().count() >= 2) {
-            let tc: Vec<char> = term.chars().collect();
-            let mut i = 0;
-            while i + tc.len() <= fchars.len() {
-                if fchars[i..i + tc.len()] == tc[..] {
-                    ranges.push(map[i]..map[i + tc.len()]);
-                    i += tc.len();
-                } else {
-                    i += 1;
-                }
+    for term in terms.iter().filter(|t| t.chars().count() >= 2) {
+        let tc: Vec<char> = fold(term).chars().collect();
+        let mut i = 0;
+        while i + tc.len() <= fchars.len() {
+            if fchars[i..i + tc.len()] == tc[..] {
+                let last = map[i + tc.len() - 1];
+                let after = (i + tc.len()..=fchars.len()).map(end_of).find(|e| *e > last).unwrap_or(s.len());
+                ranges.push(map[i]..after);
+                i += tc.len();
+            } else {
+                i += 1;
             }
         }
     }
@@ -607,7 +610,7 @@ impl FileBrowser {
             meta = meta.child(div().flex().items_center().gap(px(space::XXS)).child(icon("clipboard-list", iconsize::XS, t.secondary)).child(tr("Aufgabe")));
         }
         let hover = t.ink.opacity(0.045);
-        let has_snippet = item.snippet.is_some();
+        let first_spot = item.spots.first().cloned();
         div()
             .id(SharedString::from(format!("file-{}", path.display())))
             .group("file-row")
@@ -638,12 +641,7 @@ impl FileBrowser {
                     return;
                 }
                 if e.click_count() >= 2 {
-                    act(cx, |l| {
-                        if has_snippet {
-                            l.pdf_query = Some((open.clone(), l.search_query.clone()));
-                        }
-                        l.open_file(&open)
-                    });
+                    open_at(&open, first_spot.clone(), cx);
                 }
             })
             .on_drag(DraggedFile(path.clone()), |d, _, _, cx| cx.new(|_| d.clone()))
@@ -660,7 +658,24 @@ impl FileBrowser {
                         None => div().truncate().child(highlighted(&f.display_name(), &terms, t)).into_any_element(),
                     })
                     .child(meta)
-                    .when_some(item.snippet.clone(), |d, s| d.child(div().text_size(px(font::CAPTION)).text_color(t.secondary).line_clamp(2).child(highlighted(&s, &terms, t)))),
+                    .children(item.spots.iter().enumerate().map(|(i, spot)| {
+                        let (file, spot_at) = (path.clone(), spot.clone());
+                        div()
+                            .id(("spot", i))
+                            .px(px(space::XS))
+                            .rounded(px(radius::INNER))
+                            .soft(hover, radius::INNER)
+                            .cursor_pointer()
+                            .truncate()
+                            .text_size(px(font::CAPTION))
+                            .text_color(t.secondary)
+                            .tooltip(tip(tr("Zur Fundstelle springen")))
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                open_at(&file, Some(spot_at.clone()), cx);
+                            })
+                            .child(highlighted(&spot.excerpt, &terms, t))
+                    })),
             )
             .child(
                 div()
@@ -882,6 +897,17 @@ impl FileBrowser {
     }
 }
 
+/// Opens a file, at a search match where the viewer can show one.
+fn open_at(path: &std::path::Path, spot: Option<Spot>, cx: &mut App) {
+    let jumps = markdown::is_markdown(path) || extension(&path.to_string_lossy()).eq_ignore_ascii_case("pdf");
+    act(cx, |l| {
+        if let Some(spot) = spot.filter(|_| jumps) {
+            l.find_in_file = Some((path.to_path_buf(), spot.term, spot.nth));
+        }
+        l.open_file(path)
+    });
+}
+
 /// A file dragged out of a list, e.g. onto an assignment.
 #[derive(Clone)]
 pub struct DraggedFile(pub PathBuf);
@@ -889,7 +915,7 @@ pub struct DraggedFile(pub PathBuf);
 impl Render for DraggedFile {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
-        div().flex().items_center().gap(px(space::S)).px(px(space::S)).py(px(space::XS)).rounded(px(radius::INNER)).bg(t.material).shadow_md().child(file_icon(&self.0, iconsize::M)).child(self.0.file_name().unwrap_or_default().to_string_lossy().to_string())
+        div().flex().items_center().gap(px(space::S)).px(px(space::S)).py(px(space::XS)).rounded(px(radius::INNER)).bg(t.material).text_color(t.primary).shadow_md().child(file_icon(&self.0, iconsize::M)).child(self.0.file_name().unwrap_or_default().to_string_lossy().to_string())
     }
 }
 

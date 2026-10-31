@@ -23,6 +23,7 @@ use crate::core::library;
 use crate::core::markdown;
 use crate::core::naming::extension;
 use crate::core::prefs::{self, NoteSaveMode};
+use crate::core::search_index;
 use crate::core::shortcuts::ShortcutAction;
 
 actions!(
@@ -46,6 +47,7 @@ pub struct NoteView {
     caret_to_end: bool,
     reader_scroll: ScrollHandle,
     heading_anchors: Vec<ScrollAnchor>,
+    found: Option<markdown_view::Found>,
     path: PathBuf,
     mode: Mode,
     editor: Entity<EditorState>,
@@ -111,11 +113,21 @@ impl NoteView {
         ];
         let mode = if text.trim().chars().count() < 40 { Mode::Edit } else { Mode::Read };
         let revision = state::lib(cx).update(cx, |l, _| l.buffer(&path).revision);
-        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_scroll: ScrollHandle::new(), heading_anchors: Vec::new(), parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_scroll: ScrollHandle::new(), heading_anchors: Vec::new(), found: None, parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Selects a search match in the editor and scrolls the reader to its block.
+    fn reveal(&mut self, term: &str, nth: usize, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(range) = search_index::occurrences(text, term).into_iter().nth(nth) else { return };
+        self.editor.update(cx, |s, cx| s.set_selected_range(range.clone(), cx));
+        let token = self.found.as_ref().map_or(0, |f| f.token + 1);
+        let anchor = ScrollAnchor::for_handle(self.reader_scroll.clone());
+        anchor.scroll_to(window, cx);
+        self.found = Some(markdown_view::Found { block: markdown_view::block_at(text, range.start), anchor, token });
     }
 
     /// Focuses the editor when editing, otherwise the note itself so its shortcuts work.
@@ -312,7 +324,7 @@ impl NoteView {
             .relative()
             .size_full()
             .bg(t.content)
-            .child(div().id("note-reader").size_full().overflow_y_scroll().track_scroll(&self.reader_scroll).child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).py(px(space::XL)).child(markdown_view::render_with_anchors(&parsed, base.as_deref(), Some(toggle), &self.heading_anchors, t)))))
+            .child(div().id("note-reader").size_full().overflow_y_scroll().track_scroll(&self.reader_scroll).child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).py(px(space::XL)).child(markdown_view::render_with_anchors(&parsed, base.as_deref(), Some(toggle), &self.heading_anchors, self.found.as_ref(), t)))))
             .vertical_scrollbar(&self.reader_scroll)
             .into_any_element()
     }
@@ -445,6 +457,14 @@ impl Focusable for NoteView {
     }
 }
 
+/// The search match waiting to be shown in this file, if any.
+fn take_find_request(path: &Path, cx: &mut App) -> Option<(String, usize)> {
+    state::lib(cx).update(cx, |l, _| {
+        let matches = l.find_in_file.as_ref().is_some_and(|(p, _, _)| dunce::canonicalize(p).is_ok_and(|p| p == path));
+        if matches { l.find_in_file.take().map(|(_, term, nth)| (term, nth)) } else { None }
+    })
+}
+
 impl Render for NoteView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if std::mem::take(&mut self.needs_focus) {
@@ -456,6 +476,10 @@ impl Render for NoteView {
             let b = l.buffer(&self.path);
             (b.missing, b.text.clone())
         });
+        let request = take_find_request(&self.path, cx);
+        if let Some((term, nth)) = request {
+            self.reveal(&term, nth, &text, window, cx);
+        }
         let exporting = lib.read(cx).exporting_pdfs.contains(&self.path);
         if !self.embedded {
             let (title, relative, dirty) = state::read(cx, |l| {
@@ -605,7 +629,7 @@ struct DraggedTab {
 impl Render for DraggedTab {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
-        div().flex().items_center().gap(px(space::S)).px(px(space::M)).py(px(space::XS)).rounded(px(radius::INNER)).bg(t.material).shadow_md().text_size(px(font::CALLOUT)).child(file_icon(&self.path, iconsize::M)).child(self.title.clone())
+        div().flex().items_center().gap(px(space::S)).px(px(space::M)).py(px(space::XS)).rounded(px(radius::INNER)).bg(t.material).text_color(t.primary).shadow_md().text_size(px(font::CALLOUT)).child(file_icon(&self.path, iconsize::M)).child(self.title.clone())
     }
 }
 
@@ -750,13 +774,8 @@ impl Render for FileViewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
         if let Some(pdf) = self.pdf.clone() {
-            let lib = state::lib(cx);
-            let query = lib.update(cx, |l, _| {
-                let matches = l.pdf_query.as_ref().is_some_and(|(p, _)| dunce::canonicalize(p).is_ok_and(|p| p == self.path));
-                if matches { l.pdf_query.take().map(|(_, q)| q) } else { None }
-            });
-            if let Some(query) = query {
-                pdf.update(cx, |v, cx| v.search_for(&query, window, cx));
+            if let Some((term, nth)) = take_find_request(&self.path, cx) {
+                pdf.update(cx, |v, cx| v.search_for(&term, nth, window, cx));
             }
         }
         let me = cx.entity();

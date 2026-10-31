@@ -125,6 +125,9 @@ pub struct PdfView {
     followed_page: usize,
     hits: Vec<Hit>,
     current_hit: Option<usize>,
+    /// The match to show once the search has found it, as when arriving from the file search.
+    wanted_hit: Option<(String, usize)>,
+    hit_to_reveal: Option<usize>,
     hit_list: UniformListScrollHandle,
     search_progress: usize,
     search_active: bool,
@@ -204,6 +207,8 @@ impl PdfView {
             followed_page: usize::MAX,
             hits: Vec::new(),
             current_hit: None,
+            wanted_hit: None,
+            hit_to_reveal: None,
             hit_list: UniformListScrollHandle::new(),
             search_progress: 0,
             search_active: false,
@@ -248,14 +253,22 @@ impl PdfView {
                 if generation == self.search_generation.load(Ordering::Relaxed) {
                     let first = self.hits.is_empty();
                     self.hits.extend(hits);
-                    if first {
-                        self.select_hit(self.first_hit_from_current(), cx);
+                    match self.wanted_hit.as_ref().map(|(_, nth)| *nth) {
+                        Some(nth) if nth < self.hits.len() => {
+                            self.wanted_hit = None;
+                            self.select_hit(nth, cx);
+                        }
+                        None if first => self.select_hit(self.first_hit_from_current(), cx),
+                        _ => {}
                     }
                 }
             }
             Message::SearchProgress(generation, page) => {
                 if generation == self.search_generation.load(Ordering::Relaxed) {
                     self.search_progress = page;
+                    if page >= self.sizes.len() && self.wanted_hit.take().is_some() && !self.hits.is_empty() {
+                        self.select_hit(self.hits.len() - 1, cx);
+                    }
                 }
             }
             Message::Clipboard(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
@@ -634,8 +647,9 @@ impl PdfView {
     }
 
     /// Opens the search panel with a query, as when arriving from the file search.
-    pub fn search_for(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn search_for(&mut self, query: &str, nth: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.open_search(window, cx);
+        self.wanted_hit = Some((query.to_string(), nth));
         if let Some(input) = self.search_input.clone() {
             input.update(cx, |s, cx| s.set_value(query.to_string(), window, cx));
         }
@@ -657,6 +671,7 @@ impl PdfView {
         self.hits.clear();
         self.current_hit = None;
         self.search_progress = 0;
+        self.wanted_hit.take_if(|(wanted, _)| *wanted != query);
         if !query.trim().is_empty() {
             let _ = self.jobs.try_send(TextJob::Search { generation, query });
         }
@@ -669,10 +684,19 @@ impl PdfView {
     }
 
     fn select_hit(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(hit) = self.hits.get(index) else { return };
-        let (page, rect) = (hit.page, hit.rects.first().copied());
+        if index >= self.hits.len() {
+            return;
+        }
         self.current_hit = Some(index);
         self.hit_list.scroll_to_item(index, ScrollStrategy::Center);
+        self.hit_to_reveal = Some(index);
+        cx.notify();
+    }
+
+    /// Scrolls a match into view; runs from render, because a freshly opened PDF has no final layout before that.
+    fn reveal_hit(&mut self, index: usize) {
+        let Some(hit) = self.hits.get(index) else { return };
+        let (page, rect) = (hit.page, hit.rects.first().copied());
         if let Some(r) = rect
             && !self.geo.tops.is_empty()
         {
@@ -684,7 +708,6 @@ impl PdfView {
                 self.apply_pending();
             }
         }
-        cx.notify();
     }
 
     fn step_hit(&mut self, by: isize, cx: &mut Context<Self>) {
@@ -1147,6 +1170,11 @@ impl Render for PdfView {
         }
         self.update_geometry(view);
         self.apply_pending();
+        if self.restored
+            && let Some(index) = self.hit_to_reveal.take()
+        {
+            self.reveal_hit(index);
+        }
         if let Some((start, from, to)) = self.glide {
             let progress = start.elapsed().as_secs_f32() / motion::FAST.as_secs_f32();
             if progress >= 1. {

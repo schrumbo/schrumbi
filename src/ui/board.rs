@@ -6,7 +6,7 @@ use gpui_kit::*;
 use super::state::act;
 use super::motion::Soft;
 use super::theme::{Theme, font, radius, space, iconsize};
-use super::widgets::{KeyNav, icon, status_menu, status_toggle, tip};
+use super::widgets::{KeyNav, file_target, icon, status_menu, status_toggle, tip};
 use crate::core::i18n::tr;
 use crate::core::library::Library;
 use crate::core::model::{Assignment, Module, Session, Status};
@@ -31,7 +31,7 @@ pub struct DraggedCard {
 impl Render for DraggedCard {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
-        div().flex().items_center().gap(px(space::S)).px(px(space::M)).py(px(space::S)).rounded(px(radius::CONTROL)).bg(t.material).shadow_md().child(div().size(px(space::S)).rounded_full().bg(self.tint)).child(self.title.clone())
+        div().flex().items_center().gap(px(space::S)).px(px(space::M)).py(px(space::S)).rounded(px(radius::CONTROL)).bg(t.material).text_color(t.primary).shadow_md().child(div().size(px(space::S)).rounded_full().bg(self.tint)).child(self.title.clone())
     }
 }
 
@@ -192,10 +192,9 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
     let base = t.column;
     let fill = base.blend(tint.opacity(if closed { 0.05 } else { 0.12 }));
     let hover_fill = base.blend(tint.opacity(if closed { 0.05 } else { 0.2 }));
-    let (select_id, menu_id, drop_id) = (a.id.clone(), a.id.clone(), a.id.clone());
+    let (select_id, menu_id) = (a.id.clone(), a.id.clone());
     let tracks = a.tracks_files();
     let help = format!("{} · {}", a.title, day::due(a.due, lib.now));
-    let accent = t.accent;
 
     let mut card = div()
         .id(SharedString::from(a.id.clone()))
@@ -214,12 +213,6 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .tooltip(tip(help))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(select_id.clone()))))
         .when(!closed, |c| c.on_drag(DraggedCard { id: a.id.clone(), title: a.title.clone(), tint }, |d, _, _, cx| cx.new(|_| d.clone())))
-        .when(tracks, |c| {
-            c.drag_over::<ExternalPaths>(move |s, _, _, _| s.border_color(accent).border(px(1.5))).on_drop(move |paths: &ExternalPaths, _, cx| {
-                let paths = paths.paths().to_vec();
-                act(cx, |l| l.request_filing(paths, Some(drop_id.clone())));
-            })
-        })
         .child(div().absolute().top_0().bottom_0().left_0().w(px(3.)).rounded_l(px(radius::CONTROL)).bg(tint.opacity(if closed { 0.35 } else { 1. })))
         .child(
             div()
@@ -244,6 +237,9 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         if a.optional && !closed && !selected {
             card = card.border_dashed();
         }
+    }
+    if tracks {
+        card = file_target(card, a, t);
     }
     super::motion::flip(format!("card-{}", a.id), card.context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx))).into_any_element()
 }

@@ -190,9 +190,14 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
         mods = mods.child(
             tab(SharedString::from(format!("tab-module-{}", m.id)), active, false, chip, m.display_name(), count, wide, m.display_name(), t)
                 .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(color.opacity(0.15)))
+                .drag_over::<super::browser::DraggedFile>(move |s, _, _, _| s.bg(color.opacity(0.15)))
                 .on_drop(|paths: &ExternalPaths, _, cx| {
                     let paths = paths.paths().to_vec();
                     act(cx, |l| l.request_filing(paths, None));
+                })
+                .on_drop(|f: &super::browser::DraggedFile, _, cx| {
+                    let path = f.0.clone();
+                    act(cx, |l| l.request_filing(vec![path], None));
                 })
                 .on_click(move |_, window, cx| tab_click(route.clone(), window, cx))
                 .context_menu(move |mut menu, _, _| {

@@ -6,10 +6,11 @@ use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use super::browser::DraggedFile;
 use super::motion::{self, Soft};
 use super::state::{self, act};
 use super::theme::{Theme, font, radius, space, iconsize};
-use crate::core::i18n::tr;
+use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library};
 use crate::core::model::{Assignment, Kind, Status};
 use crate::core::naming::extension;
@@ -432,22 +433,16 @@ pub fn assignment_row(lib: &Library, a: &Assignment, show_module: bool, show_dat
     if !e.misnamed.is_empty() {
         meta = meta.child(div().id(SharedString::from(format!("mis-{}", a.id))).child(icon("triangle-alert", iconsize::XS, t.orange)).tooltip(tip(tr("Dateiname entspricht nicht der Konvention"))));
     }
-    let accent = t.accent;
     let tracks = a.tracks_files();
     div()
         .id(SharedString::from(format!("row-{}", a.id)))
+        .relative()
         .flex()
         .items_center()
         .gap(px(space::M))
         .py(px(space::XS))
         .cursor_pointer().key_nav()
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(sel.clone()))))
-        .when(tracks, |c| {
-            c.drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(accent.opacity(0.08))).on_drop(move |p: &ExternalPaths, _, cx| {
-                let paths = p.paths().to_vec();
-                act(cx, |l| l.request_filing(paths, Some(drop_id.clone())));
-            })
-        })
         .child(status_toggle(a, lib, iconsize::M, t))
         .child(
             div()
@@ -468,5 +463,44 @@ pub fn assignment_row(lib: &Library, a: &Assignment, show_module: bool, show_dat
                 .child(meta),
         )
         .child(due_label(lib, a, t))
+        .when(tracks, |c| file_target(c, a, t))
         .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx))
+}
+
+/// Lets an assignment take files from outside and from the file list; call it after the last child, the element must be relative.
+pub fn file_target(element: Stateful<Div>, a: &Assignment, t: &Theme) -> Stateful<Div> {
+    let group = SharedString::from(format!("drop-{}", a.id));
+    let (outside, inside) = (a.id.clone(), a.id.clone());
+    element
+        .group(group.clone())
+        .on_drop(move |p: &ExternalPaths, _, cx| {
+            let paths = p.paths().to_vec();
+            act(cx, |l| l.request_filing(paths, Some(outside.clone())));
+        })
+        .on_drop(move |f: &DraggedFile, _, cx| {
+            let path = f.0.clone();
+            act(cx, |l| l.request_filing(vec![path], Some(inside.clone())));
+        })
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .right_0()
+                .invisible()
+                .hover(|s| s)
+                .group_drag_over::<ExternalPaths>(group.clone(), |s| s.visible())
+                .group_drag_over::<DraggedFile>(group, |s| s.visible())
+                .flex()
+                .items_center()
+                .justify_center()
+                .px(px(space::S))
+                .rounded(px(radius::CONTROL))
+                .bg(t.accent)
+                .text_color(white())
+                .text_size(px(font::CALLOUT))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(div().truncate().child(trf("In %@ ablegen", &[&a.title]))),
+        )
 }
