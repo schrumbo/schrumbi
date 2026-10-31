@@ -27,6 +27,11 @@ pub fn init(setting: &str) {
     *LANG.write().unwrap() = if code.starts_with("en") { Lang::En } else { Lang::De };
 }
 
+/// Whether the app speaks English.
+pub fn is_english() -> bool {
+    tr("Abbrechen") != "Abbrechen"
+}
+
 pub fn lang() -> Lang {
     *LANG.read().unwrap()
 }

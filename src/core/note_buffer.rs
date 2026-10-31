@@ -146,7 +146,7 @@ impl NoteBuffer {
             self.conflict = Some(disk);
             return Ok(());
         }
-        write_atomic(&self.path, &self.text)?;
+        write_atomic(&self.path, self.text.as_bytes())?;
         self.missing = false;
         self.last_saved = self.text.clone();
         self.known = self.modified();
@@ -218,7 +218,7 @@ impl NoteBuffer {
 
 /// Replaces the file in one step, so a crash leaves the old or the new version and never a part of one.
 /// Follows links and keeps the file's permissions; a read-only file stays untouched.
-fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let target = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let existing = std::fs::metadata(&target).ok();
     if existing.as_ref().is_some_and(|m| m.permissions().readonly()) {
@@ -227,7 +227,7 @@ fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     let tmp = target.with_file_name(format!(".{}.tmp", target.file_name().unwrap_or_default().to_string_lossy()));
     let result = (|| {
         let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(text.as_bytes())?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         if let Some(m) = &existing {
             std::fs::set_permissions(&tmp, m.permissions())?;

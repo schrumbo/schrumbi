@@ -71,6 +71,13 @@ pub fn act<R>(cx: &mut App, f: impl FnOnce(&mut Library) -> R) -> R {
     if lib.update(cx, |l, _| l.take_rows_moved()) {
         super::motion::arm_rows(cx);
     }
+    let (undo_resolution, soon) = lib.update(cx, |l, _| (std::mem::take(&mut l.sync_undo_requested), std::mem::take(&mut l.sync_soon)));
+    if undo_resolution {
+        super::sync::undo_resolution(cx);
+    }
+    if soon {
+        super::sync::soon(cx);
+    }
     let toast = lib.read(cx).toast.as_ref().map(|t| (t.id, t.undo.is_some()));
     if let Some((id, undoable)) = toast
         && Some(id) != before
@@ -141,6 +148,7 @@ pub fn open_workspace(path: &Path, cx: &mut App) {
     act(cx, |l| l.open(path));
     watch(path.to_path_buf(), cx);
     reindex(cx);
+    super::sync::workspace_opened(path, cx);
 }
 
 pub fn close_workspace(cx: &mut App) {
@@ -148,6 +156,7 @@ pub fn close_workspace(cx: &mut App) {
     let store = cx.global_mut::<Store>();
     store.watcher = None;
     store.watch_task = None;
+    super::sync::workspace_closed(cx);
     act(cx, |l| l.close());
 }
 
@@ -156,12 +165,18 @@ struct Change {
     structural: bool,
     content: bool,
     config: bool,
+    history: bool,
 }
 
 fn classify(event: &notify::Event) -> Change {
     let mut c = Change::default();
     for p in &event.paths {
         let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let text = p.to_string_lossy();
+        if text.contains("/.git/") && (name == "HEAD" || text.contains("/.git/refs/")) {
+            c.history = true;
+            continue;
+        }
         if name == CONFIG_NAME || name == STATE_NAME {
             c.config = true;
             continue;
@@ -185,7 +200,7 @@ fn watch(root: PathBuf, cx: &mut App) {
     let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(e) = res {
             let c = classify(&e);
-            if c.structural || c.content || c.config {
+            if c.structural || c.content || c.config || c.history {
                 let _ = tx.send_blocking(c);
             }
         }
@@ -201,6 +216,7 @@ fn watch(root: PathBuf, cx: &mut App) {
                 c.structural |= more.structural;
                 c.content |= more.content;
                 c.config |= more.config;
+                c.history |= more.history;
             }
             cx.update(|cx| changed(c, cx));
         }
@@ -211,6 +227,11 @@ fn watch(root: PathBuf, cx: &mut App) {
 }
 
 fn changed(c: Change, cx: &mut App) {
+    if c.structural || c.content || c.config {
+        super::sync::touched(cx);
+    } else if c.history && super::sync::get(cx).step.is_none() {
+        super::sync::refresh(cx);
+    }
     if c.structural || c.config {
         let task = cx.spawn(async move |cx| {
             cx.background_executor().timer(Duration::from_millis(300)).await;

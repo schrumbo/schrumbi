@@ -1,0 +1,11 @@
+{
+	"nodes":[
+		{"id":"a1","type":"text","x":0,"y":0,"width":260,"height":120,"text":"# Text\n\nmit [[Ziel]]","color":"1"},
+		{"id":"b2","type":"file","x":340,"y":0,"width":280,"height":180,"file":"Ziel.md","subpath":"#Zweite Stufe"},
+		{"id":"c3","type":"link","x":0,"y":200,"width":260,"height":80,"url":"https://example.org"},
+		{"id":"d4","type":"group","x":-40,"y":-40,"width":720,"height":360,"label":"Gruppe","color":"#3366cc"}
+	],
+	"edges":[
+		{"id":"e1","fromNode":"a1","fromSide":"right","toNode":"b2","toSide":"left","toEnd":"arrow","label":"führt zu"}
+	]
+}

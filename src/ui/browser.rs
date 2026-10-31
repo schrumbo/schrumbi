@@ -11,6 +11,7 @@ use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use crate::core::vault::query as vault_query;
 use super::state::{self, act};
 use super::motion::{self, Soft};
 use super::theme::{Theme, font, radius, space, iconsize};
@@ -101,6 +102,9 @@ pub struct FileBrowser {
     list: ListState,
     results_changed: bool,
     shown_view: String,
+    /// Why a vault search cannot be understood; the last hits stay meanwhile.
+    query_error: Option<String>,
+    vault_sort: vault_query::Sort,
     _sub: Subscription,
 }
 
@@ -129,6 +133,8 @@ impl FileBrowser {
             list: ListState::new(0, ListAlignment::Top, px(400.)),
             results_changed: false,
             shown_view: String::new(),
+            query_error: None,
+            vault_sort: vault_query::Sort::default(),
             _sub: sub,
         };
         b.reload(cx);
@@ -195,6 +201,32 @@ impl FileBrowser {
             let rest = matching[best.len()..].to_vec();
             Results { best, groups: group(rest, searching, grouping, today, &module_order), total: matching.len(), other_kinds: if searching { other_kinds } else { 0 }, searching, query: q.clone(), loaded: true }
         };
+        self.query_error = None;
+        if searching && l.is_vault && vault_query::is_structured(&self.query) {
+            match vault_query::parse(&self.query) {
+                Err(e) => {
+                    self.query_error = Some(e);
+                    cx.notify();
+                }
+                Ok(parsed) => {
+                    let (vault, sort) = (crate::core::vault::index::current(), self.vault_sort);
+                    self.load = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(Duration::from_millis(120)).await;
+                        let paths = cx.background_spawn(async move { vault_query::search(&parsed, &vault, sort) }).await;
+                        let by_path: HashMap<PathBuf, &CatalogFile> = scoped.iter().map(|f| (f.file.path.clone(), f)).collect();
+                        let count = paths.len() as f64;
+                        let items: Vec<Item> = paths.iter().enumerate().filter_map(|(i, p)| by_path.get(p).map(|f| Item { file: (*f).clone(), spots: Vec::new(), score: count - i as f64 })).collect();
+                        let results = finish(items, &scoped);
+                        let _ = this.update(cx, |b, cx| {
+                            b.results = results;
+                            b.after_load(true);
+                            cx.notify();
+                        });
+                    }));
+                }
+            }
+            return;
+        }
         if !searching {
             self.results = finish(items, &scoped);
             self.after_load(was_searching);
@@ -855,6 +887,35 @@ impl FileBrowser {
                 menu
             }, t));
         }
+        if lib.is_vault && vault_query::is_structured(&self.query) {
+            let sorts = [(vault_query::Sort::NameAsc, tr("Name A–Z")), (vault_query::Sort::NameDesc, tr("Name Z–A")), (vault_query::Sort::ModifiedNew, tr("Zuletzt geändert")), (vault_query::Sort::ModifiedOld, tr("Am längsten unverändert")), (vault_query::Sort::CreatedNew, tr("Zuletzt erstellt")), (vault_query::Sort::CreatedOld, tr("Zuerst erstellt"))];
+            let label = sorts.iter().find(|(s, _)| *s == self.vault_sort).map_or_else(String::new, |(_, l)| l.clone());
+            let e2 = e.clone();
+            bar = bar.child(Button::new("vault-sort").ghost().small().icon(menu_icon("arrow-up-down")).label(label).dropdown_menu(move |mut menu, _, _| {
+                for (sort, name) in sorts.clone() {
+                    let e = e2.clone();
+                    menu = menu.item(PopupMenuItem::new(name).on_click(move |_, _, cx| e.update(cx, |b, cx| {
+                        b.vault_sort = sort;
+                        b.key.clear();
+                        b.reload(cx);
+                    })));
+                }
+                menu
+            }));
+        }
+        if lib.is_vault {
+            bar = bar.child(Button::new("vault-operators").ghost().small().icon(menu_icon("circle-help")).tooltip(tr("Suchbefehle")).dropdown_menu(|mut menu, _, _| {
+                for op in ["file:", "path:", "content:", "tag:", "line:()", "block:()", "section:()", "task:", "task-todo:", "task-done:", "match-case:", "ignore-case:", "[property]", "[property:wert]", "/regex/", "-ausschließen", "OR"] {
+                    menu = menu.item(PopupMenuItem::new(op.to_string()).on_click(move |_, _, cx| {
+                        act(cx, |l| {
+                            let spacer = if l.search_query.is_empty() || l.search_query.ends_with(' ') { "" } else { " " };
+                            l.search_query = format!("{}{spacer}{op}", l.search_query);
+                        });
+                    }));
+                }
+                menu
+            }));
+        }
         let typed_week = self.results.query.week;
         let active_week = typed_week.or(self.week_filter);
         let weeks: Vec<(u32, u32)> = lib.weeks().iter().filter(|w| current.is_none_or(|c| w.index <= c)).rev().map(|w| (w.index, w.iso_week)).collect();
@@ -983,6 +1044,7 @@ impl Render for FileBrowser {
         let l = lib.read(cx);
         let current = current_week(l);
         let bar = self.filter_bar(l, current, &t, &me);
+        let query_error = self.query_error.clone().map(|e| div().px(px(space::L)).py(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red).child(e));
         let lines = self.line_list(current);
         if lines != self.lines {
             self.list.reset(lines.len());
@@ -1035,6 +1097,6 @@ impl Render for FileBrowser {
                 .child(div().flex_1())
                 .child(Button::new("browser-trash").small().ghost().icon(menu_icon("trash-2")).label(tr("In den Papierkorb")).on_click(move |_, _, cx| e.update(cx, |b, cx| b.trash_targets(cx))))
         });
-        div().size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().flex().flex_col().child(body)).children(footer)
+        div().size_full().flex().flex_col().child(bar).children(query_error).child(div().flex_1().min_h_0().flex().flex_col().child(body)).children(footer)
     }
 }

@@ -13,6 +13,7 @@ use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World};
 use typst_kit::fonts::FontStore;
 
+use super::vault;
 use super::markdown::{self, Run};
 
 /// Default note accent, matching the Swift app.
@@ -162,7 +163,9 @@ impl<'a> Converter<'a> {
             None
         } else {
             let decoded = markdown::percent_decode(src);
-            let p = if Path::new(&decoded).is_absolute() { PathBuf::from(&decoded) } else { self.base.join(&decoded) };
+            let direct = if Path::new(&decoded).is_absolute() { PathBuf::from(&decoded) } else { self.base.join(&decoded) };
+            let name = decoded.split(['|', '#']).next().unwrap_or(&decoded);
+            let p = if direct.is_file() { direct } else { vault::index::current().resolve(name, Some(&self.base.join("x.md"))).unwrap_or(direct) };
             let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
             (p.is_file() && matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp")).then_some((p, ext))
         };
@@ -234,7 +237,10 @@ impl<'a> Converter<'a> {
 
     /// Converts Markdown to Typst markup and returns the images referenced as `/img/N.ext`.
     pub fn convert(mut self, src: &str) -> (String, Vec<PathBuf>) {
-        let events: Vec<Event> = Parser::new_ext(src, markdown::options()).collect();
+        let expanded = expand_embeds(&vault::syntax::prepare(src), self.base, 0);
+        let src = callouts_as_quotes(&expanded);
+        let strict = vault::index::current().config.strict_line_breaks;
+        let events: Vec<Event> = Parser::new_ext(&src, markdown::options()).collect();
         for (i, event) in events.iter().enumerate() {
             if let Some((_, buf)) = self.code.as_mut() {
                 match event {
@@ -242,6 +248,17 @@ impl<'a> Converter<'a> {
                     Event::End(TagEnd::CodeBlock) => {
                         let (lang, buf) = self.code.take().unwrap();
                         let code = buf.strip_suffix('\n').unwrap_or(&buf).to_string();
+                        if lang.as_deref() == Some("mermaid")
+                            && let Ok(svg) = vault::render::mermaid_svg(&code, false)
+                        {
+                            let file = std::env::temp_dir().join(format!("schrumbi-mermaid-{}-{}.svg", std::process::id(), self.images.len()));
+                            if std::fs::write(&file, svg).is_ok() {
+                                let name = format!("/img/{}.svg", self.images.len());
+                                self.images.push(file);
+                                self.out().push_str(&format!("#fitimg({})\n\n", str_arg(&name)));
+                                continue;
+                            }
+                        }
                         let lang = lang.map(|l| format!("lang: {}, ", str_arg(&l))).unwrap_or_default();
                         let block = format!("#raw(block: true, {lang}{})\n\n", str_arg(&code));
                         self.out().push_str(&block);
@@ -288,7 +305,7 @@ impl<'a> Converter<'a> {
                     Tag::Strong => self.out().push_str("#strong["),
                     Tag::Strikethrough => self.out().push_str("#strike["),
                     Tag::Link { dest_url, .. } => {
-                        let s = format!("#link({})[", str_arg(dest_url));
+                        let s = if dest_url.contains("://") { format!("#link({})[", str_arg(dest_url)) } else { "#text(fill: rgb(\"#2f6fdf\"))[".to_string() };
                         self.out().push_str(&s);
                     }
                     Tag::Image { dest_url, .. } => self.image = Some((dest_url.to_string(), String::new())),
@@ -330,7 +347,8 @@ impl<'a> Converter<'a> {
                     for r in markdown::runs(t) {
                         match r {
                             Run::Text(x) => s.push_str(&lit(&x)),
-                            Run::Mark(x) => s.push_str(&format!("#highlight[{}]", lit(&x))),
+                            Run::Mark(x, _) => s.push_str(&format!("#highlight[{}]", lit(&x))),
+                            Run::Tag(x) => s.push_str(&lit(&format!("#{x}"))),
                         }
                     }
                     self.out().push_str(&s);
@@ -339,6 +357,15 @@ impl<'a> Converter<'a> {
                     let s = format!("#raw({})", str_arg(c));
                     self.out().push_str(&s);
                 }
+                Event::InlineMath(m) => {
+                    let s = vault::render::math_markup(m, false).unwrap_or_else(|_| format!("#raw({})", str_arg(m)));
+                    self.out().push_str(&s);
+                }
+                Event::DisplayMath(m) => {
+                    let s = vault::render::math_markup(m, true).unwrap_or_else(|_| format!("#raw({})", str_arg(m)));
+                    self.out().push_str(&s);
+                }
+                Event::SoftBreak if !strict => self.out().push_str("#linebreak()"),
                 Event::SoftBreak => self.out().push(' '),
                 Event::HardBreak => self.out().push_str("#linebreak()"),
                 Event::Rule => self.out().push_str("#noterule\n\n"),
@@ -440,6 +467,50 @@ pub fn source(markdown_text: &str, base: &Path, meta: Option<&Meta>, o: &Options
     (format!("{}{body}", preamble(o, meta)), images)
 }
 
+/// Compiles a small Typst document to SVG, with its size in points.
+pub fn typst_svg(source: &str) -> Result<(String, f32, f32), String> {
+    let world = NoteWorld { main: Source::new(file_id("/main.typ"), source.to_string()), files: HashMap::new() };
+    let doc: PagedDocument = typst::compile(&world).output.map_err(|errs| errs.iter().map(|e| e.message.to_string()).collect::<Vec<_>>().join("; "))?;
+    let page = doc.pages().first().ok_or_else(|| "leer".to_string())?;
+    let size = page.frame.size();
+    Ok((typst_svg::svg(page, &typst_svg::SvgOptions::default()), size.x.to_pt() as f32, size.y.to_pt() as f32))
+}
+
+/// Turns `> [!typ] Titel` into a quote with a bold first line; the export has no folding.
+fn callouts_as_quotes(text: &str) -> String {
+    static HEAD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^((?:>\s*)+)\[!([^\]\s]+)\][+-]?[ \t]*(.*)$").unwrap());
+    HEAD.replace_all(text, |c: &regex::Captures| {
+        let title = if c[3].trim().is_empty() { super::i18n::tr(vault::syntax::CalloutKind::parse(&c[2]).label()) } else { c[3].trim().to_string() };
+        format!("{}**{title}**\n{}", &c[1], &c[1])
+    })
+    .into_owned()
+}
+
+/// Replaces `![[note]]` lines by the note or section they show, up to three levels deep.
+fn expand_embeds(text: &str, base: &Path, depth: usize) -> String {
+    static EMBED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^[ \t]*!\[\[([^\]|]+)(?:\|[^\]]*)?\]\][ \t]*$").unwrap());
+    if depth >= 3 {
+        return text.to_string();
+    }
+    let vault = vault::index::current();
+    let from = base.join("x.md");
+    EMBED
+        .replace_all(text, |c: &regex::Captures| {
+            let target = vault::links::LinkTarget::parse(&c[1]);
+            let Some(path) = vault.resolver.resolve(&target, Some(&from)).filter(|p| markdown::is_markdown(p)) else {
+                let name = c[1].to_string();
+                let is_image = ["png", "jpg", "jpeg", "gif", "svg", "webp"].iter().any(|e| name.to_lowercase().ends_with(e));
+                return if is_image { c[0].to_string() } else { format!("*{name}*") };
+            };
+            let Ok(inner) = std::fs::read_to_string(&path) else { return String::new() };
+            let body = &inner[vault::frontmatter::body_offset(&inner)..];
+            let shown = if target.headings.is_empty() && target.block.is_none() { body.to_string() } else { vault::links::section(body, &target) };
+            let folder = path.parent().unwrap_or(base).to_path_buf();
+            expand_embeds(&vault::syntax::prepare(&shown), &folder, depth + 1)
+        })
+        .into_owned()
+}
+
 /// Renders a note to PDF bytes.
 pub fn render(markdown_text: &str, base: &Path, meta: Option<&Meta>, o: &Options) -> Result<Vec<u8>, String> {
     let (text, images) = source(markdown_text, base, meta, o);
@@ -482,6 +553,19 @@ mod tests {
 
     fn opts() -> Options {
         Options { accent: "#0EA5E9".into(), header: true, page_numbers: true, lang: "de".into() }
+    }
+
+    #[test]
+    fn obsidian_syntax_reaches_the_pdf() {
+        let (markup, _) = super::source("Sicht %%geheim%%bar\n> [!warning]- Achtung\n> Inhalt\n\n[[Ziel|Anzeige]] und $x^2$ und [web](https://a.b)\n\n```mermaid\ngraph TD; A-->B\n```\n", Path::new("/tmp"), None, &opts());
+        assert!(!markup.contains("geheim"));
+        assert!(markup.contains("#strong[#\"Achtung\"]"), "{}", markup.lines().rev().take(12).collect::<Vec<_>>().join("\n"));
+        assert!(markup.contains("Anzeige"));
+        assert!(!markup.contains("#link(\"Ziel"), "{markup}");
+        assert!(markup.contains("#link(\"https://a.b\")"));
+        assert!(markup.contains('$'));
+        assert!(markup.contains("#fitimg"), "{markup}");
+        assert!(render("Sicht %%geheim%%bar\n\n$\\frac{a}{b}$\n\n> [!tip] Tipp\n> x\n\n```mermaid\ngraph TD; A-->B\n```\n", Path::new("/tmp"), None, &opts()).is_ok());
     }
 
     const SAMPLE: &str = "# Titel \"mit\" #Zeichen\n\nText mit **fett**, *kursiv*, `code`, ==mark==, [Link](https://a.b) und $5 \\ Backslash.[^1]\n\n## Aufgaben\n\n- [x] fertig\n- [ ] offen\n  - verschachtelt\n\n1. eins\n2. zwei\n\n| A | B |\n|:-:|--:|\n| 1 | 2 |\n| 3 | 4 |\n\n> Zitat\n\n```rust\nfn main() {}\n```\n\n---\n\n<!-- Kommentar --><br>\n\n![fehlt](nicht-da.png)\n\n[^1]: Fußnote.\n";

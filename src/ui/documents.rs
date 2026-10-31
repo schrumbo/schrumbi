@@ -17,6 +17,7 @@ use super::pdf_view::PdfView;
 use super::preview::FilePreview;
 use super::state::{self, act};
 use super::motion::Soft;
+use crate::core::vault::index;
 use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::edit_ops::{self, Edit};
@@ -32,7 +33,7 @@ actions!(
     schrumbi_editor,
     [
         Bold, Italic, InsertLink, InlineCode, ToggleTask, ToggleComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine, SelectLine, IndentLines, OutdentLines, ZoomIn, ZoomOut, ZoomReset,
-        ListNewline, ListTab, ListBacktab
+        ListNewline, ListTab, ListBacktab, ExtractSelection
     ]
 );
 
@@ -52,6 +53,7 @@ pub struct NoteView {
     found: Option<markdown_view::Found>,
     /// Editor and reader offsets at the last sync of the split view.
     split_sync: (f32, f32),
+    link_focus: markdown_view::LinkFocus,
     path: PathBuf,
     mode: Mode,
     editor: Entity<EditorState>,
@@ -72,6 +74,7 @@ impl NoteView {
     pub fn new(path: PathBuf, embedded: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let text = state::lib(cx).update(cx, |l, _| l.buffer(&path).text.clone());
         let editor = cx.new(|cx| EditorState::new(window, cx).language("markdown").soft_wrap(true).line_number(true).default_value(text.clone()));
+        editor.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(path.clone())));
         let lib = state::lib(cx);
         let p = path.clone();
         let subs = vec![
@@ -135,7 +138,9 @@ impl NoteView {
         ];
         let mode = if text.trim().chars().count() < 40 { Mode::Edit } else { Mode::Read };
         let revision = state::lib(cx).update(cx, |l, _| l.buffer(&path).revision);
-        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_scroll: ScrollHandle::new(), heading_anchors: Vec::new(), found: None, split_sync: (0., 0.), parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        let reader_scroll = ScrollHandle::new();
+        let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_scroll: reader_scroll.clone(), heading_anchors: Vec::new(), found: None, split_sync: (0., 0.), link_focus: markdown_view::LinkFocus { index: None, anchor: ScrollAnchor::for_handle(reader_scroll.clone()), found: Rc::default(), note: Some(own_path) }, parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -259,6 +264,61 @@ impl NoteView {
         super::motion::reveal("note-conflict", open, div().p(px(space::S)).child(notice("triangle-alert", t.orange, tr("Diese Notiz wurde außerhalb von Schrumbi geändert."), Some(tr("Deine Änderungen sind noch da. Gesichert wird erst, wenn du dich entschieden hast.")), actions, t)))
     }
 
+    /// Tab walks through the links of the reader.
+    fn step_link(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let count = self.link_focus.found.borrow().len();
+        if self.mode != Mode::Read || count == 0 {
+            return;
+        }
+        let next = match (self.link_focus.index, back) {
+            (None, false) => 0,
+            (None, true) => count - 1,
+            (Some(i), false) => (i + 1) % count,
+            (Some(i), true) => (i + count - 1) % count,
+        };
+        self.link_focus.index = Some(next);
+        super::link_card::hide(cx);
+        let anchor = self.link_focus.anchor.clone();
+        window.on_next_frame(move |window, cx| anchor.scroll_to(window, cx));
+        cx.notify();
+    }
+
+    /// Enter follows the focused link, Space shows the preview, Escape ends.
+    fn link_keys(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode != Mode::Read || window.has_active_dialog(cx) {
+            return;
+        }
+        let k = &e.keystroke;
+        let url = self.link_focus.index.and_then(|i| self.link_focus.found.borrow().get(i).cloned());
+        match k.key.as_str() {
+            "enter" if url.is_some() => {
+                let base = self.path.parent().map(Path::to_path_buf);
+                let action = markdown_view::link_action(url.as_deref().unwrap_or_default(), base.as_deref());
+                action(cx);
+                self.link_focus.index = None;
+                if k.modifiers.platform || k.modifiers.control {
+                    let opened = state::read(cx, |l| l.active_document.clone());
+                    let here = self.path.clone();
+                    act(cx, |l| {
+                        l.open_document(&here);
+                        l.set_split(opened);
+                    });
+                }
+            }
+            "space" if url.is_some() => {
+                let position = window.mouse_position();
+                super::link_card::show_now(url.unwrap_or_default(), self.path.parent().map(Path::to_path_buf), position, cx);
+            }
+            "escape" if self.link_focus.index.is_some() => {
+                self.link_focus.index = None;
+                super::link_card::hide(cx);
+            }
+            _ => return,
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
     fn export(&mut self, cx: &mut Context<Self>) {
         let text = self.editor.read(cx).value().to_string();
         self.save(cx);
@@ -310,6 +370,7 @@ impl NoteView {
         }
         let (e1, path, p2, p3) = (me.clone(), self.path.clone(), self.path.clone(), self.path.clone());
         let embedded = self.embedded;
+        let in_vault = state::read(cx, |l| l.is_vault) && self.path.starts_with(&index::current().root);
         let headings = self.parsed.as_ref().filter(|_| self.mode != Mode::Edit).map(|(_, p)| p.headings()).unwrap_or_default();
         let anchors = self.heading_anchors.clone();
         let toc = (headings.len() >= 2 && anchors.len() == headings.len()).then(|| {
@@ -342,6 +403,19 @@ impl NoteView {
                 menu = menu
                     .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| library::reveal(&b)))
                     .item(PopupMenuItem::new(tr("Mit Standard-App öffnen")).icon(menu_icon("square-arrow-out-up-right")).on_click(move |_, _, _| library::open_path(&c)));
+                if in_vault {
+                    let (o, h, g) = (d.clone(), d.clone(), d.clone());
+                    menu = menu
+                        .item(PopupMenuItem::new(tr("In Obsidian öffnen")).icon(menu_icon("external-link")).on_click(move |_, _, cx| cx.open_url(&crate::core::vault::config::open_uri(&o))))
+                        .item(PopupMenuItem::new(tr("Graph um diese Notiz")).icon(menu_icon("waypoints")).on_click(move |_, _, cx| {
+                            let p = g.clone();
+                            act(cx, |l| l.show_graph(Some(p)));
+                        }))
+                        .item(PopupMenuItem::new(tr("Verlauf")).icon(menu_icon("history")).on_click(move |_, _, cx| {
+                            let _ = &h;
+                            act(cx, |l| l.show_inspector = true);
+                        }));
+                }
                 if embedded {
                     menu = menu.separator().item(PopupMenuItem::new(tr("Tab schließen")).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&d, cx)));
                 }
@@ -379,22 +453,27 @@ impl NoteView {
             .relative()
             .size_full()
             .bg(t.content)
-            .child(div().id("note-reader").size_full().overflow_y_scroll().track_scroll(&self.reader_scroll).child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).py(px(space::XL)).child(markdown_view::render_with_anchors(&parsed, base.as_deref(), Some(toggle), &self.heading_anchors, self.found.as_ref(), t)))))
+            .child(div().id("note-reader").size_full().overflow_y_scroll().track_scroll(&self.reader_scroll).child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).py(px(space::XL)).child(markdown_view::render_with_anchors(&parsed, base.as_deref(), Some(toggle), &self.heading_anchors, self.found.as_ref(), Some(&self.link_focus), t)))))
             .vertical_scrollbar(&self.reader_scroll)
             .into_any_element()
     }
 
     /// Copies dropped images next to the note and links them at the cursor.
     fn drop_images(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
-        let Some(folder) = self.path.parent().map(Path::to_path_buf) else { return };
+        let Some(note_folder) = self.path.parent().map(Path::to_path_buf) else { return };
+        let vault = index::current();
+        let in_vault = state::read(cx, |l| l.is_vault) && self.path.starts_with(&vault.root);
+        let folder = if in_vault { vault.config.attachment_folder(&vault.root, &self.path) } else { note_folder };
+        let _ = std::fs::create_dir_all(&folder);
+        let line = |target: &Path, name: &str| if in_vault { format!("!{}", vault.new_link(Some(&self.path), target, "")) } else { edit_ops::image_markdown(name) };
         let mut lines = Vec::new();
         for image in paths.iter().filter(|p| ["png", "jpg", "jpeg", "gif", "webp", "svg"].contains(&extension(&p.to_string_lossy()).to_lowercase().as_str())) {
             let name = image.file_name().unwrap_or_default().to_string_lossy().to_string();
             let target = library::unique_path(&folder.join(&name));
             if *image == target || image.parent() == Some(folder.as_path()) {
-                lines.push(edit_ops::image_markdown(&name));
+                lines.push(line(image, &name));
             } else if std::fs::copy(image, &target).is_ok() {
-                lines.push(edit_ops::image_markdown(&target.file_name().unwrap_or_default().to_string_lossy()));
+                lines.push(line(&target, &target.file_name().unwrap_or_default().to_string_lossy()));
             } else {
                 act(cx, |l| l.last_error = Some(trf("Bild konnte nicht kopiert werden: %@", &[&name])));
             }
@@ -432,7 +511,20 @@ impl NoteView {
             }))
             .on_action(cx.listener(|n, _: &InsertLink, w, cx| {
                 let (s, r) = n.with_text(cx);
-                n.apply(edit_ops::link(&s, r), w, cx)
+                if state::read(cx, |l| l.is_vault) && !index::current().config.use_markdown_links {
+                    n.apply(edit_ops::wikilink(&s, r), w, cx)
+                } else {
+                    n.apply(edit_ops::link(&s, r), w, cx)
+                }
+            }))
+            .on_action(cx.listener(|n, _: &ExtractSelection, w, cx| {
+                let (_, range) = n.with_text(cx);
+                let path = n.path.clone();
+                if act(cx, |l| l.extract_to_note(&path, range)).is_some() {
+                    state::reindex(cx);
+                    let text = state::lib(cx).update(cx, |l, _| l.buffer(&path).text.clone());
+                    n.editor.update(cx, |e, cx| e.set_value(text, w, cx));
+                }
             }))
             .on_action(cx.listener(|n, _: &ToggleTask, w, cx| {
                 let (s, r) = n.with_text(cx);
@@ -590,6 +682,10 @@ impl Render for NoteView {
             }))
             .on_action(cx.listener(|n, _: &super::app::ExportPdf, _, cx| n.export(cx)))
             .on_action(cx.listener(|n, _: &super::app::Save, _, cx| n.save(cx)))
+            .on_key_down(cx.listener(|n, e: &KeyDownEvent, window, cx| n.link_keys(e, window, cx)))
+            .when(self.mode == Mode::Read, |d| d.key_context("WalkItems"))
+            .on_action(cx.listener(|n, _: &super::canvas_view::NextItem, window, cx| n.step_link(false, window, cx)))
+            .on_action(cx.listener(|n, _: &super::canvas_view::PreviousItem, window, cx| n.step_link(true, window, cx)))
             .when(!self.embedded, |d| {
                 d.on_action(|_: &super::app::CloseTab, window, cx| super::note_window::request_close(window, cx))
                     .on_action(|_: &super::app::CloseWindow, window, cx| super::note_window::request_close(window, cx))
@@ -893,6 +989,7 @@ impl Render for FileViewer {
         }
         let me = cx.entity();
         let (p1, p2, p3, p4) = (self.path.clone(), self.path.clone(), self.path.clone(), self.path.clone());
+        let in_vault = state::read(cx, |l| l.is_vault);
         let mut actions = div().flex().items_center().gap(px(space::S));
         actions = actions
             .child(Button::new("open-default").small().icon(menu_icon("square-arrow-out-up-right")).label(self.app.as_ref().map_or_else(|| tr("Mit Standard-App öffnen"), |a| trf("In %@ öffnen", &[a]))).tooltip(tr("Zum Bearbeiten in der Standard-App öffnen")).on_click(move |_, _, _| library::open_path(&p1)))
@@ -918,5 +1015,5 @@ impl Render for FileViewer {
 pub fn prepare_to_quit(cx: &mut App) {
     state::flush_pending(cx);
     let all = state::read(cx, |l| l.buffers.keys().cloned().collect());
-    resolve_unsaved(all, cx, |cx| cx.quit());
+    resolve_unsaved(all, cx, |cx| super::sync::quit_after(|cx| cx.quit(), cx));
 }

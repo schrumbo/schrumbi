@@ -17,6 +17,7 @@ pub enum ShortcutAction {
     ExportPdf,
     ToggleInspector,
     Refresh,
+    Sync,
     Bold,
     Italic,
     Link,
@@ -60,7 +61,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 30] = [
+    pub const ALL: [ShortcutAction; 31] = [
         Self::QuickOpen,
         Self::SearchFiles,
         Self::NewEntry,
@@ -74,6 +75,7 @@ impl ShortcutAction {
         Self::ExportPdf,
         Self::ToggleInspector,
         Self::Refresh,
+        Self::Sync,
         Self::Bold,
         Self::Italic,
         Self::Link,
@@ -109,6 +111,7 @@ impl ShortcutAction {
             Self::ExportPdf => "exportPDF",
             Self::ToggleInspector => "toggleInspector",
             Self::Refresh => "refresh",
+            Self::Sync => "syncNow",
             Self::Bold => "bold",
             Self::Italic => "italic",
             Self::Link => "link",
@@ -131,7 +134,7 @@ impl ShortcutAction {
 
     pub fn group(self) -> Group {
         match self {
-            Self::QuickOpen | Self::SearchFiles | Self::NewEntry | Self::NewFile | Self::GoBack | Self::ToggleInspector | Self::Refresh => Group::General,
+            Self::Sync | Self::QuickOpen | Self::SearchFiles | Self::NewEntry | Self::NewFile | Self::GoBack | Self::ToggleInspector | Self::Refresh => Group::General,
             Self::CloseTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf => Group::Documents,
             _ => Group::Editor,
         }
@@ -146,6 +149,7 @@ impl ShortcutAction {
             Self::GoBack => "Zurück",
             Self::ToggleInspector => "Details ein-/ausblenden",
             Self::Refresh => "Aktualisieren",
+            Self::Sync => "Jetzt synchronisieren",
             Self::CloseTab => "Tab schließen",
             Self::NextTab => "Nächster Tab",
             Self::PreviousTab => "Vorheriger Tab",
@@ -189,6 +193,7 @@ impl ShortcutAction {
             Self::GoBack => s("-", false, false, false, true),
             Self::ToggleInspector => s("i", true, false, true, false),
             Self::Refresh => s("r", true, false, false, false),
+            Self::Sync => s("s", true, true, false, false),
             Self::CloseTab => s("w", true, false, false, false),
             Self::NextTab => s("tab", false, false, false, true),
             Self::PreviousTab => s("tab", false, true, false, true),

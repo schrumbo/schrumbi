@@ -35,6 +35,7 @@ pub struct MainWindow {
     focus: FocusHandle,
     focused_once: bool,
     shown_route: Option<Route>,
+    slides: Option<(std::path::PathBuf, Entity<super::vault_tools::Slides>)>,
     error_shown: bool,
     _subs: Vec<Subscription>,
 }
@@ -110,6 +111,7 @@ impl MainWindow {
             focus: cx.focus_handle(),
             focused_once: false,
             shown_route: None,
+            slides: None,
             _subs: subs,
         }
     }
@@ -150,6 +152,8 @@ impl MainWindow {
             Route::Inbox => tr("Inbox"),
             Route::Search => tr("Suche"),
             Route::Checks => tr("Aufräumen"),
+            Route::Notes => tr("Notizen"),
+            Route::Graph => tr("Graph"),
             Route::Module(id) => lib.module_by_id(id).map_or(id.clone(), |m| m.display_name()),
             Route::Doc(p) => lib.note_title(p),
         }
@@ -201,6 +205,14 @@ impl Render for MainWindow {
         }
         let t = Theme::get(cx);
         let lib = state::lib(cx);
+        let wanted_slides = lib.read(cx).slides.clone();
+        if wanted_slides.as_ref() != self.slides.as_ref().map(|(p, _)| p) {
+            self.slides = wanted_slides.map(|path| {
+                let view = cx.new(|cx| super::vault_tools::Slides::new(&path, cx));
+                (path, view)
+            });
+        }
+        let slides = self.slides.as_ref().map(|(_, v)| v.clone());
         let has_error = lib.read(cx).last_error.is_some();
         if has_error && !self.error_shown {
             window.focus(&self.focus, cx);
@@ -323,7 +335,7 @@ impl Render for MainWindow {
                     .left_0()
                     .bottom_0()
                     .w(px(left))
-                    .child(sidebar::render(l, update, self.sidebar_open, &t)),
+                    .child(sidebar::render(l, update, self.sidebar_open, &t, cx)),
             )
             .child(
                 div()
@@ -342,6 +354,8 @@ impl Render for MainWindow {
             .when(l.show_inspector, |d| {
                 d.child(div().absolute().top_0().bottom_0().right_0().w(px(inspector_w)).border_l_1().border_color(t.separator).bg(t.content).pt(px(control::BAR)).child(self.inspector.clone()))
             })
+            .children(super::link_card::overlay(cx))
+            .children(slides)
             .children(toast.or(working).map(|v| {
                 let toast_motion = motion::timed(motion::SLOW, cx);
                 div()

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
-use super::cmd::{BULK, Git, GitError};
+use super::cmd::{Git, GitError};
 use super::status::{ChangeKind, ChangedFile, RepoStatus};
 
 /// GitHub refuses files of 100 MB; these stay local and are reported.
@@ -82,16 +82,6 @@ impl Git {
         self.run(&["rev-parse", "HEAD"]).ok().map(|s| s.trim().to_string())
     }
 
-    /// Paths with a conflict if the upstream were merged now; the working tree is not touched.
-    pub fn preview_merge(&self) -> Result<Vec<String>, GitError> {
-        let out = self.output(&["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", "HEAD", "@{u}"], None, BULK)?;
-        match out.code {
-            0 => Ok(Vec::new()),
-            1 => Ok(out.stdout.split('\0').skip(1).filter(|p| !p.is_empty()).map(String::from).collect()),
-            _ => Err(GitError::Other(out.stderr.trim().to_string())),
-        }
-    }
-
     /// Takes in the upstream: fast-forward, or a merge when both sides moved. Conflicts change nothing.
     fn integrate(&self, report: &mut Report) -> Result<(), GitError> {
         let status = self.status()?;
@@ -102,9 +92,14 @@ impl Git {
         if status.ahead == 0 {
             self.run_bulk(&["merge", "-q", "--ff-only", "@{u}"], None)?;
         } else {
-            let conflicts = self.preview_merge()?;
+            let (conflicts, automatic) = self.conflicts()?;
             if !conflicts.is_empty() {
-                return Err(GitError::Conflicts(conflicts));
+                return Err(GitError::Conflicts(conflicts.into_iter().map(|c| c.path).collect()));
+            }
+            if !automatic.is_empty() {
+                let resolved = self.merge_resolved(&HashMap::new(), &automatic, "Merge")?;
+                report.pulled.extend(resolved.pulled);
+                return Ok(());
             }
             self.run_bulk(&["merge", "-q", "--no-edit", "@{u}"], None)?;
         }
@@ -116,7 +111,7 @@ impl Git {
 
     /// Gives files changed since `from` the time of their last state, because deadlines are judged by file time
     /// and checking out would stamp them with now. Returns those files.
-    fn settle_times(&self, from: &str) -> Result<Vec<PathBuf>, GitError> {
+    pub(super) fn settle_times(&self, from: &str) -> Result<Vec<PathBuf>, GitError> {
         let out = self.run_bulk(&["log", "--format=%x01%ct", "--name-only", "-z", &format!("{from}..HEAD")], None)?;
         let mut times: HashMap<String, u64> = HashMap::new();
         parse_log_times(&out, &mut times);

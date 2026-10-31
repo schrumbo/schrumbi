@@ -18,6 +18,37 @@ pub enum NoteSaveMode {
     Delay,
 }
 
+/// When a synced workspace saves its state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GitMode {
+    #[default]
+    Manual,
+    Auto,
+}
+
+/// Sync settings of one workspace on this device. Not in the workspace: paths differ per device,
+/// and a cloned repository must never be able to switch itself on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GitPrefs {
+    pub enabled: bool,
+    pub mode: GitMode,
+    /// Minutes without changes before an automatic sync.
+    pub idle_minutes: u32,
+    pub sync_on_open: bool,
+    pub sync_on_quit: bool,
+    pub last_sync: Option<i64>,
+    /// The sidebar no longer offers setup here.
+    pub offer_hidden: bool,
+}
+
+impl Default for GitPrefs {
+    fn default() -> Self {
+        Self { enabled: false, mode: GitMode::Manual, idle_minutes: 5, sync_on_open: true, sync_on_quit: true, last_sync: None, offer_hidden: false }
+    }
+}
+
 /// How the file browser groups files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +117,9 @@ pub struct Prefs {
     pub module_column: Option<f32>,
     pub shortcuts: BTreeMap<String, Shortcut>,
     pub disabled_shortcuts: BTreeSet<String>,
+    pub git: BTreeMap<String, GitPrefs>,
+    /// A Git to use instead of the one found automatically.
+    pub git_path: Option<PathBuf>,
     pub tray: bool,
     /// Looks for a new version once a day.
     pub update_check: bool,
@@ -128,6 +162,8 @@ impl Default for Prefs {
             module_column: None,
             shortcuts: BTreeMap::new(),
             disabled_shortcuts: BTreeSet::new(),
+            git: BTreeMap::new(),
+            git_path: None,
             tray: true,
             update_check: true,
             update_skip: String::new(),

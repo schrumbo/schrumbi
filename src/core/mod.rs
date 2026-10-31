@@ -20,6 +20,7 @@ pub mod schedule;
 pub mod search_index;
 pub mod shortcuts;
 pub mod text;
+pub mod vault;
 pub mod workspace;
 #[cfg(test)]
 mod tests;

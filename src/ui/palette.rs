@@ -72,6 +72,9 @@ fn commands(cx: &App) -> Vec<Command> {
             add(&group, tr("Neu laden"), "refresh-cw", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.load_note_disk(&reload)))));
             add(&group, tr("Meine behalten"), "check", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.keep_note_mine(&keep)))));
         }
+        add(&general, S::Sync.label(), "cloud", keys(S::Sync), Run::Action(Box::new(app::SyncNow)));
+        add(&general, tr("Sync einrichten…"), "git-branch", None, Run::Action(Box::new(app::SyncSetup)));
+        add(&general, tr("Konflikte lösen…"), "git-merge", None, Run::Action(Box::new(app::ResolveConflicts)));
         add(&go, tr("Übersicht"), "layout-grid", Some(fixed_keys("1")), Run::Action(Box::new(app::GoToday)));
         add(&go, tr("Semester"), "table", Some(fixed_keys("2")), Run::Action(Box::new(app::GoGrid)));
         add(&go, tr("Leistungen"), "award", Some(fixed_keys("3")), Run::Action(Box::new(app::GoRecord)));
@@ -110,6 +113,42 @@ fn commands(cx: &App) -> Vec<Command> {
     }
     if state::read(cx, |l| l.can_redo()) {
         add(&edit, tr("Wiederholen"), "redo-2", Some(if cfg!(target_os = "macos") { "⇧⌘Z".to_string() } else { "Ctrl+Shift+Z".to_string() }), Run::Action(Box::new(app::Redo)));
+    }
+    if state::read(cx, |l| l.is_vault) {
+        let vault = tr("Obsidian");
+        let active = state::read(cx, |l| l.active_document.clone().filter(|p| crate::core::markdown::is_markdown(p) && matches!(l.route(), Route::Doc(_))));
+        add(&vault, tr("Tagesnotiz öffnen"), "calendar", None, Run::Call(Rc::new(|cx| {
+            act(cx, |l| l.open_daily_note());
+            state::reindex(cx);
+        })));
+        add(&vault, tr("Eindeutige Notiz anlegen"), "file-plus", None, Run::Call(Rc::new(|cx| {
+            act(cx, |l| l.open_unique_note());
+            state::reindex(cx);
+        })));
+        add(&vault, tr("Zufällige Notiz öffnen"), "shuffle", None, Run::Call(Rc::new(|cx| act(cx, |l| l.open_random_note()))));
+        add(&vault, tr("Notizen zeigen"), "book-open", None, Run::Call(Rc::new(|cx| act(cx, |l| l.set_route(Route::Notes)))));
+        add(&vault, tr("Graph zeigen"), "waypoints", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_graph(None)))));
+        if let Some(note) = active {
+            let (a, b, c, d, e) = (note.clone(), note.clone(), note.clone(), note.clone(), note);
+            add(&vault, tr("Graph um diese Notiz"), "waypoints", None, Run::Call(Rc::new(move |cx| {
+                let p = a.clone();
+                act(cx, |l| l.show_graph(Some(p)));
+            })));
+            add(&vault, tr("Vorlage einfügen"), "file-plus", None, Run::Call(Rc::new(move |cx| {
+                let p = b.clone();
+                act(cx, |l| l.note_pick = Some((false, p)));
+            })));
+            add(&vault, tr("Mit anderer Notiz zusammenführen"), "merge", None, Run::Call(Rc::new(move |cx| {
+                let p = c.clone();
+                act(cx, |l| l.note_pick = Some((true, p)));
+            })));
+            add(&vault, tr("Als Folien zeigen"), "presentation", None, Run::Call(Rc::new(move |cx| {
+                let p = d.clone();
+                act(cx, |l| l.slides = Some(p));
+            })));
+            add(&vault, tr("In Obsidian öffnen"), "external-link", None, Run::Call(Rc::new(move |cx| cx.open_url(&crate::core::vault::config::open_uri(&e)))));
+            add(&vault, tr("Auswahl in neue Notiz auslagern"), "scissors", None, Run::Action(Box::new(super::documents::ExtractSelection)));
+        }
     }
     add(&general, tr("Einstellungen…"), "settings", Some(fixed_keys(",")), Run::Action(Box::new(app::OpenSettings)));
     add(&general, tr("Tastenkürzel anzeigen"), "keyboard", Some(fixed_keys("/")), Run::Action(Box::new(app::ShowShortcuts)));

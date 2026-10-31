@@ -36,6 +36,7 @@ rust-embed = "8"
 schemars = "1.2.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml_ng = "0.10"
 sys-locale = "0.3.2"
 trash = "5.2.9"
 typst = "0.15.1"
@@ -43,6 +44,12 @@ typst-assets = { version = "0.15.1", features = ["fonts"] }
 typst-kit = { version = "0.15.1", default-features = false, features = ["scan-fonts", "embedded-fonts"] }
 typst-layout = "0.15.1"
 typst-pdf = "0.15.1"
+typst-svg = "0.15.1"
+mitex = "0.2.4"
+mermaid-rs-renderer = { version = "0.3.1", default-features = false }
+rodio = "0.23"
+lsp-types = { version = "0.97", features = ["proposed"] }
+ropey = "=2.0.0-beta.1"
 unicode-normalization = "0.1.26"
 url = "2.5.8"
 uuid = { version = "1.29.0", features = ["v4"] }

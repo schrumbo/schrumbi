@@ -31,6 +31,7 @@ enum Tab {
     Semester,
     Modules,
     Notes,
+    Sync,
     Shortcuts,
 }
 
@@ -89,6 +90,15 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Dateinamen", Tab::Modules),
     ("Wiederkehrende Deadlines", Tab::Modules),
     ("Stundenplan", Tab::Modules),
+    ("Sync", Tab::Sync),
+    ("Jetzt synchronisieren", Tab::Sync),
+    ("Wann sichern", Tab::Sync),
+    ("Nach Ruhe", Tab::Sync),
+    ("Beim Öffnen synchronisieren", Tab::Sync),
+    ("Beim Beenden synchronisieren", Tab::Sync),
+    ("Online-Speicher", Tab::Sync),
+    ("Git-Pfad", Tab::Sync),
+    ("Sync ausschalten", Tab::Sync),
     ("Editor", Tab::Notes),
     ("Schriftgröße", Tab::Notes),
     ("Sichern", Tab::Notes),
@@ -350,6 +360,7 @@ impl Settings {
             Tab::Semester => tr("Semester"),
             Tab::Modules => tr("Module"),
             Tab::Notes => tr("Notizen"),
+            Tab::Sync => tr("Sync"),
             Tab::Shortcuts => tr("Tastenkürzel"),
         };
         let mut list = div().w_full().max_w(px(560.)).flex().flex_col().gap(px(space::XXS));
@@ -376,6 +387,7 @@ impl Settings {
             (Tab::Semester, tr("Semester"), "calendar"),
             (Tab::Modules, tr("Module"), "library"),
             (Tab::Notes, tr("Notizen"), "square-pen"),
+            (Tab::Sync, tr("Sync"), "cloud"),
             (Tab::Shortcuts, tr("Tastenkürzel"), "command"),
         ] {
             let active = tab == self.tab;
@@ -1316,6 +1328,80 @@ fn week_limit(id: impl Into<ElementId>, label: String, value: Option<u32>, set: 
 }
 
 impl Settings {
+    fn sync_tab(&mut self, cx: &mut Context<Self>, t: &Theme) -> Div {
+        use super::sync;
+        use crate::core::prefs::GitMode;
+        let on = sync::settings(cx).is_some_and(|g| g.enabled) && sync::get(cx).git.is_some();
+        if !on {
+            let has_root = state::read(cx, |l| l.root.is_some());
+            return div().w_full().flex().flex_col().gap(px(space::L)).child(section(
+                None,
+                Some(tr("Sichert deine Dateien über Git und gleicht sie mit anderen Geräten ab. Zugangsdaten bleiben bei Git, Schrumbi speichert keine.")),
+                vec![row(tr("Sync"), Button::new("s-setup").primary().label(tr("Einrichten…")).disabled(!has_root).on_click(|_, _, cx| act(cx, |l| l.show_sync_setup = true)), t)],
+                t,
+            ));
+        }
+        let g = sync::settings(cx).unwrap_or_default();
+        let s = sync::get(cx);
+        let status = s.status.clone().unwrap_or_default();
+        let remote = s.git.as_ref().and_then(|git| git.run(&["remote", "get-url", "origin"]).ok()).map(|u| u.trim().to_string());
+        let (exe, version) = (s.git.as_ref().map(|git| git.exe.to_string_lossy().to_string()).unwrap_or_default(), s.git.as_ref().and_then(|git| git.run(&["--version"]).ok()).map(|v| v.trim().to_string()).unwrap_or_default());
+        let excluded: Vec<String> = s.nested.iter().chain(s.too_large.iter()).cloned().collect();
+        let mode_label = |m: GitMode| if m == GitMode::Auto { tr("Automatisch") } else { tr("Manuell") };
+        let idle = g.idle_minutes;
+        let automatic = g.mode == GitMode::Auto;
+        let mut sections = div().w_full().flex().flex_col().gap(px(space::L)).child(section(
+            Some(tr("Status")),
+            None,
+            vec![
+                row(tr("Online-Speicher"), caption(remote.unwrap_or_else(|| tr("Keiner")), t).truncate(), t),
+                row(tr("Branch"), caption(status.branch.unwrap_or_else(|| tr("Kein Branch")), t), t),
+                row(tr("Letzter Stand"), caption(super::sync_panel::last_sync_text(cx), t), t),
+                row(tr("Jetzt synchronisieren"), Button::new("s-now").label(tr("Synchronisieren")).on_click(|_, _, cx| sync::run(None, true, cx)), t),
+            ],
+            t,
+        ));
+        sections = sections.child(section(
+            Some(tr("Automatik")),
+            Some(if automatic { tr("Sichert im Hintergrund und meldet sich nur bei Konflikten oder Anmeldeproblemen.") } else { tr("Es wird nur gesichert, wenn du es auslöst.") }),
+            vec![
+                row(tr("Wann sichern"), picker("s-mode", mode_label(g.mode), move |m| {
+                    m.item(PopupMenuItem::new(tr("Automatisch")).checked(automatic).on_click(|_, _, cx| sync::update_settings(cx, |g| g.mode = GitMode::Auto)))
+                        .item(PopupMenuItem::new(tr("Manuell")).checked(!automatic).on_click(|_, _, cx| sync::update_settings(cx, |g| g.mode = GitMode::Manual)))
+                }), t),
+                row(tr("Nach Ruhe"), picker("s-idle", trf("%@ Min.", &[&idle.to_string()]), move |mut m| {
+                    for minutes in [2u32, 5, 15] {
+                        m = m.item(PopupMenuItem::new(trf("%@ Min.", &[&minutes.to_string()])).checked(idle == minutes).on_click(move |_, _, cx| sync::update_settings(cx, |g| g.idle_minutes = minutes)));
+                    }
+                    m
+                }).disabled(!automatic), t),
+                row(tr("Beim Öffnen synchronisieren"), Switch::new("s-open").checked(g.sync_on_open).disabled(!automatic).on_click(|v, _, cx| {
+                    let v = *v;
+                    sync::update_settings(cx, |g| g.sync_on_open = v);
+                }), t),
+                row(tr("Beim Beenden synchronisieren"), Switch::new("s-quit").checked(g.sync_on_quit).disabled(!automatic).on_click(|v, _, cx| {
+                    let v = *v;
+                    sync::update_settings(cx, |g| g.sync_on_quit = v);
+                }), t),
+            ],
+            t,
+        ));
+        if !excluded.is_empty() {
+            sections = sections.child(section(Some(tr("Ausgeschlossen")), Some(tr("Eigene Repositories und zu große Dateien bleiben nur auf diesem Gerät.")), excluded.into_iter().map(|e| row(e, div(), t)).collect(), t));
+        }
+        sections.child(section(
+            Some(tr("Erweitert")),
+            Some(tr("Ausschalten beendet nur den Abgleich. Das Repository und dein Verlauf bleiben unangetastet.")),
+            vec![
+                row(tr("Git-Pfad"), caption(exe, t).truncate(), t),
+                row(tr("Version"), caption(version, t), t),
+                row(tr("Einrichtung erneut prüfen"), Button::new("s-resetup").label(tr("Prüfen…")).on_click(|_, _, cx| act(cx, |l| l.show_sync_setup = true)), t),
+                row(tr("Sync ausschalten"), Button::new("s-off").danger().label(tr("Ausschalten")).on_click(|_, _, cx| sync::disable(cx)), t),
+            ],
+            t,
+        ))
+    }
+
     fn notes(&mut self, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
         let p = prefs::get();
         let mut fields = std::mem::take(&mut self.fields);
@@ -1572,6 +1658,10 @@ impl Render for Settings {
         if window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
         }
+        if cx.try_global::<OpenOnSync>().is_some_and(|o| o.0) {
+            cx.set_global(OpenOnSync(false));
+            self.tab = Tab::Sync;
+        }
         let t = Theme::get(cx);
         let config = state::read(cx, |l| l.config.clone());
         let tabs = self.tab_bar(&t, cx);
@@ -1579,6 +1669,7 @@ impl Render for Settings {
         let body: AnyElement = match (config, self.tab) {
             _ if searching => self.search_results(&t, cx),
             (_, Tab::Notes) => div().id("notes-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.notes(window, cx, &t)).into_any_element(),
+            (_, Tab::Sync) => div().id("sync-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.sync_tab(cx, &t)).into_any_element(),
             (_, Tab::Shortcuts) => div().id("sc-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.shortcuts(&t, cx)).into_any_element(),
             (None, _) => unavailable("folder", tr("Kein Ordner gewählt"), tr("Wähle zuerst im Hauptfenster deinen Studienordner."), &t).into_any_element(),
             (Some(c), Tab::General) => div().id("general-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.general(&c, window, cx, &t)).into_any_element(),
@@ -1620,3 +1711,15 @@ impl Render for Settings {
 pub fn apply_theme(window: &mut Window, cx: &mut App) {
     theme::apply(theme::is_dark(window.appearance()), Some(window), cx);
 }
+
+/// Opens the settings on the sync tab.
+pub fn open_sync(cx: &mut App) {
+    open(cx);
+    cx.set_global(OpenOnSync(true));
+    cx.refresh_windows();
+}
+
+/// Asks the settings window to switch to the sync tab on its next frame.
+struct OpenOnSync(bool);
+
+impl Global for OpenOnSync {}

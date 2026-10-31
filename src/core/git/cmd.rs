@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// How long to wait for the rest of a finished command's output.
+const PIPE_GRACE: Duration = Duration::from_secs(2);
 /// How long local commands may take.
 pub const LOCAL: Duration = Duration::from_secs(30);
 /// How long commands that touch the whole working tree may take; large workspaces need minutes.
@@ -38,6 +40,8 @@ pub struct Output {
     pub code: i32,
     pub stdout: String,
     pub stderr: String,
+    /// `stdout` as it came, for binary files.
+    pub raw: Vec<u8>,
 }
 
 /// Sorts Git's English error text; `Git` forces that language with `LC_ALL=C`.
@@ -59,6 +63,7 @@ pub fn classify(stderr: &str) -> GitError {
 }
 
 /// Runs `exe`, kills it after `timeout` and reads its pipes on their own threads, so full pipes never block it.
+/// A helper that outlives the command, such as ssh's control master, can hold them open for good: that wait is bounded.
 pub fn spawn(mut command: Command, input: Option<Vec<u8>>, timeout: Duration) -> Result<Output, GitError> {
     command.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
@@ -73,13 +78,21 @@ pub fn spawn(mut command: Command, input: Option<Vec<u8>>, timeout: Duration) ->
         });
     }
     let read = |pipe: Option<Box<dyn Read + Send>>| {
+        let shared = std::sync::Arc::new(std::sync::Mutex::new((Vec::new(), false)));
+        let writer = shared.clone();
         std::thread::spawn(move || {
-            let mut bytes = Vec::new();
+            let mut chunk = [0u8; 65536];
             if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_end(&mut bytes);
+                while let Ok(n) = pipe.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    writer.lock().unwrap().0.extend_from_slice(&chunk[..n]);
+                }
             }
-            String::from_utf8_lossy(&bytes).into_owned()
-        })
+            writer.lock().unwrap().1 = true;
+        });
+        shared
     };
     let stdout = read(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let stderr = read(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
@@ -96,7 +109,13 @@ pub fn spawn(mut command: Command, input: Option<Vec<u8>>, timeout: Duration) ->
             Err(e) => return Err(GitError::Other(e.to_string())),
         }
     };
-    Ok(Output { code: status.code().unwrap_or(-1), stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() })
+    let settled = Instant::now();
+    while !(stdout.lock().unwrap().1 && stderr.lock().unwrap().1) && settled.elapsed() < PIPE_GRACE {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let raw = std::mem::take(&mut stdout.lock().unwrap().0);
+    let stderr = std::mem::take(&mut stderr.lock().unwrap().0);
+    Ok(Output { code: status.code().unwrap_or(-1), stdout: String::from_utf8_lossy(&raw).into_owned(), stderr: String::from_utf8_lossy(&stderr).into_owned(), raw })
 }
 
 /// The system's Git, working on one folder.

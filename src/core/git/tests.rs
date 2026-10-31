@@ -1,9 +1,12 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::cmd::{Git, GitError, classify, spawn};
+use super::conflict::{self, Choice, ConflictKind};
 use super::locate;
+use super::setup;
 use super::status::{ChangeKind, parse};
 use super::sync::{MAX_FILE, Report};
 
@@ -321,6 +324,20 @@ fn decomposed_names_as_macos_may_store_them_work() {
     assert_eq!(std::fs::read_dir(&b.root).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with("Prüfung.md") || e.as_ref().unwrap().file_name().to_string_lossy().contains("fu\u{308}r") || e.as_ref().unwrap().file_name().to_string_lossy().contains("für")).count(), 1);
 }
 
+/// Stands in for a second device in manual app tests: writes `SYNC_FILE` with `SYNC_TEXT` in `SYNC_DIR`, then syncs.
+#[test]
+#[ignore]
+fn other_device() {
+    let dir = PathBuf::from(std::env::var("SYNC_DIR").unwrap());
+    if let (Ok(file), Ok(text)) = (std::env::var("SYNC_FILE"), std::env::var("SYNC_TEXT")) {
+        let path = dir.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    configure(&dir);
+    println!("{:?}", sync(&Git::new(exe(), &dir)));
+}
+
 /// Measures large repositories: `cargo test git::tests::scale -- --ignored --nocapture`.
 #[test]
 #[ignore]
@@ -347,6 +364,231 @@ fn scale() {
         let pull = t.elapsed();
         println!("{count}: changed {n}, status {status:?}, first sync {first:?}, idle sync {idle:?}, pull {pulled} in {pull:?}");
     }
+}
+
+fn clash(name: &str) -> (Git, Git) {
+    let (a, b) = devices(name);
+    std::fs::write(a.root.join("n.md"), "eins\nA\ndrei\n").unwrap();
+    std::fs::write(a.root.join("b.pdf"), [0u8, 9]).unwrap();
+    sync(&a).unwrap();
+    std::fs::write(b.root.join("n.md"), "eins\nB\ndrei\n").unwrap();
+    std::fs::write(b.root.join("b.pdf"), [0u8, 8]).unwrap();
+    assert!(matches!(sync(&b), Err(GitError::Conflicts(_))));
+    (a, b)
+}
+
+#[test]
+fn conflicts_know_their_kind_and_nothing_changes() {
+    let (_, b) = clash("kinds");
+    let (files, automatic) = b.conflicts().unwrap();
+    assert!(automatic.is_empty());
+    let kind = |p: &str| files.iter().find(|f| f.path == p).unwrap().kind;
+    assert_eq!(kind("n.md"), ConflictKind::Text);
+    assert_eq!(kind("b.pdf"), ConflictKind::Binary);
+    assert_eq!(read(&b, "n.md"), "eins\nB\ndrei\n");
+    assert!(!b.git_dir().join("MERGE_HEAD").exists());
+}
+
+#[test]
+fn keeping_both_makes_a_copy_with_the_other_version() {
+    let (a, b) = clash("both");
+    let choices: HashMap<String, Choice> = [("n.md".to_string(), Choice::Both), ("b.pdf".to_string(), Choice::Both)].into();
+    let resolved = b.merge_resolved(&choices, &[], "Konflikte gelöst").unwrap();
+    assert_eq!(resolved.copies.len(), 2);
+    assert_eq!(read(&b, "n.md"), "eins\nB\ndrei\n");
+    let md = resolved.copies.iter().find(|c| c.extension().is_some_and(|e| e == "md")).unwrap();
+    assert_eq!(std::fs::read_to_string(md).unwrap(), "eins\nA\ndrei\n");
+    let pdf = resolved.copies.iter().find(|c| c.extension().is_some_and(|e| e == "pdf")).unwrap();
+    assert_eq!(std::fs::read(pdf).unwrap(), [0u8, 9]);
+    assert_eq!(std::fs::read(b.root.join("b.pdf")).unwrap(), [0u8, 8]);
+    assert!(sync(&b).unwrap().pushed);
+    sync(&a).unwrap();
+    assert_eq!(read(&a, "n.md"), "eins\nB\ndrei\n");
+    assert!(a.status().unwrap().changed.is_empty());
+}
+
+#[test]
+fn choosing_a_side_and_taking_it_back_as_a_new_state() {
+    let (_, b) = clash("sides");
+    let choices: HashMap<String, Choice> = [("n.md".to_string(), Choice::Theirs), ("b.pdf".to_string(), Choice::Mine)].into();
+    let resolved = b.merge_resolved(&choices, &[], "gelöst").unwrap();
+    assert_eq!(read(&b, "n.md"), "eins\nA\ndrei\n");
+    assert_eq!(std::fs::read(b.root.join("b.pdf")).unwrap(), [0u8, 8]);
+    sync(&b).unwrap();
+    let before = log_count(&b);
+    b.undo_resolution(&resolved, "rückgängig").unwrap();
+    assert_eq!(read(&b, "n.md"), "eins\nB\ndrei\n");
+    assert_eq!(log_count(&b), before + 1);
+    assert!(sync(&b).unwrap().pushed);
+}
+
+#[test]
+fn a_failed_resolution_leaves_everything_as_it_was() {
+    let (_, b) = clash("abort");
+    let head = b.run(&["rev-parse", "HEAD"]).unwrap();
+    assert!(b.merge_resolved(&HashMap::new(), &[], "x").is_err());
+    assert!(!b.git_dir().join("MERGE_HEAD").exists());
+    assert_eq!(b.run(&["rev-parse", "HEAD"]).unwrap(), head);
+    assert_eq!(read(&b, "n.md"), "eins\nB\ndrei\n");
+    assert!(b.status().unwrap().changed.is_empty());
+}
+
+#[test]
+fn deleted_on_one_side_can_be_kept_or_removed() {
+    let (a, b) = devices("deleted");
+    std::fs::remove_file(a.root.join("n.md")).unwrap();
+    sync(&a).unwrap();
+    std::fs::write(b.root.join("n.md"), "geändert").unwrap();
+    assert!(matches!(sync(&b), Err(GitError::Conflicts(_))));
+    let (files, _) = b.conflicts().unwrap();
+    assert_eq!(files[0].kind, ConflictKind::DeletedThere);
+    let keep: HashMap<String, Choice> = [("n.md".to_string(), Choice::Both)].into();
+    b.merge_resolved(&keep, &[], "behalten").unwrap();
+    assert_eq!(read(&b, "n.md"), "geändert");
+    assert!(sync(&b).unwrap().pushed);
+    sync(&a).unwrap();
+    std::fs::write(a.root.join("n.md"), "wieder").unwrap();
+    sync(&a).unwrap();
+    std::fs::remove_file(b.root.join("n.md")).unwrap();
+    assert!(matches!(sync(&b), Err(GitError::Conflicts(_))));
+    assert_eq!(b.conflicts().unwrap().0[0].kind, ConflictKind::DeletedHere);
+    let remove: HashMap<String, Choice> = [("n.md".to_string(), Choice::Mine)].into();
+    b.merge_resolved(&remove, &[], "weg").unwrap();
+    assert!(!b.root.join("n.md").exists());
+}
+
+#[test]
+fn the_apps_own_files_merge_without_asking() {
+    let (a, b) = devices("own");
+    let state = |overrides: &str| format!("{{\"overrides\":{{{overrides}}}}}");
+    std::fs::write(a.root.join(".schrumbi-state.json"), state("")).unwrap();
+    sync(&a).unwrap();
+    sync(&b).unwrap();
+    std::fs::write(a.root.join(".schrumbi-state.json"), state("\"e1\":{\"status\":\"done\",\"date\":\"2026-10-01T10:00:00Z\"}")).unwrap();
+    sync(&a).unwrap();
+    std::fs::write(b.root.join(".schrumbi-state.json"), state("\"e2\":{\"status\":\"done\",\"date\":\"2026-10-01T10:00:00Z\"}")).unwrap();
+    let report = sync(&b).unwrap();
+    assert!(report.pushed);
+    let merged = read(&b, ".schrumbi-state.json");
+    assert!(merged.contains("e1") && merged.contains("e2"), "{merged}");
+    sync(&a).unwrap();
+    assert!(read(&a, ".schrumbi-state.json").contains("e2"));
+}
+
+#[test]
+fn a_real_config_contradiction_is_asked_about() {
+    let (a, b) = devices("config");
+    let config = |name: &str| format!("{{\"version\":2,\"name\":\"{name}\",\"semesters\":[],\"modules\":[]}}");
+    std::fs::write(a.root.join("schrumbi.json"), config("S")).unwrap();
+    sync(&a).unwrap();
+    sync(&b).unwrap();
+    std::fs::write(a.root.join("schrumbi.json"), config("A")).unwrap();
+    sync(&a).unwrap();
+    std::fs::write(b.root.join("schrumbi.json"), config("B")).unwrap();
+    assert!(matches!(sync(&b), Err(GitError::Conflicts(f)) if f == ["schrumbi.json"]));
+}
+
+#[test]
+fn stages_parse() {
+    let out = "abc\0100644 aaa 1\tn.md\0100644 bbb 2\tn.md\0100644 ccc 3\tn.md\0100644 ddd 2\tweg.md\0\0Auto-merging\0";
+    let files = conflict::parse_stages(out);
+    assert_eq!(files["n.md"], [Some("aaa".to_string()), Some("bbb".to_string()), Some("ccc".to_string())]);
+    assert_eq!(files["weg.md"], [None, Some("ddd".to_string()), None]);
+}
+
+#[test]
+fn setup_finds_and_cleans_up() {
+    let (a, b) = devices("setup");
+    std::fs::create_dir_all(a.root.join(".schrumbi-backup")).unwrap();
+    std::fs::write(a.root.join(".schrumbi-backup/x-1.json"), "{}").unwrap();
+    raw(&a.root, &["add", "-f", ".schrumbi-backup"]);
+    raw(&a.root, &["commit", "-q", "-m", "backup"]);
+    let inner = a.root.join("Projekt");
+    std::fs::create_dir_all(&inner).unwrap();
+    raw(&inner, &["init", "-q"]);
+    configure(&inner);
+    std::fs::write(inner.join("i"), "i").unwrap();
+    raw(&inner, &["add", "-A"]);
+    raw(&inner, &["commit", "-q", "-m", "i"]);
+    let found = setup::inspect(&a);
+    assert!(found.has_repo);
+    assert!(found.remote.is_some());
+    assert!(found.has_identity);
+    assert_eq!(found.tracked_backups, 1);
+    assert_eq!(found.nested, ["Projekt"]);
+    assert_eq!(found.missing_ignores.len(), setup::IGNORE_LINES.len());
+    let state = a.clean_up(&found.missing_ignores, &found.nested, true, "Aufräumen").unwrap().unwrap();
+    assert!(a.root.join(".schrumbi-backup/x-1.json").exists());
+    assert!(!a.run(&["ls-files"]).unwrap().contains("schrumbi-backup"));
+    assert!(read(&a, ".gitignore").contains("Projekt/"));
+    assert!(a.status().unwrap().changed.is_empty());
+    assert!(setup::inspect(&a).missing_ignores.is_empty());
+    assert_eq!(a.clean_up(&[], &[], true, "nochmal").unwrap(), None);
+    a.undo_clean_up(&state).unwrap();
+    assert!(a.run(&["ls-files"]).unwrap().contains("schrumbi-backup"));
+    assert!(a.root.join(".schrumbi-backup/x-1.json").exists());
+    let _ = b;
+}
+
+#[test]
+fn setup_recognises_special_places() {
+    assert_eq!(setup::cloud_service(Path::new("/Users/x/Library/Mobile Documents/com~apple~CloudDocs/Uni")), Some("iCloud"));
+    assert_eq!(setup::cloud_service(Path::new("/Users/x/Dropbox/Uni")), Some("Dropbox"));
+    assert_eq!(setup::cloud_service(Path::new("/Users/x/UXD")), None);
+    let dir = fresh("plugin");
+    assert!(!setup::obsidian_git_enabled(&dir));
+    std::fs::create_dir_all(dir.join(".obsidian")).unwrap();
+    std::fs::write(dir.join(".obsidian/community-plugins.json"), "[\"obsidian-git\"]").unwrap();
+    assert!(setup::obsidian_git_enabled(&dir));
+    let nested = dir.join("innen");
+    std::fs::create_dir_all(&nested).unwrap();
+    raw(&dir, &["init", "-q"]);
+    assert!(setup::inspect(&Git::new(exe(), &nested)).outer_root.is_some());
+}
+
+#[test]
+fn a_new_folder_can_be_set_up_from_nothing() {
+    let dir = fresh("init");
+    let git = Git::new(exe(), &dir);
+    assert!(!setup::inspect(&git).has_repo);
+    git.init_repo().unwrap();
+    assert!(setup::inspect(&git).has_repo);
+    git.set_identity("Muster", "m@example.invalid").unwrap();
+    assert_eq!(git.run(&["config", "user.name"]).unwrap().trim(), "Muster");
+    git.set_remote("/a").unwrap();
+    git.set_remote("/b").unwrap();
+    assert_eq!(setup::inspect(&git).remote.as_deref(), Some("/b"));
+}
+
+#[test]
+fn testing_a_remote_says_whether_it_answers() {
+    let (a, _) = devices("test-remote");
+    let url = a.root.parent().unwrap().join("remote.git");
+    assert_eq!(a.test_remote(url.to_str().unwrap()), Ok(()));
+    assert!(a.test_remote("/gibt/es/nicht.git").is_err());
+    let empty = a.root.parent().unwrap().join("leer.git");
+    raw(a.root.parent().unwrap(), &["init", "-q", "--bare", "leer.git"]);
+    assert_eq!(a.test_remote(empty.to_str().unwrap()), Ok(()));
+}
+
+#[test]
+fn history_lists_versions_across_renames_and_returns_their_bytes() {
+    let (a, _) = devices("history");
+    std::fs::write(a.root.join("n.md"), "zwei").unwrap();
+    sync(&a).unwrap();
+    raw(&a.root, &["mv", "n.md", "umbenannt.md"]);
+    sync(&a).unwrap();
+    std::fs::write(a.root.join("b.pdf"), [9u8, 0, 9]).unwrap();
+    sync(&a).unwrap();
+    let list = a.versions("umbenannt.md", 0, 100).unwrap();
+    assert_eq!(list.len(), 3, "{list:?}");
+    assert_eq!(list[0].path, "umbenannt.md");
+    assert_eq!(list[2].path, "n.md");
+    assert_eq!(a.version_bytes(&list[2]).unwrap(), b"eins\nzwei\ndrei\n");
+    assert_eq!(a.version_bytes(&list[1]).unwrap(), b"zwei");
+    assert_eq!(a.versions("umbenannt.md", 1, 1).unwrap().len(), 1);
+    assert_eq!(a.version_bytes(&a.versions("b.pdf", 1, 1).unwrap()[0]).unwrap(), [0u8, 1, 2]);
+    assert!(a.versions("gibt-es-nicht.md", 0, 10).unwrap().is_empty());
 }
 
 #[test]
@@ -386,6 +628,17 @@ u UU N... 100644 100644 100644 100644 a b c k.md\0\
     let kinds: Vec<(&str, &ChangeKind)> = s.changed.iter().map(|c| (c.path.as_str(), &c.kind)).collect();
     assert_eq!(kinds, [("m.md", &ChangeKind::Modified), ("mit leer zeichen.md", &ChangeKind::Deleted), ("neu.md", &ChangeKind::New), ("ziel.md", &ChangeKind::Renamed { from: "quelle.md".into() }), ("k.md", &ChangeKind::Conflicted), ("frei.md", &ChangeKind::New)]);
     assert_eq!(parse("# branch.head (detached)\0").branch, None);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_helper_holding_the_pipes_does_not_hang_us() {
+    let mut c = Command::new("/bin/sh");
+    c.args(["-c", "echo fertig; (sleep 30) & exit 0"]);
+    let start = SystemTime::now();
+    let out = spawn(c, None, Duration::from_secs(20)).unwrap();
+    assert_eq!(out.stdout.trim(), "fertig");
+    assert!(start.elapsed().unwrap() < Duration::from_secs(8));
 }
 
 #[cfg(unix)]

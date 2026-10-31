@@ -30,6 +30,9 @@ pub struct Pages {
     module_files: Entity<FileBrowser>,
     inbox: Entity<super::inbox::InboxPage>,
     docs: std::collections::HashMap<std::path::PathBuf, AnyView>,
+    version_pane: Option<Entity<super::history::VersionPane>>,
+    notes_page: Option<Entity<super::notes_page::NotesPage>>,
+    graph_page: Option<Entity<super::graph_view::GraphView>>,
     split_share: f32,
     shown_doc: Option<std::path::PathBuf>,
     /// The shown document gets the keyboard once no dialog holds it any more.
@@ -91,6 +94,9 @@ impl Pages {
             module_files,
             inbox,
             docs: Default::default(),
+            version_pane: None,
+            notes_page: None,
+            graph_page: None,
             split_share: crate::core::prefs::get().split_share,
             shown_doc: None,
             doc_needs_focus: false,
@@ -262,8 +268,13 @@ impl Pages {
             .entry(path.to_path_buf())
             .or_insert_with(|| {
                 let path = path.to_path_buf();
+                let kind = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
                 if crate::core::markdown::is_markdown(&path) {
                     cx.new(|cx| super::documents::NoteView::new(path, true, window, cx)).into()
+                } else if kind == "base" {
+                    cx.new(|cx| super::base_view::BaseView::new(path, cx)).into()
+                } else if kind == "canvas" {
+                    cx.new(|cx| super::canvas_view::CanvasView::new(path, window, cx)).into()
                 } else {
                     cx.new(|cx| super::documents::FileViewer::new(path, cx)).into()
                 }
@@ -284,6 +295,10 @@ impl Pages {
             window.on_next_frame(move |window, cx| {
                 if let Ok(note) = target.clone().downcast::<super::documents::NoteView>() {
                     note.update(cx, |n, cx| n.activate(window, cx));
+                } else if let Ok(canvas) = target.clone().downcast::<super::canvas_view::CanvasView>() {
+                    canvas.update(cx, |c, cx| c.activate(window, cx));
+                } else if let Ok(base) = target.clone().downcast::<super::base_view::BaseView>() {
+                    base.update(cx, |b, cx| b.activate(window, cx));
                 } else if let Ok(file) = target.downcast::<super::documents::FileViewer>() {
                     file.update(cx, |f, cx| f.activate(window, cx));
                 }
@@ -358,7 +373,19 @@ impl Render for Pages {
             Route::Inbox => self.inbox.clone().into_any_element(),
             Route::Search => self.search_page(lib.read(cx), width, &t),
             Route::Module(id) => self.module_page(lib.read(cx), &id, width, view, &t),
+            Route::Doc(path) if super::history::viewed_path(cx).as_ref() == Some(&path) => {
+                let pane = self.version_pane.get_or_insert_with(|| cx.new(super::history::VersionPane::new)).clone();
+                pane.into_any_element()
+            }
             Route::Doc(path) => self.document(path, window, cx),
+            Route::Graph => {
+                let page = self.graph_page.get_or_insert_with(|| cx.new(|cx| super::graph_view::GraphView::new(window, cx))).clone();
+                page.into_any_element()
+            }
+            Route::Notes => {
+                let page = self.notes_page.get_or_insert_with(|| cx.new(|cx| super::notes_page::NotesPage::new(window, cx))).clone();
+                page.into_any_element()
+            }
             Route::Today => div().into_any_element(),
         };
         fields.prune();

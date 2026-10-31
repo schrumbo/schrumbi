@@ -45,6 +45,9 @@ fn main() {
         ui::state::init(cx);
         ui::notifications::init(cx);
         ui::updates::init(cx);
+        ui::sync::init(cx);
+        ui::history::init(cx);
+        ui::link_card::init(cx);
         ui::app::init(cx);
         if let Some(path) = workspace {
             ui::state::open_workspace(&path, cx);

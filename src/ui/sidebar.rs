@@ -59,6 +59,9 @@ fn entries(lib: &Library) -> Vec<Entry> {
         Entry { key: Some("inbox"), route: Route::Inbox, icon: "inbox", label: tr("Inbox"), shortcut: Some("4"), badge: lib.inbox.len(), urgent: false },
         Entry { key: Some("search"), route: Route::Search, icon: "search", label: tr("Suche"), shortcut: None, badge: 0, urgent: false },
     ];
+    if lib.is_vault {
+        v.push(Entry { key: Some("notes"), route: Route::Notes, icon: "book-open", label: tr("Notizen"), shortcut: None, badge: 0, urgent: false });
+    }
     let mut doc = None;
     if let Some(doc_path) = lib.active_document.clone().or_else(|| lib.open_documents.first().cloned()) {
         doc = Some(Entry { key: None, route: Route::Doc(doc_path), icon: "files", label: tr("Dokumente"), shortcut: None, badge: lib.open_documents.len(), urgent: false });
@@ -149,7 +152,7 @@ fn menu_overlay(id: &'static str) -> Button {
 }
 
 /// The sidebar: one column of tabs. The icons always show, the labels sit beside them when wide enough.
-pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> Div {
+pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: &App) -> Div {
     let fg = t.primary;
     let mut top = div().flex().flex_col();
     let hidden = prefs::get().hidden_tabs;
@@ -256,6 +259,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
             let label = trf("Update auf %@", &[&version]);
             d.child(tab("tab-update".into(), false, false, icon("download", iconsize::L, t.accent).into_any_element(), label.clone(), None, wide, label, t).on_click(|_, window, cx| super::updates::show(window, cx)))
         })
+        .when_some(sync_row(wide, t, cx), |d, row| d.child(row))
         .when(semesters.len() > 1, |d| {
             d.child(tab("tab-semester-row".into(), false, true, icon("calendar-range", iconsize::L, fg).into_any_element(), semester.clone(), None, wide, semester.clone(), t).child(div().absolute().inset_0().child(menu_overlay("tab-semester").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
                 for s in &semesters {
@@ -287,4 +291,32 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
         .when(!modules.is_empty(), |d| d.child(div().mx(px(space::M)).my(px(space::S)).h(px(1.)).bg(t.separator)))
         .child(div().id("tab-modules").flex_1().min_h_0().overflow_y_scrollbar().child(mods))
         .child(bottom)
+}
+
+/// The sync state, always in the same place; the row opens what the state needs.
+fn sync_row(wide: bool, t: &Theme, cx: &App) -> Option<AnyElement> {
+    use super::sync_panel::RowKind;
+    let row = super::sync_panel::row(t, cx)?;
+    let fg = t.primary;
+    let glyph = if row.working {
+        super::motion::loading(iconsize::L, fg).into_any_element()
+    } else {
+        div().relative().child(icon(row.icon, iconsize::L, row.tint.unwrap_or(fg))).child(super::motion::done_pulse(("sync-done", row.finished), row.finished > 0, iconsize::L)).into_any_element()
+    };
+    let dim = row.tint.is_none() && row.count.is_none() && !row.working;
+    let base = tab("tab-sync".into(), false, dim, glyph, row.label, row.count, wide, row.help.clone(), t);
+    Some(match row.kind {
+        RowKind::Offer => base
+            .on_click(|_, _, cx| act(cx, |l| l.show_sync_setup = true))
+            .context_menu(|menu, _, _| menu.item(PopupMenuItem::new(tr("Nicht mehr anbieten")).on_click(|_, _, cx| super::sync::hide_offer(cx))))
+            .into_any_element(),
+        RowKind::Conflicts => base.on_click(|_, _, cx| act(cx, |l| l.show_conflicts = true)).into_any_element(),
+        RowKind::Panel => base
+            .child(div().absolute().inset_0().child(super::sync_panel::overlay(row.help, cx)))
+            .context_menu(|menu, _, _| {
+                menu.item(PopupMenuItem::new(tr("Jetzt synchronisieren")).on_click(|_, _, cx| super::sync::run(None, true, cx)))
+                    .item(PopupMenuItem::new(tr("Einstellungen")).on_click(|_, _, cx| super::settings::open_sync(cx)))
+            })
+            .into_any_element(),
+    })
 }

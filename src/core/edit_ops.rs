@@ -37,6 +37,14 @@ pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
 }
 
 /// `[sel]()` with the caret in the parentheses, or `[](url)` when the selection is a URL.
+/// Wraps the selection into a wikilink, or starts an empty one.
+pub fn wikilink(s: &str, sel: Range<usize>) -> Edit {
+    let inner = &s[sel.clone()];
+    let text = format!("[[{inner}]]");
+    let caret = sel.start + 2 + inner.len();
+    Edit { range: sel, text, select: caret..caret }
+}
+
 pub fn link(s: &str, sel: Range<usize>) -> Edit {
     let label = &s[sel.clone()];
     let is_url = label.starts_with("http://") || label.starts_with("https://");

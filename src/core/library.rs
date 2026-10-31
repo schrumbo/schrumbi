@@ -31,6 +31,8 @@ pub enum Route {
     Record,
     Module(String),
     Doc(PathBuf),
+    Notes,
+    Graph,
 }
 
 /// How many pages Back remembers.
@@ -62,6 +64,8 @@ pub enum Change {
     Highlights { key: String, list: Vec<Highlight> },
     /// Puts a note's text back, as chosen when another app changed the file.
     Note { path: PathBuf, text: String },
+    /// Puts a file's bytes back, for restoring an earlier version.
+    Bytes { path: PathBuf, bytes: Vec<u8> },
 }
 
 /// What one undo or redo reverts.
@@ -163,12 +167,13 @@ impl IndexJob {
     pub fn run(self) -> (usize, Vec<CatalogFile>) {
         let count = self.index.update(&self.root, &self.exclude);
         let catalog = catalog::build(&self.index.all(), &self.root, &self.config);
+        super::vault::index::rebuild(&self.root, &self.exclude);
         (count, catalog)
     }
 }
 
-const IN_APP_TYPES: [&str; 51] = [
-    "md", "markdown", "mdown", "pdf", "txt", "rtf", "rtfd", "csv", "json", "html", "htm", "xml", "css", "js", "ts", "swift", "java", "py", "c", "cpp", "h", "yml", "yaml", "tex", "doc", "docx", "ppt",
+const IN_APP_TYPES: [&str; 53] = [
+    "base", "canvas", "md", "markdown", "mdown", "pdf", "txt", "rtf", "rtfd", "csv", "json", "html", "htm", "xml", "css", "js", "ts", "swift", "java", "py", "c", "cpp", "h", "yml", "yaml", "tex", "doc", "docx", "ppt",
     "pptx", "xls", "xlsx", "pages", "key", "numbers", "odt", "ods", "odp", "png", "jpg", "jpeg", "heic", "gif", "webp", "tiff", "svg", "bmp", "mp4", "mov", "m4v", "mp3", "m4a", "wav",
 ];
 const MATERIAL_WORDS: [&str; 12] = ["unterlagen", "material", "folien", "skript", "slides", "handout", "literatur", "vorlesung", "lecture", "docs", "mitschrift", "notes"];
@@ -240,6 +245,23 @@ pub struct Library {
     /// The kind and time of the last edit that merges with the following ones, e.g. typing in a settings field.
     coalescing: Option<(String, std::time::Instant)>,
     pub buffers: HashMap<PathBuf, NoteBuffer>,
+    pending_link_changes: Vec<Change>,
+    /// Whether the workspace is an Obsidian vault.
+    pub is_vault: bool,
+    /// Asks for the note picker: `(merge, note)`; merge chooses where a note goes, otherwise which template to insert.
+    pub note_pick: Option<(bool, PathBuf)>,
+    /// The note shown as slides.
+    pub slides: Option<PathBuf>,
+    /// The note the graph centers on and how far it reaches; `None` shows the whole vault.
+    pub graph_focus: Option<(PathBuf, usize)>,
+    /// The tag the notes page filters by.
+    pub notes_tag: Option<String>,
+    pub show_sync_setup: bool,
+    pub show_conflicts: bool,
+    /// The toast asked to take back the last conflict resolution.
+    pub sync_undo_requested: bool,
+    /// A file was put where it belongs; automatic sync takes it up right away.
+    pub sync_soon: bool,
     /// A sync is rewriting the workspace; writes wait until `finish_sync`.
     sync_gate: bool,
     deferred_config: bool,
@@ -332,6 +354,16 @@ impl Library {
             redo_steps: Vec::new(),
             coalescing: None,
             buffers: HashMap::new(),
+            pending_link_changes: Vec::new(),
+            is_vault: false,
+            note_pick: None,
+            slides: None,
+            graph_focus: None,
+            notes_tag: None,
+            show_sync_setup: false,
+            show_conflicts: false,
+            sync_undo_requested: false,
+            sync_soon: false,
             sync_gate: false,
             deferred_config: false,
             deferred_state: false,
@@ -573,6 +605,244 @@ impl Library {
         changed
     }
 
+    // MARK: Links
+
+    /// Shows the graph, around a note or of the whole vault.
+    pub fn show_graph(&mut self, around: Option<PathBuf>) {
+        self.graph_focus = around.map(|p| (p, 1));
+        self.set_route(Route::Graph);
+    }
+
+    /// Shows the notes with a tag.
+    pub fn show_tag(&mut self, tag: &str) {
+        self.notes_tag = Some(tag.to_lowercase());
+        self.set_route(Route::Notes);
+    }
+
+    /// Today's daily note from the vault's settings, created from its template if needed.
+    pub fn open_daily_note(&mut self) {
+        let Some(root) = self.root.clone() else { return };
+        let root = dunce::canonicalize(&root).unwrap_or(root);
+        let settings = super::vault::config::VaultConfig::read(&root);
+        let now = Local::now();
+        let english = super::i18n::is_english();
+        let format = if settings.daily.format.is_empty() { "YYYY-MM-DD" } else { settings.daily.format.as_str() };
+        let name = super::vault::moment::format(format, now, english);
+        let path = root.join(settings.daily.folder.trim_matches('/')).join(format!("{name}.md"));
+        if !path.exists() {
+            let template = (!settings.daily.template.is_empty()).then(|| {
+                let t = settings.daily.template.trim_start_matches('/');
+                root.join(if t.ends_with(".md") { t.to_string() } else { format!("{t}.md") })
+            });
+            let text = template.and_then(|t| std::fs::read_to_string(t).ok()).map_or(String::new(), |t| {
+                let title = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                super::vault::moment::fill_template(&t, &title, now, &settings.templates.date_format, &settings.templates.time_format, english)
+            });
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&path, text) {
+                self.last_error = Some(trf("Notiz konnte nicht angelegt werden: %@", &[&explain(&e.into())]));
+                return;
+            }
+            self.refresh();
+            self.commit(trf("Angelegt: %@", &[&name_of(&path)]), "square-pen", vec![Change::Trash(path.clone())]);
+        }
+        self.open_document(&path);
+    }
+
+    /// A new note named by the unique note creator's format.
+    pub fn open_unique_note(&mut self) {
+        let Some(root) = self.root.clone() else { return };
+        let root = dunce::canonicalize(&root).unwrap_or(root);
+        let settings = super::vault::config::unique_notes(&root);
+        let now = Local::now();
+        let english = super::i18n::is_english();
+        let format = if settings.format.is_empty() { "YYYYMMDDHHmm" } else { settings.format.as_str() };
+        let name = super::vault::moment::format(format, now, english);
+        let path = unique_path(&root.join(settings.folder.trim_matches('/')).join(format!("{name}.md")));
+        let vault = super::vault::config::VaultConfig::read(&root);
+        let text = (!settings.template.is_empty()).then(|| {
+            let t = settings.template.trim_start_matches('/');
+            root.join(if t.ends_with(".md") { t.to_string() } else { format!("{t}.md") })
+        }).and_then(|t| std::fs::read_to_string(t).ok()).map_or(String::new(), |t| super::vault::moment::fill_template(&t, &name, now, &vault.templates.date_format, &vault.templates.time_format, english));
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&path, text) {
+            Ok(()) => {
+                self.refresh();
+                self.commit(trf("Angelegt: %@", &[&name_of(&path)]), "square-pen", vec![Change::Trash(path.clone())]);
+                self.open_document(&path);
+            }
+            Err(e) => self.last_error = Some(trf("Notiz konnte nicht angelegt werden: %@", &[&explain(&e.into())])),
+        }
+    }
+
+    /// Appends a template to a note, filled for this moment.
+    pub fn insert_template(&mut self, note: &Path, template: &Path) {
+        let Some(root) = self.root.clone() else { return };
+        let settings = super::vault::config::VaultConfig::read(&dunce::canonicalize(&root).unwrap_or(root));
+        let Ok(raw) = std::fs::read_to_string(template) else { return };
+        let title = note.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let filled = super::vault::moment::fill_template(&raw, &title, Local::now(), &settings.templates.date_format, &settings.templates.time_format, super::i18n::is_english());
+        let buffer = self.buffer(note);
+        let before = buffer.text.clone();
+        let separator = if before.is_empty() || before.ends_with('\n') { "" } else { "\n" };
+        match buffer.restore(format!("{before}{separator}{filled}")) {
+            Ok(()) => self.commit(tr("Vorlage eingefügt"), "file-plus", vec![Change::Note { path: note.to_path_buf(), text: before }]),
+            Err(e) => self.last_error = Some(explain(&e.into())),
+        }
+    }
+
+    /// Moves part of a note into a new note beside it and leaves a link in its place.
+    pub fn extract_to_note(&mut self, note: &Path, range: std::ops::Range<usize>) -> Option<PathBuf> {
+        let before = self.buffer(note).text.clone();
+        let selected = before.get(range.clone())?.to_string();
+        if selected.trim().is_empty() {
+            return None;
+        }
+        let title: String = selected.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().trim_start_matches(['#', ' ', '-', '>']).chars().filter(|c| !"\\/:*?\"<>|#^[]".contains(*c)).take(60).collect();
+        let title = if title.trim().is_empty() { tr("Neue Notiz") } else { title.trim().to_string() };
+        let folder = note.parent()?.to_path_buf();
+        let path = unique_path(&folder.join(format!("{title}.md")));
+        if let Err(e) = std::fs::write(&path, &selected) {
+            self.last_error = Some(trf("Notiz konnte nicht angelegt werden: %@", &[&explain(&e.into())]));
+            return None;
+        }
+        let vault = super::vault::index::current();
+        let link = vault.new_link(Some(note), &path, "");
+        let updated = format!("{}{link}{}", &before[..range.start], &before[range.end..]);
+        if let Err(e) = self.buffer(note).restore(updated) {
+            let _ = std::fs::remove_file(&path);
+            self.last_error = Some(explain(&e.into()));
+            return None;
+        }
+        self.refresh();
+        self.commit(trf("Ausgelagert: %@", &[&name_of(&path)]), "scissors", vec![Change::Trash(path.clone()), Change::Note { path: note.to_path_buf(), text: before }]);
+        Some(path)
+    }
+
+    /// Adds a note to the end of another one, points its links there and puts the original in the trash.
+    pub fn merge_note(&mut self, source: &Path, target: &Path) {
+        let text = self.buffers.get(source).map(|b| b.text.clone()).or_else(|| std::fs::read_to_string(source).ok()).unwrap_or_default();
+        let body = text[super::vault::frontmatter::body_offset(&text)..].trim_start().to_string();
+        let buffer = self.buffer(target);
+        let before = buffer.text.clone();
+        let separator = if before.is_empty() { "" } else if before.ends_with("\n\n") { "" } else if before.ends_with('\n') { "\n" } else { "\n\n" };
+        if let Err(e) = buffer.restore(format!("{before}{separator}{body}")) {
+            self.last_error = Some(explain(&e.into()));
+            return;
+        }
+        let (mut changes, _) = self.relink(source, target);
+        changes.push(Change::Note { path: target.to_path_buf(), text: before });
+        match trash_with_copy(source) {
+            Ok(change) => changes.push(change),
+            Err(_) => self.last_error = Some(tr("Konnte nicht in den Papierkorb gelegt werden. Prüfe, ob die Datei noch in einer anderen App geöffnet ist.")),
+        }
+        self.close_document(source);
+        self.refresh();
+        self.commit(trf("Zusammengeführt mit %@", &[&name_of(target)]), "merge", changes);
+        self.open_document(target);
+    }
+
+    /// Opens any note of the vault by chance.
+    pub fn open_random_note(&mut self) {
+        let vault = super::vault::index::current();
+        let notes: Vec<&PathBuf> = vault.notes.keys().filter(|p| super::markdown::is_markdown(p)).collect();
+        if notes.is_empty() {
+            return;
+        }
+        let pick = uuid::Uuid::new_v4().as_u128() as usize % notes.len();
+        let path = notes[pick].clone();
+        self.open_file(&path);
+    }
+
+    /// Follows an internal link from the note `from`: opens the file and lands on its heading or block.
+    /// Returns false when the target does not exist yet.
+    pub fn open_link(&mut self, destination: &str, from: Option<&Path>) -> bool {
+        use super::vault::{index, links};
+        let target = links::LinkTarget::parse(destination);
+        let vault = index::current();
+        let beside = from.and_then(Path::parent).map(|d| d.join(&target.path)).filter(|p| !target.path.is_empty() && p.is_file());
+        let Some(path) = beside.or_else(|| vault.resolver.resolve(&target, from)).or_else(|| from.filter(|_| target.path.is_empty()).map(Path::to_path_buf)) else { return false };
+        self.open_file(&path);
+        let text = if target.headings.is_empty() && target.block.is_none() { None } else { std::fs::read_to_string(&path).ok() };
+        if let Some(text) = text {
+            let spot = match (&target.block, target.headings.last()) {
+                (Some(id), _) => links::block_ids(&text).into_iter().find(|(b, _)| b == id).map(|(_, line)| (format!("^{id}"), line)),
+                (None, Some(h)) => links::headings(&text).into_iter().find(|(_, t, _)| t.trim().eq_ignore_ascii_case(h.trim())).map(|(_, t, line)| (t, line)),
+                _ => None,
+            };
+            if let Some((term, line)) = spot {
+                let nth = links::occurrences_before(&text, &term, line);
+                self.find_in_file = Some((path, term, nth));
+            }
+        }
+        true
+    }
+
+    /// Creates the note a link points at, where the vault wants new notes, and opens it.
+    pub fn create_link_target(&mut self, destination: &str, from: Option<&Path>) {
+        use super::vault::{index, links};
+        let target = links::LinkTarget::parse(destination);
+        let vault = index::current();
+        let Some(root) = self.root.clone() else { return };
+        let root = dunce::canonicalize(&root).unwrap_or(root);
+        let relative = if target.path.ends_with(".md") { target.path.clone() } else { format!("{}.md", target.path) };
+        let path = if relative.contains('/') { root.join(relative.trim_start_matches('/')) } else { vault.config.new_note_folder(&root, from).join(&relative) };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&path, "") {
+            Ok(()) => {
+                self.refresh();
+                self.commit(trf("Angelegt: %@", &[&name_of(&path)]), "square-pen", vec![Change::Trash(path.clone())]);
+                self.open_document(&path);
+            }
+            Err(e) => self.last_error = Some(trf("Notiz konnte nicht angelegt werden: %@", &[&explain(&e.into())])),
+        }
+    }
+
+    /// Points every link at a file's new place. The returned changes take that back, and how many links moved.
+    pub fn relink(&mut self, old: &Path, new: &Path) -> (Vec<Change>, usize) {
+        use super::vault::{canvas, index};
+        let settled = |p: &Path| p.parent().and_then(|d| dunce::canonicalize(d).ok()).zip(p.file_name()).map_or_else(|| p.to_path_buf(), |(d, n)| d.join(n));
+        let (old, new) = (settled(old), settled(new));
+        let before = index::current();
+        if before.root.as_os_str().is_empty() || !old.starts_with(&before.root) || !new.starts_with(&before.root) {
+            return (Vec::new(), 0);
+        }
+        let after = index::moved(&old, &new);
+        if !after.config.always_update_links {
+            return (Vec::new(), 0);
+        }
+        let mut sources: Vec<PathBuf> = before.backlinks.get(&old).map(|l| l.iter().map(|m| m.source.clone()).collect()).unwrap_or_default();
+        sources.sort();
+        sources.dedup();
+        let (mut changes, mut count) = (Vec::new(), 0);
+        let relative = |p: &Path| p.strip_prefix(&before.root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+        for source in sources {
+            let open = self.buffers.get(&source).map(|b| b.text.clone());
+            let Some(text) = open.clone().or_else(|| std::fs::read_to_string(&source).ok()) else { continue };
+            let rewritten = if source.extension().is_some_and(|e| e.eq_ignore_ascii_case("canvas")) {
+                canvas::rewrite_file(&text, &relative(&old), &relative(&new)).map(|t| (t, 1))
+            } else {
+                index::rewrite_links(&text, &source, &old, &new, &before.resolver, &after)
+            };
+            let Some((updated, links)) = rewritten else { continue };
+            let written = match self.buffers.get_mut(&source) {
+                Some(buffer) => buffer.restore(updated).is_ok(),
+                None => super::note_buffer::write_atomic(&source, updated.as_bytes()).is_ok(),
+            };
+            if written {
+                count += links;
+                changes.push(if open.is_some() { Change::Note { path: source, text } } else { Change::Bytes { path: source, bytes: text.into_bytes() } });
+            }
+        }
+        (changes, count)
+    }
+
     // MARK: Notes changed by other apps
 
     /// Replaces the version another app wrote with the text here; the other version stays in the undo history.
@@ -591,6 +861,25 @@ impl Library {
     pub fn load_note_disk(&mut self, path: &Path) {
         let Some(mine) = self.buffers.get_mut(path).and_then(NoteBuffer::take_disk) else { return };
         self.commit(tr("Neu geladen"), "refresh-cw", vec![Change::Note { path: path.to_path_buf(), text: mine }]);
+    }
+
+    /// Makes an earlier version current; what was current stays one undo away.
+    pub fn restore_version(&mut self, path: &Path, bytes: Vec<u8>) {
+        let message = tr("Version wiederhergestellt");
+        if super::markdown::is_markdown(path) || self.buffers.contains_key(path) {
+            let buffer = self.buffer(path);
+            let before = buffer.text.clone();
+            match buffer.restore(String::from_utf8_lossy(&bytes).into_owned()) {
+                Ok(()) => self.commit(message, "history", vec![Change::Note { path: path.to_path_buf(), text: before }]),
+                Err(e) => self.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e])),
+            }
+            return;
+        }
+        let result = std::fs::read(path).and_then(|before| super::note_buffer::write_atomic(path, &bytes).map(|_| before));
+        match result {
+            Ok(before) => self.commit(message, "history", vec![Change::Bytes { path: path.to_path_buf(), bytes: before }]),
+            Err(e) => self.last_error = Some(explain(&e.into())),
+        }
     }
 
     // MARK: Sync
@@ -656,6 +945,7 @@ impl Library {
         let (Some(root), Some(config)) = (self.root.clone(), self.config.clone()) else { return };
         day::set_time_zone(&config.time_zone);
         self.now = Local::now();
+        self.is_vault = root.join(".obsidian").is_dir();
         let fresh = schedule::assignments(&config, &self.state, &root);
         if fresh != self.assignments {
             self.assignments = fresh;
@@ -1207,7 +1497,7 @@ impl Library {
             place.remove(i);
         }
         let mut counts: HashMap<String, usize> = HashMap::new();
-        for f in self.catalog.iter().filter(|f| f.module_id.as_deref() == Some(&module.id) && f.place == place) {
+        for f in self.catalog.iter().filter(|f| f.module_id.as_deref() == Some(module.id.as_str()) && f.place == place) {
             let parts: Vec<&str> = super::naming::stem(f.name()).split('_').collect();
             let Some(last) = parts.last() else { continue };
             if parts.len() < 3 || last.len() != 6 || !last.chars().all(|c| c.is_ascii_digit()) {
@@ -1412,6 +1702,11 @@ impl Library {
                     let before = self.store_highlights(&key, list);
                     Change::Highlights { key, list: before }
                 }
+                Change::Bytes { path, bytes } => {
+                    let before = std::fs::read(&path)?;
+                    super::note_buffer::write_atomic(&path, &bytes)?;
+                    Change::Bytes { path, bytes: before }
+                }
                 Change::Note { path, text } => {
                     let buffer = self.buffer(&path);
                     let before = buffer.text.clone();
@@ -1498,13 +1793,19 @@ impl Library {
         })();
         match result {
             Ok(target) => {
+                let mut links = Vec::new();
                 if inside {
                     self.path_moved(path, &target);
+                    links = self.relink(path, &target).0;
                 }
                 self.refresh();
+                self.sync_soon = true;
                 if announce {
-                    let change = filing_change(path, &target, inside);
-                    self.commit(trf("Abgelegt: %@", &[&name_of(&target)]), "inbox", vec![change]);
+                    let mut changes = vec![filing_change(path, &target, inside)];
+                    changes.extend(links);
+                    self.commit(trf("Abgelegt: %@", &[&name_of(&target)]), "inbox", changes);
+                } else {
+                    self.pending_link_changes.extend(links);
                 }
                 Some(target)
             }
@@ -1526,6 +1827,7 @@ impl Library {
                 last = Some(t);
             }
         }
+        done.append(&mut self.pending_link_changes);
         let Some(last) = last else { return };
         let message = if done.len() == 1 { trf("Abgelegt: %@", &[&name_of(&last)]) } else { trf("%lld Dateien abgelegt", &[&done.len()]) };
         self.commit(message, "inbox", done);
@@ -1564,9 +1866,15 @@ impl Library {
         match move_path(file, &target) {
             Ok(()) => {
                 self.path_moved(file, &target);
+                let (mut changes, links) = self.relink(file, &target);
                 self.refresh();
-                let change = Change::Move { from: target.clone(), to: file.to_path_buf() };
-                self.commit(trf("Umbenannt: %@", &[&name_of(&target)]), "pencil", vec![change]);
+                changes.insert(0, Change::Move { from: target.clone(), to: file.to_path_buf() });
+                let message = match links {
+                    0 => trf("Umbenannt: %@", &[&name_of(&target)]),
+                    1 => tr("Umbenannt, 1 Link angepasst"),
+                    n => trf("Umbenannt, %@ Links angepasst", &[&n.to_string()]),
+                };
+                self.commit(message, "pencil", changes);
                 self.last_renamed = Some(target);
             }
             Err(e) => self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&explain(&e.into())])),
@@ -1622,7 +1930,9 @@ impl Library {
             let target = rename_target(&file, &name);
             if move_path(&file, &target).is_ok() {
                 self.path_moved(&file, &target);
+                let (changes, _) = self.relink(&file, &target);
                 done.push(Change::Move { from: target, to: file });
+                done.extend(changes);
             }
         }
         self.refresh();

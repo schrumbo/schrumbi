@@ -521,3 +521,49 @@ fn a_config_from_a_newer_version_is_not_overwritten_after_a_pull() {
     let on_disk: Value = serde_json::from_slice(&std::fs::read(root.join("schrumbi.json")).unwrap()).unwrap();
     assert_eq!(on_disk["version"], 99);
 }
+
+#[test]
+fn restoring_a_version_can_be_undone() {
+    let root = folder("restore");
+    std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();
+    let pdf = dunce::canonicalize(&root).unwrap().join("a.pdf");
+    std::fs::write(&pdf, [1u8, 0, 2]).unwrap();
+    let note = pdf.with_file_name("n.md");
+    std::fs::write(&note, "neu").unwrap();
+    let mut lib = open(&root);
+    lib.restore_version(&pdf, vec![9, 0, 9]);
+    assert_eq!(std::fs::read(&pdf).unwrap(), [9, 0, 9]);
+    lib.undo();
+    assert_eq!(std::fs::read(&pdf).unwrap(), [1, 0, 2]);
+    lib.redo();
+    assert_eq!(std::fs::read(&pdf).unwrap(), [9, 0, 9]);
+    lib.restore_version(&note, b"alt".to_vec());
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "alt");
+    lib.undo();
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "neu");
+}
+
+#[test]
+fn renaming_keeps_links_alive_and_undo_takes_all_of_it_back() {
+    let root = dunce::canonicalize(folder("relink")).unwrap();
+    std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();
+    std::fs::write(root.join("Alt.md"), "Ziel").unwrap();
+    std::fs::write(root.join("Quelle.md"), "Siehe [[Alt#H]] und [x](Alt.md)\n").unwrap();
+    std::fs::write(root.join("Offen.md"), "[[Alt]]").unwrap();
+    std::fs::write(root.join("Board.canvas"), r#"{"nodes":[{"id":"a","type":"file","file":"Alt.md","x":0,"y":0,"width":1,"height":1}],"edges":[]}"#).unwrap();
+    let mut lib = open(&root);
+    crate::core::vault::index::rebuild(&root, &[]);
+    lib.buffer(&root.join("Offen.md"));
+    lib.rename(&root.join("Alt.md"), "Neu.md");
+    let read = |n: &str| std::fs::read_to_string(root.join(n)).unwrap();
+    assert_eq!(read("Quelle.md"), "Siehe [[Neu#H|Alt]] und [x](Neu.md)\n");
+    assert_eq!(read("Offen.md"), "[[Neu|Alt]]");
+    assert!(read("Board.canvas").contains("Neu.md"));
+    lib.undo();
+    assert!(root.join("Alt.md").exists());
+    assert_eq!(read("Quelle.md"), "Siehe [[Alt#H]] und [x](Alt.md)\n");
+    assert_eq!(read("Offen.md"), "[[Alt]]");
+    assert!(read("Board.canvas").contains("Alt.md"));
+    lib.redo();
+    assert_eq!(read("Offen.md"), "[[Neu|Alt]]");
+}

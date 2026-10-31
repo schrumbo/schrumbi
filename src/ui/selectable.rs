@@ -12,6 +12,9 @@ pub struct SelectableStyled {
     order: u64,
     color: Hsla,
     links: Vec<(Range<usize>, LinkAction)>,
+    /// Link targets for the preview card, with the folder they are relative to.
+    hovers: Vec<(Range<usize>, String)>,
+    hover_base: Option<std::path::PathBuf>,
 }
 
 /// What clicking a link does.
@@ -20,11 +23,17 @@ pub type LinkAction = Rc<dyn Fn(&mut App)>;
 /// Wraps `text` and its highlights; `order` is its place in reading order.
 pub fn selectable(id: impl Into<ElementId>, text: String, highlights: Vec<(Range<usize>, HighlightStyle)>, order: u64, color: Hsla) -> SelectableStyled {
     let text = SharedString::from(text);
-    SelectableStyled { id: id.into(), styled: StyledText::new(text.clone()).with_highlights(highlights), text, order, color, links: Vec::new() }
+    SelectableStyled { id: id.into(), styled: StyledText::new(text.clone()).with_highlights(highlights), text, order, color, links: Vec::new(), hovers: Vec::new(), hover_base: None }
 }
 
 impl SelectableStyled {
     /// Makes byte ranges of the text clickable; a click that selected text does not count.
+    pub fn hovers(mut self, hovers: Vec<(Range<usize>, String)>, base: Option<std::path::PathBuf>) -> Self {
+        self.hovers = hovers;
+        self.hover_base = base;
+        self
+    }
+
     pub fn links(mut self, links: Vec<(Range<usize>, LinkAction)>) -> Self {
         self.links = links;
         self
@@ -102,6 +111,15 @@ impl Element for SelectableStyled {
         let link_at = |links: &[(Range<usize>, LinkAction)], position: Point<Pixels>| layout.index_for_position(position).ok().and_then(|i| links.iter().find(|(r, _)| r.contains(&i)).map(|(_, a)| a.clone()));
         if hitbox.is_hovered(window) && link_at(&self.links, window.mouse_position()).is_some() {
             window.set_cursor_style(CursorStyle::PointingHand, hitbox);
+        }
+        if !self.hovers.is_empty() {
+            let (hovers, base, hitbox, layout) = (std::mem::take(&mut self.hovers), self.hover_base.take(), hitbox.clone(), layout.clone());
+            window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
+                if phase.bubble() {
+                    let target = if hitbox.is_hovered(window) { layout.index_for_position(e.position).ok().and_then(|i| hovers.iter().find(|(r, _)| r.contains(&i)).map(|(_, u)| u.clone())) } else { None };
+                    super::link_card::hover(target, base.clone(), e.position, cx);
+                }
+            });
         }
         let (links, hitbox, layout) = (std::mem::take(&mut self.links), hitbox.clone(), layout.clone());
         window.on_mouse_event(move |e: &MouseUpEvent, phase, window, cx| {

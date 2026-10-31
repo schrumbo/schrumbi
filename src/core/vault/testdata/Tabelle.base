@@ -1,0 +1,20 @@
+filters:
+  and:
+    - file.ext == "md"
+formulas:
+  doppelt: stunden * 2
+properties:
+  status:
+    displayName: Status
+views:
+  - type: table
+    name: Tabelle
+    order: [file.name, status, stunden, formula.doppelt]
+    summaries:
+      stunden: Sum
+  - type: cards
+    name: Karten
+    order: [file.name, status]
+  - type: list
+    name: Liste
+    order: [file.name]

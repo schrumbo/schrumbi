@@ -14,14 +14,16 @@ pub fn is_markdown(path: &Path) -> bool {
 }
 
 pub fn options() -> Options {
-    Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_FOOTNOTES | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+    Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_FOOTNOTES | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS | Options::ENABLE_WIKILINKS | Options::ENABLE_MATH
 }
 
 /// Flips the task box on `line` (0-based), `- [ ]` ↔ `- [x]`.
 pub fn toggle_task(text: &str, line: usize) -> String {
     let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
     let Some(l) = lines.get_mut(line) else { return text.to_string() };
-    if let Some(i) = l.find("[ ]") {
+    if let Some((at, mark)) = super::vault::syntax::task_marker(l) {
+        l.replace_range(at..at + mark.len_utf8(), if mark == ' ' { "x" } else { " " });
+    } else if let Some(i) = l.find("[ ]") {
         l.replace_range(i..i + 3, "[x]");
     } else if let Some(i) = l.find("[x]").or_else(|| l.find("[X]")) {
         l.replace_range(i..i + 3, "[ ]");
@@ -56,31 +58,40 @@ pub fn title(text: &str) -> Option<String> {
 
 /// Open and done task boxes.
 pub fn task_counts(text: &str) -> (usize, usize) {
-    static OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*([-*+]|\d+[.)])\s+\[ \]").unwrap());
-    static DONE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*([-*+]|\d+[.)])\s+\[(x|X)\]").unwrap());
-    text.split('\n').fold((0, 0), |(o, d), l| (o + OPEN.is_match(l) as usize, d + DONE.is_match(l) as usize))
+    text.split('\n').fold((0, 0), |(o, d), l| match super::vault::syntax::task_marker(l) {
+        Some((_, ' ')) => (o + 1, d),
+        Some(_) => (o, d + 1),
+        None => (o, d),
+    })
 }
 
 /// Text split into plain and highlighted (`==x==`) runs.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Run {
     Text(String),
-    Mark(String),
+    Mark(String, super::vault::syntax::MarkColor),
+    Tag(String),
 }
 
 pub fn runs(s: &str) -> Vec<Run> {
     static MARK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"==[^=\n]+==").unwrap());
     let mut out = Vec::new();
     let mut last = 0;
+    let plain = |text: &str, out: &mut Vec<Run>| {
+        for (tag, part) in super::vault::syntax::split_tags(text) {
+            out.push(if tag { Run::Tag(part.to_string()) } else { Run::Text(part.to_string()) });
+        }
+    };
     for m in MARK.find_iter(s) {
         if m.start() > last {
-            out.push(Run::Text(s[last..m.start()].to_string()));
+            plain(&s[last..m.start()], &mut out);
         }
-        out.push(Run::Mark(s[m.start() + 2..m.end() - 2].to_string()));
+        let (color, text) = super::vault::syntax::mark_color(&s[m.start() + 2..m.end() - 2]);
+        out.push(Run::Mark(text.to_string(), color));
         last = m.end();
     }
     if last < s.len() {
-        out.push(Run::Text(s[last..].to_string()));
+        plain(&s[last..], &mut out);
     }
     out
 }
@@ -143,6 +154,8 @@ pub fn html_document(text: &str, base: Option<&Path>, css: &str, meta: Option<&M
 
 /// Note body as HTML: CommonMark + GFM tables, tasks, strikethrough, footnotes and `==highlight==`.
 pub fn to_html(text: &str, base: Option<&Path>) -> String {
+    let text = super::vault::syntax::prepare(text);
+    let text = text.as_str();
     let mut out = String::new();
     let mut aligns: Vec<Alignment> = Vec::new();
     let mut cell = 0;
@@ -264,7 +277,8 @@ pub fn to_html(text: &str, base: Option<&Path>) -> String {
                 for r in runs(&t) {
                     match r {
                         Run::Text(s) => o.push_str(&escape(&s)),
-                        Run::Mark(s) => o.push_str(&format!("<mark>{}</mark>", escape(&s))),
+                        Run::Mark(s, _) => o.push_str(&format!("<mark>{}</mark>", escape(&s))),
+                        Run::Tag(s) => o.push_str(&format!("#{}", escape(&s))),
                     }
                 }
             }

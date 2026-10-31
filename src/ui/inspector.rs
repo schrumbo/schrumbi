@@ -26,6 +26,7 @@ pub struct Inspector {
     title: Entity<InputState>,
     due: Entity<DatePickerState>,
     syncing: bool,
+    doc_side: Entity<super::doc_side::DocSide>,
     _subs: Vec<Subscription>,
 }
 
@@ -64,7 +65,8 @@ impl Inspector {
             }),
             cx.subscribe(&due, |this, _, _: &DatePickerEvent, cx| this.save_manual(cx)),
         ];
-        Self { shown: None, note, title, due, syncing: false, _subs: subs }
+        let doc_side = cx.new(|cx| super::doc_side::DocSide::new(window, cx));
+        Self { shown: None, note, title, due, syncing: false, doc_side, _subs: subs }
     }
 
     fn save_manual(&mut self, cx: &mut Context<Self>) {
@@ -162,6 +164,9 @@ impl Render for Inspector {
         let t = Theme::get(cx);
         let lib = state::lib(cx);
         let l = lib.read(cx);
+        if matches!(l.route(), crate::core::library::Route::Doc(_)) {
+            return self.doc_side.clone().into_any_element();
+        }
         let Some(a) = l.selected().cloned() else {
             return unavailable("panel-right", tr("Nichts ausgewählt"), tr("Wähle eine Abgabe, um Details, Dateien und Notizen zu sehen."), &t).into_any_element();
         };

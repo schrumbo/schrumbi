@@ -35,6 +35,9 @@ actions!(
         ExportPdf,
         ToggleInspector,
         Refresh,
+        SyncNow,
+        SyncSetup,
+        ResolveConflicts,
         GoBack,
         GoForward,
         GoToday,
@@ -73,6 +76,20 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &OpenSettings, cx| super::settings::open(cx));
     cx.on_action(|_: &About, cx| super::settings::open_about(cx));
     cx.on_action(|_: &CheckForUpdates, cx| super::updates::check(true, cx));
+    cx.on_action(|_: &SyncNow, cx| {
+        if super::sync::get(cx).git.is_some() {
+            let text = super::sync::get(cx).message.clone();
+            super::sync::run(Some(text), true, cx);
+        } else if state::read(cx, |l| l.root.is_some()) {
+            act(cx, |l| l.show_sync_setup = true);
+        }
+    });
+    cx.on_action(|_: &SyncSetup, cx| act(cx, |l| if l.root.is_some() { l.show_sync_setup = true }));
+    cx.on_action(|_: &ResolveConflicts, cx| {
+        if !super::sync::get(cx).conflicts.is_empty() {
+            act(cx, |l| l.show_conflicts = true);
+        }
+    });
     cx.on_action(|_: &Undo, cx| act(cx, |l| l.undo()));
     cx.on_action(|_: &Redo, cx| act(cx, |l| l.redo()));
     cx.on_action(|_: &CommandPalette, cx| act(cx, |l| if l.root.is_some() { l.show_palette = true }));
@@ -232,6 +249,9 @@ pub fn bind_keys(cx: &mut App) {
             binding(ShortcutAction::GoBack, GoBack, None),
             binding(ShortcutAction::ToggleInspector, ToggleInspector, None),
             binding(ShortcutAction::Refresh, Refresh, None),
+            binding(ShortcutAction::Sync, SyncNow, None),
+            Some(gpui_kit::KeyBinding::new("tab", super::canvas_view::NextItem, Some("WalkItems"))),
+            Some(gpui_kit::KeyBinding::new("shift-tab", super::canvas_view::PreviousItem, Some("WalkItems"))),
             binding(ShortcutAction::CloseTab, CloseTab, None),
             binding(ShortcutAction::NextTab, NextTab, None),
             binding(ShortcutAction::PreviousTab, PreviousTab, None),
@@ -303,6 +323,7 @@ pub fn rebuild_menus(cx: &mut App) {
             MenuItem::submenu(Menu::new(tr("Arbeitsordner")).items(recents)),
             MenuItem::separator(),
             MenuItem::action(tr("Sichern"), Save),
+            MenuItem::action(tr("Jetzt synchronisieren"), SyncNow),
             MenuItem::action(tr("Tab schließen"), CloseTab),
             MenuItem::action(tr("Geschlossenen Tab wieder öffnen"), ReopenTab),
             MenuItem::action(tr("Fenster schließen"), CloseWindow),

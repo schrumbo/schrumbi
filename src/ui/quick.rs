@@ -10,6 +10,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::inspector::{datetime_picker, picked};
+use std::path::{Path as FilePath, PathBuf};
+
+use crate::core::vault::index;
 use super::state::{self, act};
 use super::motion::Soft;
 use super::theme::{Theme, font, radius, space, iconsize};
@@ -17,7 +20,7 @@ use super::widgets::*;
 use crate::core::natural_date;
 use crate::core::catalog::{self, CatalogFile, FileKind};
 use crate::core::day;
-use crate::core::i18n::tr;
+use crate::core::i18n::{tr, trf};
 use crate::core::model::{Kind, ManualAssignment};
 use crate::core::text::fold;
 
@@ -265,6 +268,59 @@ pub struct QuickOpen {
 
 impl EventEmitter<Dismissed> for QuickOpen {}
 
+/// A hit only a vault knows: alias, tag, heading, block or a note yet to be created.
+struct VaultHit {
+    label: String,
+    detail: String,
+    icon: &'static str,
+    open: Option<(PathBuf, String)>,
+    create: Option<String>,
+}
+
+fn vault_hits(query: &str) -> Vec<VaultHit> {
+    let query = query.trim();
+    let vault = index::current();
+    if query.is_empty() || vault.root.as_os_str().is_empty() || !vault.config.is_vault {
+        return Vec::new();
+    }
+    let relative = |p: &FilePath| p.strip_prefix(&vault.root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+    let mut hits = Vec::new();
+    if let Some(tag) = query.strip_prefix('#') {
+        let tag = tag.to_lowercase();
+        for (name, _) in vault.tag_tree().into_iter().filter(|(n, _)| n.starts_with(&tag)) {
+            for path in vault.notes_with_tag(&name).into_iter().take(20) {
+                hits.push(VaultHit { label: path.file_stem().unwrap_or_default().to_string_lossy().to_string(), detail: format!("#{name}"), icon: "tag", open: Some((path, String::new())), create: None });
+            }
+        }
+        hits.truncate(40);
+        return hits;
+    }
+    if let Some((name, sub)) = query.split_once(['#', '^']) {
+        let block = query.as_bytes()[name.len()] == b'^';
+        let Some(path) = vault.resolve(name, None) else { return hits };
+        let Some(facts) = vault.notes.get(&path) else { return hits };
+        let sub = sub.to_lowercase();
+        if block {
+            hits.extend(facts.blocks.iter().filter(|(id, _)| id.to_lowercase().contains(&sub)).map(|(id, _)| VaultHit { label: format!("^{id}"), detail: relative(&path), icon: "pilcrow", open: Some((path.clone(), format!("#^{id}"))), create: None }));
+        } else {
+            hits.extend(facts.headings.iter().filter(|(_, h, _)| h.to_lowercase().contains(&sub)).map(|(_, h, _)| VaultHit { label: h.clone(), detail: relative(&path), icon: "heading", open: Some((path.clone(), format!("#{h}"))), create: None }));
+        }
+        return hits;
+    }
+    let lower = query.to_lowercase();
+    for (path, facts) in &vault.notes {
+        if let Some(alias) = facts.aliases.iter().find(|a| a.to_lowercase().contains(&lower)) {
+            hits.push(VaultHit { label: alias.clone(), detail: relative(path), icon: "corner-down-right", open: Some((path.clone(), String::new())), create: None });
+        }
+    }
+    hits.sort_by(|a, b| a.label.cmp(&b.label));
+    hits.truncate(20);
+    if vault.resolve(query, None).is_none() {
+        hits.push(VaultHit { label: trf("Neue Notiz „%@“ anlegen", &[&query.to_string()]), detail: String::new(), icon: "file-plus", open: None, create: Some(query.to_string()) });
+    }
+    hits
+}
+
 actions!(schrumbi_quick, [QuickUp, QuickDown]);
 
 impl QuickOpen {
@@ -301,10 +357,27 @@ impl QuickOpen {
     }
 
     fn open(&mut self, cx: &mut Context<Self>) {
-        if let Some((f, _)) = self.results(cx).get(self.index) {
+        let files = self.results(cx);
+        if let Some((f, _)) = files.get(self.index) {
             let p = f.file.path.clone();
             cx.emit(Dismissed);
             act(cx, |l| l.open_file(&p));
+            return;
+        }
+        let q = self.query.read(cx).value().to_string();
+        let hits = vault_hits(&q);
+        let Some(hit) = hits.get(self.index - files.len()) else { return };
+        cx.emit(Dismissed);
+        if let Some((path, sub)) = &hit.open {
+            let destination = format!("{}{sub}", path.display());
+            act(cx, |l| {
+                if sub.is_empty() || !l.open_link(&destination, None) {
+                    l.open_file(path);
+                }
+            });
+        } else if let Some(name) = &hit.create {
+            act(cx, |l| l.create_link_target(name, None));
+            state::reindex(cx);
         }
     }
 }
@@ -317,7 +390,8 @@ impl Render for QuickOpen {
         }
         let t = Theme::get(cx);
         let items = self.results(cx);
-        self.index = self.index.min(items.len().saturating_sub(1));
+        let extra = vault_hits(&self.query.read(cx).value());
+        self.index = self.index.min((items.len() + extra.len()).saturating_sub(1));
         let me = cx.entity();
         let mut list = div().flex().flex_col().gap(px(space::XXS)).p(px(space::S));
         for (i, (f, is_open)) in items.iter().enumerate() {
@@ -365,6 +439,31 @@ impl Render for QuickOpen {
                     })),
             );
         }
+        for (n, hit) in extra.iter().enumerate() {
+            let i = items.len() + n;
+            let selected = i == self.index;
+            let e = me.clone();
+            list = list.child(
+                div()
+                    .id(("qo", i))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S))
+                    .px(px(space::M))
+                    .py(px(space::S))
+                    .rounded(px(radius::INNER))
+                    .cursor_pointer().key_nav()
+                    .text_color(if selected { white() } else { t.primary })
+                    .when(selected, |d| d.bg(t.accent))
+                    .child(icon(hit.icon, iconsize::M, if selected { white() } else { t.secondary }))
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().truncate().child(hit.label.clone())).when(!hit.detail.is_empty(), |d| d.child(div().truncate().text_size(px(font::CAPTION)).text_color(if selected { white().opacity(0.85) } else { t.secondary }).child(hit.detail.clone()))))
+                    .on_click(move |_, _, cx| e.update(cx, |q, cx| {
+                        q.index = i;
+                        q.open(cx);
+                    })),
+            );
+        }
+        let any = !items.is_empty() || !extra.is_empty();
         let hint = |icon_name: &str, label: String| div().flex().items_center().gap(px(space::XS)).child(icon(icon_name, iconsize::XS, t.secondary)).child(label);
         div()
             .w(px(620.))
@@ -381,7 +480,7 @@ impl Render for QuickOpen {
             }))
             .child(div().flex().items_center().gap(px(space::S)).p(px(space::L)).child(icon("search", iconsize::M, t.secondary)).child(div().flex_1().child(Input::new(&self.query).appearance(false).large())))
             .child(div().h(px(1.)).bg(t.separator))
-            .child(if items.is_empty() {
+            .child(if !any {
                 unavailable("search", tr("Keine Treffer"), "", &t).h(px(360.)).into_any_element()
             } else {
                 div().id("qo-list").h(px(360.)).overflow_y_scrollbar().child(list).into_any_element()

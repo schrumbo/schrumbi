@@ -16,10 +16,21 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     }
     let pending = {
         let l = lib.read(cx);
-        l.filing_request.is_some() || l.show_quick_add || l.show_quick_open || l.show_palette || l.show_shortcuts || l.new_note.is_some() || l.import_path.is_some() || l.reschedule_id.is_some() || l.needs_setup
+        l.note_pick.is_some() || l.show_sync_setup || l.show_conflicts || l.filing_request.is_some() || l.show_quick_add || l.show_quick_open || l.show_palette || l.show_shortcuts || l.new_note.is_some() || l.import_path.is_some() || l.reschedule_id.is_some() || l.needs_setup
     };
     if pending {
         window.activate_window();
+    }
+    let (sync_setup, conflicts) = lib.update(cx, |l, _| (std::mem::take(&mut l.show_sync_setup), std::mem::take(&mut l.show_conflicts)));
+    if sync_setup {
+        let view = cx.new(|cx| super::sync_panel::SyncSetup::new(window, cx));
+        show(view, 600., window, cx);
+        return;
+    }
+    if conflicts {
+        let view = cx.new(|cx| super::sync_panel::ConflictSheet::new(window, cx));
+        show(view, 760., window, cx);
+        return;
     }
     let request = lib.update(cx, |l, _| l.filing_request.take());
     if let Some(r) = request {
@@ -31,6 +42,12 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
         })
         .detach();
         window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(560.)).h(px(600.)).p_0().child(form.clone()));
+        return;
+    }
+    if let Some((merge, note)) = lib.update(cx, |l, _| l.note_pick.take()) {
+        let pick = if merge { super::vault_tools::Pick::MergeInto(note) } else { super::vault_tools::Pick::InsertTemplate(note) };
+        let view = cx.new(|cx| super::vault_tools::NotePicker::new(pick, window, cx));
+        show(view, 720., window, cx);
         return;
     }
     let (palette, shortcuts) = lib.update(cx, |l, _| (std::mem::take(&mut l.show_palette), std::mem::take(&mut l.show_shortcuts)));

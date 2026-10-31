@@ -286,6 +286,11 @@ impl<'a> Device<'a> for TextCollector {
 }
 
 /// A loaded PDF whose pages render on demand.
+/// A page of a file as PNG, for showing it inside a note.
+pub fn page_png(path: &Path, index: usize, scale: f32) -> Option<Vec<u8>> {
+    PdfDoc::open(path)?.render_png(index, scale)
+}
+
 pub struct PdfDoc {
     pdf: Pdf,
 }
