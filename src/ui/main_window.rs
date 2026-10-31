@@ -35,7 +35,6 @@ pub struct MainWindow {
     focus: FocusHandle,
     focused_once: bool,
     shown_route: Option<Route>,
-    search_needs_focus: bool,
     error_shown: bool,
     _subs: Vec<Subscription>,
 }
@@ -106,7 +105,6 @@ impl MainWindow {
             sidebar_open: p.sidebar_open,
             save_bounds: None,
             sidebar_auto_closed: false,
-            search_needs_focus: false,
             error_shown: false,
             syncing_search: false,
             focus: cx.focus_handle(),
@@ -131,10 +129,6 @@ impl MainWindow {
             self.syncing_search = true;
             self.search.update(cx, |s, cx| s.set_value(wanted, window, cx));
             self.syncing_search = false;
-        }
-        if self.search_needs_focus && !window.has_active_dialog(cx) {
-            self.search_needs_focus = false;
-            self.search.update(cx, |s, cx| s.focus(window, cx));
         }
     }
 
@@ -219,7 +213,10 @@ impl Render for MainWindow {
                 window.focus(&self.focus, cx);
             }
             motion::forget_rows(cx);
-            self.search_needs_focus = route == Route::Search && state::read(cx, |l| l.search_query.is_empty());
+            if route == Route::Search && state::read(cx, |l| l.search_query.is_empty()) && !window.has_active_dialog(cx) {
+                let search = self.search.clone();
+                window.on_next_frame(move |window, cx| search.update(cx, |s, cx| s.focus(window, cx)));
+            }
             self.shown_route = Some(route);
         }
         let l = lib.read(cx);

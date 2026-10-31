@@ -241,7 +241,7 @@ fn bundle(id: &'static str, title: String, icon_name: &str, tint: Hsla, open: bo
                         })
                         .when(!fixed, |d| d.child(super::motion::chevron(SharedString::from(format!("{id}-chevron")), open, tint)))
                         .child(icon(icon_name, iconsize::S, tint))
-                        .child(div().flex_none().font_weight(FontWeight::BOLD).text_color(tint).child(title))
+                        .child(div().flex_none().font_weight(FontWeight::BOLD).text_color(t.readable(tint)).child(title))
                         .child(div().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(summary)),
                 )
                 .children(accessory),

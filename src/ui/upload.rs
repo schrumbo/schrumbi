@@ -238,7 +238,7 @@ impl UploadPanel {
                     .item(PopupMenuItem::new(tr("Pfad kopieren")).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(c.to_string_lossy().to_string()))))
             })
             .child(file_icon(path, iconsize::L))
-            .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(path.file_name().unwrap_or_default().to_string_lossy().to_string())).child(caption(size_label(path), t)))
+            .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(crate::core::text::middle_ellipsis(&path.file_name().unwrap_or_default().to_string_lossy(), 36))).child(caption(size_label(path), t)))
             .when(CAN_DRAG_OUT, |d| d.child(icon("hand", iconsize::S, t.secondary.opacity(0.6))))
     }
 }

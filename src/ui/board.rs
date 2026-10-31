@@ -221,7 +221,7 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
                 .gap(px(space::XS))
                 .text_size(px(font::CAPTION))
                 .child(status_toggle(a, lib, iconsize::M, t))
-                .child(div().font_weight(FontWeight::SEMIBOLD).text_color(tint).child(module.map_or(String::new(), |m| m.code.clone())))
+                .child(div().font_weight(FontWeight::SEMIBOLD).text_color(t.readable(tint)).child(module.map_or(String::new(), |m| m.code.clone())))
                 .child(div().text_color(t.secondary).child(day::hm(a.due))),
         )
         .child({

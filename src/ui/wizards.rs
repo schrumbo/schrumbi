@@ -237,6 +237,7 @@ impl Render for ImportCalendar {
 /// First-run setup for a freshly chosen folder. Every step can be skipped.
 pub struct Setup {
     step: usize,
+    focused: bool,
     draft: StudyConfig,
     fields: Fields,
     start: Entity<DatePickerState>,
@@ -275,7 +276,7 @@ impl Setup {
                 cx.notify();
             }),
         ];
-        Self { step: 0, draft, fields: Fields::default(), start, end, _subs: subs }
+        Self { step: 0, focused: false, draft, fields: Fields::default(), start, end, _subs: subs }
     }
 
     fn finish(&mut self, save: bool, cx: &mut Context<Self>) {
@@ -300,10 +301,14 @@ impl Render for Setup {
         let (e1, e2) = (me.clone(), me.clone());
         let body: Div = match self.step {
             0 => {
+                let first_field = std::mem::replace(&mut self.focused, true);
                 let name = fields.input("setup-name", &self.draft.name, &tr("z. B. Informatik"), window, cx, move |v, cx| e1.update(cx, |s, cx| {
                     s.draft.name = v;
                     cx.notify();
                 }));
+                if !first_field {
+                    name.update(cx, |n, cx| n.focus(window, cx));
+                }
                 let author = fields.input("setup-author", &self.draft.author, &tr("Nachname-V, z. B. Muster-M"), window, cx, move |v, cx| e2.update(cx, |s, cx| {
                     s.draft.author = v;
                     cx.notify();

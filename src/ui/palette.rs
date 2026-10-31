@@ -81,6 +81,8 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&go, S::GoBack.label(), "arrow-left", keys(S::GoBack), Run::Action(Box::new(app::GoBack)));
         add(&go, tr("Vorwärts"), "arrow-right", None, Run::Action(Box::new(app::GoForward)));
         add(&go, tr("Geschlossenen Tab wieder öffnen"), "rotate-ccw", None, Run::Action(Box::new(app::ReopenTab)));
+        add(&go, tr("Alle Tabs schließen"), "x", None, Run::Call(Rc::new(|cx| super::documents::close_all_tabs(cx))));
+        add(&go, tr("Einrichtung erneut starten"), "settings", None, Run::Call(Rc::new(|cx| act(cx, |l| l.needs_setup = true))));
         for m in l.semester_modules() {
             let route = Route::Module(m.id.clone());
             add(&go, m.display_name(), "book-open", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.set_route(route.clone())))));

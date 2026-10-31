@@ -162,6 +162,12 @@ fn show(module: Option<String>, cx: &mut App) {
     }));
 }
 
+/// Whether a typed folder stays inside the workspace; anything else keeps the old value.
+fn is_inner_folder(folder: &str) -> bool {
+    let path = std::path::Path::new(folder.trim());
+    !folder.trim().is_empty() && path.is_relative() && !path.components().any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
 fn rules_and_sessions(rules: usize, sessions: usize) -> String {
     let rules = if rules == 1 { tr("1 Regel") } else { trf("%lld Regeln", &[&rules]) };
     let sessions = if sessions == 1 { tr("1 Termin") } else { trf("%lld Termine", &[&sessions]) };
@@ -404,7 +410,7 @@ impl Settings {
         let text = |f: &mut Fields, key: &str, value: &str, placeholder: &str, window: &mut Window, cx: &mut Context<Self>, set: fn(&mut StudyConfig, String)| f.input(key, value, placeholder, window, cx, move |v, cx| edit_config(cx, |c| set(c, v)));
         let name = text(&mut f, "g-name", &c.name, "", window, cx, |c, v| c.name = v);
         let author = text(&mut f, "g-author", &c.author, &tr("Nachname-V"), window, cx, |c, v| c.author = v);
-        let inbox = text(&mut f, "g-inbox", &c.inbox, "", window, cx, |c, v| c.inbox = v);
+        let inbox = text(&mut f, "g-inbox", &c.inbox, "", window, cx, |c, v| if is_inner_folder(&v) { c.inbox = v });
         let matrikel = text(&mut f, "g-matrikel", &c.matrikel, &tr("für {matrikel} in Dateinamen"), window, cx, |c, v| c.matrikel = v);
         let credit = text(&mut f, "g-credit", &c.credit_label, &tr("ECTS, CP, Credits"), window, cx, |c, v| c.credit_label = v);
         let exclude = text(&mut f, "g-exclude", &c.search_exclude.join(", "), "", window, cx, |c, v| c.search_exclude = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
@@ -927,7 +933,7 @@ impl Settings {
         let e = edit.clone();
         let name = fields.input(&k("name"), &m.name, &tr("Name"), window, cx, move |v, cx| e(Box::new(move |m| m.name = v.clone()))(cx));
         let e = edit.clone();
-        let folder = fields.input(&k("folder"), &m.folder, &tr("Ordner"), window, cx, move |v, cx| e(Box::new(move |m| m.folder = v.clone()))(cx));
+        let folder = fields.input(&k("folder"), &m.folder, &tr("Ordner"), window, cx, move |v, cx| if is_inner_folder(&v) { e(Box::new(move |m| m.folder = v.clone()))(cx) });
         let e = edit.clone();
         let naming = fields.input(&k("naming"), &m.naming, &tr("Muster"), window, cx, move |v, cx| e(Box::new(move |m| m.naming = v.clone()))(cx));
         let root = state::read(cx, |l| l.root.clone());

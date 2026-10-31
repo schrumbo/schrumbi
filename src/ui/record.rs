@@ -163,7 +163,7 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
                 .child(motion::chevron("chevron", expanded, t.secondary))
                 .child(div().size(px(space::S)).rounded_full().bg(t.palette(&m.color)))
                 .child(div().font_weight(FontWeight::SEMIBOLD).child(m.code.clone()))
-                .child(div().truncate().text_color(t.secondary).child(m.name.clone()))
+                .when(m.name != m.code, |d| d.child(div().truncate().text_color(t.secondary).child(m.name.clone())))
                 .when(!m.components.is_empty(), |d| d.child(div().text_size(px(font::CAPTION)).text_color(t.tertiary).child(trf("%lld Teilleistungen", &[&m.components.len()])))),
         )
         .child(div().w(px(80.)).child(Input::new(&ects).small().text_right()))

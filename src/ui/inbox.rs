@@ -56,6 +56,15 @@ impl InboxPage {
             cx.stop_propagation();
             return;
         }
+        if matches!(k.key.as_str(), "backspace" | "delete") && !k.modifiers.alt {
+            let targets = self.queue(&inbox);
+            if !targets.is_empty() {
+                self.selection.clear();
+                act(cx, |l| l.trash_all(&targets));
+            }
+            cx.stop_propagation();
+            return;
+        }
         if k.modifiers.platform || k.modifiers.control || k.modifiers.alt {
             return;
         }

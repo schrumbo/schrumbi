@@ -1,5 +1,5 @@
 use gpui_kit::component::{Theme as ComponentTheme, ThemeMode};
-use gpui_kit::{App, Global, Hsla, Window, WindowAppearance, px, rgb};
+use gpui_kit::{App, Global, Hsla, Window, WindowAppearance, px, rgb, Rgba, black, white};
 
 /// Spacing scale for padding, margins and gaps.
 pub mod space {
@@ -122,6 +122,23 @@ impl Theme {
         *cx.global::<Theme>()
     }
 
+    /// A color moved towards the text color until it reads as text on this theme's backgrounds.
+    pub fn readable(&self, color: Hsla) -> Hsla {
+        let mut text = color;
+        for step in 1..=10 {
+            if contrast(text, self.column.blend(color.opacity(0.12))) >= 4.5 {
+                break;
+            }
+            text = color.blend(self.ink.opacity(step as f32 * 0.1));
+        }
+        text
+    }
+
+    /// Black or white, whichever reads on a solid fill of `color`.
+    pub fn on_fill(&self, color: Hsla) -> Hsla {
+        if luminance(over(color, color)) > 0.4 { black() } else { white() }
+    }
+
     /// Module color by palette name, as in the Swift `Palette`.
     pub fn palette(&self, name: &str) -> Hsla {
         let (light, dark) = match name {
@@ -239,26 +256,26 @@ pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
     ct.tokens = ct.colors.into();
 }
 
+fn over(top: Hsla, bottom: Hsla) -> Rgba {
+    let (t, b) = (Rgba::from(top), Rgba::from(bottom));
+    let mix = |a: f32, z: f32| a * t.a + z * (1. - t.a);
+    Rgba { r: mix(t.r, b.r), g: mix(t.g, b.g), b: mix(t.b, b.b), a: 1. }
+}
+
+fn luminance(c: Rgba) -> f32 {
+    let f = |v: f32| if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b)
+}
+
+fn contrast(text: Hsla, background: Hsla) -> f32 {
+    let (a, b) = (luminance(over(text, background)), luminance(over(background, background)));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use gpui_kit::Rgba;
-
-    fn over(top: Hsla, bottom: Hsla) -> Rgba {
-        let (t, b) = (Rgba::from(top), Rgba::from(bottom));
-        let mix = |a: f32, z: f32| a * t.a + z * (1. - t.a);
-        Rgba { r: mix(t.r, b.r), g: mix(t.g, b.g), b: mix(t.b, b.b), a: 1. }
-    }
-
-    fn luminance(c: Rgba) -> f32 {
-        let f = |v: f32| if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
-        0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b)
-    }
-
-    fn contrast(text: Hsla, background: Hsla) -> f32 {
-        let (a, b) = (luminance(over(text, background)), luminance(over(background, background)));
-        (a.max(b) + 0.05) / (a.min(b) + 0.05)
-    }
 
     #[test]
     fn text_is_readable_on_every_background() {
@@ -268,6 +285,10 @@ mod tests {
                 assert!(contrast(t.primary, background) >= 7., "primary, dark {dark}");
                 assert!(contrast(t.secondary, background) >= 4.5, "secondary, dark {dark}: {}", contrast(t.secondary, background));
                 assert!(contrast(t.accent_text, background) >= 4.5, "accent, dark {dark}: {}", contrast(t.accent_text, background));
+                for name in ["blue", "green", "orange", "purple", "pink", "teal", "red", "yellow", "indigo", "mint", "brown", "gray"] {
+                    let color = t.palette(name);
+                    assert!(contrast(t.readable(color), t.column.blend(color.opacity(0.12))) >= 4.5, "{name}, dark {dark}");
+                }
                 assert!(contrast(t.tertiary, background) >= 3., "tertiary, dark {dark}: {}", contrast(t.tertiary, background));
             }
         }

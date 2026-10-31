@@ -206,13 +206,13 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
             .justify_center()
             .text_size(px(if code.chars().count() > 2 { font::CAPTION2 } else { font::CAPTION }))
             .font_weight(FontWeight::BOLD)
-            .text_color(if active { white() } else { color })
+            .text_color(if active { t.on_fill(color) } else { t.readable(color) })
             .child(code)
             .into_any_element();
         let count = by_module.get(m.id.as_str()).copied().filter(|n| *n > 0).map(|n| (n, t.red));
         let links: Vec<(String, String)> = m.links.iter().filter_map(|k| k.url().map(|u| (if k.title.is_empty() { tr("Link") } else { k.title.clone() }, u.to_string()))).collect();
         let folder = lib.root.as_ref().map(|r| r.join(&m.folder));
-        let (outside, inside) = (m.id.clone(), m.id.clone());
+        let (outside, inside, edit_id) = (m.id.clone(), m.id.clone(), m.id.clone());
         mods = mods.child(
             tab(SharedString::from(format!("tab-module-{}", m.id)), active, false, chip, m.display_name(), count, wide, m.display_name(), t)
                 .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(color.opacity(0.15)))
@@ -233,6 +233,8 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme) -> D
                             let _ = opener::open(&url);
                         }));
                     }
+                    let edit = edit_id.clone();
+                    menu = menu.item(PopupMenuItem::new(tr("Modul bearbeiten")).on_click(move |_, _, cx| super::settings::open_module(&edit, cx)));
                     if let Some(f) = folder.clone() {
                         menu = menu.item(PopupMenuItem::new(tr("Ordner öffnen")).on_click(move |_, _, _| library::open_folder(&f)));
                     }

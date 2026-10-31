@@ -713,7 +713,7 @@ fn close_other_tabs(path: &Path, cx: &mut App) {
     resolve_unsaved(others, cx, move |cx| act(cx, |l| l.close_other_documents(&keep)));
 }
 
-fn close_all_tabs(cx: &mut App) {
+pub fn close_all_tabs(cx: &mut App) {
     let all = state::read(cx, |l| l.open_documents.clone());
     resolve_unsaved(all, cx, |cx| act(cx, |l| l.close_all_documents()));
 }

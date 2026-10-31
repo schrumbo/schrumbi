@@ -217,7 +217,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         info = info.child(info_row("calendar-clock", tr("Termin verschoben"), Some(t.orange), t));
     }
 
-    let primary = if !e.status.is_closed() && a.upload {
+    let primary = if !e.status.is_closed() && a.upload && !e.files.is_empty() {
         let (up, mark) = (id.clone(), id.clone());
         let help = match module.and_then(|m| m.upload_link()) {
             Some(link) => trf("Öffnet %@ und stellt die Dateien zum Ziehen bereit", &[&link.title]),

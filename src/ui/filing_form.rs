@@ -384,11 +384,17 @@ impl FilingForm {
         let Some(folder) = folder else { return };
         let rest: Vec<PathBuf> = self.paths[self.index..].to_vec();
         let (role, byline) = (self.role, self.byline.read(cx).value().to_string());
+        let shared_name = (role == FileRole::Work && naming.is_some()).then(|| current_name.clone());
+        let numbers_files = shared_name.is_some();
         let task = cx.background_spawn(async move {
             rest.iter()
+                .enumerate()
                 .skip(1)
-                .map(|p| {
+                .map(|(i, p)| {
                     let name = name_of(p);
+                    if let Some(shared) = &shared_name {
+                        return (p.clone(), numbered(shared, i + 1, extension(&name)));
+                    }
                     let Some(naming) = &naming else { return (p.clone(), name) };
                     let f = FileFacts::read(p);
                     let t = filing::title_suggestions(&f, &namings, &ignore).first().map(|s| s.title.clone()).unwrap_or_else(|| Naming::guess_title(&name));
@@ -401,7 +407,8 @@ impl FilingForm {
         cx.spawn_in(window, async move |this, cx| {
             let others = task.await;
             let _ = this.update(cx, |_, cx| {
-                let mut items = vec![(current, folder.clone(), current_name)];
+                let first = if numbers_files { numbered(&current_name, 1, extension(&current_name)) } else { current_name };
+                let mut items = vec![(current, folder.clone(), first)];
                 items.extend(others.into_iter().map(|(p, n)| (p, folder.clone(), n)));
                 act(cx, |l| l.file_batch(items));
                 cx.emit(FilingEvent::Finished);
@@ -539,7 +546,7 @@ impl FilingForm {
                 .border_t_1()
                 .border_color(t.separator)
                 .when(multi, |d| {
-                    d.child(Button::new("skip").label(tr("Überspringen")).on_click(move |_, window, cx| e1.update(cx, |f, cx| f.advance(window, cx)))).when(self.role != FileRole::Work && !last, |d| {
+                    d.child(Button::new("skip").label(tr("Überspringen")).on_click(move |_, window, cx| e1.update(cx, |f, cx| f.advance(window, cx)))).when(!last, |d| {
                         d.child(
                             Button::new("file-rest")
                                 .label(trf("Alle %lld hier ablegen", &[&(self.paths.len() - self.index)]))
@@ -573,15 +580,16 @@ impl FilingForm {
 
     fn shell(&self, body: Div, footer: Option<Div>, cx: &mut Context<Self>) -> Div {
         div()
+            .capture_action(cx.listener(|f, _: &gpui_kit::component::input::Escape, window, cx| {
+                if f.details {
+                    f.set_details(false, window, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .on_key_down(cx.listener(|f, e: &KeyDownEvent, window, cx| {
                 let k = &e.keystroke;
                 if k.key == "right" && k.modifiers.alt && (k.modifiers.platform || k.modifiers.control) && f.paths.len() > 1 {
                     f.advance(window, cx);
-                    cx.stop_propagation();
-                    return;
-                }
-                if k.key == "escape" && f.details {
-                    f.set_details(false, window, cx);
                     cx.stop_propagation();
                     return;
                 }
@@ -989,3 +997,10 @@ impl Render for FilingForm {
 }
 
 actions!(schrumbi_filing, [CommitFiling]);
+
+/// A file of a series that belongs together: the shared name with a running number, e.g. `Foto_261102_2.jpg`.
+fn numbered(name: &str, number: usize, ext: &str) -> String {
+    let current = extension(name).to_string();
+    let stem = name.strip_suffix(&format!(".{current}")).unwrap_or(name);
+    if ext.is_empty() { format!("{stem}_{number}") } else { format!("{stem}_{number}.{ext}") }
+}
