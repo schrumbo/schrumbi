@@ -763,6 +763,31 @@ impl Library {
         }
     }
 
+    /// Ticks off a task from the overview. The line comes from the last index, so the note may have moved on:
+    /// the task is looked up again by its text, and if that is not clear nothing changes.
+    pub fn finish_task(&mut self, path: &Path, line: usize, task: &str) -> bool {
+        let buffer = self.buffer(path);
+        buffer.reload_if_changed();
+        if buffer.conflict.is_some() {
+            self.last_error = Some(trf("„%@“ wurde auch in einer anderen App geändert. Entscheide zuerst, welche Version bleibt.", &[&name_of(path)]));
+            return false;
+        }
+        let before = buffer.text.clone();
+        let open = super::vault::index::open_tasks(&before);
+        let same: Vec<usize> = open.iter().filter(|(_, t)| t == task).map(|(l, _)| *l).collect();
+        let Some(at) = same.iter().copied().find(|l| *l == line).or(if same.len() == 1 { Some(same[0]) } else { None }) else { return false };
+        match self.buffer(path).restore(super::markdown::toggle_task(&before, at)) {
+            Ok(()) => {
+                self.commit(trf("Erledigt: %@", &[&task.to_string()]), "check", vec![Change::Note { path: path.to_path_buf(), text: before }]);
+                true
+            }
+            Err(e) => {
+                self.last_error = Some(explain(&e.into()));
+                false
+            }
+        }
+    }
+
     /// Appends a template to a note, filled for this moment.
     pub fn insert_template(&mut self, note: &Path, template: &Path) {
         let Some(root) = self.vault_root() else { return };

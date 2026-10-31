@@ -1,4 +1,11 @@
 {
+  "Keine Aufgabe passt": "No task matches",
+  "Alles erledigt": "All done",
+  "In deinen Notizen ist keine Aufgabe mehr offen.": "No task is open in your notes.",
+  "Abhaken": "Tick off",
+  "1 Aufgabe": "1 task",
+  "%@ Aufgaben": "%@ tasks",
+  "Erledigt: %@": "Done: %@",
   "Du schreibst weiter in Obsidian. Schrumbi liest mit, zeigt was ansteht und hilft beim Einsortieren. Welche Ordner sind Module? Alles andere bleibt einfach Notizen.": "You keep writing in Obsidian. Schrumbi reads along, shows what is due and helps you organize. Which folders are modules? Everything else simply stays notes.",
   "In Obsidian bearbeiten": "Edit in Obsidian",
   "Immer in Obsidian": "Always in Obsidian",

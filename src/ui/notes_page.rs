@@ -29,6 +29,8 @@ pub struct NotesPage {
     tree_width: f32,
     show_all_tags: bool,
     tree_open: bool,
+    /// Shows open tasks instead of notes.
+    show_tasks: bool,
     cache: Option<Cache>,
     focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
@@ -38,8 +40,17 @@ pub struct NotesPage {
 struct Cache {
     key: (u64, String, Option<String>, Option<String>),
     lines: Rc<Vec<Line>>,
+    tasks: Rc<Vec<TaskLine>>,
     children: Rc<BTreeMap<String, BTreeSet<String>>>,
     tags: Rc<Vec<(String, usize)>>,
+}
+
+/// An open task as the overview shows it.
+struct TaskLine {
+    path: PathBuf,
+    note: String,
+    line: usize,
+    text: String,
 }
 
 struct Line {
@@ -48,6 +59,32 @@ struct Line {
     folder: String,
     tags: Vec<String>,
     modified: f64,
+}
+
+/// Ticks off a task and brings the list up to date right away.
+fn finish(path: &std::path::Path, line: usize, text: &str, cx: &mut App) {
+    if act(cx, |l| l.finish_task(path, line, text)) {
+        state::reindex(cx);
+    }
+}
+
+/// The notes inside a folder and with a tag, newest first.
+fn tag_scope<'a>(vault: &'a index::VaultIndex, folder: Option<&str>, tag: Option<&str>) -> Vec<(&'a PathBuf, &'a index::NoteFacts)> {
+    let tagged = tag.map(|t| vault.notes_with_tag(t));
+    let mut notes: Vec<(&PathBuf, &index::NoteFacts)> = vault
+        .notes
+        .iter()
+        .filter(|(p, facts)| {
+            let Ok(rel) = p.strip_prefix(&vault.root) else { return false };
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            !facts.tasks.is_empty()
+                && !vault.config.is_ignored(&rel)
+                && folder.is_none_or(|f| rel.starts_with(&format!("{f}/")))
+                && tagged.as_ref().is_none_or(|t| t.contains(p))
+        })
+        .collect();
+    notes.sort_by(|a, b| b.1.modified.total_cmp(&a.1.modified).then_with(|| a.0.cmp(b.0)));
+    notes
 }
 
 /// When a note last changed, short enough for a row.
@@ -85,7 +122,7 @@ impl NotesPage {
             }),
             cx.observe(&lib, |_, _, cx| cx.notify()),
         ];
-        Self { folder: None, open_folders: BTreeSet::new(), query, selected: 0, selected_path: None, tree_width: crate::core::prefs::get().notes_column.unwrap_or(240.), show_all_tags: false, tree_open: false, cache: None, focus: cx.focus_handle(), list_scroll: UniformListScrollHandle::new(), _subs: subs }
+        Self { folder: None, open_folders: BTreeSet::new(), query, selected: 0, selected_path: None, tree_width: crate::core::prefs::get().notes_column.unwrap_or(240.), show_all_tags: false, tree_open: false, show_tasks: false, cache: None, focus: cx.focus_handle(), list_scroll: UniformListScrollHandle::new(), _subs: subs }
     }
 
     fn lines(&self, tag: Option<&str>, cx: &App) -> Vec<Line> {
@@ -173,6 +210,17 @@ impl NotesPage {
         }
         let same_vault = self.cache.as_ref().is_some_and(|c| c.key.0 == vault.generation);
         let lines = Rc::new(self.lines(tag.as_deref(), cx));
+        let wanted = self.query.read(cx).value().to_lowercase();
+        let mut tasks: Vec<TaskLine> = Vec::new();
+        for (path, facts) in tag_scope(&vault, self.folder.as_deref(), tag.as_deref()) {
+            let note = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            for (line, text) in &facts.tasks {
+                if wanted.is_empty() || text.to_lowercase().contains(&wanted) || note.to_lowercase().contains(&wanted) {
+                    tasks.push(TaskLine { path: path.clone(), note: note.clone(), line: *line, text: text.clone() });
+                }
+            }
+        }
+        let tasks = Rc::new(tasks);
         let (children, tags) = match self.cache.take().filter(|_| same_vault) {
             Some(old) => (old.children, old.tags),
             None => {
@@ -191,7 +239,7 @@ impl NotesPage {
                 (Rc::new(children), Rc::new(vault.tag_tree()))
             }
         };
-        self.cache = Some(Cache { key, lines, children, tags });
+        self.cache = Some(Cache { key, lines, tasks, children, tags });
     }
 
     fn tree(&self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -341,6 +389,31 @@ impl Render for NotesPage {
         let shown_tags = if self.show_all_tags { tags.len() } else { tags.len().min(12) };
         let more = tags.len() - shown_tags;
         let current_tag = tag.clone();
+        let tasks = self.cache.as_ref().map(|c| c.tasks.clone()).unwrap_or_default();
+        let any_tasks = vault.notes.values().any(|f| !f.tasks.is_empty());
+        let show_tasks = self.show_tasks;
+        let switcher = (any_tasks || show_tasks).then(|| {
+            let segment = |id: &'static str, label: String, on: bool, cx: &mut Context<Self>| {
+                div()
+                    .id(id)
+                    .px(px(space::S))
+                    .py(px(space::XXS))
+                    .rounded(px(radius::INNER))
+                    .text_size(px(font::CALLOUT))
+                    .cursor_pointer()
+                    .key_nav()
+                    .font_features(tabular())
+                    .when(on, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
+                    .child(label)
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.show_tasks = id == "notes-show-tasks";
+                        s.selected = 0;
+                        cx.notify();
+                    }))
+            };
+            let tasks_label = if tasks.is_empty() { tr("Aufgaben") } else { format!("{} {}", tr("Aufgaben"), tasks.len()) };
+            div().flex_none().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS)).child(segment("notes-show-notes", tr("Notizen"), !show_tasks, cx)).child(segment("notes-show-tasks", tasks_label, show_tasks, cx))
+        });
         let filter_row = div()
             .flex_none()
             .p(px(space::M))
@@ -349,7 +422,7 @@ impl Render for NotesPage {
             .gap(px(space::S))
             .border_b_1()
             .border_color(t.separator)
-            .child(div().flex().items_center().gap(px(space::S)).children(toggle_tree).child(div().flex_1().child(Input::new(&self.query).small())).child(Button::new("notes-graph").small().ghost().icon(menu_icon("waypoints")).tooltip(tr("Graph zeigen")).on_click(|_, _, cx| act(cx, |l| l.show_graph(None)))).child(Button::new("notes-daily").small().icon(menu_icon("calendar")).label(tr("Heute")).tooltip(tr("Tagesnotiz öffnen")).on_click(|_, _, cx| act(cx, |l| l.open_daily_note()))).child(Button::new("notes-new").small().primary().icon(menu_icon("plus")).label(tr("Neue Notiz")).on_click(cx.listener(|s, _, _, cx| {
+            .child(div().flex().items_center().gap(px(space::S)).children(toggle_tree).children(switcher).child(div().flex_1().child(Input::new(&self.query).small())).child(Button::new("notes-graph").small().ghost().icon(menu_icon("waypoints")).tooltip(tr("Graph zeigen")).on_click(|_, _, cx| act(cx, |l| l.show_graph(None)))).child(Button::new("notes-daily").small().icon(menu_icon("calendar")).label(tr("Heute")).tooltip(tr("Tagesnotiz öffnen")).on_click(|_, _, cx| act(cx, |l| l.open_daily_note()))).child(Button::new("notes-new").small().primary().icon(menu_icon("plus")).label(tr("Neue Notiz")).on_click(cx.listener(|s, _, _, cx| {
                 let folder = s.folder.clone().map(|f| index::current().root.join(f));
                 act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: None, folder }));
             }))))
@@ -393,7 +466,55 @@ impl Render for NotesPage {
         let selected = self.selected;
         let now = chrono::Local::now().timestamp() as f64;
         let rows = lines;
-        let body: AnyElement = if rows.is_empty() {
+        let body: AnyElement = if show_tasks {
+            self.selected = self.selected.min(tasks.len().saturating_sub(1));
+            let selected = self.selected;
+            if tasks.is_empty() {
+                let filtered = tag.is_some() || self.folder.is_some() || !self.query.read(cx).value().is_empty();
+                if filtered {
+                    unavailable("search", tr("Keine Aufgabe passt"), tr("Ändere den Filter oder wähle ein anderes Tag."), &t).into_any_element()
+                } else {
+                    unavailable("circle-check", tr("Alles erledigt"), tr("In deinen Notizen ist keine Aufgabe mehr offen."), &t).into_any_element()
+                }
+            } else {
+                let keyed = tasks.clone();
+                uniform_list("tasks-list", tasks.len(), move |range, _, cx| {
+                    let t = Theme::get(cx);
+                    let hover = t.ink.opacity(0.05);
+                    range
+                        .map(|i| {
+                            let task = &keyed[i];
+                            let (open, menu, tick, text) = (task.path.clone(), task.path.clone(), task.path.clone(), task.text.clone());
+                            let line = task.line;
+                            div()
+                                .id(("task-row", i))
+                                .w_full()
+                                .h(px(control::M + space::S))
+                                .px(px(space::L))
+                                .flex()
+                                .items_center()
+                                .gap(px(space::M))
+                                .cursor_pointer()
+                                .key_nav()
+                                .when(i == selected, |d| d.bg(t.ink.opacity(0.08)))
+                                .when(i != selected, |d| d.soft(hover, 0.))
+                                .child(div().id(("task-box", i)).flex_none().size(px(iconsize::M)).rounded(px(radius::SMALL)).border_1().border_color(t.secondary).cursor_pointer().tooltip(tip(tr("Abhaken"))).on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    finish(&tick, line, &text, cx);
+                                }))
+                                .child(div().flex_1().min_w_0().truncate().child(task.text.clone()))
+                                .child(caption(task.note.clone(), &t).flex_none().max_w(px(240.)).truncate())
+                                .on_click(move |_, _, cx| super::doc_side::open_at(&open, line, cx))
+                                .context_menu(move |m, _, _| file_menu(m, menu.clone()))
+                                .into_any_element()
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .track_scroll(&self.list_scroll)
+                .size_full()
+                .into_any_element()
+            }
+        } else if rows.is_empty() {
             if tag.is_some() || !self.query.read(cx).value().is_empty() {
                 unavailable("search", tr("Keine Notiz passt"), tr("Ändere den Filter oder wähle ein anderes Tag."), &t).into_any_element()
             } else {
@@ -436,6 +557,7 @@ impl Render for NotesPage {
             .into_any_element()
         };
         let keys = rows.clone();
+        let task_keys = tasks.clone();
         div()
             .id("notes-page")
             .track_focus(&self.focus)
@@ -464,6 +586,21 @@ impl Render for NotesPage {
                     return;
                 }
                 match e.keystroke.key.as_str() {
+                    "down" if s.show_tasks => s.selected = (s.selected + 1).min(task_keys.len().saturating_sub(1)),
+                    "up" if s.show_tasks => s.selected = s.selected.saturating_sub(1),
+                    "space" if s.show_tasks => {
+                        if let Some(task) = task_keys.get(s.selected) {
+                            finish(&task.path, task.line, &task.text, cx);
+                        }
+                        cx.stop_propagation();
+                        return;
+                    }
+                    "enter" if s.show_tasks => {
+                        if let Some(task) = task_keys.get(s.selected) {
+                            super::doc_side::open_at(&task.path, task.line, cx);
+                        }
+                        return;
+                    }
                     "down" => {
                         s.selected = (s.selected + 1).min(keys.len().saturating_sub(1));
                         s.selected_path = keys.get(s.selected).map(|l| l.path.clone());
@@ -485,6 +622,6 @@ impl Render for NotesPage {
                 cx.notify();
             }))
             .when(show_tree, |d| d.child(div().w(px(tree_width)).flex_none().h_full().border_r_1().border_color(t.separator).child(tree)).child(handle).on_mouse_up(MouseButton::Left, cx.listener(|s, _, _, _| crate::core::prefs::update(|p| p.notes_column = Some(s.tree_width)))))
-            .child(div().flex_1().min_w_0().h_full().flex().flex_col().child(filter_row).child(div().flex_1().min_h_0().child(body)).child(div().flex_none().px(px(space::L)).py(px(space::XS)).border_t_1().border_color(t.separator).child(caption(if count == 1 { tr("1 Notiz") } else { trf("%@ Notizen", &[&count.to_string()]) }, &t))))
+            .child(div().flex_1().min_w_0().h_full().flex().flex_col().child(filter_row).child(div().flex_1().min_h_0().child(body)).child(div().flex_none().px(px(space::L)).py(px(space::XS)).border_t_1().border_color(t.separator).child(caption(if show_tasks { if tasks.len() == 1 { tr("1 Aufgabe") } else { trf("%@ Aufgaben", &[&tasks.len().to_string()]) } } else if count == 1 { tr("1 Notiz") } else { trf("%@ Notizen", &[&count.to_string()]) }, &t))))
     }
 }

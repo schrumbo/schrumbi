@@ -23,6 +23,8 @@ pub struct NoteFacts {
     pub blocks: Vec<(String, usize)>,
     pub properties: Vec<frontmatter::Property>,
     pub words: usize,
+    /// Open tasks with their line, outside code and comments.
+    pub tasks: Vec<(usize, String)>,
     /// Footnote definitions: label, text and line.
     pub footnotes: Vec<(String, String, usize)>,
 }
@@ -88,7 +90,27 @@ pub fn facts_of(text: &str, modified: f64) -> NoteFacts {
     tags.dedup();
     static FOOTNOTE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\[\^([^\]]+)\]:\s*(.*)$").unwrap());
     let footnotes = lines.iter().enumerate().filter_map(|(i, l)| FOOTNOTE.captures(l).map(|c| (c[1].to_string(), c[2].to_string(), i))).collect();
-    NoteFacts { footnotes, modified, links, tags, aliases: frontmatter::aliases(text), headings: links::headings(text), blocks: links::block_ids(text), properties: frontmatter::properties(text).unwrap_or_default(), words: text.split_whitespace().count() }
+    NoteFacts { tasks: open_tasks(text), footnotes, modified, links, tags, aliases: frontmatter::aliases(text), headings: links::headings(text), blocks: links::block_ids(text), properties: frontmatter::properties(text).unwrap_or_default(), words: text.split_whitespace().count() }
+}
+
+/// The tasks of a note still to be done. Any other mark counts as done, as in Obsidian.
+pub fn open_tasks(text: &str) -> Vec<(usize, String)> {
+    let visible = syntax::prepare(text);
+    let code = links::code_ranges(&visible);
+    let mut offset = 0;
+    let mut tasks = Vec::new();
+    for (i, line) in visible.split('\n').enumerate() {
+        if !code.iter().any(|r| r.contains(&offset))
+            && let Some((at, ' ')) = syntax::task_marker(line)
+        {
+            let rest = line[at + 1..].trim_start_matches(']').trim();
+            if !rest.is_empty() {
+                tasks.push((i, rest.to_string()));
+            }
+        }
+        offset += line.len() + 1;
+    }
+    tasks
 }
 
 fn time_of(path: &Path) -> f64 {
@@ -320,6 +342,14 @@ pub fn moved(old: &Path, new: &Path) -> Arc<VaultIndex> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_open_tasks_only() {
+        let text = "---\na: 1\n---\n- [ ] Eins\n- [x] Fertig\n- [/] Halb\n  * [ ] Zwei\n> - [ ] Im Zitat\n```\n- [ ] Code\n```\n%%\n- [ ] Kommentar\n%%\n- [ ] \n1. [ ] Drei\n";
+        let tasks = open_tasks(text);
+        let found: Vec<(usize, &str)> = tasks.iter().map(|(l, t)| (*l, t.as_str())).collect();
+        assert_eq!(found, [(3, "Eins"), (6, "Zwei"), (7, "Im Zitat"), (15, "Drei")]);
+    }
 
     fn vault(name: &str, files: &[(&str, &str)]) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("schrumbi-index-{}-{name}", std::process::id()));

@@ -711,3 +711,23 @@ fn a_tab_follows_a_rename_made_in_another_app() {
     assert!(!lib.follow_outside_moves(), "a deleted file has nowhere to go");
     assert_eq!(lib.open_documents, vec![new]);
 }
+
+#[test]
+fn ticking_a_task_from_the_overview_finds_it_after_the_note_moved_on() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, mut lib) = vault_folder("tasks");
+    let note = root.join("T.md");
+    let read = || std::fs::read_to_string(&note).unwrap();
+    std::fs::write(&note, "- [ ] Eins\n- [ ] Zwei\n- [ ] Zwei\n").unwrap();
+    lib.buffer(&note);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&note, "Neue Zeile aus Obsidian\n- [ ] Eins\n- [ ] Zwei\n- [ ] Zwei\n").unwrap();
+    assert!(lib.finish_task(&note, 0, "Eins"));
+    assert_eq!(read(), "Neue Zeile aus Obsidian\n- [x] Eins\n- [ ] Zwei\n- [ ] Zwei\n");
+    lib.undo();
+    assert_eq!(read(), "Neue Zeile aus Obsidian\n- [ ] Eins\n- [ ] Zwei\n- [ ] Zwei\n");
+    assert!(!lib.finish_task(&note, 0, "Zwei"), "two equal tasks and a stale line: touch nothing");
+    assert!(lib.finish_task(&note, 3, "Zwei"), "the line still fits");
+    assert_eq!(read(), "Neue Zeile aus Obsidian\n- [ ] Eins\n- [ ] Zwei\n- [x] Zwei\n");
+    assert!(!lib.finish_task(&note, 1, "Gibt es nicht"));
+}
