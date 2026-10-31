@@ -26,6 +26,17 @@ pub struct ModuleState {
     pub show_later: bool,
     pub files_pane: bool,
     pub expanded_files: std::collections::HashSet<String>,
+    pub deadlines_width: Option<f32>,
+}
+
+/// The divider between deadlines and files being dragged.
+#[derive(Clone)]
+pub struct SplitDrag;
+
+impl Render for SplitDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
 }
 
 fn disclosure(id: &'static str, title: String, open: bool, view: Entity<Pages>, toggle: fn(&mut ModuleState), t: &Theme) -> Stateful<Div> {

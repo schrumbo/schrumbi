@@ -27,6 +27,7 @@
     "one": "%lld file",
     "other": "%lld files"
   },
+  "%lld Dateien in den Papierkorb": "Moved %lld files to the trash",
   "%lld Dateien abgelegt": {
     "one": "%lld file filed",
     "other": "%lld files filed"
@@ -145,6 +146,7 @@
   "Jetzt dran": "Up next",
   "und %lld weitere": "and %lld more",
   "Ändern": "Change",
+  "Deadlines, Dateien und Notizen fürs Studium an einem Ort": "Deadlines, files and notes for your studies in one place",
   "Alle Module": "All modules",
   "Alle Tabs schließen": "Close All Tabs",
   "Alle Wochen": "All weeks",
@@ -819,7 +821,9 @@
   "Zum Bearbeiten in der Standard-App öffnen": "Open in the default app to edit",
   "Zuordnung entfernt": "Link removed",
   "Zuordnung lösen": "Unlink",
+  "Umbenennen…": "Rename…",
   "Vorwärts": "Forward",
+  "wird automatisch gesichert": "saved automatically",
   "Zurück": "Back",
   "Zurück (%@)": "Back (%@)",
   "Zurück (⌘[)": "Back (⌘[)",

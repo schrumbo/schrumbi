@@ -14,6 +14,7 @@ use super::state::{self, act};
 use super::motion::Soft;
 use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
+use crate::core::natural_date;
 use crate::core::catalog::{self, CatalogFile, FileKind};
 use crate::core::day;
 use crate::core::i18n::tr;
@@ -28,6 +29,8 @@ pub struct QuickAdd {
     module: String,
     kind: Kind,
     title: Entity<InputState>,
+    /// The title without the date words found in it.
+    clean_title: Option<String>,
     due: Entity<DatePickerState>,
     folder: String,
     optional: bool,
@@ -54,14 +57,17 @@ impl QuickAdd {
         due.update(cx, |s, cx| s.set_date_time(tomorrow.and_time(default_time(Kind::Task)), window, cx));
         let module = module.or_else(|| state::read(cx, |l| l.semester_modules().first().map(|m| m.id.clone()))).unwrap_or_default();
         let subs = vec![
-            cx.subscribe_in(&title, window, |this, _, e: &InputEvent, _, cx| match e {
+            cx.subscribe_in(&title, window, |this, _, e: &InputEvent, window, cx| match e {
                 InputEvent::PressEnter { .. } => this.add(cx),
-                InputEvent::Change => cx.notify(),
+                InputEvent::Change => {
+                    this.read_date_words(window, cx);
+                    cx.notify();
+                }
                 _ => {}
             }),
             cx.subscribe(&due, |_, _, _: &DatePickerEvent, cx| cx.notify()),
         ];
-        Self { module, kind: Kind::Task, title, due, folder: String::new(), optional: false, focused: false, _subs: subs }
+        Self { module, kind: Kind::Task, title, clean_title: None, due, folder: String::new(), optional: false, focused: false, _subs: subs }
     }
 
     fn set_kind(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {
@@ -78,8 +84,22 @@ impl QuickAdd {
         cx.notify();
     }
 
+    /// Lets "Referat morgen 18 Uhr" set the date field.
+    fn read_date_words(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.title.read(cx).value().to_string();
+        let found = natural_date::parse(&text, Local::now().date_naive()).filter(|n| !n.title.is_empty());
+        self.clean_title = found.as_ref().map(|n| n.title.clone());
+        if let Some(n) = found {
+            let date = n.date.or_else(|| self.due.read(cx).date_time().start().map(|d| d.date()));
+            if let Some(date) = date {
+                let time = n.time.unwrap_or_else(|| default_time(self.kind));
+                self.due.update(cx, |s, cx| s.set_date_time(date.and_time(time), window, cx));
+            }
+        }
+    }
+
     fn add(&mut self, cx: &mut Context<Self>) {
-        let title = self.title.read(cx).value().trim().to_string();
+        let title = self.clean_title.clone().unwrap_or_else(|| self.title.read(cx).value().trim().to_string());
         let Some(due) = picked(&self.due, cx) else { return };
         if title.is_empty() || self.module.is_empty() {
             return;

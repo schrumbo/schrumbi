@@ -1384,6 +1384,21 @@ impl Library {
         }
     }
 
+    /// Moves several files to the trash as one undoable step.
+    pub fn trash_all(&mut self, paths: &[PathBuf]) {
+        let mut done: Vec<Change> = Vec::new();
+        for path in paths {
+            match trash::delete(path) {
+                Ok(()) => done.push(Change::Restore(path.clone())),
+                Err(e) => self.last_error = Some(e.to_string()),
+            }
+        }
+        self.refresh();
+        if !done.is_empty() {
+            self.commit(trf("%lld Dateien in den Papierkorb", &[&done.len()]), "trash-2", done);
+        }
+    }
+
     pub fn note(&self, id: &str) -> String {
         self.state.notes.get(id).cloned().unwrap_or_default()
     }

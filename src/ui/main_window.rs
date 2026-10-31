@@ -29,6 +29,7 @@ pub struct MainWindow {
     pages: Entity<Pages>,
     /// Whether the sidebar shows labels; its icons always stay.
     sidebar_open: bool,
+    save_bounds: Option<Task<()>>,
     sidebar_auto_closed: bool,
     syncing_search: bool,
     focus: FocusHandle,
@@ -81,6 +82,15 @@ impl MainWindow {
                 }
                 _ => {}
             }),
+            cx.observe_window_bounds(window, |this, window, cx| {
+                if let WindowBounds::Windowed(b) = window.window_bounds() {
+                    let saved = [f32::from(b.origin.x), f32::from(b.origin.y), f32::from(b.size.width), f32::from(b.size.height)];
+                    this.save_bounds = Some(cx.spawn(async move |_, cx| {
+                        cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+                        crate::core::prefs::update(|p| p.main_window = Some(saved));
+                    }));
+                }
+            }),
             cx.observe_window_appearance(window, |_, window, cx| {
                 theme::apply(theme::is_dark(window.appearance()), Some(window), cx);
                 cx.notify();
@@ -92,6 +102,7 @@ impl MainWindow {
             inspector,
             pages,
             sidebar_open: p.sidebar_open,
+            save_bounds: None,
             sidebar_auto_closed: false,
             syncing_search: false,
             focus: cx.focus_handle(),
@@ -380,7 +391,8 @@ fn error_alert(message: String, broken: bool, config: Option<PathBuf>, t: &Theme
 }
 
 pub fn open(cx: &mut App) {
-    let bounds = Bounds::centered(None, size(px(1360.), px(860.)), cx);
+    let saved = crate::core::prefs::get().main_window.map(|[x, y, w, h]| Bounds::new(point(px(x), px(y)), size(px(w), px(h)))).filter(|b| cx.displays().iter().any(|d| d.bounds().intersects(b)));
+    let bounds = saved.unwrap_or_else(|| Bounds::centered(None, size(px(1360.), px(860.)), cx));
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(1000.), px(620.))),

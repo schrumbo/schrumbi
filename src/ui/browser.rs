@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use chrono::{Days, NaiveDate};
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::scroll::ScrollableElement;
@@ -18,6 +19,7 @@ use crate::core::catalog::{self, CatalogFile, FileKind, Query};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library, NewNoteRequest};
 use crate::core::markdown;
+use crate::core::naming::extension;
 use crate::core::prefs::{self, FileGrouping};
 use crate::core::text::fold;
 
@@ -81,6 +83,9 @@ pub struct FileBrowser {
     module_filter: Option<String>,
     week_filter: Option<u32>,
     pub selected: Option<PathBuf>,
+    picked: HashSet<PathBuf>,
+    range_start: Option<PathBuf>,
+    renaming: Option<(PathBuf, Entity<InputState>, Subscription)>,
     toggled: HashSet<String>,
     results: Results,
     key: String,
@@ -107,6 +112,9 @@ impl FileBrowser {
             module_filter: None,
             week_filter: None,
             selected: None,
+            picked: HashSet::new(),
+            range_start: None,
+            renaming: None,
             toggled: HashSet::new(),
             results: Results::default(),
             key: String::new(),
@@ -233,6 +241,8 @@ impl FileBrowser {
         } else if self.selected.as_ref().is_some_and(|s| !self.contains(s)) {
             self.selected = None;
         }
+        let picked = std::mem::take(&mut self.picked);
+        self.picked = picked.into_iter().filter(|p| self.contains(p)).collect();
     }
 
     fn contains(&self, p: &PathBuf) -> bool {
@@ -253,6 +263,78 @@ impl FileBrowser {
     /// Paths in display order, for previews and arrow keys.
     pub fn visible(&self, current: Option<u32>) -> Vec<PathBuf> {
         self.results.best.iter().chain(self.results.groups.iter().filter(|g| self.is_expanded(g, current)).flat_map(|g| g.items.iter())).map(|i| i.file.file.path.clone()).collect()
+    }
+
+    /// The files an action applies to: the multiple selection, otherwise the selected file.
+    fn targets(&self, current: Option<u32>) -> Vec<PathBuf> {
+        if self.picked.len() > 1 { self.visible(current).into_iter().filter(|p| self.picked.contains(p)).collect() } else { self.selected.iter().cloned().collect() }
+    }
+
+    fn pick_only(&mut self, path: &PathBuf) {
+        self.selected = Some(path.clone());
+        self.picked = HashSet::from([path.clone()]);
+        self.range_start = Some(path.clone());
+    }
+
+    fn pick_range(&mut self, to: &PathBuf, current: Option<u32>) {
+        let v = self.visible(current);
+        let start = self.range_start.as_ref().and_then(|s| v.iter().position(|p| p == s));
+        match (start, v.iter().position(|p| p == to)) {
+            (Some(a), Some(b)) => {
+                self.picked = v[a.min(b)..=a.max(b)].iter().cloned().collect();
+                self.selected = Some(to.clone());
+            }
+            _ => self.pick_only(to),
+        }
+    }
+
+    fn pick_toggle(&mut self, path: &PathBuf) {
+        if let Some(s) = self.selected.clone().filter(|_| self.picked.is_empty()) {
+            self.picked.insert(s);
+        }
+        if !self.picked.remove(path) {
+            self.picked.insert(path.clone());
+            self.selected = Some(path.clone());
+        }
+        self.range_start = Some(path.clone());
+    }
+
+    fn trash_targets(&mut self, cx: &mut Context<Self>) {
+        let targets = self.targets(state::read(cx, current_week));
+        if !targets.is_empty() {
+            self.picked.clear();
+            act(cx, |l| l.trash_all(&targets));
+        }
+    }
+
+    /// Turns the file's name into a field in its row; Enter renames, leaving the field cancels.
+    fn start_rename(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let ext = extension(&name).to_string();
+        let stem = if ext.is_empty() { name.clone() } else { name[..name.len() - ext.len() - 1].to_string() };
+        let field = cx.new(|cx| InputState::new(window, cx).default_value(stem));
+        let target = path.clone();
+        let sub = cx.subscribe_in(&field, window, move |this, s, e: &InputEvent, window, cx| match e {
+            InputEvent::PressEnter { .. } => {
+                let stem = s.read(cx).value().trim().to_string();
+                if !stem.is_empty() && !stem.contains(['/', '\\']) {
+                    let name = if ext.is_empty() { stem } else { format!("{stem}.{ext}") };
+                    let file = target.clone();
+                    act(cx, |l| l.rename(&file, &name));
+                }
+                this.renaming = None;
+                window.focus(&this.focus, cx);
+                cx.notify();
+            }
+            InputEvent::Blur => {
+                this.renaming = None;
+                cx.notify();
+            }
+            _ => {}
+        });
+        field.update(cx, |s, cx| s.focus(window, cx));
+        self.renaming = Some((path, field, sub));
+        cx.notify();
     }
 
     pub fn move_selection(&mut self, step: i64, cx: &mut Context<Self>) {
@@ -344,14 +426,41 @@ impl FileBrowser {
         div().w_full().px(px(space::L)).child(content).into_any_element()
     }
 
-    fn on_key(&mut self, e: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &e.keystroke;
-        if k.modifiers.platform || k.modifiers.control || k.modifiers.alt {
+        let command = k.modifiers.platform || k.modifiers.control;
+        if command && !k.modifiers.alt {
+            match k.key.as_str() {
+                "a" => {
+                    self.picked = self.visible(state::read(cx, current_week)).into_iter().collect();
+                    cx.notify();
+                }
+                "backspace" | "delete" => self.trash_targets(cx),
+                _ => return,
+            }
+            cx.stop_propagation();
+            return;
+        }
+        if command || k.modifiers.alt {
             return;
         }
         match k.key.as_str() {
             "up" | "down" => {
+                let start = self.range_start.clone().or_else(|| self.selected.clone());
                 self.move_selection(if k.key == "up" { -1 } else { 1 }, cx);
+                if let Some(to) = self.selected.clone() {
+                    if k.modifiers.shift {
+                        self.range_start = start;
+                        self.pick_range(&to, state::read(cx, current_week));
+                    } else {
+                        self.pick_only(&to);
+                    }
+                }
+            }
+            "f2" => {
+                if let Some(path) = self.selected.clone() {
+                    self.start_rename(path, window, cx);
+                }
             }
             "space" => {
                 if let Some(path) = self.selected.clone() {
@@ -472,7 +581,8 @@ impl FileBrowser {
     fn row(&self, item: &Item, show_module: bool, show_week: bool, lib: &Library, t: &Theme, entity: &Entity<Self>) -> AnyElement {
         let f = &item.file;
         let path = f.file.path.clone();
-        let selected = self.selected.as_ref() == Some(&path);
+        let selected = self.selected.as_ref() == Some(&path) || self.picked.contains(&path);
+        let renaming = self.renaming.as_ref().filter(|(p, _, _)| *p == path).map(|(_, field, _)| field.clone());
         let terms = self.results.query.terms.clone();
         let (sel, open, reveal, preview, menu_path) = (path.clone(), path.clone(), path.clone(), path.clone(), path.clone());
         let week_filter = self.week_filter;
@@ -490,7 +600,7 @@ impl FileBrowser {
         if !f.place.is_empty() {
             meta = meta.child(div().truncate().child(f.place.join(" › ")));
         }
-        if f.title.is_some() {
+        if f.title.is_some() && !self.query.is_empty() {
             meta = meta.child(div().truncate().text_color(t.tertiary).child(f.name().to_string()));
         }
         if f.is_brief {
@@ -511,11 +621,22 @@ impl FileBrowser {
             .when(!selected, |d| d.soft(hover, radius::INNER))
             .tooltip(tip(lib.relative_path(&path)))
             .on_click(move |e: &ClickEvent, window, cx| {
+                let (toggle, extend) = (e.modifiers().platform || e.modifiers().control, e.modifiers().shift);
+                let current = state::read(cx, current_week);
                 click.update(cx, |this, cx| {
-                    this.selected = Some(sel.clone());
+                    if toggle {
+                        this.pick_toggle(&sel);
+                    } else if extend {
+                        this.pick_range(&sel, current);
+                    } else {
+                        this.pick_only(&sel);
+                    }
                     window.focus(&this.focus, cx);
                     cx.notify();
                 });
+                if toggle || extend {
+                    return;
+                }
                 if e.click_count() >= 2 {
                     act(cx, |l| {
                         if has_snippet {
@@ -534,7 +655,10 @@ impl FileBrowser {
                     .flex()
                     .flex_col()
                     .gap(px(space::XS))
-                    .child(div().truncate().child(highlighted(&f.display_name(), &terms, t)))
+                    .child(match renaming {
+                        Some(field) => Input::new(&field).small().into_any_element(),
+                        None => div().truncate().child(highlighted(&f.display_name(), &terms, t)).into_any_element(),
+                    })
                     .child(meta)
                     .when_some(item.snippet.clone(), |d, s| d.child(div().text_size(px(font::CAPTION)).text_color(t.secondary).line_clamp(2).child(highlighted(&s, &terms, t)))),
             )
@@ -554,9 +678,18 @@ impl FileBrowser {
                             .child(Button::new(SharedString::from(format!("rv-{}", path.display()))).ghost().small().icon(menu_icon("folder")).tooltip(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&reveal))),
                     ),
             )
-            .context_menu(move |menu, _, _| {
+            .context_menu(move |menu, _, cx| {
                 let p = menu_path.clone();
                 let (p1, p2, p3, p4) = (p.clone(), p.clone(), p.clone(), p.clone());
+                let current = state::read(cx, current_week);
+                let group: Vec<PathBuf> = entity.read(cx).targets(current).into_iter().filter(|_| entity.read(cx).picked.contains(&p)).collect();
+                if group.len() > 1 {
+                    let count = group.len();
+                    return menu.item(PopupMenuItem::new(trf("%lld Dateien in den Papierkorb", &[&count])).on_click(move |_, _, cx| {
+                        let group = group.clone();
+                        act(cx, |l| l.trash_all(&group))
+                    }));
+                }
                 let module = f2.module_id.clone();
                 let mut menu = menu
                     .item(PopupMenuItem::new(tr("Öffnen")).on_click(move |_, _, cx| act(cx, |l| l.open_file(&p1))))
@@ -587,7 +720,10 @@ impl FileBrowser {
                         b.reload(cx);
                     })));
                 }
-                menu
+                let (rename, trash_path, e) = (p.clone(), p.clone(), entity.clone());
+                menu.separator()
+                    .item(PopupMenuItem::new(tr("Umbenennen…")).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
+                    .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| act(cx, |l| l.trash(&trash_path))))
             })
             .into_any_element()
     }
@@ -850,6 +986,22 @@ impl Render for FileBrowser {
         } else {
             div().id("browser-list").flex_1().min_h_0().pt(px(space::S)).track_focus(&self.focus).on_key_down(cx.listener(Self::on_key)).child(list(self.list.clone(), cx.processor(|this, ix, _, cx| this.render_line(ix, cx))).size_full()).vertical_scrollbar(&self.list).into_any_element()
         };
-        div().size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().flex().flex_col().child(body))
+        let count = self.picked.len();
+        let e = me.clone();
+        let footer = (count > 1).then(|| {
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(space::S))
+                .px(px(space::M))
+                .py(px(space::S))
+                .border_t_1()
+                .border_color(t.separator)
+                .child(caption(trf("%lld ausgewählt", &[&count]), &t))
+                .child(div().flex_1())
+                .child(Button::new("browser-trash").small().ghost().icon(menu_icon("trash-2")).label(tr("In den Papierkorb")).on_click(move |_, _, cx| e.update(cx, |b, cx| b.trash_targets(cx))))
+        });
+        div().size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().flex().flex_col().child(body)).children(footer)
     }
 }

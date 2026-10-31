@@ -8,6 +8,7 @@ pub mod json;
 pub mod library;
 pub mod markdown;
 pub mod model;
+pub mod natural_date;
 pub mod naming;
 pub mod next_action;
 pub mod note_buffer;

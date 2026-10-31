@@ -91,6 +91,8 @@ pub struct Prefs {
     /// Keeps `Schrumbi-Kalender.ics` in the workspace up to date for calendar subscriptions.
     pub calendar_feed: bool,
     pub sidebar_open: bool,
+    /// Last position and size of the main window: x, y, width, height.
+    pub main_window: Option<[f32; 4]>,
 }
 
 impl Default for Prefs {
@@ -123,6 +125,7 @@ impl Default for Prefs {
             update_skip: String::new(),
             calendar_feed: false,
             sidebar_open: true,
+            main_window: None,
         }
     }
 }

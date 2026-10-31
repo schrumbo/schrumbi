@@ -172,7 +172,23 @@ impl Pages {
         let split = two_columns(&self.module_split, width, 900., 820.);
         let deadlines = div().id("module-deadlines").size_full().overflow_y_scrollbar().child(module_page::deadlines(lib, &m, &self.module, view.clone(), t));
         let body = if split {
-            div().flex_1().min_h_0().flex().child(div().h_full().w(px((width * 0.42).round().clamp(320., 500.))).border_r_1().border_color(t.separator).child(deadlines)).child(div().h_full().flex_1().min_w_0().child(self.module_files.clone()))
+            let resize = view.clone();
+            let column = self.module.deadlines_width.unwrap_or((width * 0.42).round()).clamp(280., (width - 320.).max(280.));
+            let accent = t.accent;
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .on_drag_move::<module_page::SplitDrag>(move |e, _, cx| {
+                    let x = f32::from(e.event.position.x - e.bounds.left());
+                    resize.update(cx, |p, cx| {
+                        p.module.deadlines_width = Some(x);
+                        cx.notify();
+                    })
+                })
+                .child(div().h_full().w(px(column)).flex_none().child(deadlines))
+                .child(div().id("module-split").h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator).cursor_col_resize().hover(move |s| s.bg(accent.opacity(0.3))).on_drag(module_page::SplitDrag, |d, _, _, cx| cx.new(|_| d.clone())))
+                .child(div().h_full().flex_1().min_w_0().child(self.module_files.clone()))
         } else if self.module.files_pane {
             div().flex_1().min_h_0().child(self.module_files.clone())
         } else {

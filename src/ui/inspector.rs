@@ -307,7 +307,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         col = col.child(files);
     }
 
-    col = col.child(div().flex().flex_col().gap(px(space::S)).child(div().font_weight(FontWeight::BOLD).child(tr("Notiz"))).child(Textarea::new(note)));
+    col = col.child(div().flex().flex_col().gap(px(space::S)).child(div().flex().items_baseline().gap(px(space::S)).child(div().font_weight(FontWeight::BOLD).child(tr("Notiz"))).child(caption(tr("wird automatisch gesichert"), t))).child(Textarea::new(note)));
 
     if l.manual_for(a).is_some() {
         let remove = id.clone();
