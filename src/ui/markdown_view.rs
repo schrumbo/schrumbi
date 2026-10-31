@@ -450,7 +450,11 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     };
                     d.child(styled_text(inl, cx, font::BODY))
                 };
-                div()
+                let order = cx.order.get();
+                cx.order.set(order + 1);
+                let min_width = px(head.len() as f32 * 140.);
+                div().id(("md-table", order)).w_full().overflow_x_scroll().child(div()
+                    .min_w(min_width)
                     .flex()
                     .flex_col()
                     .rounded(px(radius::CONTROL))
@@ -458,17 +462,60 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     .border_color(t.separator)
                     .overflow_hidden()
                     .child(div().flex().bg(t.secondary_bg).children(head.iter().enumerate().map(|(i, c)| cell(c, i, true))))
-                    .children(rows.iter().map(|r| div().flex().border_t_1().border_color(t.separator).children(r.iter().enumerate().map(|(i, c)| cell(c, i, false)))))
+                    .children(rows.iter().map(|r| div().flex().border_t_1().border_color(t.separator).children(r.iter().enumerate().map(|(i, c)| cell(c, i, false))))))
                     .into_any_element()
             }
         })
         .collect()
 }
 
+impl ParsedNote {
+    /// The note's top-level headings as level and text, for a table of contents.
+    pub fn headings(&self) -> Vec<(u8, String)> {
+        self.blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Heading(level, inl) => Some((*level, plain_text(inl))),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+fn plain_text(inlines: &[Inline]) -> String {
+    inlines
+        .iter()
+        .filter_map(|i| match i {
+            Inline::Text(s, _) | Inline::Link(s, _, _) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Renders a note with `anchors` on its top-level headings, one per entry of `ParsedNote::headings`.
+pub fn render_with_anchors(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, anchors: &[ScrollAnchor], t: &Theme) -> Div {
+    build(note, base, on_toggle, anchors, t)
+}
+
 /// Renders a parsed note; task boxes call `on_toggle` with their source line.
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
+    build(note, base, on_toggle, &[], t)
+}
+
+fn build(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, anchors: &[ScrollAnchor], t: &Theme) -> Div {
     let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: std::cell::Cell::new(0) };
-    let mut col = div().flex().flex_col().gap(px(space::M)).children(render_blocks(&note.blocks, &cx));
+    let mut heading = 0;
+    let blocks = note.blocks.iter().zip(render_blocks(&note.blocks, &cx)).map(|(block, element)| {
+        if !matches!(block, Block::Heading(..)) {
+            return element;
+        }
+        heading += 1;
+        match anchors.get(heading - 1) {
+            Some(anchor) => div().id(("md-heading", heading)).anchor_scroll(Some(anchor.clone())).child(element).into_any_element(),
+            None => element,
+        }
+    });
+    let mut col = div().flex().flex_col().gap(px(space::M)).children(blocks.collect::<Vec<_>>());
     let used: Vec<_> = note.footnote_order.iter().filter_map(|id| note.footnotes.iter().find(|(f, _)| f == id)).collect();
     if !used.is_empty() {
         col = col.child(div().h(px(1.)).mt(px(space::S)).bg(t.separator)).child(div().flex().flex_col().gap(px(space::XS)).children(used.iter().enumerate().map(|(n, (_, inl))| {
@@ -481,6 +528,12 @@ pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle
 #[cfg(test)]
 mod tests {
     use super::{Block, parse};
+
+    #[test]
+    fn lists_top_level_headings() {
+        let note = parse("# Eins\n\ntext\n\n## Zwei **fett**\n\n> # im Zitat\n");
+        assert_eq!(note.headings(), vec![(1, "Eins".to_string()), (2, "Zwei fett".to_string())]);
+    }
 
     #[test]
     fn records_task_lines() {

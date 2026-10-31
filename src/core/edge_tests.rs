@@ -438,3 +438,24 @@ fn tabs_reorder_and_closed_tabs_reopen() {
     lib.reopen_document();
     assert_eq!(lib.open_documents, vec![c.clone(), a.clone()]);
 }
+
+#[test]
+fn split_view_follows_the_tabs() {
+    let root = dunce::canonicalize(folder("split")).unwrap();
+    let (a, b) = (root.join("a.md"), root.join("b.md"));
+    for p in [&a, &b] {
+        std::fs::write(p, "x").unwrap();
+    }
+    let mut lib = Library::new();
+    lib.open_document(&a);
+    lib.open_document(&b);
+    lib.set_split(Some(b.clone()));
+    assert_eq!(lib.split_document, None, "the current tab cannot sit beside itself");
+    lib.set_split(Some(a.clone()));
+    assert_eq!(lib.split_document, Some(a.clone()));
+    lib.open_document(&a);
+    assert_eq!(lib.split_document, None, "bringing it to the front ends the split");
+    lib.set_split(Some(b.clone()));
+    lib.close_document(&b);
+    assert_eq!(lib.split_document, None);
+}

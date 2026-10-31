@@ -1,3 +1,4 @@
+use super::errors::explain;
 use super::next_action::{self, NextAction};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -200,6 +201,8 @@ pub struct Library {
     pub note_windows: HashSet<PathBuf>,
     route: Route,
     closed_documents: Vec<PathBuf>,
+    /// The open document shown beside the current one.
+    pub split_document: Option<PathBuf>,
     back_routes: Vec<Route>,
     forward_routes: Vec<Route>,
     pub toast_hovered: bool,
@@ -286,6 +289,7 @@ impl Library {
             note_windows: HashSet::new(),
             route: Route::Today,
             closed_documents: Vec::new(),
+            split_document: None,
             back_routes: Vec::new(),
             forward_routes: Vec::new(),
             toast_hovered: false,
@@ -1298,7 +1302,7 @@ impl Library {
                 Some(target)
             }
             Err(e) => {
-                self.last_error = Some(trf("Ablegen fehlgeschlagen: %@", &[&e]));
+                self.last_error = Some(trf("Ablegen fehlgeschlagen: %@", &[&explain(&e)]));
                 None
             }
         }
@@ -1356,7 +1360,7 @@ impl Library {
                 let change = Change::Move { from: target.clone(), to: file.to_path_buf() };
                 self.commit(trf("Umbenannt: %@", &[&name_of(&target)]), "pencil", vec![change]);
             }
-            Err(e) => self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&e])),
+            Err(e) => self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&explain(&e.into())])),
         }
     }
 
@@ -1547,7 +1551,7 @@ impl Library {
         for p in paths {
             match copy_path(p, &unique_path(&inbox.join(name_of(p)))) {
                 Ok(()) => count += 1,
-                Err(e) => self.last_error = Some(trf("Import fehlgeschlagen: %@", &[&e])),
+                Err(e) => self.last_error = Some(trf("Import fehlgeschlagen: %@", &[&explain(&e.into())])),
             }
         }
         self.refresh();
@@ -1607,13 +1611,20 @@ impl Library {
         let rels = prefs::get().open_documents.get(&self.documents_key()).cloned().unwrap_or_default();
         self.open_documents = rels.iter().map(|r| root.join(r)).filter(|p| p.exists()).collect();
         self.active_document = self.open_documents.first().cloned();
+        let split = prefs::get().split_documents.get(&self.documents_key()).map(|r| root.join(r));
+        self.split_document = split.filter(|p| self.open_documents.contains(p) && self.active_document.as_ref() != Some(p));
     }
 
     fn save_documents(&self) {
         let key = self.documents_key();
         let rels: Vec<String> = self.open_documents.iter().map(|p| self.relative_path(p)).collect();
+        let split = self.split_document.as_ref().map(|p| self.relative_path(p));
         prefs::update(|p| {
-            p.open_documents.insert(key, rels);
+            p.open_documents.insert(key.clone(), rels);
+            match split {
+                Some(split) => p.split_documents.insert(key, split),
+                None => p.split_documents.remove(&key),
+            };
         });
     }
 
@@ -1636,8 +1647,19 @@ impl Library {
             }
             self.save_documents();
         }
+        if self.split_document.as_ref() == Some(&path) {
+            self.split_document = None;
+            self.save_documents();
+        }
         self.active_document = Some(path.clone());
         self.set_route(Route::Doc(path));
+    }
+
+    /// Shows an open document next to the current one, or ends that when `None`.
+    pub fn set_split(&mut self, path: Option<PathBuf>) {
+        self.split_document = path.filter(|p| self.open_documents.contains(p) && self.active_document.as_ref() != Some(p));
+        self.save_documents();
+        self.changed();
     }
 
     /// The buffer for a note, created on first use.
@@ -1652,6 +1674,9 @@ impl Library {
             self.buffers.remove(path);
         }
         self.closed_documents.push(self.open_documents.remove(i));
+        if self.split_document.as_deref() == Some(path) {
+            self.split_document = None;
+        }
         self.save_documents();
         let was_shown = self.route == Route::Doc(path.to_path_buf());
         if self.active_document.as_deref() == Some(path) {
@@ -1691,6 +1716,7 @@ impl Library {
 
     pub fn close_other_documents(&mut self, path: &Path) {
         self.closed_documents.extend(self.open_documents.iter().filter(|d| *d != path).cloned());
+        self.split_document = None;
         let windows = self.note_windows.clone();
         self.buffers.retain(|p, _| p == path || windows.contains(p));
         self.open_documents.retain(|p| p == path);
@@ -1700,6 +1726,7 @@ impl Library {
 
     pub fn close_all_documents(&mut self) {
         self.closed_documents.extend(self.open_documents.iter().cloned());
+        self.split_document = None;
         let windows = self.note_windows.clone();
         self.buffers.retain(|p, _| windows.contains(p));
         self.open_documents.clear();

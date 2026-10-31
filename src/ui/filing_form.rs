@@ -59,7 +59,8 @@ pub struct FilingForm {
     rename: bool,
     grab_focus: bool,
     details: bool,
-    roomy: bool,
+    /// Width of the form, measured while painting.
+    width: f32,
     focus: FocusHandle,
     load: Option<Task<()>>,
     _subs: Vec<Subscription>,
@@ -129,7 +130,7 @@ impl FilingForm {
             rename: true,
             grab_focus,
             details: false,
-            roomy: false,
+            width: 560.,
             focus: cx.focus_handle(),
             load: None,
             _subs: subs,
@@ -141,12 +142,6 @@ impl FilingForm {
     /// The file currently being filed.
     pub fn path(&self) -> Option<&PathBuf> {
         self.paths.get(self.index)
-    }
-
-    /// Gives the preview more room, for forms that fill a page rather than a sheet.
-    pub fn roomy(mut self) -> Self {
-        self.roomy = true;
-        self
     }
 
     /// Enter from outside the form: files the suggestion, or moves into the fields when they are open.
@@ -430,7 +425,11 @@ impl FilingForm {
     /// The suggestion as one decision: where the file goes and what it will be called.
     #[allow(clippy::too_many_arguments)]
     fn summary(&self, me: Entity<Self>, thumb: AnyElement, preview: PathBuf, final_name: &str, valid: bool, can_file: bool, l: &Library, t: &Theme) -> Div {
-        let (preview_w, preview_h) = if self.roomy { (320., 440.) } else { (180., 250.) };
+        const CHOICE_MIN: f32 = 300.;
+        let room = self.width - 2. * space::XL - space::XL - CHOICE_MIN;
+        let stacked = room < 140.;
+        let preview_w = if stacked { (self.width - 2. * space::XL).min(320.) } else { room.min(480.) };
+        let preview_h = if stacked { 160. } else { preview_w * 1.375 };
         let source = self.path().map(|p| name_of(p)).unwrap_or_default();
         let picture = div().flex().flex_col().gap(px(space::S)).w(px(preview_w)).flex_none().child(
             div()
@@ -495,7 +494,6 @@ impl FilingForm {
                     .gap(px(space::S))
                     .child(Button::new("file-commit").primary().label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| commit.update(cx, |f, cx| f.commit(window, cx))))
                     .child(kbd("↩", t))
-                    .child(div().flex_1())
                     .child(Button::new("filing-change").ghost().label(tr("Ändern")).on_click(move |_, window, cx| change.update(cx, |f, cx| f.set_details(true, window, cx)))),
             );
 
@@ -522,7 +520,7 @@ impl FilingForm {
             }
             choice = choice.child(div().flex().flex_col().gap(px(space::XS)).pt(px(space::S)).child(section_label(tr("Andere Ziele"), t)).child(rows));
         }
-        div().flex().items_start().gap(px(space::XL)).p(px(space::XL)).child(picture).child(choice)
+        div().flex().when(stacked, |d| d.flex_col()).items_start().gap(px(space::XL)).p(px(space::XL)).child(picture).child(choice.w_full().max_w(px(640.)))
     }
 
     fn footer(&self, me: Entity<Self>, has_folder: bool, can_file: bool, primary: bool, t: &Theme) -> Option<Div> {
@@ -583,10 +581,29 @@ impl FilingForm {
                 cx.stop_propagation();
             }))
             .track_focus(&self.focus)
+            .relative()
             .size_full()
             .flex()
             .flex_col()
             .key_context("FilingForm")
+            .child({
+                let me = cx.entity();
+                let known = self.width;
+                canvas(
+                    move |bounds, _, cx| {
+                        let width = f32::from(bounds.size.width);
+                        if (width - known).abs() > 1. {
+                            me.update(cx, |f, cx| {
+                                f.width = width;
+                                cx.notify();
+                            });
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full()
+            })
             .on_action(cx.listener(|f, _: &CommitFiling, window, cx| f.commit(window, cx)))
             .child(div().id("filing-scroll").flex_1().min_h_0().overflow_y_scrollbar().child(body))
             .children(footer)

@@ -81,6 +81,12 @@ pub struct Prefs {
     pub indexed_root: Option<PathBuf>,
     /// Open document tabs per workspace, as paths relative to it.
     pub open_documents: BTreeMap<String, Vec<String>>,
+    /// The document shown beside the current one, per workspace.
+    pub split_documents: BTreeMap<String, String>,
+    /// Share of the width the left document gets in the split view.
+    pub split_share: f32,
+    /// Width of the deadlines column on module pages.
+    pub module_column: Option<f32>,
     pub shortcuts: BTreeMap<String, Shortcut>,
     pub disabled_shortcuts: BTreeSet<String>,
     pub tray: bool,
@@ -120,6 +126,9 @@ impl Default for Prefs {
             recent_coauthors: Vec::new(),
             indexed_root: None,
             open_documents: BTreeMap::new(),
+            split_documents: BTreeMap::new(),
+            split_share: 0.5,
+            module_column: None,
             shortcuts: BTreeMap::new(),
             disabled_shortcuts: BTreeSet::new(),
             tray: true,

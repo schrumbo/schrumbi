@@ -150,7 +150,7 @@ impl Render for InboxPage {
         });
         if !current {
             self.form = (!queue.is_empty()).then(|| {
-                let form = cx.new(|cx| FilingForm::new(queue.clone(), None, !list_focused, window, cx).roomy());
+                let form = cx.new(|cx| FilingForm::new(queue.clone(), None, !list_focused, window, cx));
                 let sub = cx.subscribe(&form, |this, _, _: &FilingEvent, cx| {
                     this.selection.clear();
                     this.form = None;
@@ -300,7 +300,7 @@ impl Render for InboxPage {
                 .flex()
                 .child(
                     div()
-                        .w(px(280.))
+                        .w(px(if f32::from(window.viewport_size().width) < 1200. { 220. } else { 280. }))
                         .h_full()
                         .flex()
                         .flex_col()

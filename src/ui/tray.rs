@@ -281,11 +281,14 @@ impl Render for TrayPopup {
         }
         let inbox = l.inbox.len();
         let accent = t.accent;
+        let appear = super::motion::timed(super::motion::MEDIUM, cx);
         div()
             .size_full()
             .flex()
             .flex_col()
             .bg(t.content)
+            .border_1()
+            .border_color(t.separator)
             .text_size(px(font::BODY))
             .text_color(t.primary)
             .drag_over::<ExternalPaths>(move |s, _, _, _| s.border_1().border_color(accent))
@@ -309,5 +312,6 @@ impl Render for TrayPopup {
                     .child(div().flex_1())
                     .child(Button::new("tray-quit").ghost().small().label(tr("Beenden")).on_click(|_, _, cx| super::app::quit(cx))),
             )
+            .with_animation("tray-appear", Animation::new(appear).with_easing(ease_out_quint()), |d, p| d.opacity(p))
     }
 }

@@ -156,7 +156,7 @@ impl MainWindow {
         }
     }
 
-    fn toolbar(&self, lib: &Library, left: f32, t: &Theme) -> Div {
+    fn toolbar(&self, lib: &Library, left: f32, page_width: f32, t: &Theme) -> Div {
         let show = lib.show_inspector;
         let module = if let Route::Module(id) = lib.route() { Some(id.clone()) } else { None };
         let module2 = module.clone();
@@ -170,7 +170,7 @@ impl MainWindow {
             .pr(px(space::M))
             .child(Button::new("go-back").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-left")).disabled(!lib.can_go_back()).tooltip(format!("{}{}", tr("Zurück"), ShortcutAction::GoBack.hint())).on_click(|_, _, cx| act(cx, |l| l.go_back())))
             .child(Button::new("go-forward").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-right")).disabled(!lib.can_go_forward()).tooltip(tr("Vorwärts")).on_click(|_, _, cx| act(cx, |l| l.go_forward())))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)))
+            .child(div().flex_1().min_w(px(80.)).truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)))
             .child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().bg(t.ink.opacity(0.06)).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("plus")).tooltip(tr("Neu")).dropdown_menu(move |menu, _, _| {
                 let m = module2.clone();
                 menu.item(PopupMenuItem::new(format!("{}{}", tr("Neuer Termin…"), ShortcutAction::NewEntry.hint())).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)))
@@ -191,7 +191,7 @@ impl MainWindow {
                     .tooltip(format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()))
                     .on_click(|_, _, cx| act(cx, |l| l.toggle_inspector())),
             )
-            .child(div().w(px(325.)).key_context("SearchField").child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true)))
+            .child(div().w(px(if page_width < 760. { 200. } else { 325. })).flex_none().key_context("SearchField").child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true)))
     }
 }
 
@@ -225,6 +225,11 @@ impl Render for MainWindow {
         let base = div()
             .child(gpui_kit::base::TextSelectionLayer)
             .id("main")
+            .capture_any_mouse_down(|e, _, cx| {
+                if e.button == MouseButton::Right {
+                    pause_tooltips(cx);
+                }
+            })
             .track_focus(&self.focus)
             .key_context("MainWindow")
             .size_full()
@@ -315,7 +320,7 @@ impl Render for MainWindow {
                     .border_color(t.separator)
                     .flex()
                     .flex_col()
-                    .child(self.toolbar(l, left, &t))
+                    .child(self.toolbar(l, left, page_width, &t))
                     .child(div().flex_1().min_h_0().child(page).with_animation(("page", page_key), Animation::new(page_motion).with_easing(ease_out_quint()), |d, p| d.opacity(0.4 + 0.6 * p))),
             )
             .when(l.show_inspector, |d| {

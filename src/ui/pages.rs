@@ -30,6 +30,7 @@ pub struct Pages {
     inbox: Entity<super::inbox::InboxPage>,
     module_drop: bool,
     docs: std::collections::HashMap<std::path::PathBuf, AnyView>,
+    split_share: f32,
     shown_doc: Option<std::path::PathBuf>,
     search_split: std::cell::Cell<bool>,
     module_split: std::cell::Cell<bool>,
@@ -79,13 +80,14 @@ impl Pages {
             grid: GridState::default(),
             record: RecordState::default(),
             checks: ChecksState::default(),
-            module: ModuleState::default(),
+            module: ModuleState { deadlines_width: crate::core::prefs::get().module_column, ..Default::default() },
             search,
             preview,
             module_files,
             inbox,
             module_drop: false,
             docs: Default::default(),
+            split_share: crate::core::prefs::get().split_share,
             shown_doc: None,
             search_split: Default::default(),
             module_split: Default::default(),
@@ -173,6 +175,7 @@ impl Pages {
         let deadlines = div().id("module-deadlines").size_full().overflow_y_scrollbar().child(module_page::deadlines(lib, &m, &self.module, view.clone(), t));
         let body = if split {
             let resize = view.clone();
+            let saver = view.clone();
             let column = self.module.deadlines_width.unwrap_or((width * 0.42).round()).clamp(280., (width - 320.).max(280.));
             let accent = t.accent;
             div()
@@ -185,6 +188,10 @@ impl Pages {
                         p.module.deadlines_width = Some(x);
                         cx.notify();
                     })
+                })
+                .on_drop(move |_: &module_page::SplitDrag, _, cx| {
+                    let width = saver.read(cx).module.deadlines_width;
+                    crate::core::prefs::update(|prefs| prefs.module_column = width);
                 })
                 .child(div().h_full().w(px(column)).flex_none().child(deadlines))
                 .child(div().id("module-split").h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator).cursor_col_resize().hover(move |s| s.bg(accent.opacity(0.3))).on_drag(module_page::SplitDrag, |d, _, _, cx| cx.new(|_| d.clone())))
@@ -245,26 +252,55 @@ impl Pages {
 }
 
 impl Pages {
-    fn document(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let view = self
-            .docs
-            .entry(path.clone())
+    fn doc_view(&mut self, path: &std::path::Path, window: &mut Window, cx: &mut Context<Self>) -> AnyView {
+        self.docs
+            .entry(path.to_path_buf())
             .or_insert_with(|| {
-                let path = path.clone();
+                let path = path.to_path_buf();
                 if crate::core::markdown::is_markdown(&path) {
                     cx.new(|cx| super::documents::NoteView::new(path, true, window, cx)).into()
                 } else {
                     cx.new(|cx| super::documents::FileViewer::new(path, cx)).into()
                 }
             })
-            .clone();
+            .clone()
+    }
+
+    fn document(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let view = self.doc_view(&path, window, cx);
+        let beside = state::read(cx, |l| l.split_document.clone()).filter(|p| *p != path);
         if self.shown_doc.as_ref() != Some(&path) {
             self.shown_doc = Some(path);
             if let Ok(note) = view.clone().downcast::<super::documents::NoteView>() {
                 window.defer(cx, move |window, cx| note.update(cx, |n, cx| n.activate(window, cx)));
             }
         }
-        view.into_any_element()
+        match beside {
+            Some(other) => {
+                let right = self.doc_view(&other, window, cx);
+                let t = Theme::get(cx);
+                let (accent, me) = (t.accent, cx.entity());
+                div()
+                    .size_full()
+                    .flex()
+                    .on_drag_move::<module_page::SplitDrag>(move |e, _, cx| {
+                        let share = f32::from(e.event.position.x - e.bounds.left()) / f32::from(e.bounds.size.width);
+                        me.update(cx, |p, cx| {
+                            p.split_share = share.clamp(0.25, 0.75);
+                            cx.notify();
+                        })
+                    })
+                    .on_drop(cx.listener(|p, _: &module_page::SplitDrag, _, _| {
+                        let share = p.split_share;
+                        crate::core::prefs::update(|prefs| prefs.split_share = share);
+                    }))
+                    .child(div().flex_none().min_w_0().h_full().w(relative(self.split_share)).child(view))
+                    .child(div().id("doc-split").h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator).cursor_col_resize().hover(move |s| s.bg(accent.opacity(0.3))).on_drag(module_page::SplitDrag, |d, _, _, cx| cx.new(|_| d.clone())))
+                    .child(div().flex_1().min_w_0().h_full().child(right))
+                    .into_any_element()
+            }
+            None => view.into_any_element(),
+        }
     }
 }
 

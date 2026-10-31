@@ -42,6 +42,10 @@ pub enum Mode {
 
 /// A Markdown note: read, edit or both side by side. Saving follows Settings → Notizen.
 pub struct NoteView {
+    /// A nearly empty note opens ready to continue writing below what is there.
+    caret_to_end: bool,
+    reader_scroll: ScrollHandle,
+    heading_anchors: Vec<ScrollAnchor>,
     path: PathBuf,
     mode: Mode,
     editor: Entity<EditorState>,
@@ -107,7 +111,7 @@ impl NoteView {
         ];
         let mode = if text.trim().chars().count() < 40 { Mode::Edit } else { Mode::Read };
         let revision = state::lib(cx).update(cx, |l, _| l.buffer(&path).revision);
-        Self { path, mode, editor, parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_scroll: ScrollHandle::new(), heading_anchors: Vec::new(), parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -119,7 +123,13 @@ impl NoteView {
         if self.mode == Mode::Read {
             window.focus(&self.focus, cx);
         } else {
-            self.editor.update(cx, |s, cx| s.focus(window, cx));
+            self.editor.update(cx, |s, cx| {
+                s.focus(window, cx);
+                if std::mem::take(&mut self.caret_to_end) {
+                    let end = s.value().len();
+                    s.set_selected_range(end..end, cx);
+                }
+            });
         }
     }
 
@@ -231,11 +241,25 @@ impl NoteView {
         }
         let (e1, path, p2, p3) = (me.clone(), self.path.clone(), self.path.clone(), self.path.clone());
         let embedded = self.embedded;
+        let headings = self.parsed.as_ref().filter(|_| self.mode != Mode::Edit).map(|(_, p)| p.headings()).unwrap_or_default();
+        let anchors = self.heading_anchors.clone();
+        let toc = (headings.len() >= 2 && anchors.len() == headings.len()).then(|| {
+            Button::new("note-toc").ghost().small().icon(menu_icon("list")).tooltip(tr("Inhalt")).dropdown_menu(move |mut menu, _, _| {
+                let top = headings.iter().map(|(level, _)| *level).min().unwrap_or(1);
+                for ((level, text), anchor) in headings.iter().zip(&anchors) {
+                    let anchor = anchor.clone();
+                    let indent = "    ".repeat((level - top) as usize);
+                    menu = menu.item(PopupMenuItem::new(format!("{indent}{text}")).on_click(move |_, window, cx| anchor.scroll_to(window, cx)));
+                }
+                menu
+            })
+        });
         div()
             .flex()
             .items_center()
             .gap(px(space::S))
             .child(modes)
+            .children(toc)
             .child(Button::new("note-pdf").small().icon(menu_icon("share")).label("PDF").tooltip(tr("Als PDF neben der Notiz sichern (⇧⌘E)")).disabled(exporting).on_click(move |_, _, cx| e1.update(cx, |n, cx| n.export(cx))))
             .child(Button::new("note-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, _, _| {
                 let (a, b, c, d) = (path.clone(), p2.clone(), p3.clone(), path.clone());
@@ -265,6 +289,7 @@ impl NoteView {
             Some((rev, p)) if *rev == self.revision => p.clone(),
             _ => {
                 let p = Rc::new(markdown_view::parse(lib_text));
+                self.heading_anchors = p.headings().iter().map(|_| ScrollAnchor::for_handle(self.reader_scroll.clone())).collect();
                 self.parsed = Some((self.revision, p.clone()));
                 p
             }
@@ -284,11 +309,11 @@ impl NoteView {
         });
         let base = self.path.parent().map(Path::to_path_buf);
         div()
-            .id("note-reader")
+            .relative()
             .size_full()
-            .overflow_y_scrollbar()
             .bg(t.content)
-            .child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).py(px(space::XL)).child(markdown_view::render(&parsed, base.as_deref(), Some(toggle), t))))
+            .child(div().id("note-reader").size_full().overflow_y_scroll().track_scroll(&self.reader_scroll).child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).py(px(space::XL)).child(markdown_view::render_with_anchors(&parsed, base.as_deref(), Some(toggle), &self.heading_anchors, t)))))
+            .vertical_scrollbar(&self.reader_scroll)
             .into_any_element()
     }
 
@@ -556,11 +581,36 @@ impl Render for DraggedTab {
 
 /// One row: open tabs on the left, the shown document's actions on the right.
 pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) -> Div {
+    if state::read(cx, |l| l.split_document.as_deref() == Some(current)) {
+        let title = state::read(cx, |l| l.note_title(current));
+        return div()
+            .flex()
+            .items_center()
+            .gap(px(space::S))
+            .px(px(space::M))
+            .min_h(px(40.))
+            .border_b_1()
+            .border_color(t.separator)
+            .child(file_icon(current, iconsize::M))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).child(title))
+            .child(div().flex_none().child(actions))
+            .child(Button::new("split-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Geteilte Ansicht schließen")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))));
+    }
     let (docs, titles, dirty) = state::read(cx, |l| {
         let docs = l.open_documents.clone();
         let titles: Vec<String> = docs.iter().map(|d| l.note_title(d)).collect();
         let dirty: Vec<bool> = docs.iter().map(|d| l.buffers.get(d).is_some_and(|b| b.dirty)).collect();
         (docs, titles, dirty)
+    });
+    let overflow = (docs.len() > 4).then(|| {
+        let (all, names, shown) = (docs.clone(), titles.clone(), current.to_path_buf());
+        Button::new("doc-tabs-all").ghost().small().icon(menu_icon("chevron-down")).tooltip(trf("Alle %lld Tabs", &[&docs.len()])).dropdown_menu(move |mut menu, _, _| {
+            for (doc, title) in all.iter().zip(&names) {
+                let open = doc.clone();
+                menu = menu.item(PopupMenuItem::new(title.clone()).checked(*doc == shown).on_click(move |_, _, cx| act(cx, |l| l.open_document(&open))));
+            }
+            menu
+        })
     });
     let mut tabs = div().flex().gap(px(space::XXS)).py(px(space::S));
     for (i, doc) in docs.iter().enumerate() {
@@ -617,8 +667,9 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
                         }),
                 )
                 .context_menu(move |m, _, _| {
-                    let (a, b, c, d) = (menu.clone(), menu.clone(), menu.clone(), menu.clone());
-                    m.item(PopupMenuItem::new(tr("Tab schließen")).on_click(move |_, _, cx| close_tab(&a, cx)))
+                    let (a, b, c, d, beside) = (menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone());
+                    m.when(!active, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.set_split(Some(beside.clone()))))))
+                        .item(PopupMenuItem::new(tr("Tab schließen")).on_click(move |_, _, cx| close_tab(&a, cx)))
                         .item(PopupMenuItem::new(tr("Andere Tabs schließen")).on_click(move |_, _, cx| close_other_tabs(&b, cx)))
                         .item(PopupMenuItem::new(tr("Alle Tabs schließen")).on_click(|_, _, cx| act(cx, |l| l.close_all_documents())))
                         .separator()
@@ -637,6 +688,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
         .border_b_1()
         .border_color(t.separator)
         .child(div().id("doc-tabs").flex_1().min_w_0().overflow_x_scroll().child(tabs))
+        .children(overflow)
         .child(div().flex_none().child(actions))
 }
 

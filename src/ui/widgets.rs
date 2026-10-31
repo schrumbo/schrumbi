@@ -79,10 +79,35 @@ pub fn menu_icon(name: &str) -> Icon {
     Icon::empty().path(SharedString::from(format!("icons/{name}.svg")))
 }
 
+/// How long after a right click tooltips stay away, so none covers the context menu that just opened.
+const TOOLTIP_PAUSE: std::time::Duration = std::time::Duration::from_secs(3);
+
+struct LastRightClick(std::time::Instant);
+
+impl Global for LastRightClick {}
+
+struct NoTooltip;
+
+impl Render for NoTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+/// Notes a right click for `tip`; call it from the window's root.
+pub fn pause_tooltips(cx: &mut App) {
+    cx.set_global(LastRightClick(std::time::Instant::now()));
+}
+
 /// Tooltip builder for `.tooltip(...)`.
 pub fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let text: SharedString = text.into();
-    move |window, cx| gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(window, cx)
+    move |window, cx| {
+        if cx.try_global::<LastRightClick>().is_some_and(|c| c.0.elapsed() < TOOLTIP_PAUSE) {
+            return cx.new(|_| NoTooltip).into();
+        }
+        gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(window, cx)
+    }
 }
 
 pub fn text(s: impl Into<SharedString>, size: f32, color: Hsla) -> Div {
