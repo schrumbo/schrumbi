@@ -465,7 +465,10 @@ impl Library {
                 self.config_broken = false;
             }
             Ok(None) => {
-                let c = workspace::starter_config(&root);
+                let mut c = workspace::starter_config(&root);
+                if root.join(".obsidian").is_dir() {
+                    c.modules.clear();
+                }
                 let _ = workspace::save(&c, &path);
                 self.config = Some(c);
                 self.needs_setup = true;

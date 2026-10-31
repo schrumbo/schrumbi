@@ -254,7 +254,8 @@ impl Setup {
         let mut draft = state::read(cx, |l| l.config.clone()).unwrap_or_default();
         let is_vault = state::read(cx, |l| l.root.as_ref().is_some_and(|r| r.join(".obsidian").is_dir()));
         let vault_folders = is_vault.then(|| {
-            let all = std::mem::take(&mut draft.modules);
+            let root = state::read(cx, |l| l.root.clone()).unwrap_or_default();
+            let all = crate::core::workspace::starter_config(&root).modules;
             draft.modules = all.iter().filter(|m| looks_like_semester_or_module(&m.folder)).cloned().collect();
             all
         });
@@ -299,8 +300,23 @@ impl Setup {
 
 /// A folder named like a semester or a course code is probably a module; everything else stays unchecked.
 fn looks_like_semester_or_module(name: &str) -> bool {
-    static PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)^(ws|ss|wise|sose|sem(ester)?)[\s_-]*\d|^\d+\.?\s*sem|^[A-ZÄÖÜ]{2,6}\d{0,4}$").unwrap());
+    static PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?i:^(ws|ss|wise|sose|sem(ester)?)[\s_-]*\d|^\d+\.?\s*sem)|^[A-ZÄÖÜ]{2,6}\d{0,4}$").unwrap());
     PATTERN.is_match(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::looks_like_semester_or_module as module;
+
+    #[test]
+    fn only_course_like_folders_start_as_modules() {
+        for yes in ["WS25", "SS 2026", "sose26", "3. Semester", "MCI", "UXD1"] {
+            assert!(module(yes), "{yes}");
+        }
+        for no in ["Privat", "Ordner", "Anhänge", "Tagebuch", "notes"] {
+            assert!(!module(no), "{no}");
+        }
+    }
 }
 
 fn form_row(label: String, content: impl IntoElement, t: &Theme) -> Div {

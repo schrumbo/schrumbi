@@ -475,8 +475,8 @@ impl CanvasView {
         }
         if e.click_count >= 2 {
             match self.node_at(x, y) {
-                Some(id) => self.start_edit(&id, window, cx),
-                None => self.add_text(x, y, window, cx),
+                Some(id) => cx.defer_in(window, move |v, window, cx| v.start_edit(&id, window, cx)),
+                None => cx.defer_in(window, move |v, window, cx| v.add_text(x, y, window, cx)),
             }
             return;
         }
@@ -671,8 +671,6 @@ impl CanvasView {
                     self.selection = doc.nodes.iter().map(|n| n.id.clone()).collect();
                 }
             }
-            ("z", true, false) => self.step_history(true, cx),
-            ("z", true, true) => self.step_history(false, cx),
             ("1" | "!", false, true) => self.fit_all(),
             ("2" | "\"", false, true) => self.fit_selection(),
             ("=" | "+", true, _) => self.zoom_center(1.2),
@@ -1047,6 +1045,8 @@ impl Render for CanvasView {
             .bg(t.content)
             .cursor(if self.space_down { CursorStyle::OpenHand } else { CursorStyle::Arrow })
             .key_context("WalkItems")
+            .on_action(cx.listener(|v, _: &super::app::Undo, _, cx| v.step_history(true, cx)))
+            .on_action(cx.listener(|v, _: &super::app::Redo, _, cx| v.step_history(false, cx)))
             .on_action(cx.listener(|v, _: &NextItem, _, cx| v.cycle(false, cx)))
             .on_action(cx.listener(|v, _: &PreviousItem, _, cx| v.cycle(true, cx)))
             .on_key_down(cx.listener(Self::on_key))

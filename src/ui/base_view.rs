@@ -241,7 +241,11 @@ impl BaseView {
         let Some(cell) = table.rows.get(row).and_then(|r| r.cells.get(col)) else { return };
         let value = cell.1.display();
         let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
-        input.update(cx, |s, cx| s.focus(window, cx));
+        input.update(cx, |s, cx| {
+            let end = s.value().len();
+            s.focus(window, cx);
+            s.set_selected_range(0..end, cx);
+        });
         self._subs.retain(|_| false);
         self._subs.push(cx.subscribe(&input, |this, input, e: &InputEvent, cx| match e {
             InputEvent::PressEnter { .. } => {
@@ -327,7 +331,7 @@ impl BaseView {
         cx.notify();
     }
 
-    fn cell(&self, row: usize, col: usize, value: &Value, t: &Theme) -> AnyElement {
+    fn cell(&self, row: usize, col: usize, value: &Value, path: &PathBuf, me: &Entity<Self>, t: &Theme) -> AnyElement {
         if let Some((r, c, input)) = &self.editing
             && *r == row
             && *c == col
@@ -335,7 +339,20 @@ impl BaseView {
             return div().w(px(COLUMN)).flex_none().px(px(space::XS)).child(Input::new(input).small()).into_any_element();
         }
         let selected = self.cursor == (row, col);
+        let (click, open) = (me.clone(), path.clone());
         div()
+            .id(("base-cell", row * 1000 + col))
+            .on_click(move |e, window, cx| {
+                click.update(cx, |v, cx| {
+                    v.cursor = (row, col);
+                    window.focus(&v.focus, cx);
+                    cx.notify();
+                });
+                if e.click_count() >= 2 {
+                    let p = open.clone();
+                    act(cx, |l| l.open_file(&p));
+                }
+            })
             .w(px(COLUMN))
             .flex_none()
             .h(px(ROW))
@@ -354,10 +371,7 @@ impl BaseView {
             .filter_map(|i| {
                 let row = table.rows.get(i)?;
                 let hover = t.ink.opacity(0.05);
-                let open = row.path.clone();
-                let cells: Vec<AnyElement> = row.cells.iter().enumerate().map(|(c, (_, v))| self.cell(i, c, v, t)).collect();
-                let click = me.clone();
-                let columns = table.columns.len().max(1);
+                let cells: Vec<AnyElement> = row.cells.iter().enumerate().map(|(c, (_, v))| self.cell(i, c, v, &row.path, &me, t)).collect();
                 Some(
                     div()
                         .id(("base-row", i))
@@ -367,18 +381,6 @@ impl BaseView {
                         .border_color(t.separator)
                         .soft(hover, 0.)
                         .children(cells)
-                        .on_click(move |e, window, cx| {
-                            let col = (f32::from(e.position().x) / COLUMN) as usize;
-                            click.update(cx, |v, cx| {
-                                v.cursor = (i, col.min(columns - 1));
-                                window.focus(&v.focus, cx);
-                                cx.notify();
-                            });
-                            if e.click_count() >= 2 {
-                                let p = open.clone();
-                                act(cx, |l| l.open_file(&p));
-                            }
-                        })
                         .into_any_element(),
                 )
             })
