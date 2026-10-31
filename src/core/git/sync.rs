@@ -97,11 +97,12 @@ impl Git {
                 return Err(GitError::Conflicts(conflicts.into_iter().map(|c| c.path).collect()));
             }
             if !automatic.is_empty() {
-                let resolved = self.merge_resolved(&HashMap::new(), &automatic, "Merge")?;
+                let resolved = self.merge_resolved(&HashMap::new(), &automatic, &crate::core::i18n::tr("Stand vom anderen Gerät übernommen"))?;
                 report.pulled.extend(resolved.pulled);
                 return Ok(());
             }
-            self.run_bulk(&["merge", "-q", "--no-edit", "@{u}"], None)?;
+            let message = crate::core::i18n::tr("Stand vom anderen Gerät übernommen");
+            self.run_bulk(&["merge", "-q", "-m", &message, "@{u}"], None)?;
         }
         if let Some(before) = before {
             report.pulled.extend(self.settle_times(&before)?);
@@ -141,9 +142,9 @@ impl Git {
 
     fn push(&self, status: &RepoStatus, remote: &str) -> Result<(), GitError> {
         if status.upstream.is_some() {
-            self.run_network(&["push", "-q"]).map(|_| ())
+            self.run_network(&["push", "--progress"]).map(|_| ())
         } else {
-            self.run_network(&["push", "-q", "-u", remote, "HEAD"]).map(|_| ())
+            self.run_network(&["push", "--progress", "-u", remote, "HEAD"]).map(|_| ())
         }
     }
 

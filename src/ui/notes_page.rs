@@ -25,6 +25,7 @@ pub struct NotesPage {
     selected: usize,
     tree_width: f32,
     show_all_tags: bool,
+    tree_open: bool,
     focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
     _subs: Vec<Subscription>,
@@ -38,6 +39,15 @@ struct Line {
     modified: f64,
 }
 
+#[derive(Clone)]
+struct NotesSplit;
+
+impl Render for NotesSplit {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
 impl NotesPage {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let query = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Notizen filtern")));
@@ -47,7 +57,7 @@ impl NotesPage {
                 cx.notify();
             }
         })];
-        Self { folder: None, open_folders: BTreeSet::new(), query, selected: 0, tree_width: 240., show_all_tags: false, focus: cx.focus_handle(), list_scroll: UniformListScrollHandle::new(), _subs: subs }
+        Self { folder: None, open_folders: BTreeSet::new(), query, selected: 0, tree_width: crate::core::prefs::get().notes_column.unwrap_or(240.), show_all_tags: false, tree_open: false, focus: cx.focus_handle(), list_scroll: UniformListScrollHandle::new(), _subs: subs }
     }
 
     fn lines(&self, tag: Option<&str>, cx: &App) -> Vec<Line> {
@@ -79,6 +89,51 @@ impl NotesPage {
             .collect();
         out.sort_by(|a, b| b.modified.total_cmp(&a.modified).then_with(|| a.name.cmp(&b.name)));
         out
+    }
+
+    /// Folders as the tree shows them, top to bottom.
+    fn shown_folders(&self) -> Vec<String> {
+        let vault = index::current();
+        let mut all: BTreeSet<String> = BTreeSet::new();
+        for path in vault.notes.keys() {
+            let Ok(rel) = path.strip_prefix(&vault.root) else { continue };
+            let mut parent = rel.parent();
+            while let Some(p) = parent.filter(|p| !p.as_os_str().is_empty()) {
+                all.insert(p.to_string_lossy().replace('\\', "/"));
+                parent = p.parent();
+            }
+        }
+        all.into_iter().filter(|f| f.rsplit_once('/').is_none_or(|(up, _)| up.split('/').scan(String::new(), |acc, part| {
+            if !acc.is_empty() {
+                acc.push('/');
+            }
+            acc.push_str(part);
+            Some(acc.clone())
+        }).all(|a| self.open_folders.contains(&a)))).collect()
+    }
+
+    /// ⌥↑↓ walk the folders, → opens one and ← closes it or goes to its parent.
+    fn tree_key(&mut self, key: &str) {
+        let shown = self.shown_folders();
+        let at = self.folder.as_ref().and_then(|f| shown.iter().position(|s| s == f));
+        match key {
+            "down" => self.folder = shown.get(at.map_or(0, |i| i + 1)).cloned().or(self.folder.clone()),
+            "up" => self.folder = at.filter(|i| *i > 0).and_then(|i| shown.get(i - 1).cloned()),
+            "right" => {
+                if let Some(f) = self.folder.clone() {
+                    self.open_folders.insert(f);
+                }
+            }
+            "left" => {
+                if let Some(f) = self.folder.clone()
+                    && !self.open_folders.remove(&f)
+                {
+                    self.folder = f.rsplit_once('/').map(|(up, _)| up.to_string());
+                }
+            }
+            _ => {}
+        }
+        self.selected = 0;
     }
 
     fn tree(&self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -217,8 +272,20 @@ impl Render for NotesPage {
         let lines = self.lines(tag.as_deref(), cx);
         self.selected = self.selected.min(lines.len().saturating_sub(1));
         let narrow = window.bounds().size.width < px(1100.);
+        let toggle_tree = narrow.then(|| {
+            Button::new("notes-tree-toggle").small().ghost().icon(menu_icon("folder")).tooltip(tr("Ordner und Lesezeichen")).on_click(cx.listener(|s, _, _, cx| {
+                s.tree_open = !s.tree_open;
+                cx.notify();
+            }))
+        });
+        let show_tree = !narrow || self.tree_open;
         let tree = self.tree(&t, cx);
         let tree_width = self.tree_width;
+        let handle = div().id("notes-split").w(px(space::XS)).h_full().flex_none().cursor_col_resize().on_drag(NotesSplit, |d, _, _, cx| cx.new(|_| d.clone())).on_drag_move(cx.listener(|s, e: &DragMoveEvent<NotesSplit>, _, cx| {
+            let left = e.bounds.left();
+            s.tree_width = f32::from(e.event.position.x - left).clamp(160., 420.);
+            cx.notify();
+        }));
         let tags = vault.tag_tree();
         let shown_tags = if self.show_all_tags { tags.len() } else { tags.len().min(12) };
         let more = tags.len() - shown_tags;
@@ -231,7 +298,7 @@ impl Render for NotesPage {
             .gap(px(space::S))
             .border_b_1()
             .border_color(t.separator)
-            .child(div().flex().items_center().gap(px(space::S)).child(div().flex_1().child(Input::new(&self.query).small())).child(Button::new("notes-daily").small().icon(menu_icon("calendar")).label(tr("Heute")).tooltip(tr("Tagesnotiz öffnen")).on_click(|_, _, cx| act(cx, |l| l.open_daily_note()))).child(Button::new("notes-new").small().primary().icon(menu_icon("plus")).label(tr("Neue Notiz")).on_click(cx.listener(|s, _, _, cx| {
+            .child(div().flex().items_center().gap(px(space::S)).children(toggle_tree).child(div().flex_1().child(Input::new(&self.query).small())).child(Button::new("notes-graph").small().ghost().icon(menu_icon("waypoints")).tooltip(tr("Graph zeigen")).on_click(|_, _, cx| act(cx, |l| l.show_graph(None)))).child(Button::new("notes-daily").small().icon(menu_icon("calendar")).label(tr("Heute")).tooltip(tr("Tagesnotiz öffnen")).on_click(|_, _, cx| act(cx, |l| l.open_daily_note()))).child(Button::new("notes-new").small().primary().icon(menu_icon("plus")).label(tr("Neue Notiz")).on_click(cx.listener(|s, _, _, cx| {
                 let folder = s.folder.clone().map(|f| index::current().root.join(f));
                 act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: None, folder }));
             }))))
@@ -324,6 +391,24 @@ impl Render for NotesPage {
                 if window.context_stack().iter().any(|c| c.contains("Input")) {
                     return;
                 }
+                let k = &e.keystroke;
+                if k.key == "/" {
+                    s.query.update(cx, |q, cx| q.focus(window, cx));
+                    cx.stop_propagation();
+                    return;
+                }
+                if k.key == "n" && k.modifiers.platform {
+                    let folder = s.folder.clone().map(|f| index::current().root.join(f));
+                    act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: None, folder }));
+                    cx.stop_propagation();
+                    return;
+                }
+                if matches!(k.key.as_str(), "left" | "right") || (k.modifiers.alt && matches!(k.key.as_str(), "up" | "down")) {
+                    s.tree_key(k.key.as_str());
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
                 match e.keystroke.key.as_str() {
                     "down" => s.selected = (s.selected + 1).min(keys.len().saturating_sub(1)),
                     "up" => s.selected = s.selected.saturating_sub(1),
@@ -339,7 +424,7 @@ impl Render for NotesPage {
                 s.list_scroll.scroll_to_item(s.selected, ScrollStrategy::Center);
                 cx.notify();
             }))
-            .when(!narrow, |d| d.child(div().w(px(tree_width)).flex_none().h_full().border_r_1().border_color(t.separator).child(tree)))
+            .when(show_tree, |d| d.child(div().w(px(tree_width)).flex_none().h_full().border_r_1().border_color(t.separator).child(tree)).child(handle).on_mouse_up(MouseButton::Left, cx.listener(|s, _, _, _| crate::core::prefs::update(|p| p.notes_column = Some(s.tree_width)))))
             .child(div().flex_1().min_w_0().h_full().flex().flex_col().child(filter_row).child(div().flex_1().min_h_0().child(body)).child(div().flex_none().px(px(space::L)).py(px(space::XS)).border_t_1().border_color(t.separator).child(caption(if count == 1 { tr("1 Notiz") } else { trf("%@ Notizen", &[&count.to_string()]) }, &t))))
     }
 }

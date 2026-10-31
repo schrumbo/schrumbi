@@ -113,11 +113,15 @@ pub struct Prefs {
     pub split_documents: BTreeMap<String, String>,
     /// Share of the width the left document gets in the split view.
     pub split_share: f32,
+    /// Width of the folder tree on the notes page.
+    pub notes_column: Option<f32>,
     /// Width of the deadlines column on module pages.
     pub module_column: Option<f32>,
     pub shortcuts: BTreeMap<String, Shortcut>,
     pub disabled_shortcuts: BTreeSet<String>,
     pub git: BTreeMap<String, GitPrefs>,
+    /// An Obsidian vault outside the workspace, by workspace path.
+    pub vaults: BTreeMap<String, std::path::PathBuf>,
     /// A Git to use instead of the one found automatically.
     pub git_path: Option<PathBuf>,
     pub tray: bool,
@@ -160,9 +164,11 @@ impl Default for Prefs {
             split_documents: BTreeMap::new(),
             split_share: 0.5,
             module_column: None,
+            notes_column: None,
             shortcuts: BTreeMap::new(),
             disabled_shortcuts: BTreeSet::new(),
             git: BTreeMap::new(),
+            vaults: BTreeMap::new(),
             git_path: None,
             tray: true,
             update_check: true,

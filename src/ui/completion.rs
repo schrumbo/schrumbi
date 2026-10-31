@@ -61,7 +61,7 @@ pub struct NoteCompletion {
 }
 
 impl NoteCompletion {
-    fn link_items(&self, typed: &str, range: Range) -> Vec<CompletionItem> {
+    fn link_items(&self, typed: &str, range: Range, open: &[PathBuf]) -> Vec<CompletionItem> {
         let vault = index::current();
         let close = "]]";
         let from = Some(self.note.as_path());
@@ -84,7 +84,16 @@ impl NoteCompletion {
             let by_alias = facts.and_then(|f| f.aliases.iter().filter_map(|a| score(a, typed).map(|s| (s, a.clone()))).min());
             let by_name = score(&name, typed);
             let Some(best) = by_name.into_iter().chain(by_alias.as_ref().map(|(s, _)| *s)).min() else { continue };
-            let near = if path.parent().map(PathBuf::from) == folder { -500 } else { 0 };
+            let top = |p: &std::path::Path| p.strip_prefix(&vault.root).ok().and_then(|r| r.components().next()).map(|c| c.as_os_str().to_os_string());
+            let near = if path.parent().map(PathBuf::from) == folder {
+                -500
+            } else if open.contains(path) {
+                -400
+            } else if top(path) == top(&self.note) {
+                -200
+            } else {
+                0
+            };
             let link = vault.link_path(from, path);
             let relative = path.strip_prefix(&vault.root).ok().and_then(|p| p.parent()).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
             let (label, new_text) = match by_alias.filter(|(s, _)| by_name.is_none_or(|n| *s < n)) {
@@ -123,7 +132,8 @@ impl NoteCompletion {
 }
 
 impl CompletionProvider for NoteCompletion {
-    fn completions(&self, text: &Rope, offset: usize, _: CompletionContext, _: &mut Window, _: &mut App) -> Task<Result<CompletionResponse>> {
+    fn completions(&self, text: &Rope, offset: usize, _: CompletionContext, _: &mut Window, cx: &mut App) -> Task<Result<CompletionResponse>> {
+        let open = super::state::read(cx, |l| l.open_documents.clone());
         let all = text.to_string();
         let offset = offset.min(all.len());
         let line_start = all[..offset].rfind('\n').map_or(0, |i| i + 1);
@@ -137,7 +147,7 @@ impl CompletionProvider for NoteCompletion {
                 let start_utf16: u32 = line.chars().take(start).map(|c| c.len_utf16() as u32).sum();
                 let end = if line[column..].starts_with("]]") { caret + 2 } else { caret };
                 let range = Range { start: Position { line: line_number, character: start_utf16 }, end: Position { line: line_number, character: end } };
-                self.link_items(&typed, range)
+                self.link_items(&typed, range, &open)
             }
             Some(Context_::Slash { typed, start }) => {
                 let start_utf16: u32 = line.chars().take(start).map(|c| c.len_utf16() as u32).sum();

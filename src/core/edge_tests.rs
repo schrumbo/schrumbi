@@ -545,6 +545,7 @@ fn restoring_a_version_can_be_undone() {
 
 #[test]
 fn renaming_keeps_links_alive_and_undo_takes_all_of_it_back() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let root = dunce::canonicalize(folder("relink")).unwrap();
     std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();
     std::fs::write(root.join("Alt.md"), "Ziel").unwrap();
@@ -566,4 +567,107 @@ fn renaming_keeps_links_alive_and_undo_takes_all_of_it_back() {
     assert!(read("Board.canvas").contains("Alt.md"));
     lib.redo();
     assert_eq!(read("Offen.md"), "[[Neu|Alt]]");
+}
+
+static VAULT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn vault_folder(name: &str) -> (PathBuf, Library) {
+    let root = dunce::canonicalize(folder(name)).unwrap();
+    std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();
+    std::fs::create_dir_all(root.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(root.join("Vorlagen")).unwrap();
+    std::fs::write(root.join(".obsidian/daily-notes.json"), r#"{"folder":"Tage","format":"YYYY-MM-DD","template":"Vorlagen/Tag"}"#).unwrap();
+    std::fs::write(root.join(".obsidian/templates.json"), r#"{"folder":"Vorlagen","dateFormat":"YYYY","timeFormat":"HH"}"#).unwrap();
+    std::fs::write(root.join(".obsidian/zk-prefixer.json"), r#"{"folder":"Zettel","format":"YYYY"}"#).unwrap();
+    std::fs::write(root.join("Vorlagen/Tag.md"), "# {{title}}\n{{date}}\n").unwrap();
+    std::fs::write(root.join("Vorlagen/Mitschrift.md"), "# Mitschrift {{title}}\n").unwrap();
+    let lib = open(&root);
+    (root, lib)
+}
+
+#[test]
+fn daily_and_unique_notes_follow_the_vault_settings_once() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, mut lib) = vault_folder("daily");
+    lib.open_daily_note();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let year = chrono::Local::now().format("%Y").to_string();
+    let path = root.join("Tage").join(format!("{today}.md"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), format!("# {today}\n{year}\n"));
+    std::fs::write(&path, "Eigener Text").unwrap();
+    lib.open_daily_note();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "Eigener Text", "an existing daily note stays");
+    lib.open_unique_note();
+    assert!(root.join("Zettel").join(format!("{year}.md")).exists());
+    lib.open_unique_note();
+    assert_eq!(std::fs::read_dir(root.join("Zettel")).unwrap().count(), 2, "a second one gets a free name");
+}
+
+#[test]
+fn new_notes_use_the_vaults_note_template() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, mut lib) = vault_folder("newnote");
+    let path = lib.create_note("Radar", &root, "md").unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "# Mitschrift Radar\n");
+}
+
+#[test]
+fn templates_extracting_and_merging_undo_as_one_step() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, mut lib) = vault_folder("composer");
+    let read = |n: &str| std::fs::read_to_string(root.join(n)).unwrap();
+    std::fs::write(root.join("A.md"), "Eins\nZwei\n").unwrap();
+    std::fs::write(root.join("Ziel.md"), "Ziel\n").unwrap();
+    std::fs::write(root.join("Quelle.md"), "Siehe [[A]]\n").unwrap();
+    crate::core::vault::index::rebuild(&root, &[]);
+
+    lib.insert_template(&root.join("A.md"), &root.join("Vorlagen/Mitschrift.md"));
+    assert_eq!(read("A.md"), "Eins\nZwei\n# Mitschrift A\n");
+    lib.undo();
+    assert_eq!(read("A.md"), "Eins\nZwei\n");
+
+    let made = lib.extract_to_note(&root.join("A.md"), 5..9).unwrap();
+    assert_eq!(made.file_name().unwrap(), "Zwei.md");
+    assert_eq!(read("Zwei.md"), "Zwei");
+    assert_eq!(read("A.md"), "Eins\n[[Zwei]]\n");
+    lib.undo();
+    assert_eq!(read("A.md"), "Eins\nZwei\n");
+    assert!(!root.join("Zwei.md").exists());
+
+    crate::core::vault::index::rebuild(&root, &[]);
+    lib.merge_note(&root.join("A.md"), &root.join("Ziel.md"));
+    assert_eq!(read("Ziel.md"), "Ziel\n\nEins\nZwei\n");
+    assert!(!root.join("A.md").exists());
+    assert!(read("Quelle.md").contains("Ziel"), "{}", read("Quelle.md"));
+    lib.undo();
+    assert_eq!(read("A.md"), "Eins\nZwei\n");
+    assert_eq!(read("Ziel.md"), "Ziel\n");
+    assert_eq!(read("Quelle.md"), "Siehe [[A]]\n");
+}
+
+#[test]
+fn a_vault_outside_the_workspace_is_searched_and_filed_under_its_module() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let root = dunce::canonicalize(folder("extern-root")).unwrap();
+    let vault = dunce::canonicalize(folder("extern-vault")).unwrap();
+    std::fs::create_dir_all(vault.join(".obsidian")).unwrap();
+    std::fs::create_dir_all(vault.join("Notizen/Mathe")).unwrap();
+    std::fs::write(vault.join("Notizen/Mathe/Satz.md"), "Pythagoras [[Beweis]]").unwrap();
+    std::fs::write(vault.join("Notizen/Mathe/Beweis.md"), "Text").unwrap();
+    std::fs::write(root.join("Eigen.md"), "Im Workspace").unwrap();
+    std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();
+    let mut study: crate::core::model::StudyConfig = serde_json::from_value(config(1, 1)).unwrap();
+    study.modules[0].notes_folder = Some("Notizen/Mathe".to_string());
+    let module = study.modules[0].id.clone();
+    let index = std::sync::Arc::new(crate::core::search_index::SearchIndex::open_at(&vault.join("index.sqlite")));
+    let job = crate::core::library::IndexJob { index: index.clone(), root: root.clone(), exclude: Vec::new(), config: study, vault: Some(vault.clone()) };
+    let (count, catalog) = job.run();
+    assert!(count >= 3);
+    let note = catalog.iter().find(|f| f.file.path == vault.join("Notizen/Mathe/Satz.md")).expect("vault note is in the catalog");
+    assert_eq!(note.module_id.as_deref(), Some(module.as_str()));
+    assert!(catalog.iter().any(|f| f.file.path == root.join("Eigen.md")), "workspace files stay known");
+    let vault_index = crate::core::vault::index::current();
+    assert_eq!(vault_index.root, vault);
+    assert!(vault_index.backlinks.contains_key(&vault.join("Notizen/Mathe/Beweis.md")));
+    assert!(index.content_search(&["pythagoras".to_string()], None, 10).iter().any(|h| h.file.path == vault.join("Notizen/Mathe/Satz.md")));
 }

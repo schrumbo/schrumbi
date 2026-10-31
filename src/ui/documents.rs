@@ -264,6 +264,15 @@ impl NoteView {
         super::motion::reveal("note-conflict", open, div().p(px(space::S)).child(notice("triangle-alert", t.orange, tr("Diese Notiz wurde außerhalb von Schrumbi geändert."), Some(tr("Deine Änderungen sind noch da. Gesichert wird erst, wenn du dich entschieden hast.")), actions, t)))
     }
 
+    /// ⌘-click in the editor: follows the link under the caret.
+    fn open_link_at_caret(&mut self, cx: &mut Context<Self>) {
+        let (text, range) = self.with_text(cx);
+        let Some(link) = crate::core::vault::links::find_links(&text).into_iter().find(|l| l.range.start <= range.start && range.start <= l.range.end) else { return };
+        let destination = format!("{}{}", link.target.path, link.target.subpath());
+        let base = self.path.parent().map(Path::to_path_buf);
+        markdown_view::link_action(&destination, base.as_deref())(cx);
+    }
+
     /// Tab walks through the links of the reader.
     fn step_link(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
         let count = self.link_focus.found.borrow().len();
@@ -411,11 +420,15 @@ impl NoteView {
                             let p = g.clone();
                             act(cx, |l| l.show_graph(Some(p)));
                         }))
-                        .item(PopupMenuItem::new(tr("Verlauf")).icon(menu_icon("history")).on_click(move |_, _, cx| {
-                            let _ = &h;
-                            act(cx, |l| l.show_inspector = true);
-                        }));
+                        ;
+                    let _ = h;
                 }
+                menu = menu.item(PopupMenuItem::new(tr("Verlauf")).icon(menu_icon("history")).on_click(|_, _, cx| {
+                    act(cx, |l| {
+                        l.show_inspector = true;
+                        l.show_versions = true;
+                    });
+                }));
                 if embedded {
                     menu = menu.separator().item(PopupMenuItem::new(tr("Tab schließen")).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&d, cx)));
                 }
@@ -572,6 +585,10 @@ impl NoteView {
                 n.apply(edit_ops::shift_lines(&s, r, -1), w, cx)
             }))
             .on_action(cx.listener(|n, _: &ListNewline, w, cx| {
+                if n.editor.read(cx).completion_menu_state().open {
+                    cx.propagate();
+                    return;
+                }
                 let (s, r) = n.with_text(cx);
                 match (r.is_empty(), edit_ops::newline(&s, r.start)) {
                     (true, Some(e)) => n.apply(e, w, cx),
@@ -579,6 +596,10 @@ impl NoteView {
                 }
             }))
             .on_action(cx.listener(|n, _: &ListTab, w, cx| {
+                if n.editor.read(cx).completion_menu_state().open {
+                    cx.propagate();
+                    return;
+                }
                 let (s, r) = n.with_text(cx);
                 if edit_ops::tab_indents(&s, &r) {
                     n.apply(edit_ops::shift_lines(&s, r, 1), w, cx)
@@ -593,6 +614,11 @@ impl NoteView {
             .on_action(|_: &ZoomIn, _, cx| NoteView::zoom(1., cx))
             .on_action(|_: &ZoomOut, _, cx| NoteView::zoom(-1., cx))
             .on_action(|_: &ZoomReset, _, cx| NoteView::zoom(0., cx))
+            .on_mouse_up(MouseButton::Left, cx.listener(|n, e: &MouseUpEvent, _, cx| {
+                if e.modifiers.platform || e.modifiers.control {
+                    n.open_link_at_caret(cx);
+                }
+            }))
             .child(Editor::new(&self.editor).appearance(false).h_full().bg(Theme::get(cx).content))
             .into_any_element()
     }
@@ -666,10 +692,12 @@ impl Render for NoteView {
         } else {
             div().h(px(44.)).flex_none().flex().items_center().justify_center().border_b_1().border_color(t.separator).child(header)
         };
+        let hover_card = (!self.embedded).then(|| super::link_card::overlay(cx)).flatten();
         let view = div()
             .size_full()
             .flex()
             .flex_col()
+            .children(hover_card)
             .track_focus(&self.focus)
             .key_context("NoteView")
             .on_action(cx.listener(|n, _: &super::app::TogglePreview, w, cx| {

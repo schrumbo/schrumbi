@@ -3,6 +3,22 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// How far the running upload is, in percent.
+pub static UPLOAD_PERCENT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn note_upload(chunk: &[u8]) {
+    if let Some(percent) = upload_percent(&String::from_utf8_lossy(chunk)) {
+        UPLOAD_PERCENT.store(percent, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The last percentage of `Writing objects:` in Git's progress output.
+pub fn upload_percent(text: &str) -> Option<u8> {
+    let line = text.rsplit("Writing objects:").next().filter(|_| text.contains("Writing objects:"))?;
+    let digits: String = line.trim_start().chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
 /// How long to wait for the rest of a finished command's output.
 const PIPE_GRACE: Duration = Duration::from_secs(2);
 /// How long local commands may take.
@@ -77,7 +93,7 @@ pub fn spawn(mut command: Command, input: Option<Vec<u8>>, timeout: Duration) ->
             let _ = stdin.write_all(&input);
         });
     }
-    let read = |pipe: Option<Box<dyn Read + Send>>| {
+    let read = |pipe: Option<Box<dyn Read + Send>>, watch: bool| {
         let shared = std::sync::Arc::new(std::sync::Mutex::new((Vec::new(), false)));
         let writer = shared.clone();
         std::thread::spawn(move || {
@@ -88,14 +104,17 @@ pub fn spawn(mut command: Command, input: Option<Vec<u8>>, timeout: Duration) ->
                         break;
                     }
                     writer.lock().unwrap().0.extend_from_slice(&chunk[..n]);
+                    if watch {
+                        note_upload(&chunk[..n]);
+                    }
                 }
             }
             writer.lock().unwrap().1 = true;
         });
         shared
     };
-    let stdout = read(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let stderr = read(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let stdout = read(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>), false);
+    let stderr = read(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>), true);
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -126,6 +145,11 @@ pub struct Git {
 }
 
 impl Git {
+    /// The same Git for another folder.
+    pub fn for_folder(&self, folder: &Path) -> Self {
+        Self::new(self.exe.clone(), folder)
+    }
+
     pub fn new(exe: PathBuf, root: &Path) -> Self {
         Self { exe, root: root.to_path_buf() }
     }

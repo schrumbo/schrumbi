@@ -50,7 +50,7 @@ fn folder() -> PathBuf {
 
 /// Shows a version in the document's place; its bytes are fetched in the background.
 pub fn show(path: PathBuf, version: Version, cx: &mut App) {
-    let Some(git) = sync::get(cx).git.clone() else { return };
+    let Some(git) = sync::git_for(&path, cx) else { return };
     cx.global_mut::<History>().generation += 1;
     let generation = cx.global::<History>().generation;
     let job = version.clone();
@@ -121,18 +121,24 @@ pub struct VersionList {
 }
 
 impl VersionList {
+    /// Gives the arrow keys to the list.
+    pub fn take_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+    }
+
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self { path: None, versions: Vec::new(), loading: false, more: false, selected: None, error: None, focus: cx.focus_handle(), generation: 0 }
     }
 
     fn relative(path: &Path, cx: &App) -> Option<String> {
-        let root = sync::get(cx).git.as_ref()?.root.clone();
+        let root = sync::git_for(path, cx)?.root;
         let full = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         Some(full.strip_prefix(&root).ok()?.to_string_lossy().replace('\\', "/"))
     }
 
     fn load(&mut self, skip: usize, cx: &mut Context<Self>) {
-        let (Some(path), Some(git)) = (self.path.clone(), sync::get(cx).git.clone()) else { return };
+        let Some(path) = self.path.clone() else { return };
+        let Some(git) = sync::git_for(&path, cx) else { return };
         let Some(rel) = Self::relative(&path, cx) else { return };
         self.loading = true;
         self.generation += 1;
@@ -355,7 +361,7 @@ impl Render for VersionPane {
             .border_b_1()
             .border_color(t.separator)
             .child(icon("history", iconsize::M, t.accent))
-            .child(div().flex_1().min_w(px(160.)).child(trf("Version vom %@, %@ · nur lesen", &[&day, &clock])))
+            .child(div().flex_1().min_w(px(160.)).child(trf("Version: %@, %@ · nur lesen", &[&day, &clock])))
             .child(
                 div()
                     .flex()

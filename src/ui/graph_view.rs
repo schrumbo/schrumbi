@@ -28,6 +28,7 @@ pub struct GraphView {
     options: Options,
     focus_note: Option<(PathBuf, usize)>,
     graph: Arc<Graph>,
+    tints: Vec<Option<Hsla>>,
     layout: Arc<Mutex<Layout>>,
     positions: Vec<(f32, f32)>,
     generation: u64,
@@ -60,6 +61,7 @@ impl GraphView {
             options: Options::default(),
             focus_note: None,
             graph: Arc::default(),
+            tints: Vec::new(),
             layout: Arc::default(),
             positions: Vec::new(),
             generation: 0,
@@ -92,6 +94,18 @@ impl GraphView {
             Some((path, depth)) => full.local(path, *depth),
             None => full,
         });
+        let t = Theme::get(cx);
+        let folders: Vec<(String, Hsla)> = state::read(cx, |l| l.config.as_ref().map_or(Vec::new(), |c| c.modules.iter().map(|m| (m.notes_folder.clone().unwrap_or_else(|| m.folder.clone()), t.palette(&m.color))).collect()));
+        let tint_root = vault.root.clone();
+        self.tints = graph
+            .nodes
+            .iter()
+            .map(|n| {
+                let NodeKind::Note(path) = &n.kind else { return None };
+                let relative = path.strip_prefix(&tint_root).ok()?.to_string_lossy().replace('\\', "/");
+                folders.iter().find(|(f, _)| relative.starts_with(&format!("{f}/"))).map(|(_, c)| *c)
+            })
+            .collect();
         let known = cx.try_global::<KnownPositions>().map(|k| k.0.clone()).unwrap_or_default();
         let nodes = graph.nodes.clone();
         let mut layout = Layout::new(nodes.len(), |i| known.get(&nodes[i].name).copied());
@@ -281,6 +295,7 @@ impl Render for GraphView {
         let (graph, positions, pan, zoom, hover, selected) = (self.graph.clone(), self.positions.clone(), self.pan, self.zoom, self.hover, self.selected);
         let highlight = hover.or(selected);
         let neighbors: std::collections::HashSet<u32> = highlight.map_or_else(Default::default, |h| graph.neighbors(h).into_iter().collect());
+        let tints = self.tints.clone();
         let colors = (t.secondary, t.accent, t.ink, t.separator, t.content);
         let view = canvas(
             move |b, _, _| measured.set(b),
@@ -309,7 +324,8 @@ impl Render for GraphView {
                         }
                     }
                     if any_normal && let Ok(path) = normal.build() {
-                        window.paint_path(path, if highlight.is_some() { line.opacity(0.4) } else { line });
+                        let fade = (zoom * 1.5).clamp(0.12, 1.);
+                        window.paint_path(path, line.opacity(if highlight.is_some() { fade * 0.4 } else { fade }));
                     }
                     if any_strong && let Ok(path) = strong.build() {
                         window.paint_path(path, accent);
@@ -321,13 +337,13 @@ impl Render for GraphView {
                             continue;
                         }
                         let i = i as u32;
-                        let r = ((3. + (node.links as f32).sqrt() * 1.6).min(16.) * zoom.max(0.5)).max(2.5);
+                        let r = ((3. + (node.links as f32).sqrt() * 1.6).min(16.) * zoom.clamp(0.25, 1.5)).max(1.5);
                         let on = highlight == Some(i);
                         let near = neighbors.contains(&i);
                         let dim = highlight.is_some() && !on && !near;
                         let color = match node.kind {
                             _ if on => accent,
-                            NodeKind::Note(_) => secondary,
+                            NodeKind::Note(_) => tints.get(i as usize).copied().flatten().unwrap_or(secondary),
                             NodeKind::Attachment(_) => ink.opacity(0.35),
                             NodeKind::Tag(_) => accent.opacity(0.7),
                             NodeKind::Missing(_) => bg,

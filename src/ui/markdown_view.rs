@@ -518,6 +518,38 @@ fn link_exists(url: &str, base: Option<&Path>) -> bool {
 /// Web links open in the browser; everything else is a link inside the vault, created if it is missing.
 pub fn link_action(url: &str, base: Option<&Path>) -> LinkAction {
     let url = url.to_string();
+    if url.starts_with("obsidian://") {
+        return Rc::new(move |cx| {
+            use crate::core::vault::config::{UriAction, parse_uri};
+            let root = crate::core::vault::index::current().root.clone();
+            match parse_uri(&url, &root) {
+                Some(UriAction::Open(file)) => {
+                    let opened = super::state::act(cx, |l| l.open_link(&file, None));
+                    if !opened {
+                        super::state::act(cx, |l| l.create_link_target(&file, None));
+                    }
+                }
+                Some(UriAction::New { name, content }) => {
+                    let path = root.join(if name.ends_with(".md") { name } else { format!("{name}.md") });
+                    if !path.exists() && std::fs::write(&path, content).is_ok() {
+                        super::state::reindex(cx);
+                    }
+                    super::state::act(cx, |l| l.open_file(&path));
+                }
+                Some(UriAction::Daily) => {
+                    super::state::act(cx, |l| l.open_daily_note());
+                    super::state::reindex(cx);
+                }
+                Some(UriAction::Search(query)) => super::state::act(cx, |l| {
+                    l.search_query = query;
+                    l.set_route(crate::core::library::Route::Search);
+                }),
+                None => {
+                    let _ = opener::open(&url);
+                }
+            }
+        });
+    }
     if is_external(&url) {
         return Rc::new(move |_| {
             let _ = opener::open(&url);

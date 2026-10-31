@@ -282,6 +282,8 @@ impl Render for SyncPanel {
         });
         let working = step.is_some();
         let label = step.map_or_else(|| tr("Jetzt synchronisieren"), step_label);
+        let percent = crate::core::git::cmd::UPLOAD_PERCENT.load(std::sync::atomic::Ordering::Relaxed);
+        let upload = (step == Some(crate::core::git::sync::Step::Uploading) && percent > 0 && sync::get(cx).started.is_some_and(|at| at.elapsed() > std::time::Duration::from_secs(2))).then(|| div().px(px(space::M)).pb(px(space::S)).child(progress_bar(percent as f32 / 100., t.accent, &t)));
         let primary = conflicts == 0 && (count > 0 || status.ahead > 0 || status.behind > 0);
         let mut button = Button::new("sync-now").w_full().label(label).disabled(working).on_click(cx.listener(|p, _, _, cx| p.start(cx)));
         if primary {
@@ -292,6 +294,7 @@ impl Render for SyncPanel {
             .flex()
             .flex_col()
             .gap(px(space::S))
+            .children(upload)
             .when(!automatic && count > 0, |d| d.child(Input::new(&self.message).small()))
             .when(offline, |d| d.child(caption(tr("Offline: Stände bleiben lokal, bis wieder eine Verbindung besteht."), &t)))
             .when(!too_large.is_empty(), |d| {
@@ -719,8 +722,10 @@ impl SyncSetup {
 pub fn choice_card(id: &'static str, selected: bool, disabled: bool, icon_name: &str, title: String, detail: String, t: &Theme) -> Stateful<Div> {
     let hover = t.ink.opacity(0.04);
     let tint = if selected { t.accent } else { t.separator };
+    let spoken = format!("{title}{}", if selected { format!(", {}", tr("ausgewählt")) } else { String::new() });
     let card = div()
         .id(id)
+        .aria_label(spoken)
         .p(px(space::M))
         .flex()
         .items_start()

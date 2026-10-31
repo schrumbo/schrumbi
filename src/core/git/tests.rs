@@ -630,6 +630,14 @@ u UU N... 100644 100644 100644 100644 a b c k.md\0\
     assert_eq!(parse("# branch.head (detached)\0").branch, None);
 }
 
+#[test]
+fn upload_progress_is_read_from_gits_output() {
+    use super::cmd::upload_percent;
+    assert_eq!(upload_percent("Writing objects:  45% (9/20)\rWriting objects:  50% (10/20)\r"), Some(50));
+    assert_eq!(upload_percent("Writing objects: 100% (20/20), 1 MiB, done.\n"), Some(100));
+    assert_eq!(upload_percent("Enumerating objects: 3, done.\n"), None);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_helper_holding_the_pipes_does_not_hang_us() {

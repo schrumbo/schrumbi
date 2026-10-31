@@ -55,6 +55,12 @@ impl SearchIndex {
         Self { db: Mutex::new(db) }
     }
 
+    /// An index stored at `path`, for tests.
+    #[cfg(test)]
+    pub fn open_at(path: &Path) -> Self {
+        Self { db: Mutex::new(Self::connect(path)) }
+    }
+
     /// Opens the database; an index from an older schema is rebuilt, it only holds derived data.
     fn connect(path: &Path) -> Option<Connection> {
         let c = Connection::open(path).ok()?;
@@ -78,18 +84,24 @@ impl SearchIndex {
 
     /// Walks `root`, re-extracting only changed files and dropping deleted ones. Returns the file count.
     pub fn update(&self, root: &Path, exclude: &[String]) -> usize {
+        self.update_all(&[root.to_path_buf()], exclude)
+    }
+
+    /// Like `update`, for a workspace and a vault outside it; files of either root stay known.
+    pub fn update_all(&self, roots: &[PathBuf], exclude: &[String]) -> usize {
         let known: HashMap<String, f64> = self.with(|c| {
             let mut s = c.prepare("SELECT path, modified FROM files")?;
             s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?.collect()
         });
         let skip: HashSet<&str> = exclude.iter().map(String::as_str).collect();
+        let skip = &skip;
         let mut seen: HashSet<String> = HashSet::new();
         let mut pending: Vec<(PathBuf, String, String, f64, bool)> = Vec::new();
-        let walker = WalkDir::new(root).min_depth(1).into_iter().filter_entry(|e| {
+        let walkers = roots.iter().flat_map(|root| WalkDir::new(root).min_depth(1).into_iter().filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
             !name.starts_with('.') && !(e.file_type().is_dir() && (skip.contains(name.as_ref()) || is_package(e.path())))
-        });
-        for entry in walker.filter_map(Result::ok).filter(|e| !e.file_type().is_dir()) {
+        }));
+        for entry in walkers.filter_map(Result::ok).filter(|e| !e.file_type().is_dir()) {
             let name = entry.file_name().to_string_lossy().to_string();
             if name == CONFIG_NAME {
                 continue;

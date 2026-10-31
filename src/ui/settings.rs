@@ -100,6 +100,7 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Git-Pfad", Tab::Sync),
     ("Sync ausschalten", Tab::Sync),
     ("Editor", Tab::Notes),
+    ("Obsidian", Tab::Notes),
     ("Schriftgröße", Tab::Notes),
     ("Sichern", Tab::Notes),
     ("Pause", Tab::Notes),
@@ -1402,6 +1403,67 @@ impl Settings {
         ))
     }
 
+    fn obsidian_section(&mut self, fields: &mut Fields, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
+        use crate::core::vault::config::{self, LinkFormat, VaultConfig};
+        let (root, external, modules) = state::read(cx, |l| (l.root.clone(), l.external_vault(), l.config.as_ref().map_or(Vec::new(), |c| c.modules.clone())));
+        let Some(root) = root else { return div() };
+        let own = root.join(".obsidian").is_dir();
+        if own || external.is_some() {
+            let vault = external.clone().unwrap_or_else(|| root.clone());
+            let read = VaultConfig::read(&vault);
+            let format = match read.new_link_format {
+                LinkFormat::Shortest => tr("Kürzester Pfad"),
+                LinkFormat::Relative => tr("Relativer Pfad"),
+                LinkFormat::Absolute => tr("Absoluter Pfad"),
+            };
+            let style = if read.use_markdown_links { "[text](pfad)" } else { "[[pfad]]" };
+            let value = |s: String| div().text_color(t.secondary).child(s).into_any_element();
+            let title = if own { tr("Dieser Ordner ist ein Obsidian-Vault") } else { trf("Verbunden mit %@", &[&vault.display().to_string()]) };
+            let mut rows = vec![
+                row(title, icon("circle-check", iconsize::M, t.green), t),
+                row(tr("Anhangsordner"), value(read.attachment_folder_path.clone()), t),
+                row(tr("Linkformat"), value(format!("{format} · {style}")), t),
+                row(tr("Vorlagen"), value(if read.templates.folder.is_empty() { tr("Kein Ordner") } else { read.templates.folder.clone() }), t),
+            ];
+            if external.is_some() {
+                for module in modules {
+                    let id = module.id.clone();
+                    let input = fields.input(&format!("vault-{id}"), module.notes_folder.as_deref().unwrap_or(""), &tr("Ordner im Vault"), window, cx, move |v, cx| {
+                        let id = id.clone();
+                        act(cx, |l| {
+                            let Some(mut updated) = l.config.clone() else { return };
+                            if let Some(m) = updated.modules.iter_mut().find(|m| m.id == id) {
+                                m.notes_folder = (!v.trim().is_empty()).then(|| v.trim().to_string());
+                            }
+                            l.save_config(updated);
+                        });
+                    });
+                    rows.push(row(module.code.clone(), div().w(px(200.)).child(Input::new(&input).small()), t));
+                }
+                rows.push(row(tr("Verbindung"), Button::new("vault-disconnect").small().ghost().label(tr("Trennen")).on_click(|_, _, cx| {
+                    act(cx, |l| l.connect_vault(None));
+                    state::watch_vault(cx);
+                    state::reindex(cx);
+                }), t));
+            }
+            return section(Some(tr("Obsidian")), Some(tr("Diese Werte kommen aus Obsidian und lassen sich dort ändern.")), rows, t);
+        }
+        let connect = |path: std::path::PathBuf, cx: &mut App| {
+            act(cx, |l| l.connect_vault(Some(path)));
+            state::watch_vault(cx);
+            state::reindex(cx);
+        };
+        let known = config::known_vaults();
+        let picker = Button::new("vault-pick").small().label(tr("Vault verbinden…")).dropdown_menu(move |mut menu, _, _| {
+            for vault in &known {
+                let path = vault.path.clone();
+                menu = menu.item(PopupMenuItem::new(vault.name.clone()).on_click(move |_, _, cx| connect(path.clone(), cx)));
+            }
+            menu.separator().item(PopupMenuItem::new(tr("Ordner wählen…")).on_click(move |_, _, cx| super::platform::choose_folder(cx, move |path, cx| connect(path, cx))))
+        });
+        section(Some(tr("Obsidian")), Some(tr("Ein Vault außerhalb dieses Ordners wird mitdurchsucht und synchronisiert. Schrumbi verändert seine Einstellungen nicht.")), vec![row(tr("Vault"), picker, t)], t)
+    }
+
     fn notes(&mut self, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
         let p = prefs::get();
         let mut fields = std::mem::take(&mut self.fields);
@@ -1410,7 +1472,6 @@ impl Settings {
                 prefs::update(|p| p.note_accent = v.to_uppercase());
             }
         });
-        self.fields = fields;
         let size = p.editor_font_size;
         let mode = p.note_save_mode;
         let delay = p.note_save_delay;
@@ -1535,7 +1596,9 @@ impl Settings {
             ],
             t,
         );
-        div().flex().flex_col().gap(px(space::XL)).child(editor).child(section(Some(tr("Sichern")), Some(save_footer), save_rows, t)).child(pdf)
+        let obsidian = self.obsidian_section(&mut fields, window, cx, t);
+        self.fields = fields;
+        div().flex().flex_col().gap(px(space::XL)).child(editor).child(obsidian).child(section(Some(tr("Sichern")), Some(save_footer), save_rows, t)).child(pdf)
     }
 
     fn shortcuts(&mut self, t: &Theme, cx: &mut Context<Self>) -> Div {

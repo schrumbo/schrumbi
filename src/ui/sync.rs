@@ -40,6 +40,8 @@ pub struct Sync {
     pub message: String,
     /// Bumped when a manual sync ended well, for the confirmation at the row.
     pub finished: u64,
+    /// When the running sync started, for showing progress only on long uploads.
+    pub started: Option<Instant>,
     /// The last resolution, for taking it back.
     pub resolved: Option<Resolved>,
     pending: Option<Option<String>>,
@@ -269,6 +271,8 @@ pub fn run(message: Option<String>, manual: bool, cx: &mut App) {
     let modules = modules(cx);
     let s = cx.global_mut::<Sync>();
     s.step = Some(Step::Saving);
+    s.started = Some(Instant::now());
+    crate::core::git::cmd::UPLOAD_PERCENT.store(0, std::sync::atomic::Ordering::Relaxed);
     s.error = None;
     s.last_change = None;
     s.retry_at = None;
@@ -276,6 +280,8 @@ pub fn run(message: Option<String>, manual: bool, cx: &mut App) {
     let started = Instant::now();
     let (tx, rx) = async_channel::unbounded::<Step>();
     let custom = message.filter(|m| !m.trim().is_empty());
+    let vault = state::read(cx, |l| l.external_vault()).filter(|v| v.join(".git").exists()).map(|v| git.for_folder(&v));
+    let vault_modules = modules.clone();
     let task = cx.background_spawn(async move {
         let result = git.sync(
             &|files| custom.clone().unwrap_or_else(|| message::auto_message(files, &modules, chrono::Local::now())),
@@ -284,7 +290,8 @@ pub fn run(message: Option<String>, manual: bool, cx: &mut App) {
             },
         );
         let conflicts = if matches!(result, Err(GitError::Conflicts(_))) { git.conflicts().ok() } else { None };
-        (result, conflicts)
+        let vault_error = vault.and_then(|v| v.sync(&|files| message::auto_message(files, &vault_modules, chrono::Local::now()), &|_| {}).err());
+        (result, conflicts, vault_error)
     });
     cx.refresh_windows();
     cx.spawn(async move |cx| {
@@ -294,7 +301,10 @@ pub fn run(message: Option<String>, manual: bool, cx: &mut App) {
                 cx.refresh_windows();
             });
         }
-        let (result, conflicts) = task.await;
+        let (result, conflicts, vault_error) = task.await;
+        if let Some(e) = vault_error {
+            cx.update(|cx| act(cx, |l| l.last_error = Some(trf("Der Vault konnte nicht synchronisiert werden: %@", &[&explain(&e).0]))));
+        }
         let spent = started.elapsed();
         if spent > Duration::from_millis(300) && spent < MIN_WORK {
             cx.background_executor().timer(MIN_WORK - spent).await;
@@ -394,6 +404,46 @@ fn announce(error: GitError, title: String, body: String, cx: &mut App) {
         let _ = notify_rust::Notification::new().appname("Schrumbi").summary(&title).body(&body).show();
     })
     .detach();
+}
+
+/// The repository a file belongs to: the workspace's or the connected vault's.
+pub fn git_for(path: &Path, cx: &App) -> Option<Git> {
+    let git = get(cx).git.clone()?;
+    let full = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if full.starts_with(&git.root) {
+        return Some(git);
+    }
+    let vault = state::read(cx, |l| l.external_vault())?;
+    let vault = dunce::canonicalize(&vault).unwrap_or(vault);
+    (full.starts_with(&vault) && vault.join(".git").exists()).then(|| git.for_folder(&vault))
+}
+
+/// Whether this workspace syncs at all.
+pub fn enabled_here(cx: &App) -> bool {
+    get(cx).git.is_some()
+}
+
+/// What the tray should say about syncing, only when it needs attention: conflicts, or nothing uploaded for over a day.
+pub fn tray_warning(cx: &App) -> Option<String> {
+    let s = get(cx);
+    if !s.conflicts.is_empty() {
+        return Some(if s.conflicts.len() == 1 { tr("1 Konflikt") } else { trf("%@ Konflikte", &[&s.conflicts.len().to_string()]) });
+    }
+    let status = s.status.as_ref()?;
+    let waiting = status.ahead > 0 || !status.changed.is_empty();
+    let stale = settings(cx).and_then(|g| g.last_sync).is_some_and(|t| (chrono::Local::now().timestamp() - t) > 86_400);
+    (s.offline && waiting && stale).then(|| tr("Seit über einem Tag nicht hochgeladen"))
+}
+
+/// Files with changes not yet saved as a state; shown only when syncing by hand.
+pub fn unsaved_files(cx: &App) -> std::collections::HashSet<PathBuf> {
+    let s = get(cx);
+    let (Some(status), Some(root)) = (s.status.as_ref(), s.root.as_ref()) else { return Default::default() };
+    if settings_for(root).is_none_or(|g| g.mode != GitMode::Manual) {
+        return Default::default();
+    }
+    let root = dunce::canonicalize(root).unwrap_or_else(|_| root.clone());
+    status.changed.iter().map(|c| root.join(&c.path)).collect()
 }
 
 /// Applies the choices for all conflicts and syncs on.

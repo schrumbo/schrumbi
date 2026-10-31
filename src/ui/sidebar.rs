@@ -304,7 +304,8 @@ fn sync_row(wide: bool, t: &Theme, cx: &App) -> Option<AnyElement> {
         div().relative().child(icon(row.icon, iconsize::L, row.tint.unwrap_or(fg))).child(super::motion::done_pulse(("sync-done", row.finished), row.finished > 0, iconsize::L)).into_any_element()
     };
     let dim = row.tint.is_none() && row.count.is_none() && !row.working;
-    let base = tab("tab-sync".into(), false, dim, glyph, row.label, row.count, wide, row.help.clone(), t);
+    let spoken = format!("{}: {}", tr("Synchronisierung"), row.label);
+    let base = tab("tab-sync".into(), false, dim, glyph, row.label, row.count, wide, row.help.clone(), t).aria_label(spoken);
     Some(match row.kind {
         RowKind::Offer => base
             .on_click(|_, _, cx| act(cx, |l| l.show_sync_setup = true))

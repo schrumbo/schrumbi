@@ -114,13 +114,21 @@ fn commands(cx: &App) -> Vec<Command> {
     if state::read(cx, |l| l.can_redo()) {
         add(&edit, tr("Wiederholen"), "redo-2", Some(if cfg!(target_os = "macos") { "⇧⌘Z".to_string() } else { "Ctrl+Shift+Z".to_string() }), Run::Action(Box::new(app::Redo)));
     }
+    if state::read(cx, |l| matches!(l.route(), Route::Doc(_))) && super::sync::get(cx).git.is_some() {
+        add(&file, tr("Verlauf dieser Datei"), "history", None, Run::Call(Rc::new(|cx| {
+            act(cx, |l| {
+                l.show_inspector = true;
+                l.show_versions = true;
+            });
+        })));
+    }
+    if super::sync::enabled_here(cx) {
+        add(&general, tr("Sync-Einstellungen"), "settings", None, Run::Call(Rc::new(|cx| super::settings::open_sync(cx))));
+    }
     if state::read(cx, |l| l.is_vault) {
         let vault = tr("Obsidian");
         let active = state::read(cx, |l| l.active_document.clone().filter(|p| crate::core::markdown::is_markdown(p) && matches!(l.route(), Route::Doc(_))));
-        add(&vault, tr("Tagesnotiz öffnen"), "calendar", None, Run::Call(Rc::new(|cx| {
-            act(cx, |l| l.open_daily_note());
-            state::reindex(cx);
-        })));
+        add(&vault, tr("Tagesnotiz öffnen"), "calendar", keys(S::DailyNote), Run::Action(Box::new(app::DailyNote)));
         add(&vault, tr("Eindeutige Notiz anlegen"), "file-plus", None, Run::Call(Rc::new(|cx| {
             act(cx, |l| l.open_unique_note());
             state::reindex(cx);

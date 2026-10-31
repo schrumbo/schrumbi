@@ -161,13 +161,25 @@ pub struct IndexJob {
     pub root: PathBuf,
     pub exclude: Vec<String>,
     pub config: StudyConfig,
+    /// A vault outside the workspace.
+    pub vault: Option<PathBuf>,
 }
 
 impl IndexJob {
     pub fn run(self) -> (usize, Vec<CatalogFile>) {
-        let count = self.index.update(&self.root, &self.exclude);
-        let catalog = catalog::build(&self.index.all(), &self.root, &self.config);
-        super::vault::index::rebuild(&self.root, &self.exclude);
+        let mut roots = vec![self.root.clone()];
+        roots.extend(self.vault.clone());
+        let count = self.index.update_all(&roots, &self.exclude);
+        let all = self.index.all();
+        let mut catalog = catalog::build(&all, &self.root, &self.config);
+        if let Some(vault) = &self.vault {
+            let mut mapped = self.config.clone();
+            for module in &mut mapped.modules {
+                module.folder = module.notes_folder.clone().unwrap_or_else(|| module.folder.clone());
+            }
+            catalog.extend(catalog::build(&all, vault, &mapped));
+        }
+        super::vault::index::rebuild(self.vault.as_ref().unwrap_or(&self.root), &self.exclude);
         (count, catalog)
     }
 }
@@ -252,6 +264,8 @@ pub struct Library {
     pub note_pick: Option<(bool, PathBuf)>,
     /// The note shown as slides.
     pub slides: Option<PathBuf>,
+    /// Asks the details column to show a note's versions.
+    pub show_versions: bool,
     /// The note the graph centers on and how far it reaches; `None` shows the whole vault.
     pub graph_focus: Option<(PathBuf, usize)>,
     /// The tag the notes page filters by.
@@ -358,6 +372,7 @@ impl Library {
             is_vault: false,
             note_pick: None,
             slides: None,
+            show_versions: false,
             graph_focus: None,
             notes_tag: None,
             show_sync_setup: false,
@@ -607,6 +622,46 @@ impl Library {
 
     // MARK: Links
 
+    /// The vault connected from outside the workspace, if any still exists.
+    pub fn external_vault(&self) -> Option<PathBuf> {
+        let root = self.root.as_ref()?;
+        prefs::get().vaults.get(&root.to_string_lossy().to_string()).filter(|p| p.is_dir()).cloned()
+    }
+
+    /// Where the vault's files live: outside if one is connected, otherwise the workspace.
+    pub fn vault_root(&self) -> Option<PathBuf> {
+        let root = self.external_vault().or_else(|| self.root.clone())?;
+        Some(dunce::canonicalize(&root).unwrap_or(root))
+    }
+
+    /// Connects or removes the vault outside this workspace; modules find their folder by name.
+    pub fn connect_vault(&mut self, vault: Option<PathBuf>) {
+        let Some(root) = self.root.clone() else { return };
+        let key = root.to_string_lossy().to_string();
+        prefs::update(|p| {
+            match &vault {
+                Some(v) => {
+                    p.vaults.insert(key.clone(), v.clone());
+                }
+                None => {
+                    p.vaults.remove(&key);
+                }
+            }
+        });
+        if let (Some(vault), Some(config)) = (&vault, self.config.clone()) {
+            let mut updated = config.clone();
+            for module in &mut updated.modules {
+                if module.notes_folder.is_none() {
+                    module.notes_folder = [module.folder.as_str(), module.code.as_str(), module.name.as_str()].into_iter().find(|name| !name.is_empty() && vault.join(name).is_dir()).map(String::from);
+                }
+            }
+            if updated != config {
+                self.save_config(updated);
+            }
+        }
+        self.refresh();
+    }
+
     /// Shows the graph, around a note or of the whole vault.
     pub fn show_graph(&mut self, around: Option<PathBuf>) {
         self.graph_focus = around.map(|p| (p, 1));
@@ -621,8 +676,7 @@ impl Library {
 
     /// Today's daily note from the vault's settings, created from its template if needed.
     pub fn open_daily_note(&mut self) {
-        let Some(root) = self.root.clone() else { return };
-        let root = dunce::canonicalize(&root).unwrap_or(root);
+        let Some(root) = self.vault_root() else { return };
         let settings = super::vault::config::VaultConfig::read(&root);
         let now = Local::now();
         let english = super::i18n::is_english();
@@ -653,8 +707,7 @@ impl Library {
 
     /// A new note named by the unique note creator's format.
     pub fn open_unique_note(&mut self) {
-        let Some(root) = self.root.clone() else { return };
-        let root = dunce::canonicalize(&root).unwrap_or(root);
+        let Some(root) = self.vault_root() else { return };
         let settings = super::vault::config::unique_notes(&root);
         let now = Local::now();
         let english = super::i18n::is_english();
@@ -681,8 +734,8 @@ impl Library {
 
     /// Appends a template to a note, filled for this moment.
     pub fn insert_template(&mut self, note: &Path, template: &Path) {
-        let Some(root) = self.root.clone() else { return };
-        let settings = super::vault::config::VaultConfig::read(&dunce::canonicalize(&root).unwrap_or(root));
+        let Some(root) = self.vault_root() else { return };
+        let settings = super::vault::config::VaultConfig::read(&root);
         let Ok(raw) = std::fs::read_to_string(template) else { return };
         let title = note.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         let filled = super::vault::moment::fill_template(&raw, &title, Local::now(), &settings.templates.date_format, &settings.templates.time_format, super::i18n::is_english());
@@ -787,8 +840,7 @@ impl Library {
         use super::vault::{index, links};
         let target = links::LinkTarget::parse(destination);
         let vault = index::current();
-        let Some(root) = self.root.clone() else { return };
-        let root = dunce::canonicalize(&root).unwrap_or(root);
+        let Some(root) = self.vault_root() else { return };
         let relative = if target.path.ends_with(".md") { target.path.clone() } else { format!("{}.md", target.path) };
         let path = if relative.contains('/') { root.join(relative.trim_start_matches('/')) } else { vault.config.new_note_folder(&root, from).join(&relative) };
         if let Some(parent) = path.parent() {
@@ -945,7 +997,7 @@ impl Library {
         let (Some(root), Some(config)) = (self.root.clone(), self.config.clone()) else { return };
         day::set_time_zone(&config.time_zone);
         self.now = Local::now();
-        self.is_vault = root.join(".obsidian").is_dir();
+        self.is_vault = root.join(".obsidian").is_dir() || self.external_vault().is_some();
         let fresh = schedule::assignments(&config, &self.state, &root);
         if fresh != self.assignments {
             self.assignments = fresh;
@@ -996,7 +1048,7 @@ impl Library {
         let root = self.root.clone()?;
         self.is_indexing = true;
         let config = self.config.clone().unwrap_or_default();
-        Some(IndexJob { index: self.search_index.clone(), root, exclude: config.search_exclude.clone(), config })
+        Some(IndexJob { vault: self.external_vault(), index: self.search_index.clone(), root, exclude: config.search_exclude.clone(), config })
     }
 
     pub fn apply_index(&mut self, count: usize, catalog: Vec<CatalogFile>) {
@@ -1415,6 +1467,13 @@ impl Library {
             }
         };
         let materials = self.material_targets();
+        if let (Some(vault), Some(config)) = (self.external_vault(), self.config.as_ref()) {
+            for module in &config.modules {
+                if let Some(folder) = &module.notes_folder {
+                    add(vault.join(folder), module, None);
+                }
+            }
+        }
         for c in self.recent_classes(3) {
             let notes = note_folders(&c.base);
             if notes.is_empty() {
@@ -1454,7 +1513,7 @@ impl Library {
         let result: Result<PathBuf> = (|| {
             std::fs::create_dir_all(folder)?;
             let path = unique_path(&folder.join(self.note_name(title, folder, ext)));
-            std::fs::write(&path, if ext == "md" { format!("# {}\n\n", title.trim()) } else { String::new() })?;
+            std::fs::write(&path, if ext == "md" { self.new_note_text(title) } else { String::new() })?;
             Ok(path)
         })();
         match result {
@@ -1468,6 +1527,20 @@ impl Library {
                 None
             }
         }
+    }
+
+    /// What a new note starts with: the vault's `Mitschrift` template if there is one, otherwise its title.
+    fn new_note_text(&self, title: &str) -> String {
+        let template = self.vault_root().and_then(|root| {
+            let settings = super::vault::config::VaultConfig::read(&root);
+            let folder = settings.templates.folder.trim_matches('/');
+            if !settings.is_vault || folder.is_empty() {
+                return None;
+            }
+            let raw = ["Mitschrift", "Notiz", "Note"].iter().find_map(|n| std::fs::read_to_string(root.join(folder).join(format!("{n}.md"))).ok())?;
+            Some(super::vault::moment::fill_template(&raw, title.trim(), Local::now(), &settings.templates.date_format, &settings.templates.time_format, super::i18n::is_english()))
+        });
+        template.unwrap_or_else(|| format!("# {}\n\n", title.trim()))
     }
 
     /// Creates a subfolder; returns its path.
@@ -2444,9 +2517,13 @@ fn files_within(path: &Path) -> Vec<PathBuf> {
 
 fn trash_with_copy(path: &Path) -> Result<Change> {
     let backup = stash(path)?;
-    if let Err(e) = trash::delete(path) {
+    #[cfg(not(test))]
+    let moved = trash::delete(path).map_err(anyhow::Error::from);
+    #[cfg(test)]
+    let moved = if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) }.map_err(anyhow::Error::from);
+    if let Err(e) = moved {
         let _ = backup.parent().map(std::fs::remove_dir_all);
-        return Err(e.into());
+        return Err(e);
     }
     Ok(Change::Restore { path: path.to_path_buf(), backup })
 }

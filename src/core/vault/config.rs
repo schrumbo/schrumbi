@@ -193,6 +193,47 @@ pub fn parse_known(bytes: &[u8]) -> Vec<KnownVault> {
     list
 }
 
+/// What an `obsidian://` address asks for.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UriAction {
+    Open(String),
+    New { name: String, content: String },
+    Daily,
+    Search(String),
+}
+
+fn decode(value: &str) -> String {
+    crate::core::markdown::percent_decode(value)
+}
+
+/// Reads an `obsidian://` address when it points at the vault in `root`; others are left to the system.
+pub fn parse_uri(uri: &str, root: &Path) -> Option<UriAction> {
+    let rest = uri.strip_prefix("obsidian://")?;
+    let name = root.file_name()?.to_string_lossy().to_string();
+    if let Some(short) = rest.strip_prefix("vault/") {
+        let (vault, file) = short.split_once('/').unwrap_or((short, ""));
+        return (decode(vault) == name && !file.is_empty()).then(|| UriAction::Open(decode(file)));
+    }
+    if rest.starts_with('/') {
+        return decode(rest).strip_prefix(&format!("{}/", root.display())).map(|f| UriAction::Open(f.to_string()));
+    }
+    let (kind, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let get = |key: &str| query.split('&').find_map(|p| p.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| decode(v)));
+    if let Some(path) = get("path") {
+        return path.strip_prefix(&format!("{}/", root.display())).map(|f| UriAction::Open(f.to_string()));
+    }
+    if get("vault").is_some_and(|v| v != name) {
+        return None;
+    }
+    match kind.trim_end_matches('/') {
+        "open" => get("file").map(UriAction::Open),
+        "new" => Some(UriAction::New { name: get("name").or(get("file")).unwrap_or_default(), content: get("content").unwrap_or_default() }),
+        "daily" => Some(UriAction::Daily),
+        "search" => Some(UriAction::Search(get("query").unwrap_or_default())),
+        _ => None,
+    }
+}
+
 /// An `obsidian://` address that opens a file in the vault containing it.
 pub fn open_uri(path: &Path) -> String {
     let encoded: String = path.to_string_lossy().bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
@@ -247,6 +288,21 @@ mod tests {
         assert_eq!(b[1].subpath.as_deref(), Some("#H"));
         assert_eq!(b[2].query.as_deref(), Some("tag:x"));
         assert!(bookmarks(&dir.join("nichts")).is_empty());
+    }
+
+    #[test]
+    fn addresses_to_this_vault_stay_here() {
+        let root = Path::new("/x/Mein Vault");
+        assert_eq!(parse_uri("obsidian://open?vault=Mein%20Vault&file=Ordner%2FNote", root), Some(UriAction::Open("Ordner/Note".into())));
+        assert_eq!(parse_uri("obsidian://open?vault=Anderer&file=Note", root), None);
+        assert_eq!(parse_uri("obsidian://open?path=%2Fx%2FMein%20Vault%2FA.md", root), Some(UriAction::Open("A.md".into())));
+        assert_eq!(parse_uri("obsidian://open?path=%2Fy%2FA.md", root), None);
+        assert_eq!(parse_uri("obsidian://vault/Mein%20Vault/A", root), Some(UriAction::Open("A".into())));
+        assert_eq!(parse_uri("obsidian:///x/Mein%20Vault/A.md", root), Some(UriAction::Open("A.md".into())));
+        assert_eq!(parse_uri("obsidian://new?name=N&content=T", root), Some(UriAction::New { name: "N".into(), content: "T".into() }));
+        assert_eq!(parse_uri("obsidian://daily?vault=Mein%20Vault", root), Some(UriAction::Daily));
+        assert_eq!(parse_uri("obsidian://search?query=tag%3Ax", root), Some(UriAction::Search("tag:x".into())));
+        assert_eq!(parse_uri("https://a.b", root), None);
     }
 
     #[test]

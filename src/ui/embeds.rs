@@ -251,9 +251,35 @@ impl RenderOnce for BaseBlock {
 }
 
 /// `![[x.base]]`.
-pub fn base_file(path: PathBuf, id: u64, _: &Theme) -> AnyElement {
+pub fn base_file(path: PathBuf, id: u64, t: &Theme) -> AnyElement {
     let source = std::fs::read_to_string(&path).unwrap_or_default();
-    BaseBlock { source, this: Some(path), id }.into_any_element()
+    let open = path.clone();
+    let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(space::XS))
+        .child(div().flex().justify_between().items_center().child(caption(name, t)).child(link_button(("base-open", id), tr("Öffnen"), t).text_size(px(font::CAPTION)).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))))
+        .child(BaseBlock { source, this: Some(path), id })
+        .into_any_element()
+}
+
+/// A page of a PDF as an image, loaded in the background and shared by everything that shows it.
+pub fn pdf_page(path: &std::path::Path, page: usize, cx: &mut App) -> Option<Arc<Image>> {
+    let key = (path.to_path_buf(), page);
+    let known = PAGES.with(|p| p.borrow().get(&key).cloned());
+    if known.is_none() {
+        PAGES.with(|p| p.borrow_mut().insert(key.clone(), None));
+        let path = path.to_path_buf();
+        let task = cx.background_spawn(async move { crate::core::pdf_render::page_png(&path, page.saturating_sub(1), 2.) });
+        cx.spawn(async move |cx| {
+            let png = task.await;
+            PAGES.with(|p| p.borrow_mut().insert(key, png.map(|b| Arc::new(Image::from_bytes(ImageFormat::Png, b)))));
+            cx.update(|cx| cx.refresh_windows());
+        })
+        .detach();
+    }
+    known.flatten()
 }
 
 /// `![[x.canvas]]`: the cards as shapes, as Obsidian does; a click opens it.

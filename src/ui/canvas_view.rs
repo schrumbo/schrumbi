@@ -692,7 +692,7 @@ impl CanvasView {
         cx.notify();
     }
 
-    fn node_content(&self, node: &Node, zoom: f32, t: &Theme) -> AnyElement {
+    fn node_content(&self, node: &Node, zoom: f32, t: &Theme, cx: &mut App) -> AnyElement {
         let size = font::BODY * zoom;
         let title = |s: String| div().p(px(space::S * zoom)).text_size(px(size)).font_weight(FontWeight::SEMIBOLD).truncate().child(s);
         if zoom < 0.3 {
@@ -707,6 +707,15 @@ impl CanvasView {
         match &node.kind {
             NodeKind::Text(text) => mini_markdown(text, zoom, t),
             NodeKind::Link(url) => div().p(px(space::S * zoom)).flex().items_center().gap(px(space::XS * zoom)).child(icon("link", 14. * zoom, t.secondary)).child(div().truncate().text_size(px(size)).text_color(t.accent_text).child(url.clone())).into_any_element(),
+            NodeKind::Group { background: Some(picture), style, .. } => {
+                let full = index::current().root.join(picture);
+                let fit = match style.as_deref() {
+                    Some("ratio") => ObjectFit::Contain,
+                    Some("repeat") => ObjectFit::None,
+                    _ => ObjectFit::Cover,
+                };
+                img(full).size_full().object_fit(fit).opacity(0.5).into_any_element()
+            }
             NodeKind::Group { .. } => div().into_any_element(),
             NodeKind::File { path, subpath } => {
                 let full = index::current().root.join(path);
@@ -715,7 +724,14 @@ impl CanvasView {
                 if image {
                     return img(full).size_full().object_fit(ObjectFit::Contain).into_any_element();
                 }
-                let body = if crate::core::markdown::is_markdown(&full) {
+                let is_pdf = Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+                let page = subpath.as_deref().and_then(|s| s.strip_prefix("#page=")).and_then(|p| p.parse().ok()).unwrap_or(1);
+                let body = if is_pdf {
+                    match super::embeds::pdf_page(&full, page, cx) {
+                        Some(image) => img(image).size_full().object_fit(ObjectFit::Contain).into_any_element(),
+                        None => div().p(px(space::S * zoom)).child(file_icon(&full, 28. * zoom)).into_any_element(),
+                    }
+                } else if crate::core::markdown::is_markdown(&full) {
                     let text = std::fs::read_to_string(&full).unwrap_or_default();
                     let shown = match subpath.as_deref() {
                         Some(sub) => crate::core::vault::links::section(&text, &crate::core::vault::links::LinkTarget::parse(sub)),
@@ -804,8 +820,17 @@ impl Render for CanvasView {
         let mut nodes: Vec<AnyElement> = Vec::new();
         let mut order: Vec<&Node> = doc.nodes.iter().filter(|n| matches!(n.kind, NodeKind::Group { .. })).collect();
         order.extend(doc.nodes.iter().filter(|n| !matches!(n.kind, NodeKind::Group { .. })));
+        let far = zoom < 0.15;
+        let mut far_cards: Vec<(f32, f32, f32, f32, Hsla, Hsla)> = Vec::new();
         for node in order.into_iter().filter(|n| visible(n)) {
             let selected = self.selection.contains(&node.id);
+            if far && self.editing.is_none() {
+                let (x, y) = self.to_view(node.x, node.y);
+                let tint = color_of(node.color.as_ref());
+                let fill = if matches!(node.kind, NodeKind::Group { .. }) { tint.map_or(t.ink.opacity(0.04), |c| c.opacity(0.08)) } else { tint.map_or(t.column, |c| c.opacity(0.3)) };
+                far_cards.push((x, y, node.width as f32 * zoom, node.height as f32 * zoom, fill, if selected { accent } else { tint.unwrap_or(t.separator) }));
+                continue;
+            }
             let (x, y) = self.to_view(node.x, node.y);
             let (w, h) = (node.width as f32 * zoom, node.height as f32 * zoom);
             let tint = color_of(node.color.as_ref());
@@ -813,7 +838,7 @@ impl Render for CanvasView {
             let border = tint.unwrap_or(t.separator);
             let label = if let NodeKind::Group { label: Some(l), .. } = &node.kind { Some(l.clone()) } else { None };
             let editing = self.editing.as_ref().filter(|(id, _)| *id == node.id).map(|(_, field)| field.clone());
-            let content = if editing.is_none() { Some(self.node_content(node, zoom, &t)) } else { None };
+            let content = if editing.is_none() { Some(self.node_content(node, zoom, &t, cx)) } else { None };
             nodes.push(
                 div()
                     .absolute()
@@ -865,11 +890,12 @@ impl Render for CanvasView {
             let selected = self.selected_edge.as_ref() == Some(&e.id);
             Some((a, b, if selected { accent } else { color_of(e.color.as_ref()).unwrap_or(t.secondary) }, e.to_end.as_deref().unwrap_or("arrow") == "arrow", e.from_end.as_deref() == Some("arrow")))
         }).collect();
-        let labels: Vec<AnyElement> = doc.edges.iter().filter_map(|e| {
+        let labels: Vec<AnyElement> = doc.edges.iter().filter(|_| !far).filter_map(|e| {
             let label = e.label.clone()?;
             let (a, b) = edge_points(&doc, e)?;
             let (x, y) = self.to_view((a.0 + b.0) / 2., (a.1 + b.1) / 2.);
-            Some(div().absolute().left(px(x)).top(px(y)).px(px(space::XS)).rounded(px(radius::SMALL)).bg(t.content).text_size(px(font::CAPTION)).text_color(t.secondary).child(label).into_any_element())
+            let half = label.chars().count() as f32 * font::CAPTION * 0.28 + space::XS;
+            Some(div().absolute().left(px(x - half)).top(px(y - font::CAPTION)).px(px(space::XS)).rounded(px(radius::SMALL)).bg(t.content).text_size(px(font::CAPTION)).text_color(t.secondary).child(label).into_any_element())
         }).collect();
         let preview = match &self.gesture {
             Some(Gesture::Edge { from, side, to }) => doc.nodes.iter().find(|n| n.id == *from).map(|n| (Canvas::side_point(n, side), *to)),
@@ -889,6 +915,22 @@ impl Render for CanvasView {
             move |b, _, _| measured.set(b),
             move |bounds, _, window, _| {
                 let at = |p: (f64, f64)| point(bounds.origin.x + px(p.0 as f32 * zoom + pan.0), bounds.origin.y + px(p.1 as f32 * zoom + pan.1));
+                for (x, y, w, h, fill, border) in &far_cards {
+                    let area = Bounds::new(point(bounds.origin.x + px(*x), bounds.origin.y + px(*y)), gpui_kit::size(px(*w), px(*h)));
+                    window.paint_quad(PaintQuad { bounds: area, corner_radii: Corners::all(px(1.)), background: (*fill).into(), border_widths: Edges::all(px(1.)), border_color: *border, border_style: BorderStyle::Solid });
+                }
+                if far {
+                    let mut all = PathBuilder::stroke(px(1.));
+                    let mut any = false;
+                    for (a, b, _, _, _) in &edge_lines {
+                        all.move_to(at(*a));
+                        all.line_to(at(*b));
+                        any = true;
+                    }
+                    if any && let Ok(p) = all.build() {
+                        window.paint_path(p, line_color.opacity(0.4));
+                    }
+                }
                 let curve = |a: Point<Pixels>, b: Point<Pixels>, color: Hsla, end: bool, start: bool, window: &mut Window| {
                     let mut path = PathBuilder::stroke(px(1.5_f32.max(1.5 * zoom)));
                     path.move_to(a);
@@ -918,8 +960,10 @@ impl Render for CanvasView {
                         tip(a, b, window);
                     }
                 };
-                for (a, b, color, end, start) in &edge_lines {
-                    curve(at(*a), at(*b), *color, *end, *start, window);
+                if !far {
+                    for (a, b, color, end, start) in &edge_lines {
+                        curve(at(*a), at(*b), *color, *end, *start, window);
+                    }
                 }
                 if let Some((a, b)) = preview {
                     curve(at(a), at(b), line_color, true, false, window);

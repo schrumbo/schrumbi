@@ -237,6 +237,8 @@ impl Render for ImportCalendar {
 /// First-run setup for a freshly chosen folder. Every step can be skipped.
 pub struct Setup {
     step: usize,
+    /// Folders of an Obsidian vault to choose modules from, while that first step is showing.
+    vault_folders: Option<Vec<Module>>,
     focused: bool,
     draft: StudyConfig,
     fields: Fields,
@@ -249,7 +251,13 @@ impl EventEmitter<Dismissed> for Setup {}
 
 impl Setup {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let draft = state::read(cx, |l| l.config.clone()).unwrap_or_default();
+        let mut draft = state::read(cx, |l| l.config.clone()).unwrap_or_default();
+        let is_vault = state::read(cx, |l| l.root.as_ref().is_some_and(|r| r.join(".obsidian").is_dir()));
+        let vault_folders = is_vault.then(|| {
+            let all = std::mem::take(&mut draft.modules);
+            draft.modules = all.iter().filter(|m| looks_like_semester_or_module(&m.folder)).cloned().collect();
+            all
+        });
         let picker = |window: &mut Window, cx: &mut Context<Self>| cx.new(|cx| DatePickerState::new(window, cx).date_format(if crate::core::i18n::lang() == crate::core::i18n::Lang::En { "%m/%d/%Y" } else { "%d.%m.%Y" }));
         let (start, end) = (picker(window, cx), picker(window, cx));
         if let Some(s) = draft.semesters.first() {
@@ -276,7 +284,7 @@ impl Setup {
                 cx.notify();
             }),
         ];
-        Self { step: 0, focused: false, draft, fields: Fields::default(), start, end, _subs: subs }
+        Self { step: 0, vault_folders, focused: false, draft, fields: Fields::default(), start, end, _subs: subs }
     }
 
     fn finish(&mut self, save: bool, cx: &mut Context<Self>) {
@@ -289,6 +297,12 @@ impl Setup {
     }
 }
 
+/// A folder named like a semester or a course code is probably a module; everything else stays unchecked.
+fn looks_like_semester_or_module(name: &str) -> bool {
+    static PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)^(ws|ss|wise|sose|sem(ester)?)[\s_-]*\d|^\d+\.?\s*sem|^[A-ZÄÖÜ]{2,6}\d{0,4}$").unwrap());
+    PATTERN.is_match(name)
+}
+
 fn form_row(label: String, content: impl IntoElement, t: &Theme) -> Div {
     div().flex().items_center().gap(px(space::M)).px(px(space::L)).py(px(space::S)).child(div().w(px(170.)).text_color(t.secondary).child(label)).child(div().flex_1().child(content))
 }
@@ -299,7 +313,28 @@ impl Render for Setup {
         let me = cx.entity();
         let mut fields = std::mem::take(&mut self.fields);
         let (e1, e2) = (me.clone(), me.clone());
-        let body: Div = match self.step {
+        let body: Div = if let Some(folders) = self.vault_folders.clone() {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(space::L))
+                .child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Das ist ein Obsidian-Vault")))
+                .child(div().text_color(t.secondary).child(tr("Welche Ordner sind Module? Alles andere bleibt einfach Notizen.")))
+                .child(grouped(&t).children(folders.into_iter().enumerate().map(|(i, module)| {
+                    let selected = self.draft.modules.iter().any(|m| m.id == module.id);
+                    let label = module.folder.clone();
+                    let entry = module;
+                    Checkbox::new(("setup-folder", i)).label(label).checked(selected).px(px(space::L)).py(px(space::S)).on_click(cx.listener(move |s, _: &bool, _, cx| {
+                        if let Some(at) = s.draft.modules.iter().position(|m| m.id == entry.id) {
+                            s.draft.modules.remove(at);
+                        } else {
+                            s.draft.modules.push(entry.clone());
+                        }
+                        cx.notify();
+                    }))
+                })))
+        } else {
+            match self.step {
             0 => {
                 let first_field = std::mem::replace(&mut self.focused, true);
                 let name = fields.input("setup-name", &self.draft.name, &tr("z. B. Informatik"), window, cx, move |v, cx| e1.update(cx, |s, cx| {
@@ -405,6 +440,7 @@ impl Render for Setup {
                     .child(div().text_color(t.secondary).child(tr("Aus deinen Ordnern erkannt. Danach: Termine aus Moodle über „Ablage → Kalender importieren“ übernehmen oder wiederkehrende Abgaben unter Einstellungen → Module anlegen.")))
                     .child(if empty { unavailable("folder", tr("Keine Ordner gefunden"), tr("Lege für jedes Modul einen Ordner an oder füge Module später hinzu."), &t).h(px(200.)).into_any_element() } else { div().id("setup-modules").max_h(px(260.)).overflow_y_scrollbar().child(list).into_any_element() })
             }
+            }
         };
         fields.prune();
         self.fields = fields;
@@ -434,7 +470,9 @@ impl Render for Setup {
                         })))
                     })
                     .child(Button::new("setup-next").primary().label(if step == 2 { tr("Fertig") } else { tr("Weiter") }).on_click(move |_, _, cx| next.update(cx, |s, cx| {
-                        if s.step == 2 {
+                        if s.vault_folders.take().is_some() {
+                            cx.notify();
+                        } else if s.step == 2 {
                             s.finish(true, cx);
                         } else {
                             s.step += 1;

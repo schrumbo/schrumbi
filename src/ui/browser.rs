@@ -430,6 +430,7 @@ impl FileBrowser {
     }
 
     fn render_line(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let unsaved = super::sync::unsaved_files(cx);
         let t = Theme::get(cx);
         let me = cx.entity();
         let lib = state::lib(cx);
@@ -438,12 +439,12 @@ impl FileBrowser {
         let show_module = self.scope_module.is_none();
         let content = match self.lines.get(ix).copied() {
             Some(Line::BestHeader) => div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).py(px(space::XS)).child(tr("Beste Treffer")).into_any_element(),
-            Some(Line::Best(i)) => self.row(&self.results.best[i], show_module, true, l, &t, &me),
+            Some(Line::Best(i)) => self.row(&self.results.best[i], show_module, true, l, &unsaved, &t, &me),
             Some(Line::Group(g)) => {
                 let group = &self.results.groups[g];
                 self.group_header(group, self.is_expanded(group, current), l, current, &t, &me)
             }
-            Some(Line::Row(g, i)) => self.row(&self.results.groups[g].items[i], show_module, false, l, &t, &me),
+            Some(Line::Row(g, i)) => self.row(&self.results.groups[g].items[i], show_module, false, l, &unsaved, &t, &me),
             Some(Line::OtherKinds) => {
                 let e = me.clone();
                 link_button("other-kinds", trf("%lld weitere Treffer in anderen Dateitypen", &[&self.results.other_kinds]), &t)
@@ -620,7 +621,7 @@ fn highlighted(s: &str, terms: &[String], t: &Theme) -> StyledText {
 }
 
 impl FileBrowser {
-    fn row(&self, item: &Item, show_module: bool, show_week: bool, lib: &Library, t: &Theme, entity: &Entity<Self>) -> AnyElement {
+    fn row(&self, item: &Item, show_module: bool, show_week: bool, lib: &Library, unsaved: &HashSet<PathBuf>, t: &Theme, entity: &Entity<Self>) -> AnyElement {
         let f = &item.file;
         let path = f.file.path.clone();
         let selected = self.selected.as_ref() == Some(&path) || self.picked.contains(&path);
@@ -694,7 +695,18 @@ impl FileBrowser {
                     .gap(px(space::XS))
                     .child(match renaming {
                         Some(field) => Input::new(&field).small().into_any_element(),
-                        None => div().truncate().child(highlighted(&f.display_name(), &terms, t)).into_any_element(),
+                        None => {
+                            let is_copy = f.display_name().contains(&format!("({} ", tr("Konflikt")));
+                            let dot = unsaved.contains(&path);
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(space::XS))
+                                .child(div().min_w_0().truncate().child(highlighted(&f.display_name(), &terms, t)))
+                                .when(dot, |d| d.child(div().id("unsaved-dot").flex_none().size(px(6.)).rounded_full().bg(t.accent).tooltip(tip(tr("Noch nicht gesichert")))))
+                                .when(is_copy, |d| d.child(div().flex_none().px(px(space::S)).rounded_full().bg(t.orange.opacity(0.18)).text_size(px(font::CAPTION)).text_color(t.orange).child(tr("Konflikt"))))
+                                .into_any_element()
+                        }
                     })
                     .child(meta)
                     .children(item.spots.iter().enumerate().map(|(i, spot)| {

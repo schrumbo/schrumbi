@@ -36,6 +36,7 @@ actions!(
         ToggleInspector,
         Refresh,
         SyncNow,
+        DailyNote,
         SyncSetup,
         ResolveConflicts,
         GoBack,
@@ -76,6 +77,12 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &OpenSettings, cx| super::settings::open(cx));
     cx.on_action(|_: &About, cx| super::settings::open_about(cx));
     cx.on_action(|_: &CheckForUpdates, cx| super::updates::check(true, cx));
+    cx.on_action(|_: &DailyNote, cx| {
+        if state::read(cx, |l| l.is_vault) {
+            act(cx, |l| l.open_daily_note());
+            state::reindex(cx);
+        }
+    });
     cx.on_action(|_: &SyncNow, cx| {
         if super::sync::get(cx).git.is_some() {
             let text = super::sync::get(cx).message.clone();
@@ -250,6 +257,7 @@ pub fn bind_keys(cx: &mut App) {
             binding(ShortcutAction::ToggleInspector, ToggleInspector, None),
             binding(ShortcutAction::Refresh, Refresh, None),
             binding(ShortcutAction::Sync, SyncNow, None),
+            binding(ShortcutAction::DailyNote, DailyNote, None),
             Some(gpui_kit::KeyBinding::new("tab", super::canvas_view::NextItem, Some("WalkItems"))),
             Some(gpui_kit::KeyBinding::new("shift-tab", super::canvas_view::PreviousItem, Some("WalkItems"))),
             binding(ShortcutAction::CloseTab, CloseTab, None),

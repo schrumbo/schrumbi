@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::Sizable;
@@ -14,6 +15,7 @@ use super::state::{self, act};
 use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::tr;
+use crate::core::library::Change;
 use crate::core::markdown;
 use crate::core::vault::frontmatter::{self, Property, PropertyKind};
 use crate::core::vault::index::{self, Mention};
@@ -33,15 +35,17 @@ pub struct DocSide {
     properties: Entity<PropertyEditor>,
     closed: std::collections::BTreeSet<&'static str>,
     unlinked: Option<(PathBuf, u64, Vec<Mention>)>,
+    focus_versions: bool,
 }
 
 impl DocSide {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self { side: Side::Links, versions: cx.new(VersionList::new), properties: cx.new(|cx| PropertyEditor::new(window, cx)), closed: Default::default(), unlinked: None }
+        Self { side: Side::Links, versions: cx.new(VersionList::new), properties: cx.new(|cx| PropertyEditor::new(window, cx)), closed: Default::default(), unlinked: None, focus_versions: false }
     }
 
     pub fn show(&mut self, side: Side, cx: &mut Context<Self>) {
         self.side = side;
+        self.focus_versions = side == Side::Versions;
         cx.notify();
     }
 
@@ -168,6 +172,11 @@ impl DocSide {
             }
         };
         let mut list = div().flex().flex_col().py(px(space::S));
+        let around = path.to_path_buf();
+        list = list.child(div().px(px(space::M)).pb(px(space::S)).child(Button::new("side-graph").ghost().small().icon(menu_icon("waypoints")).label(tr("Graph um diese Notiz")).on_click(move |_, _, cx| {
+            let p = around.clone();
+            act(cx, |l| l.show_graph(Some(p)));
+        })));
         let nothing = backlinks.is_empty() && existing.is_empty() && missing.is_empty() && unlinked.is_empty() && facts.headings.is_empty();
         if nothing {
             return unavailable("link", tr("Noch keine Verknüpfungen"), tr("Tippe [[ im Editor, um eine Notiz zu verlinken."), t).into_any_element();
@@ -265,10 +274,17 @@ pub fn open_at(path: &Path, line: usize, cx: &mut App) {
 }
 
 impl Render for DocSide {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
         let path = state::read(cx, |l| l.active_document.clone());
         let is_note = path.as_ref().is_some_and(|p| markdown::is_markdown(p));
+        if state::lib(cx).update(cx, |l, _| std::mem::take(&mut l.show_versions)) {
+            self.side = Side::Versions;
+            self.focus_versions = true;
+        }
+        if std::mem::take(&mut self.focus_versions) {
+            self.versions.update(cx, |v, cx| v.take_focus(window, cx));
+        }
         if !is_note && self.side != Side::Versions {
             self.side = Side::Versions;
         }
@@ -297,6 +313,8 @@ pub struct PropertyEditor {
     path: Option<PathBuf>,
     new_name: Entity<InputState>,
     fields: super::fields::Fields,
+    chip_inputs: std::collections::HashMap<(PathBuf, String), (Entity<InputState>, Subscription)>,
+    pending_clear: Option<(PathBuf, String)>,
     _subs: Vec<Subscription>,
 }
 
@@ -339,32 +357,118 @@ impl PropertyEditor {
                 }
             }
         })];
-        Self { path: None, new_name, fields: Default::default(), _subs: subs }
+        Self { path: None, new_name, fields: Default::default(), chip_inputs: Default::default(), pending_clear: None, _subs: subs }
     }
 
-    fn change(&mut self, name: &str, kind: PropertyKind, values: Vec<String>, cx: &mut Context<Self>) {
+    fn write(&mut self, label: String, edit: impl FnOnce(&str) -> String, cx: &mut Context<Self>) {
         let Some(path) = self.path.clone() else { return };
-        let name = name.to_string();
-        state::lib(cx).update(cx, |l, cx| {
-            let buffer = l.buffer(&path);
-            let updated = frontmatter::set(&buffer.text, &name, kind, &values);
-            buffer.replace(updated);
-            let _ = buffer.save();
-            cx.notify();
+        act(cx, |l| {
+            let before = l.buffer(&path).text.clone();
+            let updated = edit(&before);
+            if updated != before && l.buffer(&path).restore(updated).is_ok() {
+                l.record_edit("property", label, Change::Note { path: path.clone(), text: before });
+            }
         });
+        state::reindex(cx);
         cx.notify();
     }
 
-    fn remove(&mut self, name: &str, cx: &mut Context<Self>) {
-        let Some(path) = self.path.clone() else { return };
+    fn change(&mut self, name: &str, kind: PropertyKind, values: Vec<String>, cx: &mut Context<Self>) {
         let name = name.to_string();
-        state::lib(cx).update(cx, |l, cx| {
-            let buffer = l.buffer(&path);
-            let updated = frontmatter::remove(&buffer.text, &name);
-            buffer.replace(updated);
-            let _ = buffer.save();
-            cx.notify();
-        });
+        self.write(tr("Eigenschaft geändert"), move |text| frontmatter::set(text, &name, kind, &values), cx);
+    }
+
+    fn remove(&mut self, name: &str, cx: &mut Context<Self>) {
+        let name = name.to_string();
+        self.write(tr("Eigenschaft entfernt"), move |text| frontmatter::remove(text, &name), cx);
+    }
+
+    /// Kapseln: a click removes a value, Enter in the field adds one and Backspace in the empty field takes the last back.
+    fn chips(&mut self, row: usize, name: &str, kind: PropertyKind, values: Vec<String>, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let t = Theme::get(cx);
+        let key = (self.path.clone().unwrap_or_default(), name.to_string());
+        let input = match self.chip_inputs.get(&key) {
+            Some((input, _)) => input.clone(),
+            None => {
+                let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Hinzufügen")));
+                let (n, list_key) = (name.to_string(), key.clone());
+                let sub = cx.subscribe(&input, move |this, field, e: &InputEvent, cx| {
+                    if matches!(e, InputEvent::PressEnter { .. }) {
+                        let value = field.read(cx).value().trim().to_string();
+                        if value.is_empty() {
+                            return;
+                        }
+                        let mut list = this.current_values(&n, cx);
+                        if !list.contains(&value) {
+                            list.push(value);
+                        }
+                        this.pending_clear = Some(list_key.clone());
+                        this.change(&n, kind, list, cx);
+                    }
+                });
+                self.chip_inputs.insert(key.clone(), (input.clone(), sub));
+                input
+            }
+        };
+        if self.pending_clear.as_ref() == Some(&key) {
+            self.pending_clear = None;
+            input.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        let me = cx.entity();
+        let (back_name, back_values) = (name.to_string(), values.clone());
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(space::XS))
+            .children(values.iter().enumerate().map(|(i, value)| {
+                let (e, n, list) = (me.clone(), name.to_string(), values.clone());
+                div()
+                    .id(("prop-chip", row * 1000 + i))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::XXS))
+                    .px(px(space::S))
+                    .py(px(space::XXS))
+                    .rounded_full()
+                    .bg(t.ink.opacity(0.08))
+                    .text_size(px(font::CAPTION))
+                    .cursor_pointer()
+                    .key_nav()
+                    .child(value.clone())
+                    .child(icon("x", iconsize::XS, t.secondary))
+                    .tooltip(tip(tr("Entfernen")))
+                    .on_click(move |_, _, cx| {
+                        let mut rest = list.clone();
+                        rest.remove(i);
+                        let n = n.clone();
+                        e.update(cx, |ed, cx| ed.change(&n, kind, rest, cx));
+                    })
+            }))
+            .child(
+                div()
+                    .w(px(90.))
+                    .on_key_down(cx.listener(move |this, ev: &KeyDownEvent, _, cx| {
+                        if ev.keystroke.key == "backspace" && !back_values.is_empty() && this.chip_field_is_empty(&back_name, cx) {
+                            let mut rest = back_values.clone();
+                            rest.pop();
+                            this.change(&back_name, kind, rest, cx);
+                        }
+                    }))
+                    .child(Input::new(&input).small().appearance(false)),
+            )
+            .into_any_element()
+    }
+
+    fn chip_field_is_empty(&self, name: &str, cx: &App) -> bool {
+        let key = (self.path.clone().unwrap_or_default(), name.to_string());
+        self.chip_inputs.get(&key).is_none_or(|(i, _)| i.read(cx).value().is_empty())
+    }
+
+    fn current_values(&self, name: &str, cx: &mut Context<Self>) -> Vec<String> {
+        let Some(path) = self.path.clone() else { return Vec::new() };
+        let text = state::lib(cx).update(cx, |l, _| l.buffer(&path).text.clone());
+        frontmatter::properties(&text).and_then(|p| p.into_iter().find(|x| x.name == name)).map_or(Vec::new(), |p| p.values)
     }
 }
 
@@ -394,14 +498,21 @@ impl Render for PropertyEditor {
                         editor.update(cx, |e, cx| e.change(&name, PropertyKind::Checkbox, vec![value], cx));
                     }).into_any_element()
                 }
-                PropertyKind::List | PropertyKind::Tags => {
+                PropertyKind::List | PropertyKind::Tags => self.chips(i, &name, kind, values.clone(), window, cx),
+                PropertyKind::Date => {
                     let (name2, editor) = (name.clone(), me.clone());
-                    let state = fields.input(&key, &values.join(", "), "", window, cx, move |v, cx| {
-                        let list: Vec<String> = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                    let shown = values.first().and_then(|v| chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d").ok());
+                    let picker = fields.date(&key, shown, window, cx, move |d, cx| {
                         let (n, e) = (name2.clone(), editor.clone());
-                        e.update(cx, |e, cx| e.change(&n, kind, list, cx));
+                        e.update(cx, |e, cx| e.change(&n, kind, vec![d.format("%Y-%m-%d").to_string()], cx));
                     });
-                    Input::new(&state).small().into_any_element()
+                    let vault = index::current();
+                    let daily_name = shown.map(|d| crate::core::vault::moment::format(if vault.config.daily.format.is_empty() { "YYYY-MM-DD" } else { vault.config.daily.format.as_str() }, d.and_hms_opt(12, 0, 0).and_then(|x| x.and_local_timezone(chrono::Local).single()).unwrap_or_else(chrono::Local::now), crate::core::i18n::is_english()));
+                    let daily = daily_name.map(|n| vault.root.join(vault.config.daily.folder.trim_matches('/')).join(format!("{n}.md"))).filter(|p| vault.notes.contains_key(p));
+                    div().flex().items_center().gap(px(space::XS)).child(div().flex_1().min_w_0().child(gpui_kit::component::date_picker::DatePicker::new(&picker).small())).children(daily.map(|p| Button::new(("prop-daily", i)).ghost().small().icon(menu_icon("calendar")).tooltip(tr("Tagesnotiz öffnen")).on_click(move |_, _, cx| {
+                        let p = p.clone();
+                        act(cx, |l| l.open_file(&p));
+                    }))).into_any_element()
                 }
                 _ => {
                     let (name2, editor) = (name.clone(), me.clone());
@@ -409,14 +520,20 @@ impl Render for PropertyEditor {
                         let (n, e) = (name2.clone(), editor.clone());
                         let valid = match kind {
                             PropertyKind::Number => v.is_empty() || v.parse::<f64>().is_ok(),
-                            PropertyKind::Date => v.is_empty() || chrono::NaiveDate::parse_from_str(&v, "%Y-%m-%d").is_ok() || crate::core::natural_date::parse(&v, chrono::Local::now().date_naive()).is_some(),
                             _ => true,
                         };
                         if valid {
                             e.update(cx, |e, cx| e.change(&n, kind, vec![v], cx));
                         }
                     });
-                    Input::new(&state).small().into_any_element()
+                    let link = values.first().and_then(|v| v.strip_prefix("[[")).and_then(|v| v.strip_suffix("]]")).map(|d| d.split('|').next().unwrap_or(d).to_string());
+                    let from = path.clone();
+                    div().flex().items_center().gap(px(space::XS)).child(div().flex_1().min_w_0().child(Input::new(&state).small())).children(link.map(|d| Button::new(("prop-link", i)).ghost().small().icon(menu_icon("arrow-up-right")).tooltip(tr("Öffnen")).on_click(move |_, _, cx| {
+                        let (d, f) = (d.clone(), from.clone());
+                        act(cx, |l| {
+                            l.open_link(&d, Some(&f));
+                        });
+                    }))).into_any_element()
                 }
             };
             let (remove, editor) = (name.clone(), me.clone());
@@ -435,6 +552,17 @@ impl Render for PropertyEditor {
         }
         self.fields = fields;
         let empty = props.is_empty();
+        let me2 = cx.entity();
+        let suggestions: Vec<String> = {
+            let mut names: std::collections::BTreeSet<String> = Default::default();
+            for facts in index::current().notes.values() {
+                names.extend(facts.properties.iter().map(|p| p.name.clone()));
+            }
+            for p in &props {
+                names.remove(&p.name);
+            }
+            names.into_iter().take(40).collect()
+        };
         div()
             .id("side-props")
             .size_full()
@@ -446,7 +574,17 @@ impl Render for PropertyEditor {
                     .py(px(space::S))
                     .when(empty, |d| d.child(div().px(px(space::M)).py(px(space::S)).child(caption(tr("Diese Notiz hat noch keine Eigenschaften."), &t))))
                     .child(rows)
-                    .child(div().p(px(space::M)).child(Input::new(&self.new_name).small()))
+                    .child(div().p(px(space::M)).flex().items_center().gap(px(space::XS)).child(div().flex_1().child(Input::new(&self.new_name).small())).child(Button::new("prop-names").ghost().small().icon(menu_icon("chevron-down")).tooltip(tr("Namen aus dem Vault")).dropdown_menu(move |mut menu, _, _| {
+                        for known in &suggestions {
+                            let (k, e) = (known.clone(), me2.clone());
+                            menu = menu.item(PopupMenuItem::new(known.clone()).on_click(move |_, _, cx| {
+                                let k = k.clone();
+                                let kind = known_kind(&k).unwrap_or(PropertyKind::Text);
+                                e.update(cx, |ed, cx| ed.change(&k, kind, vec![String::new()], cx));
+                            }));
+                        }
+                        menu
+                    })))
                     .child(div().px(px(space::M)).child(caption(tr("Enter legt sie an."), &t))),
             )
             .into_any_element()

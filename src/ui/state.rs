@@ -14,6 +14,7 @@ const RELOAD_SETTLE: u64 = 150;
 pub struct Store {
     pub lib: Entity<Library>,
     watcher: Option<notify::RecommendedWatcher>,
+    vault_watcher: Option<notify::RecommendedWatcher>,
     watch_task: Option<Task<()>>,
     reminder_task: Option<Task<()>>,
     reminders: Vec<Reminder>,
@@ -38,6 +39,7 @@ pub fn init(cx: &mut App) {
     cx.set_global(Store {
         lib,
         watcher: None,
+        vault_watcher: None,
         watch_task: None,
         reminder_task: None,
         reminders: Vec::new(),
@@ -155,7 +157,9 @@ pub fn close_workspace(cx: &mut App) {
     flush_pending(cx);
     let store = cx.global_mut::<Store>();
     store.watcher = None;
+    store.vault_watcher = None;
     store.watch_task = None;
+    crate::core::vault::index::reset();
     super::sync::workspace_closed(cx);
     act(cx, |l| l.close());
 }
@@ -224,6 +228,35 @@ fn watch(root: PathBuf, cx: &mut App) {
     let store = cx.global_mut::<Store>();
     store.watcher = Some(watcher);
     store.watch_task = Some(task);
+    watch_vault(cx);
+}
+
+/// Watches a connected vault as well, so changes made in Obsidian arrive.
+pub fn watch_vault(cx: &mut App) {
+    cx.global_mut::<Store>().vault_watcher = None;
+    let Some(vault) = read(cx, |l| l.external_vault()) else { return };
+    let (tx, rx) = async_channel::unbounded::<()>();
+    let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if res.is_ok() {
+            let _ = tx.try_send(());
+        }
+    });
+    let Ok(mut watcher) = watcher else { return };
+    if watcher.watch(&vault, RecursiveMode::Recursive).is_err() {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        while rx.recv().await.is_ok() {
+            cx.background_executor().timer(Duration::from_millis(500)).await;
+            while rx.try_recv().is_ok() {}
+            cx.update(|cx| {
+                reindex(cx);
+                super::sync::touched(cx);
+            });
+        }
+    })
+    .detach();
+    cx.global_mut::<Store>().vault_watcher = Some(watcher);
 }
 
 fn changed(c: Change, cx: &mut App) {

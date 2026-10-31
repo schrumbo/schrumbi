@@ -158,6 +158,9 @@ pub struct Holiday {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Module {
+    /// Folder of this module's notes inside an external vault, relative to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes_folder: Option<String>,
     pub id: String,
     pub code: String,
     pub name: String,
@@ -185,6 +188,7 @@ pub struct Module {
 impl Default for Module {
     fn default() -> Self {
         Self {
+            notes_folder: None,
             id: new_id(),
             code: String::new(),
             name: String::new(),
