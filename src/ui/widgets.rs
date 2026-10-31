@@ -357,6 +357,28 @@ pub fn banner(tint: Hsla) -> Div {
     div().p(px(space::L)).rounded(px(radius::CARD)).bg(tint.opacity(0.08)).border_1().border_color(tint.opacity(0.25))
 }
 
+/// A hint that needs an answer: what happened, optionally why, and the buttons passed as `actions`.
+pub fn notice(icon_name: &str, tint: Hsla, title: impl Into<SharedString>, detail: Option<String>, actions: impl IntoElement, t: &Theme) -> Div {
+    banner(tint)
+        .px(px(space::L))
+        .py(px(space::M))
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(space::M))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(220.))
+                .flex()
+                .items_start()
+                .gap(px(space::S))
+                .child(icon(icon_name, iconsize::M, tint))
+                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().font_weight(FontWeight::MEDIUM).child(title.into())).when_some(detail, |d, text| d.child(caption(text, t)))),
+        )
+        .child(div().flex_none().flex().items_center().gap(px(space::S)).child(actions))
+}
+
 /// Section heading in title3 weight.
 pub fn section_title(s: impl Into<SharedString>) -> Div {
     div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).child(s.into())

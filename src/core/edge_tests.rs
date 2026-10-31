@@ -459,3 +459,65 @@ fn split_view_follows_the_tabs() {
     lib.close_document(&b);
     assert_eq!(lib.split_document, None);
 }
+
+#[test]
+fn sync_gate_holds_writes_and_reloads_pulled_files() {
+    let root = folder("sync-gate");
+    std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();
+    let note = root.join("n.md");
+    std::fs::write(&note, "alt").unwrap();
+    let mut lib = open(&root);
+    let key = dunce::canonicalize(&note).unwrap();
+    lib.buffer(&key);
+    lib.begin_sync();
+    std::fs::write(&key, "gezogen").unwrap();
+    std::fs::File::options().write(true).open(&key).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1000)).unwrap();
+    assert!(!lib.reload_external());
+    lib.finish_sync(std::slice::from_ref(&key));
+    assert_eq!(lib.buffer(&key).text, "gezogen");
+    assert!(lib.buffer(&key).conflict.is_none());
+}
+
+#[test]
+fn deciding_about_another_apps_version_can_be_undone_and_redone() {
+    let root = folder("note-undo");
+    std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();
+    let note = root.join("n.md");
+    std::fs::write(&note, "alt").unwrap();
+    let mut lib = open(&root);
+    let key = dunce::canonicalize(&note).unwrap();
+    lib.buffer(&key).edited("meins".into());
+    std::fs::write(&key, "fremd").unwrap();
+    let _ = lib.buffer(&key).save();
+    assert_eq!(lib.buffer(&key).conflict.as_deref(), Some("fremd"));
+    lib.keep_note_mine(&key);
+    assert_eq!(std::fs::read_to_string(&key).unwrap(), "meins");
+    lib.undo();
+    assert_eq!(std::fs::read_to_string(&key).unwrap(), "fremd");
+    assert_eq!(lib.buffer(&key).text, "fremd");
+    lib.redo();
+    assert_eq!(std::fs::read_to_string(&key).unwrap(), "meins");
+    lib.buffer(&key).edited("meins 2".into());
+    std::fs::write(&key, "fremd 2").unwrap();
+    let _ = lib.buffer(&key).save();
+    lib.load_note_disk(&key);
+    assert_eq!(lib.buffer(&key).text, "fremd 2");
+    lib.undo();
+    assert_eq!(lib.buffer(&key).text, "meins 2");
+    assert_eq!(std::fs::read_to_string(&key).unwrap(), "meins 2");
+}
+
+#[test]
+fn a_config_from_a_newer_version_is_not_overwritten_after_a_pull() {
+    let root = folder("newer");
+    std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();
+    let mut lib = open(&root);
+    let mut newer = config(1, 1);
+    newer["version"] = json!(99);
+    std::fs::write(root.join("schrumbi.json"), newer.to_string()).unwrap();
+    assert!(lib.reload_external());
+    assert!(lib.last_error.is_some());
+    lib.write_config();
+    let on_disk: Value = serde_json::from_slice(&std::fs::read(root.join("schrumbi.json")).unwrap()).unwrap();
+    assert_eq!(on_disk["version"], 99);
+}

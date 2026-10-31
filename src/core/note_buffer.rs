@@ -1,5 +1,10 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
+
+use super::i18n::tr;
+use super::library::unique_path;
+use super::naming::{extension, stem};
 
 /// An open note. The editor owns the live text while typing and reports edits here;
 /// `text` is the snapshot used by the reader, export and saving.
@@ -13,17 +18,26 @@ pub struct NoteBuffer {
     known: Option<SystemTime>,
     /// Bumped whenever the text changes from outside the editor, so editors reload it.
     pub revision: u64,
+    /// The version on disk when it changed while there were unsaved edits here; saving waits for a decision.
+    pub conflict: Option<String>,
+    /// Saves are only remembered, because a sync is rewriting the workspace.
+    held: bool,
+    save_wanted: bool,
 }
 
 impl NoteBuffer {
     pub fn open(path: &Path) -> Self {
-        let mut b = Self { path: path.to_path_buf(), text: String::new(), dirty: false, missing: false, last_saved: String::new(), known: None, revision: 0 };
+        let mut b = Self { path: path.to_path_buf(), text: String::new(), dirty: false, missing: false, last_saved: String::new(), known: None, revision: 0, conflict: None, held: false, save_wanted: false };
         b.load();
         b
     }
 
     fn modified(&self) -> Option<SystemTime> {
         std::fs::metadata(&self.path).and_then(|m| m.modified()).ok()
+    }
+
+    fn read_disk(&self) -> Option<String> {
+        std::fs::read(&self.path).ok().map(|b| String::from_utf8_lossy(&b).into_owned())
     }
 
     pub fn load(&mut self) {
@@ -37,20 +51,48 @@ impl NoteBuffer {
                 self.last_saved = s;
                 self.known = self.modified();
                 self.dirty = false;
+                self.conflict = None;
             }
             Err(_) => self.missing = !self.path.exists(),
         }
     }
 
-    /// Picks up edits made in another app, unless there are unsaved changes here.
+    /// Picks up edits made in another app; with unsaved changes here the other version becomes a conflict.
     pub fn reload_if_changed(&mut self) -> bool {
-        match (self.dirty, self.modified(), self.known) {
-            (false, Some(m), Some(k)) if m > k + Duration::from_millis(500) => {
-                self.load();
-                true
-            }
-            _ => false,
+        if self.held {
+            return false;
         }
+        let modified = self.modified();
+        if modified.is_none() {
+            let gone = !self.dirty && !self.missing;
+            self.missing |= gone;
+            return gone;
+        }
+        if self.missing {
+            self.load();
+            return true;
+        }
+        if modified == self.known {
+            return false;
+        }
+        self.known = modified;
+        let Some(disk) = self.read_disk() else { return false };
+        if disk == self.last_saved {
+            return self.conflict.take().is_some();
+        }
+        if !self.dirty {
+            self.load();
+            return true;
+        }
+        if disk == self.text {
+            self.last_saved = disk;
+            self.dirty = false;
+            self.conflict = None;
+            return true;
+        }
+        let changed = self.conflict.as_deref() != Some(disk.as_str());
+        self.conflict = Some(disk);
+        changed
     }
 
     /// The editor's text after an edit.
@@ -66,21 +108,342 @@ impl NoteBuffer {
         self.revision += 1;
     }
 
+    /// Writes the note, unless another app changed the file since it was read: that becomes a `conflict`.
     pub fn save(&mut self) -> std::io::Result<()> {
-        if self.text == self.last_saved && self.path.exists() {
+        if self.conflict.is_some() {
+            return Ok(());
+        }
+        if self.held {
+            self.save_wanted = true;
+            return Ok(());
+        }
+        if self.text == self.last_saved {
             self.dirty = false;
             return Ok(());
         }
-        let tmp = self.path.with_file_name(format!(".{}.tmp", self.path.file_name().unwrap_or_default().to_string_lossy()));
-        std::fs::write(&tmp, &self.text)?;
-        std::fs::rename(&tmp, &self.path)?;
+        if let Some(disk) = self.read_disk()
+            && disk != self.last_saved
+            && disk != self.text
+        {
+            self.known = self.modified();
+            self.conflict = Some(disk);
+            return Ok(());
+        }
+        write_atomic(&self.path, &self.text)?;
+        self.missing = false;
         self.last_saved = self.text.clone();
         self.known = self.modified();
         self.dirty = false;
         Ok(())
     }
 
+    /// Resolves a conflict in favour of the text here; the next save replaces the other version.
+    pub fn keep_mine(&mut self) {
+        if let Some(disk) = self.conflict.take() {
+            self.last_saved = disk;
+            self.known = self.modified();
+            self.dirty = self.text != self.last_saved;
+        }
+    }
+
+    /// Resolves a conflict in favour of the file on disk and hands back the text it replaced.
+    pub fn take_disk(&mut self) -> Option<String> {
+        self.conflict.take()?;
+        let mine = self.text.clone();
+        self.dirty = false;
+        self.load();
+        Some(mine)
+    }
+
+    /// Writes the text here to a separate file next to the note, then adopts the version on disk.
+    pub fn save_conflict_copy(&mut self) -> std::io::Result<PathBuf> {
+        let name = self.path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let date = chrono::Local::now().format("%Y-%m-%d");
+        let ext = extension(&name);
+        let suffix = if ext.is_empty() { String::new() } else { format!(".{ext}") };
+        let target = unique_path(&self.path.with_file_name(format!("{} ({} {date}){suffix}", stem(&name), tr("Konflikt"))));
+        std::fs::write(&target, &self.text)?;
+        self.take_disk();
+        Ok(target)
+    }
+
+    /// Takes on `text` as a deliberate step, e.g. from the undo history, and writes it.
+    pub fn restore(&mut self, text: String) -> std::io::Result<()> {
+        self.keep_mine();
+        self.replace(text);
+        self.save()
+    }
+
+    /// Starts remembering saves instead of writing them.
+    pub fn hold(&mut self) {
+        self.held = true;
+    }
+
+    /// Ends `hold`. With `changed` the file is compared even if its time did not move forward,
+    /// since a sync may give it an older time; then remembered saves are written.
+    pub fn release(&mut self, changed: bool) -> std::io::Result<bool> {
+        self.held = false;
+        let mut reloaded = false;
+        if changed {
+            self.known = None;
+            reloaded = self.reload_if_changed();
+        }
+        if std::mem::take(&mut self.save_wanted) {
+            self.save()?;
+        }
+        Ok(reloaded)
+    }
+
     pub fn name(&self) -> String {
         self.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+    }
+}
+
+/// Replaces the file in one step, so a crash leaves the old or the new version and never a part of one.
+/// Follows links and keeps the file's permissions; a read-only file stays untouched.
+fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    let target = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let existing = std::fs::metadata(&target).ok();
+    if existing.as_ref().is_some_and(|m| m.permissions().readonly()) {
+        return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    }
+    let tmp = target.with_file_name(format!(".{}.tmp", target.file_name().unwrap_or_default().to_string_lossy()));
+    let result = (|| {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        if let Some(m) = &existing {
+            std::fs::set_permissions(&tmp, m.permissions())?;
+        }
+        std::fs::rename(&tmp, &target)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn note(name: &str, text: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("schrumbi-note-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("n.md");
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    /// Changes the file like another app and moves its time, whatever the clock resolution.
+    fn outside(path: &Path, text: &str, seconds: u64) {
+        std::fs::write(path, text).unwrap();
+        let time = SystemTime::now() + std::time::Duration::from_secs(seconds);
+        std::fs::File::options().write(true).open(path).unwrap().set_modified(time).unwrap();
+    }
+
+    #[test]
+    fn save_never_overwrites_a_change_from_outside() {
+        let path = note("save", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.edited("mine".into());
+        outside(&path, "theirs", 5);
+        b.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
+        assert_eq!(b.conflict.as_deref(), Some("theirs"));
+        assert!(b.dirty);
+        assert_eq!(b.text, "mine");
+    }
+
+    #[test]
+    fn clean_buffer_follows_the_file_also_to_an_older_time() {
+        let path = note("older", "a");
+        let mut b = NoteBuffer::open(&path);
+        std::fs::write(&path, "b").unwrap();
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1000)).unwrap();
+        assert!(b.reload_if_changed());
+        assert_eq!(b.text, "b");
+        assert!(b.conflict.is_none());
+    }
+
+    #[test]
+    fn dirty_buffer_reports_conflict_on_reload() {
+        let path = note("dirty", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.edited("mine".into());
+        outside(&path, "theirs", 5);
+        assert!(b.reload_if_changed());
+        assert_eq!(b.text, "mine");
+        assert_eq!(b.conflict.as_deref(), Some("theirs"));
+        assert!(!b.reload_if_changed());
+    }
+
+    #[test]
+    fn same_text_on_both_sides_is_no_conflict() {
+        let path = note("same", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.edited("x".into());
+        outside(&path, "x", 5);
+        assert!(b.reload_if_changed());
+        assert!(b.conflict.is_none());
+        assert!(!b.dirty);
+    }
+
+    #[test]
+    fn keeping_mine_overwrites_on_the_next_save() {
+        let path = note("mine", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.edited("mine".into());
+        outside(&path, "theirs", 5);
+        b.save().unwrap();
+        b.keep_mine();
+        b.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine");
+        assert!(b.conflict.is_none());
+        assert!(!b.dirty);
+    }
+
+    #[test]
+    fn taking_disk_hands_back_my_text_for_undo() {
+        let path = note("disk", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.edited("mine".into());
+        outside(&path, "theirs", 5);
+        b.save().unwrap();
+        assert_eq!(b.take_disk().as_deref(), Some("mine"));
+        assert_eq!(b.text, "theirs");
+        assert!(!b.dirty);
+        b.replace("mine".into());
+        assert!(b.dirty);
+    }
+
+    #[test]
+    fn conflict_copy_keeps_both_versions() {
+        let path = note("copy", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.edited("mine".into());
+        outside(&path, "theirs", 5);
+        b.save().unwrap();
+        let copy = b.save_conflict_copy().unwrap();
+        assert_eq!(std::fs::read_to_string(&copy).unwrap(), "mine");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
+        assert_eq!(extension(&copy.file_name().unwrap().to_string_lossy()), "md");
+        assert!(b.conflict.is_none());
+    }
+
+    #[test]
+    fn held_saves_wait_and_a_pull_is_noticed() {
+        let path = note("held", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.hold();
+        b.edited("typed during sync".into());
+        b.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a");
+        std::fs::write(&path, "pulled").unwrap();
+        assert!(!b.reload_if_changed());
+        b.release(true).unwrap();
+        assert_eq!(b.conflict.as_deref(), Some("pulled"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "pulled");
+    }
+
+    #[test]
+    fn held_save_is_written_when_nothing_was_pulled() {
+        let path = note("held2", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.hold();
+        b.edited("typed".into());
+        b.save().unwrap();
+        b.release(false).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "typed");
+        assert!(!b.dirty);
+    }
+
+    #[test]
+    fn a_file_deleted_outside_does_not_come_back_by_itself() {
+        let path = note("gone", "a");
+        let mut b = NoteBuffer::open(&path);
+        std::fs::remove_file(&path).unwrap();
+        assert!(b.reload_if_changed());
+        assert!(b.missing);
+        b.save().unwrap();
+        assert!(!path.exists());
+        std::fs::write(&path, "a").unwrap();
+        assert!(b.reload_if_changed());
+        assert!(!b.missing);
+    }
+
+    #[test]
+    fn typing_keeps_a_deleted_file_and_saving_brings_it_back() {
+        let path = note("gone2", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.edited("wichtig".into());
+        std::fs::remove_file(&path).unwrap();
+        assert!(!b.reload_if_changed());
+        assert!(!b.missing);
+        b.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "wichtig");
+    }
+
+    #[test]
+    fn conflict_copy_of_a_file_without_extension_has_no_trailing_dot() {
+        let path = note("noext", "a").with_file_name("README");
+        std::fs::write(&path, "a").unwrap();
+        let mut b = NoteBuffer::open(&path);
+        b.edited("mine".into());
+        outside(&path, "theirs", 5);
+        b.save().unwrap();
+        let copy = b.save_conflict_copy().unwrap();
+        assert!(!copy.file_name().unwrap().to_string_lossy().ends_with('.'), "{copy:?}");
+    }
+
+    #[test]
+    fn restore_is_a_full_round_trip() {
+        let path = note("restore", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.edited("mine".into());
+        outside(&path, "theirs", 5);
+        b.save().unwrap();
+        let mine = b.take_disk().unwrap();
+        b.restore(mine).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine");
+        assert!(!b.dirty);
+        b.restore("theirs".into()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_keeps_links_and_permissions_and_respects_read_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let real = note("link", "a");
+        let link = real.with_file_name("verweis.md");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let mut b = NoteBuffer::open(&link);
+        b.edited("neu".into());
+        b.save().unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "neu");
+        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o640);
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o440)).unwrap();
+        b.edited("gesperrt".into());
+        assert!(b.save().is_err());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "neu");
+        assert!(b.dirty);
+        let names: Vec<_> = std::fs::read_dir(real.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert!(!names.iter().any(|n| n.to_string_lossy().ends_with(".tmp")), "{names:?}");
+    }
+
+    #[test]
+    fn saving_keeps_bytes_exact() {
+        let text = "\u{feff}a\r\nb\n\nkein Ende";
+        let path = note("bytes", text);
+        let mut b = NoteBuffer::open(&path);
+        b.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        b.edited(format!("{text}!"));
+        b.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), format!("{text}!"));
     }
 }

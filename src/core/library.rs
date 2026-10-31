@@ -57,6 +57,8 @@ pub enum Change {
     Trash(PathBuf),
     Restore(PathBuf),
     Highlights { key: String, list: Vec<Highlight> },
+    /// Puts a note's text back, as chosen when another app changed the file.
+    Note { path: PathBuf, text: String },
 }
 
 /// What one undo or redo reverts.
@@ -233,6 +235,10 @@ pub struct Library {
     /// The kind and time of the last edit that merges with the following ones, e.g. typing in a settings field.
     coalescing: Option<(&'static str, std::time::Instant)>,
     pub buffers: HashMap<PathBuf, NoteBuffer>,
+    /// A sync is rewriting the workspace; writes wait until `finish_sync`.
+    sync_gate: bool,
+    deferred_config: bool,
+    deferred_state: bool,
     weeks_cache: Option<(Semester, Vec<LectureWeek>)>,
     /// Bumped on every change, so views can skip work when nothing changed.
     pub revision: u64,
@@ -320,6 +326,9 @@ impl Library {
             redo_steps: Vec::new(),
             coalescing: None,
             buffers: HashMap::new(),
+            sync_gate: false,
+            deferred_config: false,
+            deferred_state: false,
             weeks_cache: None,
             revision: 0,
         }
@@ -489,6 +498,10 @@ impl Library {
         if self.read_only {
             return;
         }
+        if self.sync_gate {
+            self.deferred_config = true;
+            return;
+        }
         c.version = CURRENT_VERSION;
         if let Err(e) = workspace::save(&c, &path) {
             self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&e]));
@@ -500,6 +513,10 @@ impl Library {
         if self.read_only {
             return;
         }
+        if self.sync_gate {
+            self.deferred_state = true;
+            return;
+        }
         if let Err(e) = workspace::save(&self.state, &path) {
             self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&e]));
         }
@@ -507,11 +524,18 @@ impl Library {
 
     /// Picks up `schrumbi.json` / state edits made outside the app; true when something changed.
     pub fn reload_external(&mut self) -> bool {
+        if self.sync_gate {
+            return false;
+        }
         let mut changed = false;
         if let Some(p) = self.config_path()
             && let Ok(Some(c)) = workspace::load::<StudyConfig>(&p)
             && Some(&c) != self.config.as_ref()
         {
+            if c.version > CURRENT_VERSION {
+                self.read_only = true;
+                self.last_error = Some(tr("schrumbi.json stammt aus einer neueren App-Version. Änderungen werden nicht gespeichert, bis du die App aktualisierst."));
+            }
             self.config = Some(c);
             changed = true;
         }
@@ -526,6 +550,76 @@ impl Library {
             self.refresh();
         }
         changed
+    }
+
+    // MARK: Notes changed by other apps
+
+    /// Replaces the version another app wrote with the text here; the other version stays in the undo history.
+    pub fn keep_note_mine(&mut self, path: &Path) {
+        let Some(buffer) = self.buffers.get_mut(path) else { return };
+        let Some(theirs) = buffer.conflict.clone() else { return };
+        buffer.keep_mine();
+        if let Err(e) = buffer.save() {
+            self.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]));
+            return;
+        }
+        self.commit(tr("Deine Version behalten"), "check", vec![Change::Note { path: path.to_path_buf(), text: theirs }]);
+    }
+
+    /// Shows the version another app wrote; the text here stays in the undo history.
+    pub fn load_note_disk(&mut self, path: &Path) {
+        let Some(mine) = self.buffers.get_mut(path).and_then(NoteBuffer::take_disk) else { return };
+        self.commit(tr("Neu geladen"), "refresh-cw", vec![Change::Note { path: path.to_path_buf(), text: mine }]);
+    }
+
+    // MARK: Sync
+
+    /// Writes everything pending, then holds all further writes while a sync rewrites the workspace.
+    pub fn begin_sync(&mut self) {
+        self.write_config();
+        self.save_state();
+        let mut failed = None;
+        for b in self.buffers.values_mut() {
+            if b.dirty
+                && let Err(e) = b.save()
+            {
+                failed = Some(e);
+            }
+            b.hold();
+        }
+        if let Some(e) = failed {
+            self.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]));
+        }
+        self.sync_gate = true;
+    }
+
+    /// Ends `begin_sync`: reloads what `changed` touched and writes what was held back.
+    pub fn finish_sync(&mut self, changed: &[PathBuf]) {
+        self.sync_gate = false;
+        let changed: HashSet<&Path> = changed.iter().map(PathBuf::as_path).collect();
+        let mut failed = None;
+        for (path, b) in &mut self.buffers {
+            let touched = changed.contains(path.as_path()) || dunce::canonicalize(path).is_ok_and(|p| changed.contains(p.as_path()));
+            if let Err(e) = b.release(touched) {
+                failed = Some(e);
+            }
+        }
+        if let Some(e) = failed {
+            self.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]));
+        }
+        let held_config = std::mem::take(&mut self.deferred_config).then(|| self.config.clone()).flatten();
+        let held_state = std::mem::take(&mut self.deferred_state).then(|| self.state.clone());
+        self.reload_external();
+        if let Some(c) = held_config {
+            self.config = Some(c);
+            self.write_config();
+        }
+        if let Some(s) = held_state {
+            self.state = s;
+            self.save_state();
+        }
+        self.refresh();
+        self.changed();
     }
 
     // MARK: Refresh
@@ -1265,6 +1359,12 @@ impl Library {
                     let before = self.store_highlights(&key, list);
                     Change::Highlights { key, list: before }
                 }
+                Change::Note { path, text } => {
+                    let buffer = self.buffer(&path);
+                    let before = buffer.text.clone();
+                    buffer.restore(text)?;
+                    Change::Note { path, text: before }
+                }
             })
         })();
         match result {
@@ -1715,7 +1815,14 @@ impl Library {
 
     /// The buffer for a note, created on first use.
     pub fn buffer(&mut self, path: &Path) -> &mut NoteBuffer {
-        self.buffers.entry(path.to_path_buf()).or_insert_with(|| NoteBuffer::open(path))
+        let gate = self.sync_gate;
+        self.buffers.entry(path.to_path_buf()).or_insert_with(|| {
+            let mut b = NoteBuffer::open(path);
+            if gate {
+                b.hold();
+            }
+            b
+        })
     }
 
     /// Removes a document tab; the caller saves or asks about unsaved changes first.

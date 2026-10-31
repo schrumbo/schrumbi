@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
+use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::component::input::{Editor, EditorState, InputEvent};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{Disableable, Sizable};
@@ -94,7 +96,13 @@ impl NoteView {
                 if rev != this.revision {
                     this.revision = rev;
                     this.syncing = true;
-                    this.editor.update(cx, |s, cx| s.set_value(text, window, cx));
+                    this.editor.update(cx, |s, cx| {
+                        let (selected, scroll) = (s.selected_range(), s.scroll_offset());
+                        let (start, end) = (text.floor_char_boundary(selected.start), text.floor_char_boundary(selected.end));
+                        s.set_value(text, window, cx);
+                        s.set_selected_range(start..end, cx);
+                        s.set_scroll_offset(scroll, cx);
+                    });
                     this.syncing = false;
                     this.parsed = None;
                 }
@@ -232,6 +240,18 @@ impl NoteView {
         if let Err(e) = result {
             act(cx, |l| l.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e])));
         }
+    }
+
+    fn conflict_notice(&self, open: bool, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let (compare, reload, keep) = (self.path.clone(), self.path.clone(), self.path.clone());
+        let actions = div()
+            .flex()
+            .items_center()
+            .gap(px(space::S))
+            .child(Button::new("conflict-compare").small().label(tr("Vergleichen")).on_click(move |_, _, cx| compare_note(compare.clone(), cx)))
+            .child(Button::new("conflict-reload").small().label(tr("Neu laden")).on_click(move |_, _, cx| act(cx, |l| l.load_note_disk(&reload))))
+            .child(Button::new("conflict-keep").small().primary().label(tr("Meine behalten")).on_click(move |_, _, cx| act(cx, |l| l.keep_note_mine(&keep))));
+        super::motion::reveal("note-conflict", open, div().p(px(space::S)).child(notice("triangle-alert", t.orange, tr("Diese Notiz wurde außerhalb von Schrumbi geändert."), Some(tr("Deine Änderungen sind noch da. Gesichert wird erst, wenn du dich entschieden hast.")), actions, t)))
     }
 
     fn export(&mut self, cx: &mut Context<Self>) {
@@ -512,9 +532,9 @@ impl Render for NoteView {
         }
         let t = Theme::get(cx);
         let lib = state::lib(cx);
-        let (missing, text) = lib.update(cx, |l, _| {
+        let (missing, text, conflict) = lib.update(cx, |l, _| {
             let b = l.buffer(&self.path);
-            (b.missing, b.text.clone())
+            (b.missing, b.text.clone(), b.conflict.is_some())
         });
         let request = take_find_request(&self.path, cx);
         if let Some((term, nth)) = request {
@@ -571,6 +591,7 @@ impl Render for NoteView {
                     .on_action(|_: &super::app::CloseWindow, window, cx| super::note_window::request_close(window, cx))
             })
             .child(top)
+            .child(self.conflict_notice(conflict, &t, cx))
             .child(div().flex_1().min_h_0().child(content));
         if self.embedded {
             view.into_any_element()
@@ -587,14 +608,78 @@ pub fn set_font_size(size: f32, cx: &mut App) {
     cx.refresh_windows();
 }
 
+/// Opens both versions of a note side by side; the diff is worked out in the background, notes can be long.
+pub fn compare_note(path: PathBuf, cx: &mut App) {
+    let Some((mine, theirs)) = state::read(cx, |l| l.buffers.get(&path).and_then(|b| b.conflict.clone().map(|c| (b.text.clone(), c)))) else { return };
+    let Some(window) = cx.active_window() else { return };
+    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let task = cx.background_spawn(async move {
+        let diff = similar::TextDiff::configure().timeout(Duration::from_secs(2)).diff_lines(&theirs, &mine);
+        let patch = diff.unified_diff().header(&name, &name).to_string();
+        gpui_kit::component::diff::DiffFile::parse(&patch).unwrap_or_default()
+    });
+    cx.spawn(async move |cx| {
+        let files = task.await;
+        let _ = window.update(cx, |_, window, cx| {
+            if window.has_active_dialog(cx) {
+                return;
+            }
+            let state = cx.new(|cx| gpui_kit::component::diff::DiffState::new(files, cx).with_mode(gpui_kit::component::diff::DiffMode::Split));
+            window.open_dialog(cx, move |d, _, cx| {
+                let t = Theme::get(cx);
+                let (reload, keep) = (path.clone(), path.clone());
+                d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().child(
+                    div()
+                        .h(px(480.))
+                        .flex()
+                        .flex_col()
+                        .child(div().flex_none().px(px(space::L)).py(px(space::M)).flex().justify_between().text_size(px(font::CAPTION)).text_color(t.secondary).child(tr("Version der anderen App")).child(tr("Deine Version")))
+                        .child(div().flex_1().min_h_0().child(gpui_kit::component::diff::Diff::new(&state)))
+                        .child(
+                            div()
+                                .flex_none()
+                                .p(px(space::M))
+                                .flex()
+                                .justify_end()
+                                .gap(px(space::S))
+                                .border_t_1()
+                                .border_color(t.separator)
+                                .child(Button::new("compare-close").small().label(tr("Später")).on_click(|_, window, cx| window.close_dialog(cx)))
+                                .child(Button::new("compare-reload").small().label(tr("Neu laden")).on_click(move |_, window, cx| {
+                                    act(cx, |l| l.load_note_disk(&reload));
+                                    window.close_dialog(cx);
+                                }))
+                                .child(Button::new("compare-keep").small().primary().label(tr("Meine behalten")).on_click(move |_, window, cx| {
+                                    act(cx, |l| l.keep_note_mine(&keep));
+                                    window.close_dialog(cx);
+                                })),
+                        ),
+                )
+            });
+        });
+    })
+    .detach();
+}
+
+/// Saves for closing, also during a sync. An undecided conflict keeps both versions, because nobody can answer anymore.
 fn save_buffer(path: &Path, cx: &mut App) -> bool {
     let result = state::lib(cx).update(cx, |l, cx| {
-        let r = l.buffers.get_mut(path).map_or(Ok(()), |b| b.save());
+        let r = l.buffers.get_mut(path).map_or(Ok(None), |b| {
+            b.release(false)?;
+            b.save()?;
+            if b.conflict.is_some() { b.save_conflict_copy().map(Some) } else { Ok(None) }
+        });
         cx.notify();
         r
     });
     match result {
-        Ok(()) => true,
+        Ok(copy) => {
+            if let Some(copy) = copy {
+                let name = copy.file_name().unwrap_or_default().to_string_lossy().to_string();
+                act(cx, |l| l.notify(trf("Beide Versionen behalten: %@", &[&name]), "copy-plus", None, None));
+            }
+            true
+        }
         Err(e) => {
             act(cx, |l| l.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e])));
             false

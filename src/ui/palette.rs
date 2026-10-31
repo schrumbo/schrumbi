@@ -65,6 +65,13 @@ fn commands(cx: &App) -> Vec<Command> {
                 add(&current, trf("%@: %@", &[&a.title, &tr("Termin verschieben…")]), "calendar-clock", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.reschedule_id = Some(move_id.clone())))));
             }
         }
+        if let Some(path) = l.active_document.clone().filter(|p| l.buffers.get(p).is_some_and(|b| b.conflict.is_some())) {
+            let group = tr("Notiz außerhalb geändert");
+            let (compare, reload, keep) = (path.clone(), path.clone(), path);
+            add(&group, tr("Vergleichen"), "file-text", None, Run::Call(Rc::new(move |cx| super::documents::compare_note(compare.clone(), cx))));
+            add(&group, tr("Neu laden"), "refresh-cw", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.load_note_disk(&reload)))));
+            add(&group, tr("Meine behalten"), "check", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.keep_note_mine(&keep)))));
+        }
         add(&go, tr("Übersicht"), "layout-grid", Some(fixed_keys("1")), Run::Action(Box::new(app::GoToday)));
         add(&go, tr("Semester"), "table", Some(fixed_keys("2")), Run::Action(Box::new(app::GoGrid)));
         add(&go, tr("Leistungen"), "award", Some(fixed_keys("3")), Run::Action(Box::new(app::GoRecord)));
