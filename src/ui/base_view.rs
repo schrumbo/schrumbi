@@ -338,15 +338,19 @@ impl BaseView {
         }
         let selected = self.cursor == (row, col);
         let (click, open) = (me.clone(), path.clone());
+        let editable = self.table.as_ref().and_then(|t| t.columns.get(col)).is_some_and(|(_, column)| !column.contains('.') || column.starts_with("note."));
         div()
             .id(("base-cell", row * 1000 + col))
             .on_click(move |e, window, cx| {
                 click.update(cx, |v, cx| {
                     v.cursor = (row, col);
                     window.focus(&v.focus, cx);
+                    if e.click_count() >= 2 && editable {
+                        v.start_edit(window, cx);
+                    }
                     cx.notify();
                 });
-                if e.click_count() >= 2 {
+                if e.click_count() >= 2 && !editable {
                     let p = open.clone();
                     act(cx, |l| l.open_file(&p));
                 }
@@ -360,7 +364,7 @@ impl BaseView {
             .when(is_number(value), |d| d.justify_end().font_features(tabular()))
             .when(selected, |d| d.border_1().border_color(t.accent).rounded(px(radius::SMALL)))
             .text_size(px(font::CALLOUT))
-            .child(div().truncate().child(value.display()))
+            .child(div().truncate().child(value.display().strip_suffix(".md").map_or_else(|| value.display(), str::to_string)))
             .into_any_element()
     }
 
@@ -472,7 +476,7 @@ impl Render for BaseView {
             .child(Button::new("base-filter").small().ghost().icon(menu_icon("list-filter")).label(filter_label).on_click(cx.listener(|v, _, window, cx| v.open_filters(window, cx))))
             .child(property_menu)
             .child(div().flex_1())
-            .child(Button::new("base-new-row").small().icon(menu_icon("plus")).label(tr("Neue Zeile")).on_click(cx.listener(|v, _, _, cx| v.new_row(cx))));
+            .child(Button::new("base-new-row").small().icon(menu_icon("plus")).label(tr("Neue Notiz")).on_click(cx.listener(|v, _, _, cx| v.new_row(cx))));
         let filters = self.filters_open.then(|| {
             let readable = filter_count.is_some();
             div()

@@ -615,7 +615,8 @@ impl NoteView {
 
     /// Typing with nothing open starts where writing last happened, so no keystroke is lost.
     fn open_for_typing(&mut self, inserted: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
-        let line = self.last_line.unwrap_or_else(|| self.top_line());
+        let wanted = self.last_line.unwrap_or_else(|| self.top_line());
+        let line = self.segments.iter().find(|seg| seg.line >= wanted && matches!(seg.kind, SegmentKind::Line { .. } | SegmentKind::Blank)).map_or(wanted, |seg| seg.line);
         self.open_line(line, None, window, cx);
         if let Some(text) = inserted {
             self.block.update(cx, |b, cx| b.replace(text, window, cx));
@@ -796,7 +797,7 @@ impl NoteView {
                 .when(heading, |e| e.font_weight(FontWeight::BOLD))
                 .when(!cell, |e| e.w(width + px(LIVE_GUTTER)))
                 .when(cell, |e| e.w_full())
-                .h(height + px(LIVE_INSET * 2.))
+                .h(height + px(LIVE_INSET * 2. + 4.))
                 .mt(px(-LIVE_INSET))
                 .ml(px(left - LIVE_GUTTER)),
         );
