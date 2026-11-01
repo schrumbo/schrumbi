@@ -22,7 +22,7 @@ enum Content {
     Loading,
     Markdown(Arc<super::markdown_view::ParsedNote>),
     Text(String),
-    Image(PathBuf),
+    Image(Entity<super::image_view::ImageView>),
     Other,
 }
 
@@ -43,6 +43,13 @@ fn ext(path: &Path) -> String {
 impl FilePreview {
     pub fn new(header: bool) -> Self {
         Self { path: None, content: Content::Other, load: None, pdf: None, header }
+    }
+
+    /// Gives the keyboard to an image, so its zoom keys work.
+    pub fn take_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Content::Image(view) = &self.content {
+            view.update(cx, |v, cx| v.take_focus(window, cx));
+        }
     }
 
     pub fn path(&self) -> Option<&PathBuf> {
@@ -69,7 +76,7 @@ impl FilePreview {
             return;
         }
         if IMAGES.contains(&e.as_str()) {
-            self.content = Content::Image(path);
+            self.content = Content::Image(cx.new(|cx| super::image_view::ImageView::new(path, cx)));
             cx.notify();
             return;
         }
@@ -111,10 +118,16 @@ impl Render for FilePreview {
                 .id("preview-md")
                 .size_full()
                 .overflow_y_scrollbar()
+                .child(super::image_view::wheel_zoom(|factor, _, _, cx| super::documents::scale_font(factor, cx)))
                 .child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(680.)).p(px(space::XL)).child(super::markdown_view::render(text, self.path.as_deref().and_then(Path::parent), None, &t))))
                 .into_any_element(),
-            Content::Text(text) => div().id("preview-text").size_full().overflow_y_scrollbar().p(px(space::XL)).font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(text.clone()).into_any_element(),
-            Content::Image(p) => div().size_full().p(px(space::L)).flex().items_center().justify_center().child(img(p.clone()).max_w_full().max_h_full().object_fit(ObjectFit::Contain)).into_any_element(),
+            Content::Text(text) => div()
+                .relative()
+                .size_full()
+                .child(div().id("preview-text").size_full().overflow_y_scrollbar().p(px(space::XL)).font_family(Theme::mono_family()).text_size(px(super::theme::note_size(font::CALLOUT))).child(text.clone()))
+                .child(super::image_view::wheel_zoom(|factor, _, _, cx| super::documents::scale_font(factor, cx)))
+                .into_any_element(),
+            Content::Image(view) => view.clone().into_any_element(),
             Content::Other => div()
                 .size_full()
                 .flex()

@@ -100,7 +100,7 @@ impl MainWindow {
                 }
             }),
             cx.observe_window_appearance(window, |_, window, cx| {
-                theme::apply(theme::is_dark(window.appearance()), Some(window), cx);
+                theme::refresh(window, cx);
                 cx.notify();
             }),
         ];
@@ -549,7 +549,12 @@ pub fn open(cx: &mut App) {
     };
     let options = super::chrome::window_options(options, "Schrumbi");
     if let Ok((handle, _)) = gpui_kit::open_window(options, cx, |window, cx| {
-        theme::apply(theme::is_dark(window.appearance()), Some(window), cx);
+        super::platform::set_window_appearance(match crate::core::prefs::get().theme {
+            crate::core::prefs::ThemeChoice::System => None,
+            crate::core::prefs::ThemeChoice::Light => Some(false),
+            _ => Some(true),
+        });
+        theme::refresh(window, cx);
         cx.new(|cx| MainWindow::new(window, cx))
     }) {
         cx.set_global(MainHandle(handle));

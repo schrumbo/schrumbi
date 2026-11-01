@@ -196,10 +196,11 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
         let route = Route::Module(m.id.clone());
         let active = is_active(lib, &route);
         let color = t.palette(&m.color);
-        let code: String = m.code.chars().take(3).collect();
+        let code = m.badge();
         let chip = div()
-            .size(px(control::S))
+            .size(px(control::M))
             .rounded(px(radius::CONTROL))
+            .overflow_hidden()
             .bg(color.opacity(if active { 0.9 } else { 0.22 }))
             .flex()
             .items_center()
@@ -214,7 +215,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
         let folder = lib.root.as_ref().map(|r| r.join(&m.folder));
         let (outside, inside, edit_id) = (m.id.clone(), m.id.clone(), m.id.clone());
         mods = mods.child(
-            tab(SharedString::from(format!("tab-module-{}", m.id)), active, false, chip, m.display_name(), count, wide, m.display_name(), t)
+            tab(SharedString::from(format!("tab-module-{}", m.id)), active, false, chip, if m.name.is_empty() { m.code.clone() } else { m.name.clone() }, count, wide, m.display_name(), t)
                 .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(color.opacity(0.15)))
                 .drag_over::<super::browser::DraggedFile>(move |s, _, _, _| s.bg(color.opacity(0.15)))
                 .on_drop(move |paths: &ExternalPaths, _, cx| {

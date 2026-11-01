@@ -45,6 +45,8 @@ pub struct VaultIndex {
     pub resolver: Resolver,
     pub notes: HashMap<PathBuf, NoteFacts>,
     pub files: Vec<PathBuf>,
+    /// Every folder, also the empty ones; hidden and excluded folders stay out.
+    pub folders: Vec<PathBuf>,
     pub backlinks: HashMap<PathBuf, Vec<Mention>>,
     /// Link targets that do not exist yet, with where they are used.
     pub missing: BTreeMap<String, Vec<Mention>>,
@@ -131,6 +133,19 @@ fn list_files(root: &Path, exclude: &[String]) -> Vec<PathBuf> {
         .collect()
 }
 
+fn list_folders(root: &Path, exclude: &[String]) -> Vec<PathBuf> {
+    WalkDir::new(root)
+        .min_depth(1)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            e.file_type().is_dir() && !name.starts_with('.') && !exclude.iter().any(|x| *x == name)
+        })
+        .filter_map(Result::ok)
+        .map(|e| e.into_path())
+        .collect()
+}
+
 fn is_canvas(path: &Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("canvas"))
 }
@@ -154,7 +169,9 @@ pub fn rebuild(root: &Path, exclude: &[String]) {
             Some((p.clone(), facts))
         })
         .collect();
-    let index = assemble(root, files, notes);
+    let folders = list_folders(&root, exclude);
+    let mut index = assemble(root, files, notes);
+    index.folders = folders;
     *CACHE.lock().unwrap() = index.notes.clone();
     publish(index);
 }
@@ -190,7 +207,7 @@ fn assemble(root: PathBuf, files: Vec<PathBuf>, notes: HashMap<PathBuf, NoteFact
     for list in tags.values_mut() {
         list.sort();
     }
-    VaultIndex { reach: Some(super::config::reach(&root, &super::config::known_vaults(), super::config::obsidian_installed())), bookmarks: super::config::bookmarks(&root), types: super::config::property_types(&root), config: VaultConfig::read(&root), root, resolver, notes, files, backlinks, missing, tags, generation: 0 }
+    VaultIndex { reach: Some(super::config::reach(&root, &super::config::known_vaults(), super::config::obsidian_installed())), bookmarks: super::config::bookmarks(&root), types: super::config::property_types(&root), config: VaultConfig::read(&root), root, resolver, notes, files, folders: Vec::new(), backlinks, missing, tags, generation: 0 }
 }
 
 impl VaultIndex {
@@ -332,7 +349,8 @@ pub fn moved(old: &Path, new: &Path) -> Arc<VaultIndex> {
     if let Some(facts) = notes.remove(old) {
         notes.insert(new.to_path_buf(), facts);
     }
-    let next = assemble(index.root.clone(), files, notes);
+    let mut next = assemble(index.root.clone(), files, notes);
+    next.folders = index.folders.clone();
     publish(next);
     current()
 }

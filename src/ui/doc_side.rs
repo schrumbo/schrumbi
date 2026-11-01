@@ -712,7 +712,7 @@ fn mini_graph(path: &Path, vault: &index::VaultIndex, t: &Theme) -> Option<AnyEl
             .mb(px(space::S))
             .child(lines)
             .children(nodes.collect::<Vec<_>>())
-            .child(div().absolute().left(px(center.0 - 56.)).top(px(center.1 - 12.)).w(px(112.)).h(px(24.)).px(px(space::XS)).flex().items_center().justify_center().rounded(px(radius::SMALL)).bg(t.accent).text_color(white()).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).child(div().truncate().child(name)))
+            .child(div().absolute().left(px(center.0 - 56.)).top(px(center.1 - 12.)).w(px(112.)).h(px(24.)).px(px(space::XS)).flex().items_center().justify_center().rounded(px(radius::SMALL)).bg(t.accent).text_color(t.on_accent).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).child(div().truncate().child(name)))
             .children((hidden > 0).then(|| div().absolute().right(px(space::XS)).bottom(px(0.)).text_size(px(font::CAPTION)).text_color(t.secondary).child(trf("+%@ weitere", &[&hidden.to_string()]))))
             .into_any_element(),
     )

@@ -220,3 +220,14 @@ mod tests {
         assert_eq!(math_inline(r"\unbekannt{x}"), None);
     }
 }
+
+/// An SVG file as a PNG at the given scale, kept small enough for a texture.
+pub fn svg_to_png(svg: &[u8], scale: f32) -> Option<Vec<u8>> {
+    let tree = resvg::usvg::Tree::from_data(svg, &resvg::usvg::Options::default()).ok()?;
+    let size = tree.size();
+    let longest = size.width().max(size.height()) * scale;
+    let scale = if longest > 8192. { scale * 8192. / longest } else { scale };
+    let mut pixmap = resvg::tiny_skia::Pixmap::new((size.width() * scale).ceil() as u32, (size.height() * scale).ceil() as u32)?;
+    resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    pixmap.encode_png().ok()
+}

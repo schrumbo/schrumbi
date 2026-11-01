@@ -18,7 +18,7 @@ use super::preview::FilePreview;
 use super::state::{self, act};
 use super::motion::Soft;
 use crate::core::vault::index;
-use super::theme::{Theme, control, font, radius, space, iconsize};
+use super::theme::{Theme, control, font, note_size, note_scale, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::live_text::{self, LiveStyle, Segment, SegmentKind};
 use crate::core::edit_ops::{self, Edit};
@@ -81,6 +81,8 @@ pub struct NoteView {
     /// A nearly empty note opens ready to continue writing below what is there.
     caret_to_end: bool,
     reader_list: ListState,
+    /// The text scale the list measured its items with.
+    measured_scale: f32,
     /// A block the reader should bring into view once it knows the block.
     reveal_block: Option<usize>,
     item_hashes: Vec<u64>,
@@ -245,7 +247,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, measured_scale: note_scale(), reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -535,15 +537,15 @@ impl NoteView {
     fn field_font_size(&self, value: &str) -> f32 {
         let hashes = value.chars().take_while(|c| *c == '#').count();
         if !value.contains('\n') && hashes > 0 && value[hashes..].starts_with(' ') {
-            return match hashes {
+            return note_size(match hashes {
                 1 => font::TITLE,
                 2 => font::TITLE2,
                 3 => font::TITLE3,
                 4 => font::BODY,
                 _ => font::CALLOUT,
-            };
+            });
         }
-        font::BODY
+        note_size(font::BODY)
     }
 
     /// Whether the caret stands on the first or last drawn line of what is open.
@@ -779,7 +781,7 @@ impl NoteView {
         let cell = self.live.as_ref().is_some_and(|l| l.cell.is_some());
         let single = self.live.as_ref().is_some_and(|l| l.single) && !cell;
         let depth = live_text::depth_while_writing(&value, self.live.as_ref().and_then(|l| self.segments.get(l.index)).map_or(0, |s| if let SegmentKind::Line { depth } = s.kind { depth } else { 0 }));
-        let size = if cell { font::BODY } else { self.field_font_size(&value) };
+        let size = if cell { note_size(font::BODY) } else { self.field_font_size(&value) };
         let width = if cell { px(160.) } else { self.field_width(&value, window) };
         let style = window.text_style();
         let run = TextRun { len: value.len(), font: style.font(), color: style.color, background_color: None, underline: None, strikethrough: None };
@@ -787,7 +789,7 @@ impl NoteView {
         let line = px(size * 1.5);
         let height = line * (rows.max(1) as f32);
         let left = if single { self.drawn_text_left(&value, depth) - self.hang_width(&value, size, window) } else { 0. };
-        let heading = single && value.starts_with('#') && size != font::BODY;
+        let heading = single && value.starts_with('#') && size != note_size(font::BODY);
         let field = writing_menu(
             Editor::new(&self.block)
                 .appearance(false)
@@ -1312,8 +1314,8 @@ impl NoteView {
             }
             let line = segment.line;
             let body: AnyElement = match segment.kind {
-                SegmentKind::Blank => div().h(px(font::BODY * 1.5)).into_any_element(),
-                SegmentKind::Raw => div().text_size(px(font::CALLOUT)).line_height(relative(1.5)).text_color(t.tertiary).child(source_lines.get(line).cloned().unwrap_or_default()).into_any_element(),
+                SegmentKind::Blank => div().h(px(note_size(font::BODY) * 1.5)).into_any_element(),
+                SegmentKind::Raw => div().text_size(px(note_size(font::CALLOUT))).line_height(relative(1.5)).text_color(t.tertiary).child(source_lines.get(line).cloned().unwrap_or_default()).into_any_element(),
                 SegmentKind::Line { depth } => {
                     let written = source_lines.get(line).map_or("", |s| s.as_str());
                     let fragment = {
@@ -1324,7 +1326,7 @@ impl NoteView {
                         known.entry(written.to_string()).or_insert_with(|| Rc::new(markdown_view::parse(&format!("{}\n\n{definitions}", written.trim_start())))).clone()
                     };
                     if fragment.len() == 0 {
-                        div().text_size(px(font::CALLOUT)).line_height(relative(1.5)).text_color(t.tertiary).child(written.to_string()).into_any_element()
+                        div().text_size(px(note_size(font::CALLOUT))).line_height(relative(1.5)).text_color(t.tertiary).child(written.to_string()).into_any_element()
                     } else {
                         let offset_toggle: markdown_view::OnToggle = {
                             let inner = toggle.clone();
@@ -1786,6 +1788,10 @@ impl Render for NoteView {
         if std::mem::take(&mut self.needs_focus) {
             self.activate(window, cx);
         }
+        if self.measured_scale != note_scale() {
+            self.measured_scale = note_scale();
+            self.reader_list.remeasure();
+        }
         let wanted = prefs::get().note_editor;
         if wanted != self.editor_kind {
             self.editor_kind = wanted;
@@ -1801,6 +1807,7 @@ impl Render for NoteView {
         }
         let t = Theme::get(cx);
         let lib = state::lib(cx);
+        let wheel = super::image_view::wheel_zoom(|factor, _, _, cx| scale_font(factor, cx));
         let (missing, text, conflict) = lib.update(cx, |l, _| {
             let b = l.buffer(&self.path);
             (b.missing, b.text.clone(), b.conflict.is_some())
@@ -1845,6 +1852,7 @@ impl Render for NoteView {
         };
         let hover_card = (!self.embedded).then(|| super::link_card::overlay(cx)).flatten();
         let view = div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -1887,6 +1895,7 @@ impl Render for NoteView {
             .child(top)
             .child(self.conflict_notice(conflict, &t))
             .child(div().flex_1().min_h_0().child(content));
+        let view = view.child(wheel);
         if self.embedded {
             view.into_any_element()
         } else {
@@ -1895,10 +1904,27 @@ impl Render for NoteView {
     }
 }
 
+/// ⌘ plus wheel over a note or text: the same font size the settings change.
+pub fn scale_font(factor: f32, cx: &mut App) {
+    thread_local! {
+        static PENDING: std::cell::Cell<f32> = const { std::cell::Cell::new(0.) };
+    }
+    let moved = PENDING.with(|p| {
+        let total = p.get() + factor.ln();
+        let steps = (total / 0.12).trunc();
+        p.set(total - steps * 0.12);
+        steps
+    });
+    if moved != 0. {
+        set_font_size((prefs::get().editor_font_size + moved).clamp(10., 24.), cx);
+    }
+}
+
 /// Sets the editor font size everywhere.
 pub fn set_font_size(size: f32, cx: &mut App) {
     prefs::update(|p| p.editor_font_size = size);
     gpui_kit::component::Theme::global_mut(cx).mono_font_size = px(size);
+    super::theme::set_note_scale(size);
     cx.refresh_windows();
 }
 
@@ -2180,6 +2206,8 @@ impl FileViewer {
     pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(pdf) = self.pdf.clone() {
             pdf.update(cx, |v, cx| v.take_focus(window, cx));
+        } else {
+            self.preview.update(cx, |p, cx| p.take_focus(window, cx));
         }
     }
 }

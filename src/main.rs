@@ -41,7 +41,7 @@ fn main() {
     app.on_reopen(|cx| ui::main_window::show(cx));
     app.run(move |cx: &mut App| {
         gpui_kit::init(cx);
-        ui::theme::apply(false, None, cx);
+        ui::theme::apply(ui::theme::Kind::Light, None, cx);
         ui::state::init(cx);
         ui::notifications::init(cx);
         ui::updates::init(cx);

@@ -68,6 +68,8 @@ pub struct NotesPage {
     /// The folder new notes land in.
     target_folder: Option<String>,
     renaming: Option<(PathBuf, Entity<InputState>, Subscription)>,
+    /// A folder just made, shown before the next scan has seen it.
+    pending_folder: Option<PathBuf>,
     width: f32,
     /// A width drag is under way; it is saved when the drag ends.
     resizing: bool,
@@ -100,6 +102,15 @@ fn build_tree(vault: &index::VaultIndex) -> Tree {
             parent = full;
         }
         tree.files.entry(parent).or_default().push(path.clone());
+    }
+    for path in &vault.folders {
+        let Ok(rel) = path.strip_prefix(&vault.root) else { continue };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        if vault.config.is_ignored(&rel) {
+            continue;
+        }
+        let parent = rel.rsplit_once('/').map_or(String::new(), |(up, _)| up.to_string());
+        tree.folders.entry(parent).or_default().insert(rel);
     }
     tree
 }
@@ -160,6 +171,7 @@ impl NotesPage {
             selected: None,
             target_folder: None,
             renaming: None,
+            pending_folder: None,
             width: crate::core::prefs::get().notes_column.unwrap_or(260.),
             resizing: false,
             tree: None,
@@ -197,10 +209,14 @@ impl NotesPage {
     }
 
     fn file_rows(&self, tree: &Tree, folder: &str, depth: usize, vault: &index::VaultIndex, out: &mut Vec<Row>) {
-        if let Some(subfolders) = tree.folders.get(folder) {
-            let mut sorted: Vec<&String> = subfolders.iter().collect();
+        let pending = self.pending_folder.as_ref().and_then(|p| p.strip_prefix(&vault.root).ok()).map(|p| p.to_string_lossy().replace('\\', "/")).filter(|p| p.rsplit_once('/').map_or("", |(up, _)| up) == folder);
+        if tree.folders.contains_key(folder) || pending.is_some() {
+            let mut sorted: Vec<String> = tree.folders.get(folder).map(|s| s.iter().cloned().collect()).unwrap_or_default();
+            if let Some(p) = pending.filter(|p| !sorted.contains(p)) {
+                sorted.push(p);
+            }
             sorted.sort_by(|a, b| natural(a, b));
-            for sub in sorted {
+            for sub in &sorted {
                 let open = self.open_folders.contains(sub);
                 out.push(Row::Folder { rel: sub.clone(), name: sub.rsplit('/').next().unwrap_or(sub).to_string(), depth, open });
                 if open {
@@ -208,7 +224,7 @@ impl NotesPage {
                 }
             }
         }
-        let in_rename = self.renaming.as_ref().map(|(p, ..)| p).filter(|p| {
+        let in_rename = self.renaming.as_ref().map(|(p, ..)| p).filter(|p| Some(*p) != self.pending_folder.as_ref()).filter(|p| {
             !tree.files.get(folder).is_some_and(|f| f.contains(p)) && p.parent().and_then(|d| d.strip_prefix(&vault.root).ok()).is_some_and(|d| d.to_string_lossy().replace('\\', "/") == folder)
         });
         if let Some(path) = in_rename {
@@ -375,13 +391,18 @@ impl NotesPage {
         }
     }
 
-    fn new_folder(&mut self, within: Option<String>, cx: &mut Context<Self>) {
+    /// Makes the folder and lets its name be typed right in the row.
+    fn new_folder(&mut self, within: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         let parent = within.or_else(|| self.target_folder.clone()).map_or_else(|| index::current().root.clone(), |f| Self::folder_path(&f));
         if let Some(made) = act(cx, |l| l.create_folder(&tr("Neuer Ordner"), &parent)) {
             state::reindex(cx);
             if let Ok(rel) = made.strip_prefix(&index::current().root) {
                 self.target_folder = Some(rel.to_string_lossy().replace('\\', "/"));
             }
+            self.pending_folder = Some(made.clone());
+            self.view = View::Files;
+            self.reveal(&made.join("x"));
+            self.start_rename(made, window, cx);
         }
     }
 
@@ -416,6 +437,7 @@ impl NotesPage {
         if self.renaming.take().is_none() {
             return;
         }
+        let is_folder = path.is_dir();
         let was_note = markdown::is_markdown(path);
         let old = shown_name(path);
         if !text.is_empty() && text != old && !text.contains(['/', '\\', ':']) {
@@ -427,8 +449,12 @@ impl NotesPage {
             act(cx, |l| l.rename(path, &name));
             state::reindex(cx);
         }
-        act(cx, |l| l.focus_document = true);
-        let _ = window;
+        if is_folder {
+            self.pending_folder = None;
+            window.focus(&self.focus, cx);
+        } else {
+            act(cx, |l| l.focus_document = true);
+        }
         cx.notify();
     }
 
@@ -531,8 +557,10 @@ impl NotesPage {
                 None => {}
             },
             "f2" => {
-                if let Some(Row::File { path, .. }) = selected {
-                    self.start_rename(path, window, cx);
+                match selected {
+                    Some(Row::File { path, .. }) => self.start_rename(path, window, cx),
+                    Some(Row::Folder { rel, .. }) => self.start_rename(Self::folder_path(&rel), window, cx),
+                    _ => {}
                 }
             }
             "space" => {
@@ -608,6 +636,11 @@ impl NotesPage {
         };
         match row {
             Row::Folder { rel, name, depth, open } => {
+                if let Some((renamed, input, _)) = &self.renaming
+                    && *renamed == Self::folder_path(rel)
+                {
+                    return div().w_full().h(px(control::M)).pl(px(space::S + *depth as f32 * space::M + iconsize::M + space::XS)).pr(px(space::S)).flex().items_center().child(Input::new(input).small()).into_any_element();
+                }
                 let (drop_rel, menu_rel, menu_me, drop_me) = (rel.clone(), rel.clone(), me.clone(), me.clone());
                 let accent = t.accent;
                 base(("tree-folder", i))
@@ -626,9 +659,12 @@ impl NotesPage {
                         drop_me.update(cx, |_, cx| cx.notify());
                     })
                     .on_click(click(row, me))
-                    .context_menu(move |m, _, _| {
+                    .context_menu(move |m, _, cx| {
                         let (a, b, c, r) = (menu_me.clone(), menu_me.clone(), menu_rel.clone(), NotesPage::folder_path(&menu_rel));
                         let d = menu_rel.clone();
+                        let (rename_path, trash_path, rename_me) = (NotesPage::folder_path(&menu_rel), NotesPage::folder_path(&menu_rel), menu_me.clone());
+                        let module_rel = menu_rel.clone();
+                        let is_module = state::read(cx, |l| l.config.as_ref().is_some_and(|c| c.modules.iter().any(|m| m.folder == menu_rel)));
                         m.item(PopupMenuItem::new(tr("Neue Notiz")).icon(menu_icon("square-pen")).on_click(move |_, window, cx| {
                             let folder = c.clone();
                             a.update(cx, |s, cx| {
@@ -636,12 +672,26 @@ impl NotesPage {
                                 s.new_note(window, cx);
                             });
                         }))
-                        .item(PopupMenuItem::new(tr("Neuer Ordner")).icon(menu_icon("folder-plus")).on_click(move |_, _, cx| {
+                        .item(PopupMenuItem::new(tr("Neuer Ordner")).icon(menu_icon("folder-plus")).on_click(move |_, window, cx| {
                             let folder = d.clone();
-                            b.update(cx, |s, cx| s.new_folder(Some(folder), cx));
+                            b.update(cx, |s, cx| s.new_folder(Some(folder), window, cx));
                         }))
                         .separator()
+                        .item(PopupMenuItem::new(if is_module { tr("Kein Modul mehr") } else { tr("Als Modul verwenden") }).icon(menu_icon("library")).on_click(move |_, _, cx| {
+                            let folder = module_rel.clone();
+                            act(cx, |l| l.toggle_module_folder(&folder));
+                        }))
                         .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| crate::core::library::reveal(&r)))
+                        .separator()
+                        .item(PopupMenuItem::new(tr("Umbenennen")).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
+                            let p = rename_path.clone();
+                            rename_me.update(cx, |s, cx| s.start_rename(p, window, cx));
+                        }))
+                        .item(PopupMenuItem::new(tr("In den Papierkorb")).icon(menu_icon("trash-2")).on_click(move |_, _, cx| {
+                            let p = trash_path.clone();
+                            act(cx, |l| l.trash(&p));
+                            state::reindex(cx);
+                        }))
                     })
                     .into_any_element()
             }
@@ -801,7 +851,7 @@ impl Render for NotesPage {
                 let me = me.clone();
                 move |menu, _, _| {
                     let (a, b, c, d) = (me.clone(), me.clone(), me.clone(), me.clone());
-                    menu.item(PopupMenuItem::new(tr("Neuer Ordner")).icon(menu_icon("folder-plus")).on_click(move |_, _, cx| a.update(cx, |s, cx| s.new_folder(None, cx))))
+                    menu.item(PopupMenuItem::new(tr("Neuer Ordner")).icon(menu_icon("folder-plus")).on_click(move |_, window, cx| a.update(cx, |s, cx| s.new_folder(None, window, cx))))
                         .item(PopupMenuItem::new(tr("Tagesnotiz öffnen")).icon(menu_icon("calendar")).on_click(|_, _, cx| {
                             act(cx, |l| l.open_daily_note());
                             state::reindex(cx);

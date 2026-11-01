@@ -1525,6 +1525,13 @@ impl Render for PdfView {
                                 .child(div().relative().w(px(content_width)).h(px(total)).children(pages).children(mark_bar)),
                         )
                         .scrollbar(&self.scroll, gpui_kit::component::scroll::ScrollbarAxis::Both)
+                        .child(super::image_view::wheel_zoom({
+                            let me = cx.entity();
+                            move |factor, at, _, cx| me.update(cx, |v, cx| {
+                                let at = v.to_view(at);
+                                v.zoom_by(factor, Some(at), cx);
+                            })
+                        }))
                         .children(badge),
                 ),
             )

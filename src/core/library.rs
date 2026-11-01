@@ -2181,6 +2181,36 @@ impl Library {
         Naming::with_author(m, c.semester(&m.semester), BRIEF_TAG, "", CoauthorStyle::Initial).parse(file_name)
     }
 
+    /// Makes a folder at any depth a module, or takes that away again. Its files stay where they are.
+    pub fn toggle_module_folder(&mut self, folder: &str) {
+        let Some(mut config) = self.config.clone() else { return };
+        if let Some(at) = config.modules.iter().position(|m| m.folder == folder) {
+            let removed = config.modules.remove(at);
+            let name = removed.name.clone();
+            self.save_config(config);
+            self.notify(trf("%@ ist kein Modul mehr", &[&name]), "library", Some(tr("Rückgängig")), Some(Box::new(move |l: &mut Library| {
+                if let Some(mut config) = l.config.clone() {
+                    config.modules.push(removed.clone());
+                    l.save_config(config);
+                }
+            })));
+        } else {
+            let semester = self.now_semester_id().unwrap_or_default();
+            let mut taken: Vec<String> = config.modules.iter().map(|m| m.code.clone()).collect();
+            let at = config.modules.len();
+            let module = super::workspace::module_for_folder(folder, &semester, at, &mut taken);
+            let (name, id) = (module.name.clone(), module.id.clone());
+            config.modules.push(module);
+            self.save_config(config);
+            self.notify(trf("%@ ist jetzt ein Modul", &[&name]), "library", Some(tr("Öffnen")), Some(Box::new(move |l: &mut Library| l.set_route(Route::Module(id.clone())))));
+        }
+    }
+
+    fn now_semester_id(&self) -> Option<String> {
+        let config = self.config.as_ref()?;
+        config.current_semester(self.now).or(config.semesters.last()).map(|s| s.id.clone())
+    }
+
     pub fn rename(&mut self, file: &Path, name: &str) {
         if name == name_of(file) {
             return;
@@ -2188,6 +2218,7 @@ impl Library {
         let target = rename_target(file, name);
         match move_path(file, &target) {
             Ok(()) => {
+                self.folder_moved(file, &target);
                 self.path_moved(file, &target);
                 let (mut changes, links) = self.relink(file, &target);
                 self.refresh();
@@ -2201,6 +2232,26 @@ impl Library {
                 self.last_renamed = Some(target);
             }
             Err(e) => self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&explain(&e.into())])),
+        }
+    }
+
+    /// Modules keep following their folder when it, or a folder above it, gets a new name.
+    fn folder_moved(&mut self, old: &Path, new: &Path) {
+        let (Some(root), Some(mut config)) = (self.root.clone(), self.config.clone()) else { return };
+        let (Ok(old), Ok(new)) = (old.strip_prefix(&root), new.strip_prefix(&root)) else { return };
+        let (old, new) = (old.to_string_lossy().replace('\\', "/"), new.to_string_lossy().replace('\\', "/"));
+        let mut changed = false;
+        for m in &mut config.modules {
+            if m.folder == old {
+                m.folder = new.clone();
+                changed = true;
+            } else if let Some(rest) = m.folder.strip_prefix(&format!("{old}/")) {
+                m.folder = format!("{new}/{rest}");
+                changed = true;
+            }
+        }
+        if changed {
+            self.save_config(config);
         }
     }
 

@@ -1,6 +1,17 @@
 use gpui_kit::component::{Theme as ComponentTheme, ThemeMode};
 use gpui_kit::{App, Global, Hsla, Window, WindowAppearance, px, rgb, Rgba, black, white};
 
+use crate::core::prefs::{self, ThemeChoice};
+
+/// The palettes the app can be drawn in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Light,
+    Dark,
+    Nord,
+    Dracula,
+}
+
 /// Spacing scale for padding, margins and gaps.
 pub mod space {
     /// Optical inset inside chips and between stacked text lines.
@@ -65,9 +76,27 @@ pub mod font {
     pub const CAPTION2: f32 = 10.;
 }
 
+static NOTE_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1065353216);
+
+/// How much bigger than the default the text of notes is, in all ways of showing them.
+pub fn note_scale() -> f32 {
+    f32::from_bits(NOTE_SCALE.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Remembers the note font size chosen in the settings.
+pub fn set_note_scale(size: f32) {
+    NOTE_SCALE.store((size / font::BODY).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A size from the type scale, as written in notes.
+pub fn note_size(base: f32) -> f32 {
+    (base * note_scale() * 2.).round() / 2.
+}
+
 /// Colors resolved for light or dark appearance, mirroring the SwiftUI semantic colors.
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
+    pub kind: Kind,
     pub dark: bool,
     pub sidebar: Hsla,
     pub sidebar_border: Hsla,
@@ -81,6 +110,8 @@ pub struct Theme {
     pub accent: Hsla,
     /// The accent for text, which needs more contrast than fills do.
     pub accent_text: Hsla,
+    /// Text and icons on a solid accent fill.
+    pub on_accent: Hsla,
     pub selection: Hsla,
     pub green: Hsla,
     pub blue: Hsla,
@@ -98,9 +129,18 @@ fn c(hex: u32) -> Hsla {
 }
 
 impl Theme {
-    pub fn new(dark: bool) -> Self {
+    pub fn new(kind: Kind) -> Self {
+        match kind {
+            Kind::Light | Kind::Dark => Self::plain(kind == Kind::Dark),
+            Kind::Nord => Self::nord(),
+            Kind::Dracula => Self::dracula(),
+        }
+    }
+
+    fn plain(dark: bool) -> Self {
         let ink = if dark { c(0xFFFFFF) } else { c(0x000000) };
         Self {
+            kind: if dark { Kind::Dark } else { Kind::Light },
             dark,
             sidebar: if dark { c(0x1D1D1D) } else { c(0xF3F3F5) },
             sidebar_border: ink.opacity(if dark { 0.08 } else { 0.06 }),
@@ -113,6 +153,7 @@ impl Theme {
             separator: ink.opacity(if dark { 0.12 } else { 0.1 }),
             accent: if dark { c(0x0A84FF) } else { c(0x007AFF) },
             accent_text: if dark { c(0x409CFF) } else { c(0x0062CC) },
+            on_accent: c(0xFFFFFF),
             selection: if dark { c(0x3172D4) } else { c(0x0A6CF0) },
             green: if dark { c(0x30D158) } else { c(0x34C759) },
             blue: if dark { c(0x0A84FF) } else { c(0x007AFF) },
@@ -121,6 +162,64 @@ impl Theme {
             gray: c(0x8E8E93),
             ink,
             material: if dark { c(0x303030) } else { c(0xFBFBFC) },
+        }
+    }
+
+    /// Nord: Polar Night for the surfaces, Snow Storm for the text, Frost for what can be used, Aurora for states.
+    fn nord() -> Self {
+        let ink = c(0xECEFF4);
+        Self {
+            kind: Kind::Nord,
+            dark: true,
+            sidebar: c(0x292E39),
+            sidebar_border: ink.opacity(0.07),
+            content: c(0x2E3440),
+            secondary_bg: c(0x3B4252),
+            column: c(0x2B313C),
+            primary: ink.opacity(0.92),
+            secondary: ink.opacity(0.66),
+            tertiary: ink.opacity(0.5),
+            separator: ink.opacity(0.11),
+            accent: c(0x5E81AC),
+            accent_text: c(0x88C0D0),
+            on_accent: c(0xECEFF4),
+            selection: c(0x4C6A92),
+            green: c(0xA3BE8C),
+            blue: c(0x81A1C1),
+            orange: c(0xD08770),
+            red: c(0xBF616A),
+            gray: c(0x8591A8),
+            ink,
+            material: c(0x3B4252),
+        }
+    }
+
+    /// Dracula: its own background family, purple as the accent, the signature colours for states.
+    fn dracula() -> Self {
+        let ink = c(0xF8F8F2);
+        Self {
+            kind: Kind::Dracula,
+            dark: true,
+            sidebar: c(0x21222C),
+            sidebar_border: ink.opacity(0.07),
+            content: c(0x282A36),
+            secondary_bg: c(0x343746),
+            column: c(0x252733),
+            primary: ink.opacity(0.94),
+            secondary: ink.opacity(0.68),
+            tertiary: ink.opacity(0.5),
+            separator: ink.opacity(0.11),
+            accent: c(0xBD93F9),
+            accent_text: c(0xBD93F9),
+            on_accent: c(0x21222C),
+            selection: c(0x6A5A9C),
+            green: c(0x50FA7B),
+            blue: c(0x8BE9FD),
+            orange: c(0xFFB86C),
+            red: c(0xFF5555),
+            gray: c(0x8A94B8),
+            ink,
+            material: c(0x3A3D4E),
         }
     }
 
@@ -147,6 +246,9 @@ impl Theme {
 
     /// Module color by palette name, as in the Swift `Palette`.
     pub fn palette(&self, name: &str) -> Hsla {
+        if let Some(color) = self.palette_of_theme(name) {
+            return c(color);
+        }
         let (light, dark) = match name {
             "green" => (0x34C759, 0x30D158),
             "orange" => (0xFF9500, 0xFF9F0A),
@@ -162,6 +264,40 @@ impl Theme {
             _ => (0x007AFF, 0x0A84FF),
         };
         c(if self.dark { dark } else { light })
+    }
+
+    fn palette_of_theme(&self, name: &str) -> Option<u32> {
+        match self.kind {
+            Kind::Light | Kind::Dark => None,
+            Kind::Nord => Some(match name {
+                "green" => 0xA3BE8C,
+                "orange" => 0xD08770,
+                "purple" => 0xB48EAD,
+                "pink" => 0xC98BA6,
+                "teal" => 0x8FBCBB,
+                "red" => 0xBF616A,
+                "yellow" => 0xEBCB8B,
+                "indigo" => 0x7E8FC9,
+                "mint" => 0x9FD1C7,
+                "brown" => 0xA58D76,
+                "gray" => 0x8591A8,
+                _ => 0x81A1C1,
+            }),
+            Kind::Dracula => Some(match name {
+                "green" => 0x50FA7B,
+                "orange" => 0xFFB86C,
+                "purple" => 0xBD93F9,
+                "pink" => 0xFF79C6,
+                "teal" => 0x8BE9FD,
+                "red" => 0xFF5555,
+                "yellow" => 0xF1FA8C,
+                "indigo" => 0x9A8CFF,
+                "mint" => 0x7AF0C8,
+                "brown" => 0xC9A58A,
+                "gray" => 0x8A94B8,
+                _ => 0x6CB6FF,
+            }),
+        }
     }
 
     /// The platform UI font.
@@ -190,10 +326,41 @@ pub fn is_dark(appearance: WindowAppearance) -> bool {
     matches!(appearance, WindowAppearance::Dark | WindowAppearance::VibrantDark)
 }
 
+/// The palette the choice in the settings means right now.
+pub fn resolve(choice: ThemeChoice, system_dark: bool) -> Kind {
+    match choice {
+        ThemeChoice::System => if system_dark { Kind::Dark } else { Kind::Light },
+        ThemeChoice::Light => Kind::Light,
+        ThemeChoice::Dark => Kind::Dark,
+        ThemeChoice::Nord => Kind::Nord,
+        ThemeChoice::Dracula => Kind::Dracula,
+    }
+}
+
+/// Draws the app in what the settings say, following the system where they ask for that.
+pub fn refresh(window: &mut Window, cx: &mut App) {
+    let kind = resolve(prefs::get().theme, is_dark(window.appearance()));
+    apply(kind, Some(window), cx);
+}
+
+/// Switches the theme now, in every window. Native parts of the window follow.
+pub fn choose(choice: ThemeChoice, window: &mut Window, cx: &mut App) {
+    prefs::update(|p| p.theme = choice);
+    super::platform::set_window_appearance(match choice {
+        ThemeChoice::System => None,
+        ThemeChoice::Light => Some(false),
+        _ => Some(true),
+    });
+    refresh(window, cx);
+    cx.refresh_windows();
+}
+
 /// Sets the app palette and maps it onto the component library so its controls match.
-pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
-    let t = Theme::new(dark);
+pub fn apply(kind: Kind, window: Option<&mut Window>, cx: &mut App) {
+    let t = Theme::new(kind);
+    let dark = t.dark;
     cx.set_global(t);
+    set_note_scale(crate::core::prefs::get().editor_font_size);
     ComponentTheme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, window, cx);
     let ct = ComponentTheme::global_mut(cx);
     ct.font_family = Theme::font_family().into();
@@ -203,7 +370,7 @@ pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
     let mut highlight = (*ct.highlight_theme).clone();
     highlight.style.editor_background = Some(t.content);
     highlight.style.editor_active_line = Some(t.ink.opacity(0.05));
-    apply_syntax_colors(&mut highlight, dark);
+    apply_syntax_colors(&mut highlight, kind);
     ct.highlight_theme = std::sync::Arc::new(highlight);
     ct.motion.duration_slow = super::motion::SLOW;
     ct.scrollbar_mode = gpui_kit::base::ScrollbarMode::Hover;
@@ -218,11 +385,11 @@ pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
     k.primary = t.accent;
     k.primary_hover = t.accent.opacity(0.9);
     k.primary_active = t.accent.opacity(0.8);
-    k.primary_foreground = gpui_kit::white();
+    k.primary_foreground = t.on_accent;
     k.button_primary = t.accent;
     k.button_primary_hover = t.accent.blend(gpui_kit::white().opacity(0.08));
     k.button_primary_active = t.accent.blend(gpui_kit::black().opacity(0.12));
-    k.button_primary_foreground = gpui_kit::white();
+    k.button_primary_foreground = t.on_accent;
     k.button = t.ink.opacity(if dark { 0.1 } else { 0.05 });
     k.button_hover = t.ink.opacity(if dark { 0.14 } else { 0.08 });
     k.button_active = t.ink.opacity(0.18);
@@ -286,18 +453,26 @@ mod tests {
 
     #[test]
     fn text_is_readable_on_every_background() {
-        for dark in [false, true] {
-            let t = Theme::new(dark);
+        for kind in [Kind::Light, Kind::Dark, Kind::Nord, Kind::Dracula] {
+            let dark = kind;
+            let t = Theme::new(kind);
             for background in [t.content, t.sidebar, t.secondary_bg, t.column] {
-                assert!(contrast(t.primary, background) >= 7., "primary, dark {dark}");
-                assert!(contrast(t.secondary, background) >= 4.5, "secondary, dark {dark}: {}", contrast(t.secondary, background));
-                assert!(contrast(t.accent_text, background) >= 4.5, "accent, dark {dark}: {}", contrast(t.accent_text, background));
+                assert!(contrast(t.primary, background) >= 7., "primary, {dark:?}");
+                assert!(contrast(t.secondary, background) >= 4.5, "secondary, {dark:?}: {}", contrast(t.secondary, background));
+                assert!(contrast(t.accent_text, background) >= 4.5, "accent, {dark:?}: {}", contrast(t.accent_text, background));
                 for name in ["blue", "green", "orange", "purple", "pink", "teal", "red", "yellow", "indigo", "mint", "brown", "gray"] {
                     let color = t.palette(name);
-                    assert!(contrast(t.readable(color), t.column.blend(color.opacity(0.12))) >= 4.5, "{name}, dark {dark}");
+                    assert!(contrast(t.readable(color), t.column.blend(color.opacity(0.12))) >= 4.5, "{name}, {dark:?}");
                 }
-                assert!(contrast(t.tertiary, background) >= 3., "tertiary, dark {dark}: {}", contrast(t.tertiary, background));
+                assert!(contrast(t.tertiary, background) >= 3., "tertiary, {dark:?}: {}", contrast(t.tertiary, background));
+                let p = syntax_palette(kind);
+                for color in [p.keyword, p.string, p.comment, p.number, p.kind, p.function] {
+                    if background == t.content {
+                        assert!(contrast(c(color), background) >= 4.5, "syntax {color:06x}, {dark:?}");
+                    }
+                }
             }
+            assert!(contrast(t.on_accent, t.accent) >= 3., "on accent, {dark:?}: {}", contrast(t.on_accent, t.accent));
         }
     }
 }
@@ -312,17 +487,18 @@ pub struct SyntaxPalette {
     pub function: u32,
 }
 
-pub fn syntax_palette(dark: bool) -> SyntaxPalette {
-    if dark {
-        SyntaxPalette { keyword: 0xB7A8F8, string: 0x8FCB9B, comment: 0x8E939B, number: 0xE5A76B, kind: 0x7CC7D6, function: 0x82AAF5 }
-    } else {
-        SyntaxPalette { keyword: 0x6A4BC4, string: 0x2B7A4B, comment: 0x68707C, number: 0xA3560F, kind: 0x0B7285, function: 0x1F5FCC }
+pub fn syntax_palette(kind: Kind) -> SyntaxPalette {
+    match kind {
+        Kind::Dark => SyntaxPalette { keyword: 0xB7A8F8, string: 0x8FCB9B, comment: 0x8E939B, number: 0xE5A76B, kind: 0x7CC7D6, function: 0x82AAF5 },
+        Kind::Light => SyntaxPalette { keyword: 0x6A4BC4, string: 0x2B7A4B, comment: 0x68707C, number: 0xA3560F, kind: 0x0B7285, function: 0x1F5FCC },
+        Kind::Nord => SyntaxPalette { keyword: 0x81A1C1, string: 0xA3BE8C, comment: 0x98A3B8, number: 0xC9A8C2, kind: 0x8FBCBB, function: 0x88C0D0 },
+        Kind::Dracula => SyntaxPalette { keyword: 0xFF79C6, string: 0xF1FA8C, comment: 0x8D9AD0, number: 0xBD93F9, kind: 0x8BE9FD, function: 0x50FA7B },
     }
 }
 
-fn apply_syntax_colors(theme: &mut gpui_kit::component::highlighter::HighlightTheme, dark: bool) {
+fn apply_syntax_colors(theme: &mut gpui_kit::component::highlighter::HighlightTheme, kind: Kind) {
     use gpui_kit::component::highlighter::ThemeStyle;
-    let p = syntax_palette(dark);
+    let p = syntax_palette(kind);
     let paint = |color: u32| serde_json::from_value::<ThemeStyle>(serde_json::json!({ "color": format!("#{color:06x}") })).ok();
     let s = &mut theme.style.syntax;
     s.keyword = paint(p.keyword);

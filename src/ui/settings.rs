@@ -46,8 +46,52 @@ const ACCENTS: [(&str, &str); 8] = [
     ("#334155", "Schiefer"),
 ];
 
+/// Other words people look for a setting with.
+const SYNONYMS: &[(&str, &str)] = &[
+    ("theme", "Erscheinungsbild"),
+    ("design", "Erscheinungsbild"),
+    ("dark", "Erscheinungsbild"),
+    ("dunkel", "Erscheinungsbild"),
+    ("light", "Erscheinungsbild"),
+    ("hell", "Erscheinungsbild"),
+    ("nord", "Erscheinungsbild"),
+    ("dracula", "Erscheinungsbild"),
+    ("farbe", "Erscheinungsbild"),
+    ("color", "Erscheinungsbild"),
+    ("font", "Schriftgröße"),
+    ("schrift", "Schriftgröße"),
+    ("text", "Schriftgröße"),
+    ("zoom", "Schriftgröße"),
+    ("language", "Sprache"),
+    ("english", "Sprache"),
+    ("deutsch", "Sprache"),
+    ("autostart", "Bei Anmeldung starten"),
+    ("tray", "Symbol in der Menüleiste"),
+    ("git", "Sync"),
+    ("github", "Online-Speicher"),
+    ("backup", "Sicherung"),
+    ("zip", "Sicherung"),
+    ("workspace", "Ordner"),
+    ("vault", "Obsidian"),
+    ("live", "Notizen schreiben"),
+    ("markdown", "Notizen schreiben"),
+    ("speichern", "Sichern"),
+    ("autosave", "Sichern"),
+    ("benachrichtigung", "Mitteilungen vor Deadlines"),
+    ("notification", "Mitteilungen vor Deadlines"),
+    ("ics", "Kalenderdatei aktuell halten"),
+    ("spell", "Rechtschreibung prüfen"),
+    ("ects", "Bezeichnung der Punkte"),
+    ("note", "Notensystem"),
+    ("shortcut", "Tastenkürzel"),
+    ("hotkey", "Tastenkürzel"),
+    ("keybinding", "Tastenkürzel"),
+];
+
 /// Every labelled setting and the tab it lives on, for the search field.
 const SEARCHABLE: &[(&str, Tab)] = &[
+    ("Darstellung", Tab::General),
+    ("Erscheinungsbild", Tab::General),
     ("Studium", Tab::General),
     ("Name", Tab::General),
     ("Kürzel in Dateinamen", Tab::General),
@@ -99,7 +143,23 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Online-Speicher", Tab::Sync),
     ("Git-Pfad", Tab::Sync),
     ("Sync ausschalten", Tab::Sync),
+    ("Status", Tab::Sync),
+    ("Branch", Tab::Sync),
+    ("Letzter Stand", Tab::Sync),
+    ("Automatik", Tab::Sync),
+    ("Ausgeschlossen", Tab::Sync),
+    ("Erweitert", Tab::Sync),
+    ("Version", Tab::Sync),
+    ("Einrichtung erneut prüfen", Tab::Sync),
+    ("Anhangsordner", Tab::Notes),
+    ("Linkformat", Tab::Notes),
+    ("Vorlagen", Tab::Notes),
+    ("Verbindung", Tab::Notes),
+    ("Vault", Tab::Notes),
+    ("Tastenkürzel", Tab::Shortcuts),
     ("Editor", Tab::Notes),
+    ("Notizen schreiben", Tab::Notes),
+    ("Rechtschreibung prüfen", Tab::Notes),
     ("Obsidian", Tab::Notes),
     ("Schriftgröße", Tab::Notes),
     ("Sichern", Tab::Notes),
@@ -120,6 +180,10 @@ pub struct Settings {
     advanced: HashSet<String>,
     filter: Entity<InputState>,
     search: Entity<InputState>,
+    /// The search hit Enter opens.
+    hit: usize,
+    /// The scrolling page of the tabs that scroll as a whole.
+    page: ScrollHandle,
     recording: Option<ShortcutAction>,
     focus: FocusHandle,
     launch_at_login: bool,
@@ -219,6 +283,50 @@ impl Render for About {
     }
 }
 
+/// The setting a search result led to: it scrolls into view once and lights up for a moment.
+struct Jump {
+    label: String,
+    handle: ScrollHandle,
+    scrolled: bool,
+}
+
+thread_local! {
+    static JUMP: std::cell::RefCell<Option<Jump>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The row or heading with this label, marked and brought into view while a jump leads to it.
+fn jump_target(label: &str, content: Div, t: &Theme) -> Div {
+    let hit = JUMP.with(|j| j.borrow().as_ref().filter(|j| j.label == label).map(|j| (j.handle.clone(), !j.scrolled)));
+    let Some((handle, scroll)) = hit else { return content };
+    if scroll {
+        JUMP.with(|j| {
+            if let Some(j) = j.borrow_mut().as_mut() {
+                j.scrolled = true;
+            }
+        });
+    }
+    content.relative().bg(t.accent.opacity(0.14)).rounded(px(radius::INNER)).when(scroll, |d| {
+        d.child(
+            canvas(
+                move |bounds, window, _| {
+                    let handle = handle.clone();
+                    window.on_next_frame(move |window, _| {
+                        let view = handle.bounds();
+                        let now = handle.offset();
+                        handle.set_offset(point(now.x, now.y - (bounds.top() - view.top() - px(64.))));
+                        window.refresh();
+                    });
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        )
+    })
+}
+
 fn section(title: Option<String>, footer: Option<String>, rows: Vec<AnyElement>, t: &Theme) -> Div {
     let mut g = grouped(t);
     for (i, r) in rows.into_iter().enumerate() {
@@ -231,13 +339,18 @@ fn section(title: Option<String>, footer: Option<String>, rows: Vec<AnyElement>,
         .flex()
         .flex_col()
         .gap(px(space::S))
-        .when_some(title, |d, s| d.child(div().px(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(s)))
+        .when_some(title, |d, s| {
+            let key = s.clone();
+            d.child(jump_target(&key, div().px(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(s), t))
+        })
         .child(g)
         .when_some(footer, |d, f| d.child(div().px(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(f)))
 }
 
 fn row(label: impl Into<SharedString>, control: impl IntoElement, t: &Theme) -> AnyElement {
-    div().flex().items_center().gap(px(space::M)).px(px(space::L)).min_h(px(40.)).py(px(space::S)).child(div().flex_1().min_w_0().text_color(t.primary).child(label.into())).child(div().flex_none().max_w(px(460.)).child(control)).into_any_element()
+    let label: SharedString = label.into();
+    let key = label.to_string();
+    jump_target(&key, div().flex().items_center().gap(px(space::M)).px(px(space::L)).min_h(px(40.)).py(px(space::S)).child(div().flex_1().min_w_0().text_color(t.primary).child(label)).child(div().flex_none().max_w(px(460.)).child(control)), t).into_any_element()
 }
 
 /// A pop-up button like SwiftUI's menu-style `Picker`.
@@ -300,16 +413,58 @@ fn break_summary(b: &Break) -> String {
     }
 }
 
+/// Where a search hit leads.
+#[derive(Clone)]
+enum HitTarget {
+    Setting(Tab, String),
+    Module(String),
+    Semester(String),
+    Shortcut(String),
+}
+
+#[derive(Clone)]
+struct Hit {
+    label: String,
+    place: String,
+    to: HitTarget,
+}
+
+fn tab_name(tab: Tab) -> String {
+    match tab {
+        Tab::General => tr("Allgemein"),
+        Tab::Semester => tr("Semester"),
+        Tab::Modules => tr("Module"),
+        Tab::Notes => tr("Notizen"),
+        Tab::Sync => tr("Sync"),
+        Tab::Shortcuts => tr("Tastenkürzel"),
+    }
+}
+
+fn theme_label(choice: prefs::ThemeChoice) -> String {
+    match choice {
+        prefs::ThemeChoice::System => tr("System"),
+        prefs::ThemeChoice::Light => tr("Hell"),
+        prefs::ThemeChoice::Dark => tr("Dunkel"),
+        prefs::ThemeChoice::Nord => "Nord".to_string(),
+        prefs::ThemeChoice::Dracula => "Dracula".to_string(),
+    }
+}
+
 impl Settings {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Befehl suchen")));
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Suchen")));
         let lib = state::lib(cx);
         let subs = vec![cx.observe(&lib, |_, _, cx| cx.notify()), cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()), cx.subscribe_in(&search, window, |s, _, e: &InputEvent, window, cx| {
-            if let InputEvent::PressEnter { .. } = e
-                && let Some(tab) = s.matches(cx).first().map(|(_, tab)| *tab)
-            {
-                s.open_result(tab, window, cx);
+            match e {
+                InputEvent::PressEnter { .. } => {
+                    let found = s.matches(cx);
+                    if let Some(hit) = found.get(s.hit.min(found.len().saturating_sub(1))).cloned() {
+                        s.open_result(hit, window, cx);
+                    }
+                }
+                InputEvent::Change => s.hit = 0,
+                _ => {}
             }
             cx.notify();
         })];
@@ -323,6 +478,8 @@ impl Settings {
             advanced: HashSet::new(),
             filter,
             search,
+            hit: 0,
+            page: ScrollHandle::new(),
             recording: None,
             focus: cx.focus_handle(),
             launch_at_login: super::platform::launches_at_login(),
@@ -331,12 +488,49 @@ impl Settings {
         }
     }
 
-    fn matches(&self, cx: &App) -> Vec<(String, Tab)> {
+    /// Settings, modules, semesters and shortcuts that fit what is typed, the best first.
+    fn matches(&self, cx: &App) -> Vec<Hit> {
         let query = fold(self.search.read(cx).value().trim());
         if query.is_empty() {
             return Vec::new();
         }
-        SEARCHABLE.iter().map(|(key, tab)| (tr(key), *tab)).filter(|(label, _)| fold(label).contains(&query)).collect()
+        let mut scored: Vec<(u8, Hit)> = Vec::new();
+        for (key, tab) in SEARCHABLE {
+            let label = tr(key);
+            let folded = fold(&label);
+            let score = if folded.starts_with(&query) {
+                0
+            } else if folded.contains(&query) {
+                1
+            } else if SYNONYMS.iter().any(|(word, target)| target == key && word.starts_with(&query)) {
+                2
+            } else {
+                continue;
+            };
+            scored.push((score, Hit { label, place: tab_name(*tab), to: HitTarget::Setting(*tab, tr(key)) }));
+        }
+        state::read(cx, |l| {
+            if let Some(c) = &l.config {
+                for m in &c.modules {
+                    if fold(&m.code).contains(&query) || fold(&m.name).contains(&query) {
+                        scored.push((1, Hit { label: m.display_name(), place: tr("Module"), to: HitTarget::Module(m.id.clone()) }));
+                    }
+                }
+                for semester in &c.semesters {
+                    if fold(&semester.name).contains(&query) {
+                        scored.push((1, Hit { label: semester.name.clone(), place: tr("Semester"), to: HitTarget::Semester(semester.id.clone()) }));
+                    }
+                }
+            }
+        });
+        for action in ShortcutAction::ALL {
+            let label = action.label();
+            if fold(&label).contains(&query) {
+                scored.push((3, Hit { label: label.clone(), place: tr("Tastenkürzel"), to: HitTarget::Shortcut(label) }));
+            }
+        }
+        scored.sort_by(|a, b| a.0.cmp(&b.0));
+        scored.into_iter().map(|(_, hit)| hit).take(40).collect()
     }
 
     fn show_module(&mut self, id: String) {
@@ -344,28 +538,47 @@ impl Settings {
         self.module = Some(id);
     }
 
-    fn open_result(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
-        self.tab = tab;
+    fn open_result(&mut self, hit: Hit, window: &mut Window, cx: &mut Context<Self>) {
         self.recording = None;
         self.search.update(cx, |s, cx| s.set_value("", window, cx));
+        match hit.to {
+            HitTarget::Setting(tab, label) => {
+                self.tab = tab;
+                self.light_up(label, window, cx);
+            }
+            HitTarget::Module(id) => self.show_module(id),
+            HitTarget::Semester(id) => {
+                self.tab = Tab::Semester;
+                self.semester = Some(id);
+            }
+            HitTarget::Shortcut(label) => {
+                self.tab = Tab::Shortcuts;
+                self.filter.update(cx, |f, cx| f.set_value(label, window, cx));
+            }
+        }
         cx.notify();
+    }
+
+    /// Scrolls to a setting and marks it until the eye has found it.
+    fn light_up(&mut self, label: String, _: &mut Window, cx: &mut Context<Self>) {
+        JUMP.with(|j| *j.borrow_mut() = Some(Jump { label, handle: self.page.clone(), scrolled: false }));
+        cx.spawn(async |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(1800)).await;
+            JUMP.with(|j| *j.borrow_mut() = None);
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
     }
 
     fn search_results(&self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let results = self.matches(cx);
         if results.is_empty() {
-            return unavailable("search", tr("Keine Treffer"), "", t).into_any_element();
+            return unavailable("search", tr("Keine Treffer"), tr("Versuch ein anderes Wort, zum Beispiel Theme, Schrift oder Sync."), t).into_any_element();
         }
-        let tab_name = |tab: Tab| match tab {
-            Tab::General => tr("Allgemein"),
-            Tab::Semester => tr("Semester"),
-            Tab::Modules => tr("Module"),
-            Tab::Notes => tr("Notizen"),
-            Tab::Sync => tr("Sync"),
-            Tab::Shortcuts => tr("Tastenkürzel"),
-        };
+        let selected = self.hit.min(results.len() - 1);
         let mut list = div().w_full().max_w(px(560.)).flex().flex_col().gap(px(space::XXS));
-        for (i, (label, tab)) in results.into_iter().enumerate() {
+        for (i, hit) in results.into_iter().enumerate() {
+            let (label, place, open) = (hit.label.clone(), hit.place.clone(), hit);
             list = list.child(
                 row_button(("settings-result", i), t)
                     .flex()
@@ -373,16 +586,17 @@ impl Settings {
                     .px(px(space::M))
                     .py(px(space::S))
                     .rounded(px(radius::INNER))
+                    .when(i == selected, |d| d.bg(t.ink.opacity(0.09)))
                     .child(div().flex_1().min_w_0().truncate().child(label))
-                    .child(caption(tab_name(tab), t))
-                    .on_click(cx.listener(move |s, _, window, cx| s.open_result(tab, window, cx))),
+                    .child(caption(place, t))
+                    .on_click(cx.listener(move |s, _, window, cx| s.open_result(open.clone(), window, cx))),
             );
         }
         div().id("settings-results").size_full().overflow_y_scrollbar().p(px(space::XL)).flex().justify_center().child(list).into_any_element()
     }
 
     fn tab_bar(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
-        let mut bar = div().flex().justify_center().gap(px(space::XS)).pt(px(if super::chrome::CUSTOM { space::M } else { space::XXL })).pb(px(space::S)).border_b_1().border_color(t.separator);
+        let mut bar = div().flex().justify_start().pl(px(if super::chrome::CUSTOM { space::M } else { 72. })).gap(px(space::XXS)).pt(px(if super::chrome::CUSTOM { space::M } else { space::XXL })).pb(px(space::S)).border_b_1().border_color(t.separator);
         for (tab, label, icon_name) in [
             (Tab::General, tr("Allgemein"), "settings"),
             (Tab::Semester, tr("Semester"), "calendar"),
@@ -396,7 +610,7 @@ impl Settings {
             bar = bar.child(
                 div()
                     .id(SharedString::from(format!("tab-{label}")))
-                    .w(px(84.))
+                    .w(px(76.))
                     .flex()
                     .flex_col()
                     .items_center()
@@ -415,7 +629,7 @@ impl Settings {
                     })),
             );
         }
-        div().relative().child(bar).child(div().absolute().top(px(if super::chrome::CUSTOM { space::M } else { space::XXL })).right(px(space::M)).w(px(130.)).child(Input::new(&self.search).small().prefix(icon("search", iconsize::XS, t.secondary))))
+        div().relative().child(bar).child(div().absolute().top(px(if super::chrome::CUSTOM { space::M } else { space::XXL })).right(px(space::M)).w(px(170.)).child(Input::new(&self.search).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary))))
     }
 
     fn general(&mut self, c: &StudyConfig, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
@@ -539,10 +753,20 @@ impl Settings {
             "en" => "English".to_string(),
             _ => tr("Systemsprache"),
         };
+        let theme_choice = p.theme;
         let language = section(
-            None,
+            Some(tr("Darstellung")),
             None,
             vec![row(
+                tr("Erscheinungsbild"),
+                picker("g-theme", theme_label(theme_choice), move |mut m| {
+                    for choice in [prefs::ThemeChoice::System, prefs::ThemeChoice::Light, prefs::ThemeChoice::Dark, prefs::ThemeChoice::Nord, prefs::ThemeChoice::Dracula] {
+                        m = m.item(PopupMenuItem::new(theme_label(choice)).checked(choice == theme_choice).on_click(move |_, window, cx| theme::choose(choice, window, cx)));
+                    }
+                    m
+                }),
+                t,
+            ), row(
                 tr("Sprache"),
                 picker("g-lang", label, move |m| {
                     let set = |code: &'static str| {
@@ -645,7 +869,7 @@ impl Settings {
                 .collect(),
             t,
         );
-        div().flex().flex_col().gap(px(space::XL)).child(studium).child(grades).child(search).child(sidebar).child(storage).child(language).child(reminders).child(calendar).child(system)
+        div().flex().flex_col().gap(px(space::XL)).child(language).child(studium).child(grades).child(sidebar).child(reminders).child(calendar).child(system).child(search).child(storage)
     }
 }
 
@@ -1536,7 +1760,7 @@ impl Settings {
                     "n-size",
                     format!("{} pt", size as i32),
                     Box::new(move |cx| super::documents::set_font_size((size - 1.).max(10.), cx)),
-                    Box::new(move |cx| super::documents::set_font_size((size + 1.).min(22.), cx)),
+                    Box::new(move |cx| super::documents::set_font_size((size + 1.).min(24.), cx)),
                 ),
                 t,
             )],
@@ -1748,13 +1972,14 @@ impl Render for Settings {
         let config = state::read(cx, |l| l.config.clone());
         let tabs = self.tab_bar(&t, cx);
         let searching = !self.search.read(cx).value().trim().is_empty();
+        let page = self.page.clone();
         let body: AnyElement = match (config, self.tab) {
             _ if searching => self.search_results(&t, cx),
-            (_, Tab::Notes) => div().id("notes-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.notes(window, cx, &t)).into_any_element(),
-            (_, Tab::Sync) => div().id("sync-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.sync_tab(cx, &t)).into_any_element(),
-            (_, Tab::Shortcuts) => div().id("sc-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.shortcuts(&t, cx)).into_any_element(),
+            (_, Tab::Notes) => div().id("notes-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.notes(window, cx, &t)).into_any_element(),
+            (_, Tab::Sync) => div().id("sync-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.sync_tab(cx, &t)).into_any_element(),
+            (_, Tab::Shortcuts) => div().id("sc-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.shortcuts(&t, cx)).into_any_element(),
             (None, _) => unavailable("folder", tr("Kein Ordner gewählt"), tr("Wähle zuerst im Hauptfenster deinen Studienordner."), &t).into_any_element(),
-            (Some(c), Tab::General) => div().id("general-scroll").size_full().overflow_y_scrollbar().p(px(space::XL)).child(self.general(&c, window, cx, &t)).into_any_element(),
+            (Some(c), Tab::General) => div().id("general-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.general(&c, window, cx, &t)).into_any_element(),
             (Some(c), Tab::Semester) => self.semesters(&c, window, cx, &t).into_any_element(),
             (Some(c), Tab::Modules) => self.modules(&c, window, cx, &t).into_any_element(),
         };
@@ -1784,14 +2009,25 @@ impl Render for Settings {
             .text_size(px(font::BODY))
             .line_height(relative(1.22))
             .text_color(t.primary)
+            .capture_key_down(cx.listener(|s, e: &KeyDownEvent, window, cx| {
+                if !s.search.read(cx).value().trim().is_empty() {
+                    match e.keystroke.key.as_str() {
+                        "down" => s.hit = (s.hit + 1).min(s.matches(cx).len().saturating_sub(1)),
+                        "up" => s.hit = s.hit.saturating_sub(1),
+                        "escape" => s.search.update(cx, |f, cx| f.set_value("", window, cx)),
+                        _ => return,
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                } else if e.keystroke.key == "f" && e.keystroke.modifiers.secondary(cx) {
+                    s.search.update(cx, |f, cx| f.focus(window, cx));
+                    cx.stop_propagation();
+                }
+            }))
             .child(tabs)
             .child(div().flex_1().min_h_0().child(body));
         super::chrome::frame(tr("Einstellungen"), content, &t)
     }
-}
-
-pub fn apply_theme(window: &mut Window, cx: &mut App) {
-    theme::apply(theme::is_dark(window.appearance()), Some(window), cx);
 }
 
 /// Opens the settings on the sync tab.
@@ -1805,3 +2041,19 @@ pub fn open_sync(cx: &mut App) {
 struct OpenOnSync(bool);
 
 impl Global for OpenOnSync {}
+
+#[cfg(test)]
+mod tests {
+    use super::{SEARCHABLE, SYNONYMS};
+
+    #[test]
+    fn every_setting_can_be_found_by_search() {
+        let source = include_str!("settings.rs");
+        let label = regex::Regex::new(r#"(?:row\(\s*tr\(|section\(\s*Some\(tr\()"([^"]+)"\)"#).unwrap();
+        let missing: Vec<String> = label.captures_iter(source).map(|c| c[1].to_string()).filter(|l| !SEARCHABLE.iter().any(|(k, _)| k == l)).collect();
+        assert!(missing.is_empty(), "not searchable: {missing:?}");
+        for (word, target) in SYNONYMS {
+            assert!(SEARCHABLE.iter().any(|(k, _)| k == target), "{word} points nowhere");
+        }
+    }
+}

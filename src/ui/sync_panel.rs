@@ -607,7 +607,7 @@ impl SyncSetup {
             .cursor_pointer()
             .key_nav()
             .soft(hover, 0.)
-            .child(div().size(px(iconsize::M)).flex_none().rounded(px(radius::SMALL)).border_1().border_color(if on { t.accent } else { t.separator }).when(on, |d| d.bg(t.accent)).flex().items_center().justify_center().when(on, |d| d.child(icon("check", iconsize::XS, white()))))
+            .child(div().size(px(iconsize::M)).flex_none().rounded(px(radius::SMALL)).border_1().border_color(if on { t.accent } else { t.separator }).when(on, |d| d.bg(t.accent)).flex().items_center().justify_center().when(on, |d| d.child(icon("check", iconsize::XS, t.on_accent))))
             .child(div().flex_1().min_w_0().child(title))
             .child(caption(detail, t).flex_none())
             .on_click(cx.listener(move |s, _, _, cx| {

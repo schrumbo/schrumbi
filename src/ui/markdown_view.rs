@@ -9,7 +9,7 @@ use gpui_kit::*;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
 use super::selectable::{InlineKind, InlineSlot, LinkAction, selectable};
-use super::theme::{Theme, font, radius, space, iconsize};
+use super::theme::{Theme, font, note_size, radius, space, iconsize};
 use crate::core::i18n::{tr, trf};
 use crate::core::markdown::{self, Run, TokenKind};
 use crate::core::vault::syntax::{self, CalloutHead, MarkColor};
@@ -1407,7 +1407,7 @@ fn coloured(lang: Option<&str>, code: &str) -> Rc<Vec<(String, TokenKind)>> {
 
 fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
     let t = cx.t;
-    let colors = super::theme::syntax_palette(t.dark);
+    let colors = super::theme::syntax_palette(t.kind);
     let mut text = String::new();
     let mut highlights = Vec::new();
     for (s, kind) in coloured(lang, code).iter() {
@@ -1444,7 +1444,7 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
                 .border_1()
                 .border_color(t.separator.opacity(0.6))
                 .font_family(Theme::mono_family())
-                .text_size(px(font::CALLOUT))
+                .text_size(px(note_size(font::CALLOUT)))
                 .child(selectable(("md-code-text", order), text, highlights, order, t.accent.opacity(0.3)).on_text_click(text_click_of(cx))),
         )
         .child(
@@ -1480,15 +1480,15 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
         .map(|b| match b {
             Block::Heading(level, inl) => {
                 let size = match level {
-                    1 => font::TITLE,
-                    2 => font::TITLE2,
-                    3 => font::TITLE3,
-                    4 => font::BODY,
-                    _ => font::CALLOUT,
+                    1 => note_size(font::TITLE),
+                    2 => note_size(font::TITLE2),
+                    3 => note_size(font::TITLE3),
+                    4 => note_size(font::BODY),
+                    _ => note_size(font::CALLOUT),
                 };
                 div().pt(px(if *level <= 2 { space::S } else { space::XS })).font_weight(if *level == 1 { FontWeight::BOLD } else { FontWeight::SEMIBOLD }).child(styled_text(inl, cx, size)).into_any_element()
             }
-            Block::Paragraph(inl) => styled_text(inl, cx, font::BODY),
+            Block::Paragraph(inl) => styled_text(inl, cx, note_size(font::BODY)),
             Block::Quote(inner) => div()
                 .flex()
                 .gap(px(space::S))
@@ -1508,7 +1508,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                 cx.order.set(order + 1);
                 let shown = (!plain_text(title).trim().is_empty() || title.iter().any(|i| matches!(i, Inline::Link(..) | Inline::Math(_)))).then(|| {
                     cx.head_text.set(true);
-                    let drawn = styled_text(title, cx, font::CALLOUT);
+                    let drawn = styled_text(title, cx, note_size(font::CALLOUT));
                     cx.head_text.set(false);
                     drawn
                 });
@@ -1539,7 +1539,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                             .capture_any_mouse_down(|_, _, _| press_control())
                             .font_weight(FontWeight::MEDIUM)
                             .child(super::motion::chevron(("md-details-chevron", order), is_open, t.secondary))
-                            .child(styled_text(summary, cx, font::BODY))
+                            .child(styled_text(summary, cx, note_size(font::BODY)))
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
                                 if let Some(f) = &folds {
@@ -1577,7 +1577,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                                 .when(!done, |d| d.border_1().border_color(if special { t.accent } else { t.secondary }))
                                 .when(special, |d| d.text_size(px(font::CAPTION2)).text_color(t.accent).child(mark.to_string()))
                                 .when(toggle.is_some(), |d| d.cursor_pointer())
-                                .when(done, |d| d.child(super::widgets::icon("check", iconsize::XS, white())))
+                                .when(done, |d| d.child(super::widgets::icon("check", iconsize::XS, t.on_accent)))
                                 .on_click(move |_, _, cx| {
                                     cx.stop_propagation();
                                     if let Some(f) = &toggle {
@@ -1586,8 +1586,8 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                                 })
                                 .into_any_element()
                         }
-                        (None, Some(s)) => div().flex_none().min_w(px(16.)).flex().justify_end().text_size(px(font::BODY)).line_height(relative(1.5)).text_color(t.secondary).child(format!("{}.", s + i as u64)).into_any_element(),
-                        (None, None) => div().flex_none().min_w(px(16.)).flex().justify_end().text_size(px(font::BODY)).line_height(relative(1.5)).text_color(t.secondary).child("•").into_any_element(),
+                        (None, Some(s)) => div().flex_none().min_w(px(16.)).flex().justify_end().text_size(px(note_size(font::BODY))).line_height(relative(1.5)).text_color(t.secondary).child(format!("{}.", s + i as u64)).into_any_element(),
+                        (None, None) => div().flex_none().min_w(px(16.)).flex().justify_end().text_size(px(note_size(font::BODY))).line_height(relative(1.5)).text_color(t.secondary).child("•").into_any_element(),
                     };
                     let done = matches!(item.task, Some('x' | 'X'));
                     let has_nested = item.blocks.iter().any(|b| matches!(b, Block::List { .. }));
@@ -1658,7 +1658,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     let drawn = match open {
                         Some(field) => d.child(field),
                         None => {
-                            let body = styled_text(inl, cx, font::BODY);
+                            let body = styled_text(inl, cx, note_size(font::BODY));
                             d.when_some(click, |d, click| {
                                 d.capture_any_mouse_down(|_, _, _| press_control()).on_mouse_up(MouseButton::Left, move |_, window, cx| click("", 0, window, cx))
                             })
@@ -1807,7 +1807,7 @@ impl RenderOnce for Callout {
             .flex()
             .items_center()
             .gap(px(space::S))
-            .text_size(px(font::CALLOUT))
+            .text_size(px(note_size(font::CALLOUT)))
             .child(super::widgets::icon(self.head.kind.icon(), iconsize::S, tint))
             .child(div().flex_1().min_w_0().font_weight(FontWeight::SEMIBOLD).text_color(tint).child(title))
             .when(foldable, |d| {
@@ -1865,7 +1865,7 @@ impl RenderOnce for Properties {
         let (secondary, separator, accent) = (self.secondary, self.separator, self.accent);
         let base = self.base.clone();
         let id = self.id.clone();
-        div().flex().flex_col().pb(px(space::S)).border_b_1().border_color(separator).text_size(px(font::CALLOUT)).children(self.items.into_iter().enumerate().map(move |(i, (name, values))| {
+        div().flex().flex_col().pb(px(space::S)).border_b_1().border_color(separator).text_size(px(note_size(font::CALLOUT))).children(self.items.into_iter().enumerate().map(move |(i, (name, values))| {
             let base = base.clone();
             let row = ElementId::NamedChild(std::sync::Arc::new(id.clone()), SharedString::from(format!("row-{i}")));
             div()
@@ -2054,7 +2054,7 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<ListState>, t: &Theme) -
         div()
             .flex()
             .gap(px(space::S))
-            .text_size(px(font::CALLOUT))
+            .text_size(px(note_size(font::CALLOUT)))
             .line_height(relative(1.5))
             .child(div().flex_none().text_color(t.secondary).child(format!("{}.", i + 1)))
             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XS)).children(render_blocks(blocks, &cx)))

@@ -7836,6 +7836,7 @@ dependencies = [
  "raw-window-handle",
  "rayon",
  "regex",
+ "resvg 0.45.1",
  "rodio",
  "ropey",
  "rusqlite",

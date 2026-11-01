@@ -68,7 +68,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     });
     if setup {
         let view = cx.new(|cx| Setup::new(window, cx));
-        show(view, 600., window, cx);
+        show(view, 760., window, cx);
     } else if let Some(p) = import {
         let view = cx.new(|cx| ImportCalendar::new(&p, cx));
         show(view, 640., window, cx);

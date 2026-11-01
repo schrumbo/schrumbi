@@ -74,7 +74,7 @@ impl RenderOnce for Formula {
         let source = self.source.clone();
         let painted = picture(format!("math:{source}"), t.dark, move || render::math_svg(&source, true, color), cx);
         let body: AnyElement = match painted {
-            Painted::Done(image, w, h) => img(image).w(px(w)).h(px(h)).flex_none().into_any_element(),
+            Painted::Done(image, w, h) => img(image).w(px(w * super::theme::note_scale())).h(px(h * super::theme::note_scale())).flex_none().into_any_element(),
             Painted::Busy => div().h(px(32.)).child(loading(iconsize::S, t.tertiary)).into_any_element(),
             Painted::Failed(e) => source_with_error(&self.source, &e, &t).into_any_element(),
         };
@@ -92,7 +92,7 @@ pub fn inline_math(source: &str, cx: &mut App) -> Option<(Arc<Image>, f32, f32)>
     let color = if dark { "#EDEDED" } else { "#1F1F1F" };
     let formula = source.to_string();
     match picture(format!("imath:{source}"), dark, move || render::math_svg(&formula, false, color), cx) {
-        Painted::Done(image, w, h) => Some((image, w * 1.15, h * 1.15)),
+        Painted::Done(image, w, h) => Some((image, w * 1.15 * super::theme::note_scale(), h * 1.15 * super::theme::note_scale())),
         _ => None,
     }
 }

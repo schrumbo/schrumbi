@@ -112,21 +112,22 @@ pub fn starter_config(root: &Path) -> StudyConfig {
         .unwrap_or_default();
     folders.retain(|n| !n.starts_with('.') && !n.starts_with('_'));
     folders.sort();
-    let modules = folders
-        .iter()
-        .enumerate()
-        .map(|(i, name)| Module {
-            id: name.to_lowercase(),
-            code: name.clone(),
-            name: name.clone(),
-            semester: semester.id.clone(),
-            folder: name.clone(),
-            color: PALETTE[i % PALETTE.len()].into(),
-            ..Default::default()
-        })
-        .collect();
+    let mut taken = Vec::new();
+    let modules = folders.iter().enumerate().map(|(i, name)| module_for_folder(name, &semester.id, i, &mut taken)).collect();
     let name = root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     StudyConfig::new(name, String::new(), vec![semester], modules)
+}
+
+/// A module for a folder at any depth, named after the folder's last part.
+pub fn module_for_folder(folder: &str, semester: &str, position: usize, taken: &mut Vec<String>) -> Module {
+    let name = folder.rsplit('/').next().unwrap_or(folder).to_string();
+    let code = abbreviation_for(&name, taken);
+    taken.push(code.clone());
+    Module { id: folder.to_lowercase(), code, name, semester: semester.to_string(), folder: folder.to_string(), color: PALETTE[position % PALETTE.len()].into(), ..Default::default() }
+}
+
+fn abbreviation_for(name: &str, taken: &[String]) -> String {
+    super::model::unique_abbreviation(name, taken)
 }
 
 /// "WS 2026/27" for dates from September to February, otherwise "SS 2027".

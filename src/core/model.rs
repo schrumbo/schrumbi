@@ -209,6 +209,12 @@ impl Default for Module {
 }
 
 impl Module {
+    /// The module's mark for tight places: three characters at most, whatever the code says.
+    pub fn badge(&self) -> String {
+        let source = if self.code.trim().is_empty() { &self.name } else { &self.code };
+        abbreviation(source)
+    }
+
     pub fn display_name(&self) -> String {
         if self.name.is_empty() || self.name == self.code { self.code.clone() } else { format!("{} · {}", self.code, self.name) }
     }
@@ -240,6 +246,71 @@ impl Module {
     pub fn upload_link(&self) -> Option<&ModuleLink> {
         self.links.iter().find(|l| l.upload && l.url().is_some()).or_else(|| self.links.iter().find(|l| l.url().is_some()))
     }
+}
+
+/// Three characters at most for a module name: "Complex Analysis 1" is "CA1", "Mathe 2" is "MA2", "Datenbanken" is "DAT".
+pub fn abbreviation(name: &str) -> String {
+    let name = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
+    if name.chars().count() <= 3 {
+        return name.to_string();
+    }
+    const SMALL: [&str; 16] = ["und", "and", "of", "the", "der", "die", "das", "des", "dem", "den", "für", "for", "in", "im", "zu", "to"];
+    let mut spaced = String::new();
+    let mut last: Option<char> = None;
+    for c in name.chars() {
+        if last.is_some_and(|l| (l.is_lowercase() && c.is_uppercase()) || (l.is_alphabetic() && c.is_ascii_digit())) {
+            spaced.push(' ');
+        }
+        spaced.push(c);
+        last = Some(c);
+    }
+    let mut words: Vec<&str> = Vec::new();
+    let mut number = None;
+    for word in spaced.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+        let roman = match word {
+            "I" => Some("1"),
+            "II" => Some("2"),
+            "III" => Some("3"),
+            "IV" => Some("4"),
+            "V" => Some("5"),
+            _ => None,
+        };
+        if word.chars().all(|c| c.is_ascii_digit()) {
+            number = Some(word.to_string());
+        } else if let Some(n) = roman.filter(|_| !words.is_empty()) {
+            number = Some(n.to_string());
+        } else if !SMALL.contains(&word.to_lowercase().as_str()) {
+            words.push(word);
+        }
+    }
+    let digits = number.map_or(String::new(), |n| n.chars().rev().take(1).collect());
+    let room = 3 - digits.chars().count();
+    let letters: String = match words.as_slice() {
+        [] => String::new(),
+        [only] => only.chars().take(room).collect(),
+        many => many.iter().filter_map(|w| w.chars().next()).take(room).collect(),
+    };
+    let badge = format!("{}{digits}", letters.to_uppercase());
+    if badge.is_empty() { name.chars().take(3).collect::<String>().to_uppercase() } else { badge.chars().take(3).collect() }
+}
+
+/// An abbreviation no other module has yet, still three characters at most.
+pub fn unique_abbreviation(name: &str, taken: &[String]) -> String {
+    let base = abbreviation(name);
+    if !taken.contains(&base) {
+        return base;
+    }
+    let letters: Vec<char> = name.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_uppercase).collect();
+    let first = base.chars().next().unwrap_or('M');
+    for second in letters.iter().skip(1) {
+        for third in letters.iter().skip(2) {
+            let candidate: String = [first, *second, *third].iter().collect();
+            if !taken.contains(&candidate) {
+                return candidate;
+            }
+        }
+    }
+    (2..100).map(|n| format!("{}{n}", base.chars().take(1).collect::<String>())).find(|c| !taken.contains(c)).unwrap_or(base)
 }
 
 /// A recurring deadline, generated once per lecture week.
@@ -655,5 +726,40 @@ impl GradingSystem {
             Self::Gpa => "GPA (0,0–4,0)",
             Self::PassFail => "Bestanden / nicht bestanden",
         })
+    }
+}
+
+#[cfg(test)]
+mod abbreviation_tests {
+    use super::{abbreviation, unique_abbreviation};
+
+    #[test]
+    fn stays_within_three_characters() {
+        for (name, short) in [
+            ("Complex Analysis 1", "CA1"),
+            ("Mathe 2", "MA2"),
+            ("Datenbanken", "DAT"),
+            ("Software Engineering", "SE"),
+            ("Lineare Algebra und Geometrie 2", "LA2"),
+            ("Analysis II", "AN2"),
+            ("UXD1", "UX1"),
+            ("MCI", "MCI"),
+            ("ComplexAnalysis1", "CA1"),
+            ("WS25/Theoretische Informatik", "TI"),
+            ("Übung", "ÜBU"),
+            ("01 Analysis", "AN1"),
+            ("Mechanik_Für-Ingenieure", "MI"),
+        ] {
+            assert_eq!(abbreviation(name), short, "{name}");
+        }
+        assert!(abbreviation("日本語の授業について").chars().count() <= 3);
+    }
+
+    #[test]
+    fn avoids_the_marks_of_other_modules() {
+        let taken = vec!["CA1".to_string()];
+        let other = unique_abbreviation("Computer Architecture 1", &taken);
+        assert_ne!(other, "CA1");
+        assert!(other.chars().count() <= 3);
     }
 }

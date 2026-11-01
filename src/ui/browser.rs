@@ -581,7 +581,7 @@ fn group(items: Vec<Item>, searching: bool, grouping: FileGrouping, today: Naive
 }
 
 fn badge(text: String, prominent: bool, t: &Theme) -> Div {
-    div().px(px(space::S)).py(px(space::XXS)).rounded_full().text_size(px(font::CAPTION2)).font_weight(FontWeight::SEMIBOLD).bg(if prominent { t.accent } else { t.ink.opacity(0.08) }).text_color(if prominent { white() } else { t.secondary }).child(text)
+    div().px(px(space::S)).py(px(space::XXS)).rounded_full().text_size(px(font::CAPTION2)).font_weight(FontWeight::SEMIBOLD).bg(if prominent { t.accent } else { t.ink.opacity(0.08) }).text_color(if prominent { t.on_accent } else { t.secondary }).child(text)
 }
 
 pub fn week_badge(text: String, prominent: bool, t: &Theme) -> Div {
@@ -635,7 +635,7 @@ impl FileBrowser {
         let (entity, click) = (entity.clone(), entity.clone());
         let mut meta = div().flex().items_center().gap(px(space::S)).text_size(px(font::CAPTION)).text_color(t.secondary);
         if show_module && let Some(m) = f.module_id.as_deref().and_then(|id| lib.module_by_id(id)) {
-            meta = meta.child(module_tag(&m.code, t.palette(&m.color)));
+            meta = meta.child(module_tag(&m.badge(), t.palette(&m.color)));
         }
         if let (true, Some(w)) = (show_week, f.week) {
             meta = meta.child(format!("W{w:02}"));
@@ -815,7 +815,7 @@ impl FileBrowser {
             GroupKind::Week(None) => title = title.child(div().font_weight(FontWeight::SEMIBOLD).child(tr("Ohne Woche"))),
             GroupKind::Folder(m, place) => {
                 if let Some(m) = m.as_deref().and_then(|id| lib.module_by_id(id)) {
-                    title = title.child(module_chip(&m.code, t.palette(&m.color)));
+                    title = title.child(module_chip(&m.badge(), t.palette(&m.color)));
                 }
                 title = title.child(div().truncate().font_weight(FontWeight::SEMIBOLD).child(if place.is_empty() { tr("Hauptordner") } else { place.join(" › ") }));
             }

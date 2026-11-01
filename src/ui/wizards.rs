@@ -237,8 +237,8 @@ impl Render for ImportCalendar {
 /// First-run setup for a freshly chosen folder. Every step can be skipped.
 pub struct Setup {
     step: usize,
-    /// Folders of an Obsidian vault to choose modules from, while that first step is showing.
-    vault_folders: Option<Vec<Module>>,
+    folders: Entity<super::folder_picker::FolderPicker>,
+    is_vault: bool,
     focused: bool,
     draft: StudyConfig,
     fields: Fields,
@@ -252,13 +252,17 @@ impl EventEmitter<Dismissed> for Setup {}
 impl Setup {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut draft = state::read(cx, |l| l.config.clone()).unwrap_or_default();
-        let is_vault = state::read(cx, |l| l.root.as_ref().is_some_and(|r| r.join(".obsidian").is_dir()));
-        let vault_folders = is_vault.then(|| {
-            let root = state::read(cx, |l| l.root.clone()).unwrap_or_default();
-            let all = crate::core::workspace::starter_config(&root).modules;
-            draft.modules = all.iter().filter(|m| looks_like_semester_or_module(&m.folder)).cloned().collect();
-            all
-        });
+        let root = state::read(cx, |l| l.root.clone()).unwrap_or_default();
+        let is_vault = root.join(".obsidian").is_dir();
+        let found = crate::core::folders::all_folders(&root);
+        let chosen = crate::core::folders::suggested_modules(&found, is_vault);
+        let semester = draft.semesters.first().map(|s| s.id.clone()).unwrap_or_default();
+        draft.modules.clear();
+        let mut taken = Vec::new();
+        for (i, folder) in chosen.iter().enumerate() {
+            draft.modules.push(crate::core::workspace::module_for_folder(folder, &semester, i, &mut taken));
+        }
+        let folders = cx.new(|cx| super::folder_picker::FolderPicker::new(&root, chosen, window, cx));
         let picker = |window: &mut Window, cx: &mut Context<Self>| cx.new(|cx| DatePickerState::new(window, cx).date_format(if crate::core::i18n::lang() == crate::core::i18n::Lang::En { "%m/%d/%Y" } else { "%d.%m.%Y" }));
         let (start, end) = (picker(window, cx), picker(window, cx));
         if let Some(s) = draft.semesters.first() {
@@ -270,6 +274,19 @@ impl Setup {
             }
         }
         let subs = vec![
+            cx.subscribe(&folders, |this, picker, _: &super::folder_picker::Changed, cx| {
+                let chosen = picker.read(cx).selected.clone();
+                let semester = this.draft.semesters.first().map(|s| s.id.clone()).unwrap_or_default();
+                this.draft.modules.retain(|m| chosen.contains(&m.folder));
+                let mut taken: Vec<String> = this.draft.modules.iter().map(|m| m.code.clone()).collect();
+                for folder in &chosen {
+                    if !this.draft.modules.iter().any(|m| m.folder == *folder) {
+                        let position = this.draft.modules.len();
+                        this.draft.modules.push(crate::core::workspace::module_for_folder(folder, &semester, position, &mut taken));
+                    }
+                }
+                cx.notify();
+            }),
             cx.subscribe(&start, |this, _, e: &DatePickerEvent, cx| {
                 let DatePickerEvent::Change(v) = e;
                 if let (Some(d), Some(s)) = (v.start(), this.draft.semesters.first_mut()) {
@@ -285,7 +302,7 @@ impl Setup {
                 cx.notify();
             }),
         ];
-        Self { step: 0, vault_folders, focused: false, draft, fields: Fields::default(), start, end, _subs: subs }
+        Self { step: 0, folders, is_vault, focused: false, draft, fields: Fields::default(), start, end, _subs: subs }
     }
 
     fn finish(&mut self, save: bool, cx: &mut Context<Self>) {
@@ -295,27 +312,6 @@ impl Setup {
         }
         act(cx, |l| l.needs_setup = false);
         cx.emit(Dismissed);
-    }
-}
-
-/// A folder named like a semester or a course code is probably a module; everything else stays unchecked.
-fn looks_like_semester_or_module(name: &str) -> bool {
-    static PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?i:^(ws|ss|wise|sose|sem(ester)?)[\s_-]*\d|^\d+\.?\s*sem)|^[A-ZÄÖÜ]{2,6}\d{0,4}$").unwrap());
-    PATTERN.is_match(name)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::looks_like_semester_or_module as module;
-
-    #[test]
-    fn only_course_like_folders_start_as_modules() {
-        for yes in ["WS25", "SS 2026", "sose26", "3. Semester", "MCI", "UXD1"] {
-            assert!(module(yes), "{yes}");
-        }
-        for no in ["Privat", "Ordner", "Anhänge", "Tagebuch", "notes"] {
-            assert!(!module(no), "{no}");
-        }
     }
 }
 
@@ -329,27 +325,7 @@ impl Render for Setup {
         let me = cx.entity();
         let mut fields = std::mem::take(&mut self.fields);
         let (e1, e2) = (me.clone(), me.clone());
-        let body: Div = if let Some(folders) = self.vault_folders.clone() {
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(space::L))
-                .child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Das ist ein Obsidian-Vault")))
-                .child(div().text_color(t.secondary).child(tr("Deine Notizen bleiben normale Dateien. Du kannst sie hier schreiben und in Obsidian, auch gleichzeitig. Welche Ordner sind Module? Alles andere bleibt einfach Notizen.")))
-                .child(grouped(&t).children(folders.into_iter().enumerate().map(|(i, module)| {
-                    let selected = self.draft.modules.iter().any(|m| m.id == module.id);
-                    let label = module.folder.clone();
-                    let entry = module;
-                    Checkbox::new(("setup-folder", i)).label(label).checked(selected).px(px(space::L)).py(px(space::S)).on_click(cx.listener(move |s, _: &bool, _, cx| {
-                        if let Some(at) = s.draft.modules.iter().position(|m| m.id == entry.id) {
-                            s.draft.modules.remove(at);
-                        } else {
-                            s.draft.modules.push(entry.clone());
-                        }
-                        cx.notify();
-                    }))
-                })))
-        } else {
+        let body: Div = {
             match self.step {
             0 => {
                 let first_field = std::mem::replace(&mut self.focused, true);
@@ -372,7 +348,7 @@ impl Render for Setup {
                     .flex_col()
                     .gap(px(space::L))
                     .child(div().flex().items_center().gap(px(space::M)).child(super::onboarding::snail(54., &t)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Willkommen"))))
-                    .child(div().text_color(t.secondary).child(tr("Drei kurze Schritte, danach erkennt die App deine Abgaben automatisch.")))
+                    .child(div().text_color(t.secondary).child(if self.is_vault { tr("Deine Notizen bleiben normale Dateien. Du kannst sie hier schreiben und in Obsidian, auch gleichzeitig.") } else { tr("Drei kurze Schritte, danach erkennt die App deine Abgaben automatisch.") }))
                     .child(
                         grouped(&t)
                             .child(form_row(tr("Studiengang"), Input::new(&name), &t))
@@ -407,12 +383,10 @@ impl Render for Setup {
                 col
             }
             _ => {
-                let mut list = grouped(&t);
+                let mut list = div().flex().flex_col();
                 for (i, m) in self.draft.modules.clone().into_iter().enumerate() {
                     let (e1, e2, e3) = (me.clone(), me.clone(), me.clone());
-                    let id1 = m.id.clone();
-                    let id2 = m.id.clone();
-                    let id3 = m.id.clone();
+                    let (id1, id2, folder) = (m.id.clone(), m.id.clone(), m.folder.clone());
                     let code = fields.input(&format!("setup-code-{}", m.id), &m.code, &tr("Kürzel"), window, cx, move |v, cx| e1.update(cx, |s, cx| {
                         if let Some(m) = s.draft.module_mut(&id1) {
                             m.code = v;
@@ -431,28 +405,64 @@ impl Render for Setup {
                     list = list.child(
                         div()
                             .flex()
-                            .items_center()
-                            .gap(px(space::S))
-                            .px(px(space::L))
+                            .flex_col()
+                            .gap(px(space::XS))
+                            .px(px(space::M))
                             .py(px(space::S))
-                            .child(div().size(px(10.)).rounded_full().bg(t.palette(&m.color)))
-                            .child(div().w(px(70.)).child(Input::new(&code).small()))
-                            .child(div().flex_1().child(Input::new(&name).small()))
-                            .child(caption(m.folder.clone(), &t))
-                            .child(Button::new(SharedString::from(format!("setup-rm-{}", m.id))).ghost().small().icon(menu_icon("circle-minus")).tooltip(tr("Kein Modul")).on_click(move |_, _, cx| e3.update(cx, |s, cx| {
-                                s.draft.modules.retain(|x| x.id != id3);
-                                cx.notify();
-                            }))),
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(space::S))
+                                    .child(div().flex_none().size(px(space::S + space::XXS)).rounded_full().bg(t.palette(&m.color)))
+                                    .child(div().flex_none().w(px(56.)).child(Input::new(&code).small()))
+                                    .child(div().flex_1().min_w_0().child(Input::new(&name).small()))
+                                    .child(Button::new(SharedString::from(format!("setup-rm-{}", m.id))).ghost().small().icon(menu_icon("circle-minus")).tooltip(tr("Kein Modul")).on_click(move |_, _, cx| e3.update(cx, |s, cx| {
+                                        s.folders.update(cx, |p, cx| {
+                                            p.selected.remove(&folder);
+                                            cx.emit(super::folder_picker::Changed);
+                                            cx.notify();
+                                        });
+                                    }))),
+                            )
+                            .child(caption(m.folder.replace('/', " › "), &t).truncate()),
                     );
                 }
                 let empty = self.draft.modules.is_empty();
+                let picked = self.draft.modules.len();
                 div()
+                    .h_full()
                     .flex()
                     .flex_col()
-                    .gap(px(space::L))
+                    .gap(px(space::M))
                     .child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Module")))
-                    .child(div().text_color(t.secondary).child(tr("Aus deinen Ordnern erkannt. Danach: Termine aus Moodle über „Ablage → Kalender importieren“ übernehmen oder wiederkehrende Abgaben unter Einstellungen → Module anlegen.")))
-                    .child(if empty { unavailable("folder", tr("Keine Ordner gefunden"), tr("Lege für jedes Modul einen Ordner an oder füge Module später hinzu."), &t).h(px(200.)).into_any_element() } else { div().id("setup-modules").max_h(px(260.)).overflow_y_scrollbar().child(list).into_any_element() })
+                    .child(div().text_color(t.secondary).child(tr("Hake die Ordner an, die Module sind, egal wie tief sie liegen. Alles andere bleibt einfach Notizen.")))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .gap(px(space::M))
+                            .child(div().flex_1().min_w_0().h_full().rounded(px(radius::CARD)).border_1().border_color(t.separator).overflow_hidden().child(self.folders.clone()))
+                            .child(
+                                div()
+                                    .w(px(320.))
+                                    .flex_none()
+                                    .h_full()
+                                    .flex()
+                                    .flex_col()
+                                    .rounded(px(radius::CARD))
+                                    .border_1()
+                                    .border_color(t.separator)
+                                    .overflow_hidden()
+                                    .child(div().flex_none().px(px(space::M)).py(px(space::S)).border_b_1().border_color(t.separator).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(if picked == 1 { tr("1 Modul") } else { trf("%lld Module", &[&picked]) }))
+                                    .child(if empty {
+                                        unavailable("library", tr("Noch kein Modul"), tr("Du kannst das auch später machen: Rechtsklick auf einen Ordner in den Notizen."), &t).into_any_element()
+                                    } else {
+                                        div().id("setup-modules").flex_1().min_h_0().overflow_y_scrollbar().child(list).into_any_element()
+                                    }),
+                            ),
+                    )
             }
             }
         };
@@ -461,12 +471,12 @@ impl Render for Setup {
         let step = self.step;
         let (later, back, next) = (me.clone(), me.clone(), me.clone());
         div()
-            .w(px(600.))
-            .h(px(520.))
+            .w_full()
+            .h(px(600.))
             .flex()
             .flex_col()
             .child(div().flex().gap(px(space::S)).px(px(space::XL)).pt(px(space::XL)).children((0..3).map(|i| div().flex_1().h(px(4.)).rounded_full().bg(if i <= step { t.accent } else { t.secondary.opacity(0.25) }))))
-            .child(div().id("setup-body").flex_1().min_h_0().overflow_y_scrollbar().p(px(space::XL)).child(body))
+            .child(if step == 2 { div().id("setup-body").flex_1().min_h_0().p(px(space::XL)).child(body).into_any_element() } else { div().id("setup-body").flex_1().min_h_0().overflow_y_scrollbar().p(px(space::XL)).child(body).into_any_element() })
             .child(
                 div()
                     .flex()
@@ -484,9 +494,7 @@ impl Render for Setup {
                         })))
                     })
                     .child(Button::new("setup-next").primary().label(if step == 2 { tr("Fertig") } else { tr("Weiter") }).on_click(move |_, _, cx| next.update(cx, |s, cx| {
-                        if s.vault_folders.take().is_some() {
-                            cx.notify();
-                        } else if s.step == 2 {
+                        if s.step == 2 {
                             s.finish(true, cx);
                         } else {
                             s.step += 1;

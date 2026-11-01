@@ -222,3 +222,26 @@ pub fn default_app_name(path: &std::path::Path) -> Option<String> {
 pub fn default_app_name(_: &std::path::Path) -> Option<String> {
     None
 }
+
+/// Makes native window parts light or dark regardless of the system; `None` follows the system again.
+#[cfg(target_os = "macos")]
+pub fn set_window_appearance(dark: Option<bool>) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::NSString;
+    unsafe {
+        let (Some(app), Some(appearance_class)) = (AnyClass::get(c"NSApplication"), AnyClass::get(c"NSAppearance")) else { return };
+        let shared: *mut AnyObject = msg_send![app, sharedApplication];
+        let chosen: *mut AnyObject = match dark {
+            None => std::ptr::null_mut(),
+            Some(dark) => {
+                let name = NSString::from_str(if dark { "NSAppearanceNameDarkAqua" } else { "NSAppearanceNameAqua" });
+                msg_send![appearance_class, appearanceNamed: &*name]
+            }
+        };
+        let _: () = msg_send![shared, setAppearance: chosen];
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_window_appearance(_dark: Option<bool>) {}

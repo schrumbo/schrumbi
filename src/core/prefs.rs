@@ -70,6 +70,19 @@ pub enum NoteEditor {
     Code,
 }
 
+/// The colours of the app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemeChoice {
+    /// Light or dark, as the system is.
+    #[default]
+    System,
+    Light,
+    Dark,
+    Nord,
+    Dracula,
+}
+
 /// A key plus modifiers, as stored for custom shortcuts.
 /// A reading position in a PDF.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,6 +125,7 @@ pub struct Prefs {
     pub pdf_header: bool,
     pub pdf_page_numbers: bool,
     pub editor_font_size: f32,
+    pub theme: ThemeChoice,
     /// Notes save while typing since this was the default; older settings move over once.
     pub saves_while_typing: bool,
     pub note_save_mode: NoteSaveMode,
@@ -175,6 +189,7 @@ impl Default for Prefs {
             pdf_header: true,
             pdf_page_numbers: true,
             editor_font_size: 13.,
+            theme: ThemeChoice::System,
             saves_while_typing: false,
             note_save_mode: NoteSaveMode::Delay,
             note_save_delay: 2.,

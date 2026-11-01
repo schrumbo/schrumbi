@@ -115,7 +115,7 @@ fn next_action(lib: &Library, t: &Theme) -> Div {
             .on_click(select(a.id.clone()))
             .child(label(tint))
             .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).truncate().child(a.title.clone()))
-            .child(div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(div().font_weight(FontWeight::SEMIBOLD).child(module_tag(m.map_or("?", |m| m.code.as_str()), module_tint))).child(when))
+            .child(div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(div().font_weight(FontWeight::SEMIBOLD).child(module_tag(&m.map_or("?".to_string(), |m| m.badge()), module_tint))).child(when))
     };
     let file_button = |a: &Assignment| {
         let id = a.id.clone();
@@ -204,7 +204,7 @@ fn chips(lib: &Library, items: &[&Assignment], t: &Theme) -> Div {
             .when(selected, |c| c.border(px(2.)).border_color(t.accent))
             .on_click(select(a.id.clone()))
             .child(status_toggle(a, lib, iconsize::M, t))
-            .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).child(module_tag(m.map_or("?", |m| m.code.as_str()), tint)))
+            .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).child(module_tag(&m.map_or("?".to_string(), |m| m.badge()), tint)))
             .child(div().text_size(px(font::CALLOUT)).child(a.title.clone()))
             .child(caption(day::day_label(a.due, lib.now), t))
             .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx));
@@ -337,7 +337,7 @@ fn exams(lib: &Library, t: &Theme) -> Option<Div> {
     let row = div().flex().gap(px(space::M)).children(exams.into_iter().take(4).map(|a| {
         let m = lib.module(a);
         let tint = t.palette(m.map_or("blue", |m| m.color.as_str()));
-        tile(SharedString::from(format!("exam-{}", a.id)), m.map_or(String::new(), |m| m.code.clone()), "graduation-cap", tint, true, t).on_click(select(a.id.clone())).child(
+        tile(SharedString::from(format!("exam-{}", a.id)), m.map_or(String::new(), |m| m.badge()), "graduation-cap", tint, true, t).on_click(select(a.id.clone())).child(
             div()
                 .flex()
                 .flex_col()

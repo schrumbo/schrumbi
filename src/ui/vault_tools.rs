@@ -145,9 +145,9 @@ impl Render for NotePicker {
                 .flex_col()
                 .cursor_pointer()
                 .key_nav()
-                .when(selected, |d| d.bg(t.accent).text_color(white()))
+                .when(selected, |d| d.bg(t.accent).text_color(t.on_accent))
                 .child(div().truncate().child(name))
-                .when(!folder.is_empty(), |d| d.child(div().truncate().text_size(px(font::CAPTION)).text_color(if selected { white().opacity(0.85) } else { t.secondary }).child(folder)))
+                .when(!folder.is_empty(), |d| d.child(div().truncate().text_size(px(font::CAPTION)).text_color(if selected { t.on_accent.opacity(0.85) } else { t.secondary }).child(folder)))
                 .on_click(move |_, _, cx| {
                     e.update(cx, |q, cx| {
                         q.index = i;

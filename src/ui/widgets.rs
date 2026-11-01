@@ -459,7 +459,7 @@ pub fn assignment_row(lib: &Library, a: &Assignment, show_module: bool, show_dat
     let title = div().font_weight(FontWeight::MEDIUM).text_color(if e.status.is_closed() { t.secondary } else { t.primary }).child(a.title.clone());
     let mut meta = div().flex().items_center().gap(px(space::S)).text_size(px(font::CAPTION)).text_color(t.secondary);
     if show_module {
-        meta = meta.child(module_tag(module.map_or("?", |m| m.code.as_str()), tint));
+        meta = meta.child(module_tag(&module.map_or("?".to_string(), |m| m.badge()), tint));
     }
     if let (true, Some(w)) = (show_week, a.week) {
         meta = meta.child(format!("W{w:02}"));
@@ -538,7 +538,7 @@ pub fn file_target(element: Stateful<Div>, a: &Assignment, t: &Theme) -> Statefu
                 .px(px(space::S))
                 .rounded(px(radius::CONTROL))
                 .bg(t.accent)
-                .text_color(white())
+                .text_color(t.on_accent)
                 .text_size(px(font::CALLOUT))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(div().truncate().child(trf("In %@ ablegen", &[&a.title]))),
