@@ -32,6 +32,11 @@ pub fn render(error: Option<String>, t: &Theme) -> Div {
         .justify_center()
         .gap(px(space::L))
         .p(px(space::XXL))
+        .on_drop(|paths: &ExternalPaths, _, cx| {
+            if let Some(folder) = paths.paths().iter().find(|p| p.is_dir()) {
+                state::open_workspace(folder, cx);
+            }
+        })
         .child(logo(56., t))
         .child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).child(tr("Deadlines, Dateien und Notizen fürs Studium an einem Ort")))
         .child(div().max_w(px(380.)).text_center().text_color(t.secondary).child(tr("Wähle den Ordner mit deinen Unterlagen. Die App liest nur diesen Ordner und legt dort `schrumbi.json` an.").replace('`', "")))

@@ -16,7 +16,7 @@ use super::fields::Fields;
 use super::inspector::{datetime_picker, picked};
 use super::quick::Dismissed;
 use super::state::{self, act};
-use super::theme::{Theme, font, radius, space};
+use super::theme::{Theme, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::ics::{self, CalendarEvent};
@@ -244,8 +244,18 @@ pub struct Setup {
     fields: Fields,
     start: Entity<DatePickerState>,
     end: Entity<DatePickerState>,
+    /// A weekly deadline for each module that gets one: its title and weekday.
+    weekly: std::collections::HashMap<String, (String, u32)>,
+    calendar: String,
+    new_module: String,
+    /// Holds the keyboard on pages without a field, so Enter still goes on.
+    focus: FocusHandle,
+    focused_step: Option<usize>,
     _subs: Vec<Subscription>,
 }
+
+/// The last page: nothing to fill in, only what to do next.
+const SETUP_DONE: usize = 4;
 
 impl EventEmitter<Dismissed> for Setup {}
 
@@ -274,19 +284,7 @@ impl Setup {
             }
         }
         let subs = vec![
-            cx.subscribe(&folders, |this, picker, _: &super::folder_picker::Changed, cx| {
-                let chosen = picker.read(cx).selected.clone();
-                let semester = this.draft.semesters.first().map(|s| s.id.clone()).unwrap_or_default();
-                this.draft.modules.retain(|m| chosen.contains(&m.folder));
-                let mut taken: Vec<String> = this.draft.modules.iter().map(|m| m.code.clone()).collect();
-                for folder in &chosen {
-                    if !this.draft.modules.iter().any(|m| m.folder == *folder) {
-                        let position = this.draft.modules.len();
-                        this.draft.modules.push(crate::core::workspace::module_for_folder(folder, &semester, position, &mut taken));
-                    }
-                }
-                cx.notify();
-            }),
+            cx.subscribe(&folders, Self::folders_changed),
             cx.subscribe(&start, |this, _, e: &DatePickerEvent, cx| {
                 let DatePickerEvent::Change(v) = e;
                 if let (Some(d), Some(s)) = (v.start(), this.draft.semesters.first_mut()) {
@@ -302,16 +300,106 @@ impl Setup {
                 cx.notify();
             }),
         ];
-        Self { step: 0, folders, is_vault, focused: false, draft, fields: Fields::default(), start, end, _subs: subs }
+        Self { step: 0, folders, is_vault, focused: false, draft, fields: Fields::default(), start, end, weekly: Default::default(), calendar: String::new(), new_module: String::new(), focus: cx.focus_handle(), focused_step: None, _subs: subs }
+    }
+
+    fn folders_changed(&mut self, picker: Entity<super::folder_picker::FolderPicker>, _: &super::folder_picker::Changed, cx: &mut Context<Self>) {
+        let chosen = picker.read(cx).selected.clone();
+        let semester = self.draft.semesters.first().map(|s| s.id.clone()).unwrap_or_default();
+        self.draft.modules.retain(|m| chosen.contains(&m.folder));
+        let mut taken: Vec<String> = self.draft.modules.iter().map(|m| m.code.clone()).collect();
+        for folder in &chosen {
+            if !self.draft.modules.iter().any(|m| m.folder == *folder) {
+                let position = self.draft.modules.len();
+                self.draft.modules.push(crate::core::workspace::module_for_folder(folder, &semester, position, &mut taken));
+            }
+        }
+        cx.notify();
+    }
+
+    /// Makes a folder for a module that has none yet and takes it into the list.
+    fn add_module(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = crate::core::text::safe_file_stem(&self.new_module);
+        let root = state::read(cx, |l| l.root.clone()).unwrap_or_default();
+        if name.is_empty() || std::fs::create_dir_all(root.join(&name)).is_err() {
+            return;
+        }
+        let mut chosen: Vec<String> = self.folders.read(cx).selected.iter().cloned().collect();
+        if !chosen.contains(&name) {
+            chosen.push(name);
+        }
+        let folders = cx.new(|cx| super::folder_picker::FolderPicker::new(&root, chosen, window, cx));
+        self._subs.push(cx.subscribe(&folders, Self::folders_changed));
+        self.folders = folders.clone();
+        self.new_module.clear();
+        window.focus(&self.focus, cx);
+        self.folders_changed(folders, &super::folder_picker::Changed, cx);
+    }
+
+    /// What keeps this step from going on, said in a sentence.
+    fn problem(&self) -> Option<String> {
+        if self.step == 1 {
+            let semester = self.draft.semesters.first()?;
+            return match (semester.start_date(), semester.end_date()) {
+                (Some(a), Some(b)) if a < b => None,
+                (Some(_), Some(_)) => Some(tr("Das Ende muss nach dem Beginn liegen.")),
+                _ => Some(tr("Wähle Beginn und Ende der Vorlesungszeit.")),
+            };
+        }
+        if self.step == 3 {
+            let address = self.calendar.trim();
+            if !(address.is_empty() || address.starts_with("https://") || address.starts_with("http://") || address.starts_with("webcal://")) {
+                return Some(tr("Die Adresse muss mit https:// oder webcal:// beginnen."));
+            }
+        }
+        if self.step == 2 {
+            let mut codes: Vec<String> = self.draft.modules.iter().map(|m| m.code.trim().to_lowercase()).collect();
+            if codes.iter().any(String::is_empty) {
+                return Some(tr("Jedes Modul braucht ein Kürzel."));
+            }
+            codes.sort();
+            if codes.windows(2).any(|w| w[0] == w[1]) {
+                return Some(tr("Zwei Module haben dasselbe Kürzel."));
+            }
+        }
+        None
+    }
+
+    fn go_on(&mut self, cx: &mut Context<Self>) {
+        if self.problem().is_some() {
+            return;
+        }
+        if self.step == SETUP_DONE {
+            self.finish(true, cx);
+        } else {
+            self.step += 1;
+            cx.notify();
+        }
     }
 
     fn finish(&mut self, save: bool, cx: &mut Context<Self>) {
         if save {
+            for module in &mut self.draft.modules {
+                if let Some((title, weekday)) = self.weekly.get(&module.id).filter(|(title, _)| !title.trim().is_empty()) {
+                    let short: String = title.trim().chars().take(2).collect::<String>().to_uppercase();
+                    let today = Local::now().date_naive();
+                    let start_week = self.draft.semesters.first().and_then(|semester| schedule::lecture_weeks(semester).into_iter().find(|w| w.monday + chrono::Days::new(*weekday as u64 - 1) >= today).map(|w| w.index));
+                    module.rules.push(crate::core::model::Rule { title: title.trim().to_string(), short, weekday: *weekday, time: "23:59".into(), upload: true, start_week, ..Default::default() });
+                }
+            }
             let c = self.draft.clone();
             act(cx, |l| l.save_config(c));
         }
         act(cx, |l| l.needs_setup = false);
         cx.emit(Dismissed);
+        let address = self.calendar.trim().to_string();
+        if save && !address.is_empty() {
+            let root = state::read(cx, |l| l.root.clone()).unwrap_or_default().to_string_lossy().to_string();
+            crate::core::prefs::update(|p| {
+                p.calendar_sources.insert(root, address);
+            });
+            state::refresh_calendar(true, cx);
+        }
     }
 }
 
@@ -325,6 +413,11 @@ impl Render for Setup {
         let me = cx.entity();
         let mut fields = std::mem::take(&mut self.fields);
         let (e1, e2) = (me.clone(), me.clone());
+        if self.step != 0 && self.focused_step != Some(self.step) {
+            let focus = self.focus.clone();
+            window.on_next_frame(move |window, cx| window.focus(&focus, cx));
+        }
+        self.focused_step = Some(self.step);
         let body: Div = {
             match self.step {
             0 => {
@@ -348,7 +441,7 @@ impl Render for Setup {
                     .flex_col()
                     .gap(px(space::L))
                     .child(div().flex().items_center().gap(px(space::M)).child(super::onboarding::snail(54., &t)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Willkommen"))))
-                    .child(div().text_color(t.secondary).child(if self.is_vault { tr("Deine Notizen bleiben normale Dateien. Du kannst sie hier schreiben und in Obsidian, auch gleichzeitig.") } else { tr("Drei kurze Schritte, danach erkennt die App deine Abgaben automatisch.") }))
+                    .child(div().text_color(t.secondary).child(if self.is_vault { tr("Deine Notizen bleiben normale Dateien. Du kannst sie hier schreiben und in Obsidian, auch gleichzeitig.") } else { tr("Vier kurze Schritte, danach kennt die App deine Module und Abgaben.") }))
                     .child(
                         grouped(&t)
                             .child(form_row(tr("Studiengang"), Input::new(&name), &t))
@@ -381,6 +474,69 @@ impl Render for Setup {
                     );
                 }
                 col
+            }
+            3 => {
+                let typed = me.clone();
+                let calendar = fields.input("setup-calendar", &self.calendar, "https://…", window, cx, move |v, cx| typed.update(cx, |s, cx| {
+                    s.calendar = v;
+                    cx.notify();
+                }));
+                let mut rows = div().flex().flex_col();
+                for (i, m) in self.draft.modules.clone().into_iter().enumerate() {
+                    let (typed, picked, id, id2) = (me.clone(), me.clone(), m.id.clone(), m.id.clone());
+                    let current = self.weekly.get(&m.id).cloned().unwrap_or_else(|| (String::new(), 5));
+                    let title = fields.input(&format!("setup-weekly-{}", m.id), &current.0, &tr("z. B. Übungsblatt"), window, cx, move |v, cx| typed.update(cx, |s, cx| {
+                        s.weekly.entry(id.clone()).or_insert_with(|| (String::new(), 5)).0 = v;
+                        cx.notify();
+                    }));
+                    if i > 0 {
+                        rows = rows.child(divider(&t));
+                    }
+                    rows = rows.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(space::S))
+                            .px(px(space::M))
+                            .py(px(space::S))
+                            .child(div().flex_none().w(px(44.)).font_weight(FontWeight::SEMIBOLD).text_color(t.palette(&m.color)).child(m.code.clone()))
+                            .child(div().flex_1().min_w_0().child(Input::new(&title).small()))
+                            .child(Button::new(SharedString::from(format!("setup-day-{}", m.id))).small().ghost().label(day::weekday_names().get(current.1 as usize - 1).copied().unwrap_or_default().to_string()).dropdown_caret(true).dropdown_menu(move |mut menu, _, _| {
+                                for (n, name) in day::weekday_names().iter().enumerate() {
+                                    let (p, id) = (picked.clone(), id2.clone());
+                                    menu = menu.item(PopupMenuItem::new(name.to_string()).checked(current.1 as usize == n + 1).on_click(move |_, _, cx| p.update(cx, |s, cx| {
+                                        s.weekly.entry(id.clone()).or_insert_with(|| (String::new(), 5)).1 = n as u32 + 1;
+                                        cx.notify();
+                                    })));
+                                }
+                                menu
+                            })),
+                    );
+                }
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::L))
+                    .child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Abgaben")))
+                    .child(div().text_color(t.secondary).child(tr("Beides ist freiwillig und geht auch später in den Einstellungen.")))
+                    .child(div().flex().flex_col().gap(px(space::S)).child(section_title(tr("Aus Moodle"))).child(caption(tr("Kalender → Exportieren → Kalender-URL abrufen. Neue Abgaben kommen dann von selbst."), &t)).child(Input::new(&calendar)))
+                    .child(div().flex().flex_col().gap(px(space::S)).child(section_title(tr("Jede Woche"))).child(caption(tr("Hat ein Modul jede Woche eine Abgabe? Trage ihren Namen ein, sie ist dann jede Vorlesungswoche um 23:59 fällig."), &t)).when(!self.draft.modules.is_empty(), |d| d.child(grouped(&t).child(rows))).when(self.draft.modules.is_empty(), |d| d.child(caption(tr("Noch kein Modul gewählt."), &t))))
+            }
+            SETUP_DONE => {
+                let command = if cfg!(target_os = "macos") { "⌘" } else { "Strg+" };
+                let weekly = self.weekly.values().filter(|(title, _)| !title.trim().is_empty()).count();
+                let modules = self.draft.modules.len();
+                let tip = |name: &'static str, title: String, detail: String| div().flex().items_start().gap(px(space::M)).child(div().size(px(36.)).flex_none().rounded(px(radius::INNER)).bg(t.accent.opacity(0.14)).flex().items_center().justify_center().child(icon(name, iconsize::M, t.accent_text))).child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().font_weight(FontWeight::SEMIBOLD).child(title)).child(caption(detail, &t)));
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::L))
+                    .child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Alles bereit")))
+                    .child(div().text_color(t.secondary).child(trf("%@ Module, %@ wöchentliche Abgaben. Das meiste geht von hier aus so:", &[&modules.to_string(), &weekly.to_string()])))
+                    .child(tip("inbox", tr("Dateien ablegen"), tr("Ziehe Dateien ins Fenster. Die App schlägt Modul, Abgabe und Namen vor, Enter legt ab.")))
+                    .child(tip("square-pen", tr("Notizen schreiben"), trf("%@N legt eine an, ihr Dateiname folgt der ersten Überschrift.", &[&command])))
+                    .child(tip("layers", tr("Karten lernen"), tr("Schreibe „Frage :: Antwort“ in eine Notiz, die Karte erscheint im Tab Karten.")))
+                    .child(tip("search", tr("Alles finden"), trf("%@K zeigt jeden Befehl, / sucht in Dateien und Notizen.", &[&command])))
             }
             _ => {
                 let mut list = div().flex().flex_col();
@@ -430,6 +586,13 @@ impl Render for Setup {
                 }
                 let empty = self.draft.modules.is_empty();
                 let picked = self.draft.modules.len();
+                let typed = me.clone();
+                let add_field = fields.input("setup-new-module", &self.new_module, &tr("Modul, das noch keinen Ordner hat"), window, cx, move |v, cx| typed.update(cx, |s, cx| {
+                    s.new_module = v;
+                    cx.notify();
+                }));
+                let adder = me.clone();
+                let can_add = !self.new_module.trim().is_empty();
                 div()
                     .h_full()
                     .flex()
@@ -443,7 +606,7 @@ impl Render for Setup {
                             .min_h_0()
                             .flex()
                             .gap(px(space::M))
-                            .child(div().flex_1().min_w_0().h_full().rounded(px(radius::CARD)).border_1().border_color(t.separator).overflow_hidden().child(self.folders.clone()))
+                            .child(div().flex_1().min_w_0().h_full().flex().flex_col().gap(px(space::S)).child(div().flex_1().min_h_0().rounded(px(radius::CARD)).border_1().border_color(t.separator).overflow_hidden().child(self.folders.clone())).child(div().flex_none().flex().gap(px(space::S)).child(div().flex_1().min_w_0().child(Input::new(&add_field).small())).child(Button::new("setup-add").small().icon(menu_icon("plus")).label(tr("Anlegen")).disabled(!can_add).on_click(move |_, window, cx| adder.update(cx, |s, cx| s.add_module(window, cx))))))
                             .child(
                                 div()
                                     .w(px(320.))
@@ -457,7 +620,7 @@ impl Render for Setup {
                                     .overflow_hidden()
                                     .child(div().flex_none().px(px(space::M)).py(px(space::S)).border_b_1().border_color(t.separator).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(if picked == 1 { tr("1 Modul") } else { trf("%lld Module", &[&picked]) }))
                                     .child(if empty {
-                                        unavailable("library", tr("Noch kein Modul"), tr("Du kannst das auch später machen: Rechtsklick auf einen Ordner in den Notizen."), &t).into_any_element()
+                                        unavailable("library", tr("Noch kein Modul"), tr("Hake links einen Ordner an oder lege unten einen an. Geht auch später: Rechtsklick auf einen Ordner in den Notizen."), &t).into_any_element()
                                     } else {
                                         div().id("setup-modules").flex_1().min_h_0().overflow_y_scrollbar().child(list).into_any_element()
                                     }),
@@ -469,13 +632,31 @@ impl Render for Setup {
         fields.prune();
         self.fields = fields;
         let step = self.step;
+        let problem = self.problem();
+        let blocked = problem.is_some();
         let (later, back, next) = (me.clone(), me.clone(), me.clone());
         div()
             .w_full()
             .h(px(600.))
             .flex()
             .flex_col()
-            .child(div().flex().gap(px(space::S)).px(px(space::XL)).pt(px(space::XL)).children((0..3).map(|i| div().flex_1().h(px(4.)).rounded_full().bg(if i <= step { t.accent } else { t.secondary.opacity(0.25) }))))
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|s, e: &KeyDownEvent, _, cx| {
+                if e.keystroke.key == "enter" {
+                    s.go_on(cx);
+                }
+            }))
+            .capture_action(cx.listener(|s, a: &gpui_kit::component::input::Enter, window, cx| {
+                if !a.secondary {
+                    if s.step == 2 && !s.new_module.trim().is_empty() {
+                        s.add_module(window, cx);
+                    } else {
+                        s.go_on(cx);
+                    }
+                    cx.stop_propagation();
+                }
+            }))
+            .child(div().flex().gap(px(space::S)).px(px(space::XL)).pt(px(space::XL)).children((0..4).map(|i| div().flex_1().h(px(4.)).rounded_full().bg(if i <= step { t.accent } else { t.secondary.opacity(0.25) }))))
             .child(if step == 2 { div().id("setup-body").flex_1().min_h_0().p(px(space::XL)).child(body).into_any_element() } else { div().id("setup-body").flex_1().min_h_0().overflow_y_scrollbar().p(px(space::XL)).child(body).into_any_element() })
             .child(
                 div()
@@ -485,22 +666,16 @@ impl Render for Setup {
                     .p(px(space::L))
                     .border_t_1()
                     .border_color(t.separator)
-                    .child(Button::new("setup-later").ghost().label(tr("Später einrichten")).on_click(move |_, _, cx| later.update(cx, |s, cx| s.finish(false, cx))))
+                    .when(step < SETUP_DONE, |d| d.child(Button::new("setup-later").ghost().label(tr("Später einrichten")).on_click(move |_, _, cx| later.update(cx, |s, cx| s.finish(false, cx)))))
                     .child(div().flex_1())
+                    .children(problem.map(|text| div().text_size(px(font::CALLOUT)).text_color(t.orange).child(text)))
                     .when(step > 0, |d| {
                         d.child(Button::new("setup-back").label(tr("Zurück")).on_click(move |_, _, cx| back.update(cx, |s, cx| {
                             s.step -= 1;
                             cx.notify();
                         })))
                     })
-                    .child(Button::new("setup-next").primary().label(if step == 2 { tr("Fertig") } else { tr("Weiter") }).on_click(move |_, _, cx| next.update(cx, |s, cx| {
-                        if s.step == 2 {
-                            s.finish(true, cx);
-                        } else {
-                            s.step += 1;
-                            cx.notify();
-                        }
-                    }))),
+                    .child(Button::new("setup-next").primary().disabled(blocked).label(if step == SETUP_DONE { tr("Los geht's") } else { tr("Weiter") }).on_click(move |_, _, cx| next.update(cx, |s, cx| s.go_on(cx)))),
             )
             .rounded(px(radius::CARD))
     }

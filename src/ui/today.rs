@@ -344,7 +344,7 @@ fn getting_started(t: &Theme) -> Div {
                 .flex()
                 .items_start()
                 .gap(px(space::M))
-                .child(step("calendar-plus", tr("Aus Moodle importieren"), tr("Kalender → Exportieren → .ics, dann „Ablage → Kalender importieren“.")))
+                .child(step("calendar-plus", tr("Aus Moodle importieren"), tr("Einstellungen → Kalender abonnieren, Adresse eintragen.")))
                 .child(step("repeat", tr("Wiederkehrende Abgaben"), tr("Einstellungen → Module → Regel hinzufügen, z. B. jeden Montag 18:00.")))
                 .child(step("circle-plus", tr("Einzeln hinzufügen"), trf("%@ für Aufgaben, Abgaben und Prüfungen.", &[&crate::core::shortcuts::ShortcutAction::NewEntry.shortcut().map_or_else(|| tr("Plus"), |s| s.display())]))),
         )

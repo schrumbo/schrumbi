@@ -31,7 +31,8 @@ impl Fields {
         let initial = value.to_string();
         let field = key.to_string();
         let state = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(initial));
-        let sub = cx.subscribe(&state, move |_, s, e: &InputEvent, cx| {
+        let app: &mut App = cx;
+        let sub = app.subscribe(&state, move |s, e: &InputEvent, cx| {
             if matches!(e, InputEvent::Change) {
                 super::state::set_edited_field(&field);
                 on_change(s.read(cx).value().to_string(), cx);
@@ -57,7 +58,8 @@ impl Fields {
         if let Some(v) = value {
             state.update(cx, |s, cx| s.set_date(v, window, cx));
         }
-        let sub = cx.subscribe(&state, move |_, _, e: &DatePickerEvent, cx| {
+        let app: &mut App = cx;
+        let sub = app.subscribe(&state, move |_, e: &DatePickerEvent, cx| {
             let DatePickerEvent::Change(v) = e;
             if let Some(d) = v.start() {
                 on_change(d.date(), cx);

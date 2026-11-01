@@ -73,7 +73,13 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     });
     if setup {
         let view = cx.new(|cx| Setup::new(window, cx));
-        show(view, 760., window, cx);
+        let handle = window.window_handle();
+        cx.subscribe(&view, move |_, _: &Dismissed, cx| {
+            let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));
+            super::state::return_focus_to_page(cx);
+        })
+        .detach();
+        window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().overlay_closable(false).keyboard(false).close_button(false).child(view.clone()));
     } else if let Some(p) = import {
         let view = cx.new(|cx| ImportCalendar::new(&p, cx));
         show(view, 640., window, cx);
