@@ -50,8 +50,10 @@ pub enum Mode {
 pub struct NoteView {
     /// A nearly empty note opens ready to continue writing below what is there.
     caret_to_end: bool,
-    reader_scroll: ScrollHandle,
-    heading_anchors: Vec<ScrollAnchor>,
+    reader_list: ListState,
+    /// A block the reader should bring into view once it knows the block.
+    reveal_block: Option<usize>,
+    block_sources: Vec<(usize, u64)>,
     found: Option<markdown_view::Found>,
     /// Editor and reader offsets at the last sync of the split view.
     split_sync: (f32, f32),
@@ -144,9 +146,9 @@ impl NoteView {
         ];
         let mode = if text.trim().chars().count() < 40 { Mode::Edit } else { Mode::Read };
         let revision = state::lib(cx).update(cx, |l, _| l.buffer(&path).revision);
-        let reader_scroll = ScrollHandle::new();
+        let reader_list = ListState::new(0, ListAlignment::Top, px(1000.));
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_scroll: reader_scroll.clone(), heading_anchors: Vec::new(), found: None, split_sync: (0., 0.), link_focus: markdown_view::LinkFocus { index: None, anchor: ScrollAnchor::for_handle(reader_scroll.clone()), found: Rc::default(), note: Some(own_path) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_list, reveal_block: None, block_sources: Vec::new(), found: None, split_sync: (0., 0.), link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -158,9 +160,10 @@ impl NoteView {
         let Some(range) = search_index::occurrences(text, term).into_iter().nth(nth) else { return };
         self.editor.update(cx, |s, cx| s.set_selected_range(range.clone(), cx));
         let token = self.found.as_ref().map_or(0, |f| f.token + 1);
-        let anchor = ScrollAnchor::for_handle(self.reader_scroll.clone());
-        anchor.scroll_to(window, cx);
-        self.found = Some(markdown_view::Found { block: markdown_view::block_at(text, range.start), anchor, token });
+        let _ = (&window, &cx);
+        let block = markdown_view::block_at(text, range.start);
+        self.reveal_block = Some(block);
+        self.found = Some(markdown_view::Found { block, token });
     }
 
     /// Keeps editor and reader at the same relative position; whichever moved last leads.
@@ -169,19 +172,19 @@ impl NoteView {
             let e = self.editor.read(cx);
             (-f32::from(e.scroll_offset().y), e.line_height().map_or(0., f32::from))
         };
-        let reader_y = -f32::from(self.reader_scroll.offset().y);
-        let reader_max = f32::from(self.reader_scroll.max_offset().y);
+        let reader_y = -f32::from(self.reader_list.scroll_px_offset_for_scrollbar().y);
+        let reader_max = f32::from(self.reader_list.max_offset_for_scrollbar().y);
         let (last_editor, last_reader) = self.split_sync;
         let (editor_moved, reader_moved) = ((editor_y - last_editor).abs() > 1., (reader_y - last_reader).abs() > 1.);
         if line <= 0. || reader_max <= 0. || !(editor_moved || reader_moved) {
             return;
         }
-        let view = self.reader_scroll.bounds().size;
+        let view = self.reader_list.viewport_bounds().size;
         let rows = wrapped_rows(text, f32::from(view.width), prefs::get().editor_font_size);
         let editor_max = (rows * line - f32::from(view.height)).max(1.);
         if editor_moved {
             let y = (editor_y / editor_max).clamp(0., 1.) * reader_max;
-            self.reader_scroll.set_offset(point(px(0.), px(-y)));
+            self.reader_list.set_offset_from_scrollbar(point(px(0.), px(-y)));
             self.split_sync = (editor_y, y);
         } else {
             let y = (reader_y / reader_max).clamp(0., 1.) * editor_max;
@@ -249,7 +252,8 @@ impl NoteView {
 
     /// Keeps where reading stopped, for coming back to it after a restart.
     fn remember_place(&self) {
-        let offset = f32::from(-self.reader_scroll.offset().y);
+        let top = self.reader_list.logical_scroll_top();
+        let offset = top.item_ix as f32 + f32::from(top.offset_in_item).clamp(0., 4095.) / 4096.;
         let key = self.path.to_string_lossy().to_string();
         let known = prefs::get().note_places.get(&key).copied().unwrap_or(0.);
         if self.place_restored && (known - offset).abs() > 1. {
@@ -298,7 +302,8 @@ impl NoteView {
 
     /// Tab walks through the links of the reader.
     fn step_link(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let count = self.link_focus.found.borrow().len();
+        let links: Vec<(String, usize)> = self.parsed.as_ref().map(|(_, p)| p.links().to_vec()).unwrap_or_default();
+        let count = links.len();
         if self.mode != Mode::Read || count == 0 {
             return;
         }
@@ -310,8 +315,8 @@ impl NoteView {
         };
         self.link_focus.index = Some(next);
         super::link_card::hide(cx);
-        let anchor = self.link_focus.anchor.clone();
-        window.on_next_frame(move |window, cx| anchor.scroll_to(window, cx));
+        let _ = window;
+        self.reader_list.scroll_to_reveal_item(links[next].1 + 1);
         cx.notify();
     }
 
@@ -321,7 +326,7 @@ impl NoteView {
             return;
         }
         let k = &e.keystroke;
-        let url = self.link_focus.index.and_then(|i| self.link_focus.found.borrow().get(i).cloned());
+        let url = self.link_focus.index.and_then(|i| self.parsed.as_ref().and_then(|(_, p)| p.links().get(i).map(|(u, _)| u.clone())));
         match k.key.as_str() {
             "enter" if url.is_some() => {
                 let base = self.path.parent().map(Path::to_path_buf);
@@ -404,14 +409,15 @@ impl NoteView {
         let embedded = self.embedded;
         let in_vault = super::vault_tools::in_vault(&self.path, cx);
         let headings = self.parsed.as_ref().filter(|_| self.mode != Mode::Edit).map(|(_, p)| p.headings()).unwrap_or_default();
-        let anchors = self.heading_anchors.clone();
+        let anchors = self.parsed.as_ref().map(|(_, p)| p.heading_blocks()).unwrap_or_default();
+        let toc_list = self.reader_list.clone();
         let toc = (headings.len() >= 2 && anchors.len() == headings.len()).then(|| {
             Button::new("note-toc").ghost().small().icon(menu_icon("list")).tooltip(tr("Inhalt")).dropdown_menu(move |mut menu, _, _| {
                 let top = headings.iter().map(|(level, _)| *level).min().unwrap_or(1);
-                for ((level, text), anchor) in headings.iter().zip(&anchors) {
-                    let anchor = anchor.clone();
+                for ((level, text), block) in headings.iter().zip(&anchors) {
+                    let (block, list) = (*block, toc_list.clone());
                     let indent = "    ".repeat((level - top) as usize);
-                    menu = menu.item(PopupMenuItem::new(format!("{indent}{text}")).on_click(move |_, window, cx| anchor.scroll_to(window, cx)));
+                    menu = menu.item(PopupMenuItem::new(format!("{indent}{text}")).on_click(move |_, _, _| list.scroll_to(ListOffset { item_ix: block + 1, offset_in_item: px(0.) })));
                 }
                 menu
             })
@@ -464,24 +470,24 @@ impl NoteView {
         if lib_text.trim().is_empty() {
             return div().p(px(space::XXL)).text_color(t.secondary).child(tr("Leere Notiz. Zum Schreiben auf „Bearbeiten“ wechseln.")).into_any_element();
         }
-        if !std::mem::replace(&mut self.place_restored, true)
-            && let Some(offset) = prefs::get().note_places.get(&self.path.to_string_lossy().to_string()).copied()
-        {
-            let scroll = self.reader_scroll.clone();
-            window.on_next_frame(move |window, _| {
-                scroll.set_offset(point(px(0.), px(-offset)));
-                window.refresh();
-            });
-        }
         let parsed = match &self.parsed {
             Some((rev, p)) if *rev == self.revision => p.clone(),
             _ => {
                 let p = Rc::new(markdown_view::parse(lib_text));
-                self.heading_anchors = p.headings().iter().map(|_| ScrollAnchor::for_handle(self.reader_scroll.clone())).collect();
+                self.adopt_blocks(p.sources().to_vec());
                 self.parsed = Some((self.revision, p.clone()));
                 p
             }
         };
+        if !std::mem::replace(&mut self.place_restored, true)
+            && let Some(offset) = prefs::get().note_places.get(&self.path.to_string_lossy().to_string()).copied()
+        {
+            let item_ix = (offset.max(0.).trunc() as usize).min(self.reader_list.item_count().saturating_sub(1));
+            self.reader_list.scroll_to(ListOffset { item_ix, offset_in_item: px(offset.fract() * 4096.) });
+        }
+        if let Some(block) = self.reveal_block.take() {
+            self.reader_list.scroll_to_reveal_item(block + 1);
+        }
         let path = self.path.clone();
         let toggle: markdown_view::OnToggle = Rc::new(move |line, cx: &mut App| {
             let path = path.clone();
@@ -490,17 +496,40 @@ impl NoteView {
             });
         });
         let base = self.path.parent().map(Path::to_path_buf);
-        let plugin = super::embeds::note_plugin(&self.path, lib_text).map(|name| {
-            let path = self.path.clone();
-            div().pb(px(space::L)).child(notice("puzzle", t.blue, trf("Diese Notiz gehört zum Obsidian-Plugin %@", &[&name.to_string()]), Some(tr("Hier siehst du nur ihren Text. Darstellen kann sie Obsidian.")), Button::new("plugin-open").small().label(tr("In Obsidian öffnen")).on_click(move |_, _, cx| super::vault_tools::open_in_obsidian(&path, cx)), t))
+        let plugin = super::embeds::note_plugin(&self.path, lib_text).map(|name| (name.to_string(), self.path.clone()));
+        let found = self.found.clone();
+        let focus = self.link_focus.clone();
+        let items = parsed.len() + 2;
+        let content = move |inner: AnyElement| div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).child(inner)).into_any_element();
+        let row = list(self.reader_list.clone(), move |i, _, cx| {
+            let t = Theme::get(cx);
+            if i == 0 {
+                let notice_row = plugin.as_ref().map(|(name, path)| plugin_notice(name, path, &t));
+                return content(div().pt(px(space::XL)).children(notice_row).into_any_element());
+            }
+            if i + 1 == items {
+                return content(div().pb(px(space::XXL)).children(markdown_view::render_footnotes(&parsed, &t)).into_any_element());
+            }
+            content(div().pb(px(space::M)).child(markdown_view::render_block(&parsed, i - 1, base.as_deref(), Some(toggle.clone()), found.as_ref(), Some(&focus), &t)).into_any_element())
         });
-        div()
-            .relative()
-            .size_full()
-            .bg(t.content)
-            .child(div().id("note-reader").size_full().overflow_y_scroll().track_scroll(&self.reader_scroll).child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).py(px(space::XL)).children(plugin).child(markdown_view::render_with_anchors(&parsed, base.as_deref(), Some(toggle), &self.heading_anchors, self.found.as_ref(), Some(&self.link_focus), t)))))
-            .vertical_scrollbar(&self.reader_scroll)
-            .into_any_element()
+        div().relative().size_full().bg(t.content).child(row.size_full()).vertical_scrollbar(&self.reader_list).into_any_element()
+    }
+
+    /// Tells the list which blocks changed, so everything else keeps its measured height.
+    fn adopt_blocks(&mut self, new: Vec<(usize, u64)>) {
+        let hash = |b: &(usize, u64)| b.1;
+        let old = std::mem::take(&mut self.block_sources);
+        let target = new.len() + 2;
+        if self.reader_list.item_count() != old.len() + 2 {
+            self.reader_list.reset(target);
+        } else {
+            let prefix = old.iter().map(hash).zip(new.iter().map(hash)).take_while(|(a, b)| a == b).count();
+            let suffix = old.iter().rev().map(hash).zip(new.iter().rev().map(hash)).take_while(|(a, b)| a == b).count().min(old.len().min(new.len()) - prefix);
+            if prefix + suffix != old.len() || old.len() != new.len() {
+                self.reader_list.splice(prefix + 1..old.len() - suffix + 1, new.len() - prefix - suffix);
+            }
+        }
+        self.block_sources = new;
     }
 
     /// Copies dropped images next to the note and links them at the cursor.
@@ -1099,4 +1128,10 @@ pub fn prepare_to_quit(cx: &mut App) {
     state::flush_pending(cx);
     let all = state::read(cx, |l| l.buffers.keys().cloned().collect());
     resolve_unsaved(all, cx, |cx| super::sync::quit_after(|cx| cx.quit(), cx));
+}
+
+/// Says which Obsidian plugin a note belongs to.
+fn plugin_notice(name: &str, path: &Path, t: &Theme) -> AnyElement {
+    let path = path.to_path_buf();
+    div().pb(px(space::L)).child(notice("puzzle", t.blue, trf("Diese Notiz gehört zum Obsidian-Plugin %@", &[&name.to_string()]), Some(tr("Hier siehst du nur ihren Text. Darstellen kann sie Obsidian.")), Button::new("plugin-open").small().label(tr("In Obsidian öffnen")).on_click(move |_, _, cx| super::vault_tools::open_in_obsidian(&path, cx)), t)).into_any_element()
 }

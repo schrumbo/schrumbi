@@ -60,6 +60,10 @@ struct Item {
 
 /// A parsed note, kept between frames so long notes don't re-parse while scrolling.
 pub struct ParsedNote {
+    /// Source line and content hash of each top-level block, in order.
+    sources: Vec<(usize, u64)>,
+    /// Every link in reading order, with the top-level block it sits in.
+    links: Vec<(String, usize)>,
     blocks: Vec<Block>,
     footnotes: Vec<(String, Vec<Inline>)>,
     footnote_order: Vec<String>,
@@ -94,7 +98,11 @@ pub fn parse(src: &str) -> ParsedNote {
             top.1.push(Block::Paragraph(inl));
         }
     };
+    let mut sources: Vec<(usize, u64)> = Vec::new();
+    let mut last_range = 0..0;
     for (event, range) in Parser::new_ext(src, markdown::options()).into_offset_iter() {
+        note_sources(src, &stack, &last_range, &mut sources);
+        last_range = range.clone();
         if let Some(buf) = metadata.as_mut() {
             match event {
                 Event::Text(t) => buf.push_str(&t),
@@ -327,11 +335,55 @@ pub fn parse(src: &str) -> ParsedNote {
         }
     }
     flush_inline(&mut stack);
+    note_sources(src, &stack, &last_range, &mut sources);
     let blocks = stack.pop().map(|s| s.1).unwrap_or_default();
-    ParsedNote { blocks, footnotes, footnote_order }
+    let mut links = Vec::new();
+    for (i, block) in blocks.iter().enumerate() {
+        collect_links(std::slice::from_ref(block), i, &mut links);
+    }
+    ParsedNote { sources, links, blocks, footnotes, footnote_order }
 }
 
 /// A note's source of `^id` at a paragraph's end disappears from what is shown.
+/// Remembers where newly finished top-level blocks came from.
+fn note_sources<T>(src: &str, stack: &[(T, Vec<Block>, Vec<Inline>)], range: &std::ops::Range<usize>, sources: &mut Vec<(usize, u64)>) {
+    use std::hash::{Hash, Hasher};
+    let [(_, blocks, _)] = stack else { return };
+    while sources.len() < blocks.len() {
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        src.get(range.clone()).unwrap_or_default().hash(&mut hash);
+        sources.push((line_of(src, range.start), hash.finish()));
+    }
+}
+
+/// Lists a block's links in the order they are drawn.
+fn collect_links(blocks: &[Block], top: usize, out: &mut Vec<(String, usize)>) {
+    let mut inline = |inl: &[Inline], out: &mut Vec<(String, usize)>| {
+        for i in inl {
+            if let Inline::Link(_, _, url) = i {
+                out.push((url.clone(), top));
+            }
+        }
+    };
+    for block in blocks {
+        match block {
+            Block::Heading(_, inl) | Block::Paragraph(inl) => inline(inl, out),
+            Block::Quote(inner) | Block::Callout(_, inner) => collect_links(inner, top, out),
+            Block::List { items, .. } => {
+                for item in items {
+                    collect_links(&item.blocks, top, out);
+                }
+            }
+            Block::Table { head, rows, .. } => {
+                for cell in head.iter().chain(rows.iter().flatten()) {
+                    inline(cell, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn strip_block_id(inlines: &mut Vec<Inline>) -> bool {
     static ID: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?:^|\s)\^[A-Za-z0-9-]+\s*$").unwrap());
     let Some(Inline::Text(last, _)) = inlines.last_mut() else { return false };
@@ -414,9 +466,6 @@ fn html_text(html: &str) -> String {
 #[derive(Clone)]
 pub struct LinkFocus {
     pub index: Option<usize>,
-    pub anchor: ScrollAnchor,
-    /// Filled while rendering, in reading order.
-    pub found: Rc<RefCell<Vec<String>>>,
     /// The note being shown, so it cannot embed itself.
     pub note: Option<PathBuf>,
 }
@@ -462,7 +511,6 @@ fn styled_text(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                     if let Some(focus) = cx.focus {
                         let index = cx.links_seen.get();
                         cx.links_seen.set(index + 1);
-                        focus.found.borrow_mut().push(url.clone());
                         if focus.index == Some(index) {
                             focused_here = true;
                             highlights.push((start..text.len(), HighlightStyle { background_color: Some(t.accent.opacity(0.28)), ..Default::default() }));
@@ -512,10 +560,7 @@ fn styled_text(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
     let order = cx.order.get();
     cx.order.set(order + 1);
     let base = cx.base.map(Path::to_path_buf);
-    let mut body = div().text_size(px(size)).line_height(relative(1.5)).child(selectable(("md-text", order), text, highlights, order, t.accent.opacity(0.3)).links(links).hovers(hovers, base));
-    if focused_here && let Some(focus) = cx.focus {
-        body = div().child(div().id(("md-link-focus", order)).anchor_scroll(Some(focus.anchor.clone())).child(body));
-    }
+    let body = div().text_size(px(size)).line_height(relative(1.5)).child(selectable(("md-text", order), text, highlights, order, t.accent.opacity(0.3)).links(links).hovers(hovers, base));
     if images.is_empty() { body.into_any_element() } else { div().flex().flex_col().gap(px(space::S)).child(body).children(images).into_any_element() }
 }
 
@@ -907,6 +952,26 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
 
 impl ParsedNote {
     /// The note's top-level headings as level and text, for a table of contents.
+    /// The number of top-level blocks.
+    pub fn len(&self) -> usize {
+        self.blocks.len()
+    }
+
+    /// Source line and content hash of each top-level block.
+    pub fn sources(&self) -> &[(usize, u64)] {
+        &self.sources
+    }
+
+    /// Every link in reading order, with its top-level block.
+    pub fn links(&self) -> &[(String, usize)] {
+        &self.links
+    }
+
+    /// The top-level block of each heading, in the order of `headings`.
+    pub fn heading_blocks(&self) -> Vec<usize> {
+        self.blocks.iter().enumerate().filter(|(_, b)| matches!(b, Block::Heading(..))).map(|(i, _)| i).collect()
+    }
+
     pub fn headings(&self) -> Vec<(u8, String)> {
         self.blocks
             .iter()
@@ -1069,57 +1134,47 @@ pub fn block_at(src: &str, offset: usize) -> usize {
 #[derive(Clone)]
 pub struct Found {
     pub block: usize,
-    pub anchor: ScrollAnchor,
     pub token: usize,
-}
-
-/// Renders a note with `anchors` on its top-level headings, one per entry of `ParsedNote::headings`.
-pub fn render_with_anchors(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, anchors: &[ScrollAnchor], found: Option<&Found>, focus: Option<&LinkFocus>, t: &Theme) -> Div {
-    build(note, base, on_toggle, anchors, found, focus, t)
 }
 
 /// Renders a parsed note; task boxes call `on_toggle` with their source line.
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
-    build(note, base, on_toggle, &[], None, None, t)
+    let (order, links_seen) = (Cell::new(0), Cell::new(0));
+    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen };
+    div().flex().flex_col().gap(px(space::M)).children(render_blocks(&note.blocks, &cx)).children(render_footnotes(note, t))
 }
 
-fn build(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, anchors: &[ScrollAnchor], found: Option<&Found>, focus: Option<&LinkFocus>, t: &Theme) -> Div {
-    let (order, links_seen) = (Cell::new(0), Cell::new(0));
-    if let Some(f) = focus {
-        f.found.borrow_mut().clear();
-    }
+/// Renders one top-level block on its own, so long notes only build what is on screen.
+pub fn render_block(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: Option<OnToggle>, found: Option<&Found>, focus: Option<&LinkFocus>, t: &Theme) -> AnyElement {
+    let Some(block) = note.blocks.get(i) else { return div().into_any_element() };
+    let order = Cell::new((i as u64 + 1) * 100_000);
+    let links_seen = Cell::new(note.links.iter().take_while(|(_, top)| *top < i).count());
     let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen };
-    let mut heading = 0;
+    let element = render_blocks(std::slice::from_ref(block), &cx).into_iter().next().unwrap_or_else(|| div().into_any_element());
     let accent = t.accent;
-    let blocks = note.blocks.iter().zip(render_blocks(&note.blocks, &cx)).enumerate().map(|(i, (block, element))| {
-        let element = if matches!(block, Block::Heading(..)) {
-            heading += 1;
-            match anchors.get(heading - 1) {
-                Some(anchor) => div().id(("md-heading", heading)).anchor_scroll(Some(anchor.clone())).child(element).into_any_element(),
-                None => element,
-            }
-        } else {
-            element
-        };
-        match found.filter(|f| f.block == i) {
-            Some(f) => div()
-                .id(("md-found", f.token))
-                .anchor_scroll(Some(f.anchor.clone()))
-                .rounded(px(radius::INNER))
-                .child(element)
-                .with_animation(("md-found-mark", f.token), Animation::new(std::time::Duration::from_millis(1800)).with_easing(ease_in_out), move |d, p| d.bg(accent.opacity(0.28 * (1. - p))))
-                .into_any_element(),
-            None => element,
-        }
-    });
-    let mut col = div().flex().flex_col().gap(px(space::M)).children(blocks.collect::<Vec<_>>());
-    let used: Vec<_> = note.footnote_order.iter().filter_map(|id| note.footnotes.iter().find(|(f, _)| f == id)).collect();
-    if !used.is_empty() {
-        col = col.child(div().h(px(1.)).mt(px(space::S)).bg(t.separator)).child(div().flex().flex_col().gap(px(space::XS)).children(used.iter().enumerate().map(|(n, (_, inl))| {
-            div().flex().gap(px(space::S)).text_size(px(font::CALLOUT)).line_height(relative(1.5)).child(div().flex_none().text_color(t.secondary).child(format!("{}.", n + 1))).child(styled_text(inl, &cx, font::CALLOUT))
-        })));
+    match found.filter(|f| f.block == i) {
+        Some(f) => div()
+            .id(("md-found", f.token))
+            .rounded(px(radius::INNER))
+            .child(element)
+            .with_animation(("md-found-mark", f.token), Animation::new(std::time::Duration::from_millis(1800)).with_easing(ease_in_out), move |d, delta| d.bg(accent.opacity(0.25 * (1. - delta))))
+            .into_any_element(),
+        None => element,
     }
-    col
+}
+
+/// The footnotes a note refers to, as they appear at its end.
+pub fn render_footnotes(note: &ParsedNote, t: &Theme) -> Option<AnyElement> {
+    let used: Vec<_> = note.footnote_order.iter().filter_map(|id| note.footnotes.iter().find(|(f, _)| f == id)).collect();
+    if used.is_empty() {
+        return None;
+    }
+    let (order, links_seen) = (Cell::new(u64::MAX / 2), Cell::new(0));
+    let cx = Ctx { t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen };
+    let rows = used.iter().enumerate().map(|(i, (_, inl))| {
+        div().flex().gap(px(space::S)).text_size(px(font::CALLOUT)).line_height(relative(1.5)).child(div().flex_none().text_color(t.secondary).child(format!("{}.", i + 1))).child(div().flex_1().min_w_0().child(styled_text(inl, &cx, font::CALLOUT)))
+    });
+    Some(div().flex().flex_col().gap(px(space::XS)).child(div().h(px(1.)).mt(px(space::S)).mb(px(space::S)).bg(t.separator)).children(rows.collect::<Vec<_>>()).into_any_element())
 }
 
 #[cfg(test)]
