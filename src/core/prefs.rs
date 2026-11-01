@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{LazyLock, RwLock};
 
@@ -120,6 +120,8 @@ pub struct Prefs {
     /// Width of the folder tree on the notes page.
     pub notes_column: Option<f32>,
     pub notes_explorer_hidden: bool,
+    /// What was folded in each note's reading view.
+    pub note_folds: HashMap<String, Vec<String>>,
     /// Width of the deadlines column on module pages.
     pub module_column: Option<f32>,
     pub shortcuts: BTreeMap<String, Shortcut>,
@@ -173,6 +175,7 @@ impl Default for Prefs {
             module_column: None,
             notes_column: None,
             notes_explorer_hidden: false,
+            note_folds: HashMap::new(),
             shortcuts: BTreeMap::new(),
             disabled_shortcuts: BTreeSet::new(),
             git: BTreeMap::new(),

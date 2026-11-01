@@ -83,6 +83,17 @@ fn source_with_error(source: &str, error: &str, t: &Theme) -> Div {
     div().w_full().flex().flex_col().gap(px(space::XS)).child(div().p(px(space::S)).rounded(px(radius::INNER)).bg(t.secondary_bg).font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(source.to_string())).child(div().flex().items_center().gap(px(space::XS)).child(icon("triangle-alert", iconsize::XS, t.orange)).child(caption(error.to_string(), t)))
 }
 
+/// A formula for inside a sentence, once it is drawn; `None` while it is not.
+pub fn inline_math(source: &str, cx: &mut App) -> Option<(Arc<Image>, f32, f32)> {
+    let dark = Theme::get(cx).dark;
+    let color = if dark { "#EDEDED" } else { "#1F1F1F" };
+    let formula = source.to_string();
+    match picture(format!("imath:{source}"), dark, move || render::math_svg(&formula, false, color), cx) {
+        Painted::Done(image, w, h) => Some((image, w * 1.15, h * 1.15)),
+        _ => None,
+    }
+}
+
 pub fn math(source: &str, id: u64, _: &Theme) -> AnyElement {
     Formula { source: source.to_string(), id }.into_any_element()
 }
@@ -116,8 +127,10 @@ impl RenderOnce for Diagram {
             Painted::Busy => div().h(px(120.)).flex().items_center().child(loading(iconsize::M, t.tertiary)).into_any_element(),
             Painted::Failed(e) => source_with_error(&self.code, &e, &t).into_any_element(),
         };
-        grouped(&t)
-            .p(px(space::M))
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
             .items_center()
             .child(body)
             .when(!links.is_empty(), |d| {

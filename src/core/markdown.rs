@@ -394,8 +394,64 @@ fn language(name: &str) -> Option<Language> {
 }
 
 /// Splits code into coloured runs; unknown languages come back as one plain run.
+/// What a grammar's scope means for colouring.
+fn token_of(scopes: &syntect::parsing::ScopeStack) -> TokenKind {
+    for scope in scopes.as_slice().iter().rev() {
+        let name = scope.build_string();
+        let kind = match () {
+            () if name.starts_with("comment") => TokenKind::Comment,
+            () if name.starts_with("string") => TokenKind::String,
+            () if name.starts_with("constant.numeric") || name.starts_with("constant.language") => TokenKind::Number,
+            () if name.starts_with("keyword") || name.starts_with("storage") => TokenKind::Keyword,
+            () if name.starts_with("entity.name.type") || name.starts_with("entity.name.class") || name.starts_with("support.type") || name.starts_with("support.class") => TokenKind::Type,
+            () if name.starts_with("entity.other.attribute-name") || name.starts_with("entity.name.tag") || name.starts_with("entity.name.function") || name.starts_with("support.function") => TokenKind::Attribute,
+            () => continue,
+        };
+        return kind;
+    }
+    TokenKind::Plain
+}
+
+/// Colours code with the language's real grammar; `None` for a language without one.
+fn highlight_grammar(code: &str, name: &str) -> Option<Vec<(String, TokenKind)>> {
+    use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
+    static SYNTAXES: std::sync::LazyLock<SyntaxSet> = std::sync::LazyLock::new(SyntaxSet::load_defaults_newlines);
+    let token = match name.to_lowercase().as_str() {
+        "ts" | "typescript" | "tsx" | "jsx" => "js".to_string(),
+        "shell" | "zsh" | "sh" => "bash".to_string(),
+        other => other.to_string(),
+    };
+    let syntax = SYNTAXES.find_syntax_by_token(&token)?;
+    let mut state = ParseState::new(syntax);
+    let mut scopes = ScopeStack::new();
+    let mut out: Vec<(String, TokenKind)> = Vec::new();
+    let mut push = |text: &str, kind: TokenKind, out: &mut Vec<(String, TokenKind)>| {
+        if text.is_empty() {
+            return;
+        }
+        match out.last_mut() {
+            Some((last, k)) if *k == kind => last.push_str(text),
+            _ => out.push((text.to_string(), kind)),
+        }
+    };
+    for line in code.split_inclusive('\n') {
+        let changes = state.parse_line(line, &SYNTAXES).ok()?;
+        let mut at = 0;
+        for (offset, op) in changes {
+            push(&line[at..offset], token_of(&scopes), &mut out);
+            at = offset;
+            scopes.apply(&op).ok()?;
+        }
+        push(&line[at..], token_of(&scopes), &mut out);
+    }
+    Some(out)
+}
+
 pub fn highlight(code: &str, lang_name: Option<&str>) -> Vec<(String, TokenKind)> {
     let Some(name) = lang_name else { return vec![(code.to_string(), TokenKind::Plain)] };
+    if let Some(tokens) = highlight_grammar(code, name) {
+        return tokens;
+    }
     let Some(lang) = language(name) else { return vec![(code.to_string(), TokenKind::Plain)] };
     let markup = ["html", "xml", "svg"].contains(&name.to_lowercase().as_str());
     let case_insensitive = name.eq_ignore_ascii_case("sql");

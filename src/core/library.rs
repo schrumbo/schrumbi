@@ -272,6 +272,7 @@ pub struct Library {
     document_stamps: HashMap<PathBuf, (u64, std::time::SystemTime)>,
     /// Asks the details column to show a note's versions.
     pub show_versions: bool,
+    pub show_properties: bool,
     /// The note the graph centers on and how far it reaches; `None` shows the whole vault.
     pub graph_focus: Option<(PathBuf, usize)>,
     /// The tag the notes page filters by.
@@ -399,6 +400,7 @@ impl Library {
             slides: None,
             document_stamps: HashMap::new(),
             show_versions: false,
+            show_properties: false,
             graph_focus: None,
             notes_tag: None,
             show_sync_setup: false,

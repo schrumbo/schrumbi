@@ -214,6 +214,20 @@ pub fn section(text: &str, target: &LinkTarget) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     if let Some(id) = &target.block {
         let Some((_, line)) = block_ids(text).into_iter().find(|(b, _)| b == id) else { return String::new() };
+        let list_item = lines.get(line).is_some_and(|l| {
+            let bare = l.trim_start();
+            bare.starts_with("- ") || bare.starts_with("* ") || bare.starts_with("+ ") || bare.split_once(". ").is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        });
+        if list_item {
+            let indent = |l: &str| l.len() - l.trim_start().len();
+            let own = indent(lines[line]);
+            let mut last = line;
+            while lines.get(last + 1).is_some_and(|l| !l.trim().is_empty() && indent(l) > own) {
+                last += 1;
+            }
+            let pattern = format!(" ^{id}");
+            return lines[line..=last].iter().map(|l| l[own.min(indent(l))..].replace(&pattern, "")).collect::<Vec<_>>().join("\n");
+        }
         let own_line = lines.get(line).is_some_and(|l| l.trim_start().starts_with('^'));
         let mut end = if own_line { line } else { line + 1 };
         while own_line && end > 0 && lines[end - 1].trim().is_empty() {
@@ -245,6 +259,12 @@ pub fn occurrences_before(text: &str, term: &str, line: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_block_id_on_a_list_item_takes_the_item_and_what_hangs_under_it() {
+        let text = "- eins\n- zwei ^b\n  - unter\n- drei\n";
+        assert_eq!(section(text, &LinkTarget::parse("N#^b")), "- zwei\n  - unter");
+    }
 
     #[test]
     fn headings_skip_front_matter_and_know_setext() {

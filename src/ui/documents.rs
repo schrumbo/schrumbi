@@ -147,8 +147,10 @@ impl NoteView {
         let mode = if text.trim().chars().count() < 40 { Mode::Edit } else { Mode::Read };
         let revision = state::lib(cx).update(cx, |l, _| l.buffer(&path).revision);
         let reader_list = ListState::new(0, ListAlignment::Top, px(1000.));
+        let list_for_focus = reader_list.clone();
+        let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_list, reveal_block: None, block_sources: Vec::new(), found: None, split_sync: (0., 0.), link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Edit, mode, editor, reader_list, reveal_block: None, block_sources: Vec::new(), found: None, split_sync: (0., 0.), link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, reparse: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -252,6 +254,17 @@ impl NoteView {
 
     /// Keeps where reading stopped, for coming back to it after a restart.
     fn remember_place(&self) {
+        let folds: Vec<String> = self.link_focus.folds.borrow().iter().cloned().collect();
+        let note = self.path.to_string_lossy().to_string();
+        if prefs::get().note_folds.get(&note).map_or(!folds.is_empty(), |known| known.len() != folds.len() || known.iter().any(|k| !folds.contains(k))) {
+            prefs::update(|p| {
+                if folds.is_empty() {
+                    p.note_folds.remove(&note);
+                } else {
+                    p.note_folds.insert(note.clone(), folds.clone());
+                }
+            });
+        }
         let top = self.reader_list.logical_scroll_top();
         let offset = top.item_ix as f32 + f32::from(top.offset_in_item).clamp(0., 4095.) / 4096.;
         let key = self.path.to_string_lossy().to_string();
@@ -500,6 +513,8 @@ impl NoteView {
         let found = self.found.clone();
         let focus = self.link_focus.clone();
         let items = parsed.len() + 2;
+        let hidden = parsed.hidden_blocks(&self.link_focus.folds);
+        let footnote_list = self.reader_list.clone();
         let content = move |inner: AnyElement| div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).child(inner)).into_any_element();
         let row = list(self.reader_list.clone(), move |i, _, cx| {
             let t = Theme::get(cx);
@@ -508,7 +523,10 @@ impl NoteView {
                 return content(div().pt(px(space::XL)).children(notice_row).into_any_element());
             }
             if i + 1 == items {
-                return content(div().pb(px(space::XXL)).children(markdown_view::render_footnotes(&parsed, &t)).into_any_element());
+                return content(div().pb(px(space::XXL)).children(markdown_view::render_footnotes(&parsed, Some(footnote_list.clone()), &t)).into_any_element());
+            }
+            if hidden.get(i - 1).copied().unwrap_or(false) {
+                return div().into_any_element();
             }
             content(div().pb(px(space::M)).child(markdown_view::render_block(&parsed, i - 1, base.as_deref(), Some(toggle.clone()), found.as_ref(), Some(&focus), &t)).into_any_element())
         });

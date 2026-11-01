@@ -276,6 +276,9 @@ impl Render for DocSide {
             self.side = Side::Versions;
             self.focus_versions = true;
         }
+        if state::lib(cx).update(cx, |l, _| std::mem::take(&mut l.show_properties)) {
+            self.side = Side::Properties;
+        }
         if std::mem::take(&mut self.focus_versions) {
             self.versions.update(cx, |v, cx| v.take_focus(window, cx));
         }

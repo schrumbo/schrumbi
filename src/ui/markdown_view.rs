@@ -7,7 +7,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
-use super::selectable::{LinkAction, selectable};
+use super::selectable::{InlineKind, InlineSlot, LinkAction, selectable};
 use super::theme::{Theme, font, radius, space, iconsize};
 use crate::core::i18n::{tr, trf};
 use crate::core::markdown::{self, Run, TokenKind};
@@ -21,7 +21,9 @@ pub type OnToggle = Rc<dyn Fn(usize, &mut App)>;
 enum Inline {
     Text(String, Style),
     Link(String, Style, String),
-    Image(String, String),
+    /// Source, alternative text and the link around it.
+    Image(String, String, Option<String>),
+    Math(String),
     FootnoteRef(String),
     Tag(String),
 }
@@ -34,6 +36,9 @@ struct Style {
     code: bool,
     mark: Option<MarkColor>,
     link: bool,
+    underline: bool,
+    small: bool,
+    color: Option<u32>,
 }
 
 enum Block {
@@ -44,16 +49,18 @@ enum Block {
     List { start: Option<u64>, items: Vec<Item> },
     Rule,
     Table { head: Vec<Vec<Inline>>, rows: Vec<Vec<Vec<Inline>>>, aligns: Vec<pulldown_cmark::Alignment> },
-    Html(String),
-    Callout(CalloutHead, Vec<Block>),
+    Callout(CalloutHead, Vec<Inline>, Vec<Block>),
     Properties(Vec<frontmatter::Property>),
+    Centered(Vec<Block>),
+    Details(Vec<Inline>, Vec<Block>, bool),
     Math(String),
     /// Takes its place in the count of blocks and shows nothing, like a `^id` on its own line.
     Nothing,
 }
 
 struct Item {
-    task: Option<bool>,
+    /// The character in the box: ` `, `x`, or anything a theme gives its own meaning.
+    task: Option<char>,
     line: usize,
     blocks: Vec<Block>,
 }
@@ -65,7 +72,9 @@ pub struct ParsedNote {
     /// Every link in reading order, with the top-level block it sits in.
     links: Vec<(String, usize)>,
     blocks: Vec<Block>,
-    footnotes: Vec<(String, Vec<Inline>)>,
+    footnotes: Vec<(String, Vec<Block>)>,
+    /// The top-level block that first refers to a footnote.
+    footnote_homes: HashMap<String, usize>,
     footnote_order: Vec<String>,
 }
 
@@ -83,12 +92,12 @@ pub fn parse(src: &str) -> ParsedNote {
     let mut style = Style::default();
     let mut link: Option<String> = None;
     let mut items: Vec<Vec<Item>> = Vec::new();
-    let mut item_meta: Vec<(Option<bool>, usize)> = Vec::new();
+    let mut item_meta: Vec<(Option<char>, usize)> = Vec::new();
     let mut table: Option<(Vec<Vec<Inline>>, Vec<Vec<Vec<Inline>>>, Vec<pulldown_cmark::Alignment>, bool)> = None;
     let mut row: Vec<Vec<Inline>> = Vec::new();
     let mut code: Option<(Option<String>, String)> = None;
     let mut image: Option<(String, String)> = None;
-    let mut footnotes: Vec<(String, Vec<Inline>)> = Vec::new();
+    let mut footnotes: Vec<(String, Vec<Block>)> = Vec::new();
     let mut footnote_order: Vec<String> = Vec::new();
     let mut html_block: Option<String> = None;
     let flush_inline = |stack: &mut Vec<(Option<Tag>, Vec<Block>, Vec<Inline>)>| {
@@ -99,7 +108,10 @@ pub fn parse(src: &str) -> ParsedNote {
         }
     };
     let mut sources: Vec<(usize, u64)> = Vec::new();
+    let mut footnote_homes: HashMap<String, usize> = HashMap::new();
     let mut last_range = 0..0;
+    let mut bare_wikilink = false;
+    let mut raised: Option<fn(&str) -> String> = None;
     for (event, range) in Parser::new_ext(src, markdown::options()).into_offset_iter() {
         note_sources(src, &stack, &last_range, &mut sources);
         last_range = range.clone();
@@ -131,7 +143,7 @@ pub fn parse(src: &str) -> ParsedNote {
                 Event::Text(t) => alt.push_str(&t),
                 Event::End(TagEnd::Image) => {
                     let (src, alt) = image.take().unwrap();
-                    stack.last_mut().unwrap().2.push(Inline::Image(src, alt));
+                    stack.last_mut().unwrap().2.push(Inline::Image(src, alt, link.clone()));
                 }
                 _ => {}
             }
@@ -181,8 +193,9 @@ pub fn parse(src: &str) -> ParsedNote {
                 Tag::Emphasis => style.italic = true,
                 Tag::Strong => style.bold = true,
                 Tag::Strikethrough => style.strike = true,
-                Tag::Link { dest_url, .. } => {
+                Tag::Link { dest_url, link_type, .. } => {
                     style.link = true;
+                    bare_wikilink = matches!(link_type, pulldown_cmark::LinkType::WikiLink { has_pothole: false });
                     link = Some(dest_url.to_string());
                 }
                 Tag::Image { dest_url, .. } => image = Some((dest_url.to_string(), String::new())),
@@ -191,6 +204,7 @@ pub fn parse(src: &str) -> ParsedNote {
             Event::End(end) => match end {
                 TagEnd::Paragraph => {
                     let (_, inner, mut inl) = stack.pop().unwrap();
+                    join_marks(&mut inl);
                     let had_blocks = !inner.is_empty();
                     stack.last_mut().unwrap().1.extend(inner);
                     if !(had_blocks && inl.is_empty()) {
@@ -199,7 +213,8 @@ pub fn parse(src: &str) -> ParsedNote {
                     }
                 }
                 TagEnd::Heading(level) => {
-                    let (_, inner, inl) = stack.pop().unwrap();
+                    let (_, inner, mut inl) = stack.pop().unwrap();
+                    join_marks(&mut inl);
                     stack.last_mut().unwrap().1.push(Block::Heading(markdown::heading_number(level), inl));
                     stack.last_mut().unwrap().1.extend(inner);
                 }
@@ -211,8 +226,7 @@ pub fn parse(src: &str) -> ParsedNote {
                 TagEnd::FootnoteDefinition => {
                     flush_inline(&mut stack);
                     if let (Some(Tag::FootnoteDefinition(id)), blocks, _) = stack.pop().unwrap() {
-                        let inl = blocks.into_iter().flat_map(|b| if let Block::Paragraph(i) = b { i } else { Vec::new() }).collect();
-                        footnotes.push((id.to_string(), inl));
+                        footnotes.push((id.to_string(), blocks));
                     }
                 }
                 TagEnd::Item => {
@@ -253,10 +267,8 @@ pub fn parse(src: &str) -> ParsedNote {
                     }
                 }
                 TagEnd::HtmlBlock => {
-                    let text = html_text(&html_block.take().unwrap_or_default());
-                    if !text.trim().is_empty() {
-                        stack.last_mut().unwrap().1.push(Block::Html(text.trim().to_string()));
-                    }
+                    let found = html_blocks(&html_block.take().unwrap_or_default());
+                    stack.last_mut().unwrap().1.extend(found);
                 }
                 TagEnd::Emphasis => style.italic = false,
                 TagEnd::Strong => style.bold = false,
@@ -268,25 +280,35 @@ pub fn parse(src: &str) -> ParsedNote {
                 _ => {}
             },
             Event::Text(t) => {
-                for r in markdown::runs(&t) {
+                let lifted = raised.map(|lift| lift(&t));
+                let t = lifted.as_deref().unwrap_or(&t);
+                for r in markdown::runs(t) {
                     let target = &mut stack.last_mut().unwrap().2;
                     match r {
-                        Run::Text(s) => target.push(match &link {
-                            Some(url) => Inline::Link(s, style, url.clone()),
-                            None => Inline::Text(s, style),
-                        }),
+                        Run::Text(s) => match &link {
+                            Some(url) => {
+                                let shown = if bare_wikilink { wikilink_label(&s) } else { s };
+                                target.push(Inline::Link(shown, style, url.clone()));
+                            }
+                            None => push_with_autolinks(target, &collapse_spaces(&s), style),
+                        },
                         Run::Mark(s, color) => target.push(Inline::Text(s, Style { mark: Some(color), ..style })),
-                        Run::Tag(s) => target.push(Inline::Tag(s)),
+                        Run::Tag(s) => match &link {
+                            Some(url) => {
+                                let written = format!("#{}", s.trim_start_matches('#'));
+                                target.push(Inline::Link(if bare_wikilink { wikilink_label(&written) } else { written }, style, url.clone()));
+                            }
+                            None => target.push(Inline::Tag(s)),
+                        },
                     }
                 }
             }
-            Event::Code(c) => stack.last_mut().unwrap().2.push(Inline::Text(c.to_string(), Style { code: true, ..style })),
+            Event::Code(c) => stack.last_mut().unwrap().2.push(match &link {
+                Some(url) => Inline::Link(c.to_string(), Style { code: true, ..style }, url.clone()),
+                None => Inline::Text(c.to_string(), Style { code: true, ..style }),
+            }),
             Event::SoftBreak => stack.last_mut().unwrap().2.push(Inline::Text(if strict { " " } else { "\n" }.into(), style)),
-            Event::InlineMath(m) => {
-                let shown = crate::core::vault::render::math_inline(m.as_ref());
-                let code = shown.is_none();
-                stack.last_mut().unwrap().2.push(Inline::Text(shown.unwrap_or_else(|| m.to_string()), Style { code, ..style }));
-            }
+            Event::InlineMath(m) => stack.last_mut().unwrap().2.push(Inline::Math(m.to_string())),
             Event::DisplayMath(m) => {
                 flush_inline(&mut stack);
                 stack.last_mut().unwrap().1.push(Block::Math(m.to_string()));
@@ -301,10 +323,8 @@ pub fn parse(src: &str) -> ParsedNote {
                     buffer.push_str(&h);
                 } else {
                     flush_inline(&mut stack);
-                    let text = html_text(&h);
-                    if !text.trim().is_empty() {
-                        stack.last_mut().unwrap().1.push(Block::Html(text.trim().to_string()));
-                    }
+                    let found = html_blocks(&h);
+                    stack.last_mut().unwrap().1.extend(found);
                 }
             }
             Event::InlineHtml(h) => match h.trim().to_lowercase().as_str() {
@@ -315,6 +335,26 @@ pub fn parse(src: &str) -> ParsedNote {
                 "</i>" | "</em>" => style.italic = false,
                 "<s>" | "<del>" => style.strike = true,
                 "</s>" | "</del>" => style.strike = false,
+                "<u>" | "<ins>" | "<abbr>" => style.underline = true,
+                "</u>" | "</ins>" | "</abbr>" => style.underline = false,
+                "<small>" => style.small = true,
+                "</small>" => style.small = false,
+                "<sup>" => raised = Some(superscript),
+                "<sub>" => raised = Some(subscript),
+                "</sup>" | "</sub>" => raised = None,
+                "</span>" | "</font>" => style.color = None,
+                "</a>" => {
+                    style.link = false;
+                    link = None;
+                }
+                tag if tag.starts_with("<span") || tag.starts_with("<font") => style.color = css_color_of(tag),
+                tag if tag.starts_with("<abbr") => style.underline = true,
+                tag if tag.starts_with("<a ") => {
+                    if let Some(href) = html_attribute(h.as_ref(), "href") {
+                        style.link = true;
+                        link = Some(href);
+                    }
+                }
                 "<mark>" => style.mark = Some(MarkColor::Default),
                 "</mark>" => style.mark = None,
                 "<kbd>" | "<code>" => style.code = true,
@@ -323,12 +363,13 @@ pub fn parse(src: &str) -> ParsedNote {
             },
             Event::TaskListMarker(done) => {
                 if let Some(m) = item_meta.last_mut() {
-                    m.0 = Some(done);
+                    m.0 = Some(if done { 'x' } else { ' ' });
                 }
             }
             Event::FootnoteReference(id) => {
                 if !footnote_order.iter().any(|f| f == id.as_ref()) {
                     footnote_order.push(id.to_string());
+                    footnote_homes.insert(id.to_string(), stack.first().map_or(0, |s| s.1.len()));
                 }
                 stack.last_mut().unwrap().2.push(Inline::FootnoteRef(id.to_string()));
             }
@@ -341,10 +382,105 @@ pub fn parse(src: &str) -> ParsedNote {
     for (i, block) in blocks.iter().enumerate() {
         collect_links(std::slice::from_ref(block), i, &mut links);
     }
-    ParsedNote { sources, links, blocks, footnotes, footnote_order }
+    ParsedNote { sources, links, blocks, footnotes, footnote_homes, footnote_order }
 }
 
 /// A note's source of `^id` at a paragraph's end disappears from what is shown.
+/// Writes digits and common letters raised; what has no raised form stays as it is.
+fn superscript(text: &str) -> String {
+    text.chars().map(|c| match c {
+        '0' => '⁰', '1' => '¹', '2' => '²', '3' => '³', '4' => '⁴', '5' => '⁵', '6' => '⁶', '7' => '⁷', '8' => '⁸', '9' => '⁹',
+        '+' => '⁺', '-' => '⁻', '=' => '⁼', '(' => '⁽', ')' => '⁾', 'n' => 'ⁿ', 'i' => 'ⁱ',
+        other => other,
+    }).collect()
+}
+
+/// Writes digits lowered; what has no lowered form stays as it is.
+fn subscript(text: &str) -> String {
+    text.chars().map(|c| match c {
+        '0' => '₀', '1' => '₁', '2' => '₂', '3' => '₃', '4' => '₄', '5' => '₅', '6' => '₆', '7' => '₇', '8' => '₈', '9' => '₉',
+        '+' => '₊', '-' => '₋', '=' => '₌', '(' => '₍', ')' => '₎',
+        other => other,
+    }).collect()
+}
+
+/// What a link without its own label says: `Note#Heading` reads `Note > Heading`.
+fn wikilink_label(target: &str) -> String {
+    let (note, rest) = target.split_once('#').unwrap_or((target, ""));
+    let parts: Vec<&str> = std::iter::once(note).chain(rest.split('#')).filter(|p| !p.is_empty()).collect();
+    parts.join(" > ")
+}
+
+/// Runs of spaces in the source read as one, as in Obsidian's reading view.
+fn collapse_spaces(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last_space = false;
+    for c in text.chars() {
+        let space = c == ' ' || c == '\t';
+        if !(space && last_space) {
+            out.push(if space { ' ' } else { c });
+        }
+        last_space = space;
+    }
+    out
+}
+
+/// Bare web addresses in the text become links.
+fn push_with_autolinks(target: &mut Vec<Inline>, text: &str, style: Style) {
+    static URL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"https?://[^\s<>\]\)]+").unwrap());
+    let mut copied = 0;
+    for hit in URL.find_iter(text) {
+        let shown = hit.as_str().trim_end_matches(['.', ',', ';', ':', '!', '?', '\'', '"']);
+        if hit.start() > copied {
+            target.push(Inline::Text(text[copied..hit.start()].to_string(), style));
+        }
+        target.push(Inline::Link(shown.to_string(), Style { link: true, ..style }, shown.to_string()));
+        copied = hit.start() + shown.len();
+    }
+    if copied < text.len() {
+        target.push(Inline::Text(text[copied..].to_string(), style));
+    }
+}
+
+/// Marks whose `==` sit in different runs, as in `==**fett** Text==`.
+fn join_marks(inlines: &mut Vec<Inline>) {
+    loop {
+        let found = |from: usize, inlines: &[Inline]| inlines.iter().enumerate().skip(from).find(|(_, i)| matches!(i, Inline::Text(t, st) if !st.code && t.contains("=="))).map(|(at, _)| at);
+        let Some(open) = found(0, inlines) else { return };
+        let Inline::Text(open_text, open_style) = inlines[open].clone() else { return };
+        let split = open_text.find("==").unwrap_or(0);
+        let after_open = &open_text[split + 2..];
+        if after_open.contains("==") {
+            return;
+        }
+        let Some(close) = found(open + 1, inlines) else { return };
+        let Inline::Text(close_text, close_style) = inlines[close].clone() else { return };
+        let end = close_text.find("==").unwrap_or(0);
+        let mark = Some(MarkColor::Default);
+        let mut replaced: Vec<Inline> = Vec::new();
+        if split > 0 {
+            replaced.push(Inline::Text(open_text[..split].to_string(), open_style));
+        }
+        if !after_open.is_empty() {
+            replaced.push(Inline::Text(after_open.to_string(), Style { mark, ..open_style }));
+        }
+        for inner in &inlines[open + 1..close] {
+            replaced.push(match inner {
+                Inline::Text(t, st) => Inline::Text(t.clone(), Style { mark, ..*st }),
+                Inline::Link(t, st, url) => Inline::Link(t.clone(), Style { mark, ..*st }, url.clone()),
+                other => other.clone(),
+            });
+        }
+        if end > 0 {
+            replaced.push(Inline::Text(close_text[..end].to_string(), Style { mark, ..close_style }));
+        }
+        if end + 2 < close_text.len() {
+            replaced.push(Inline::Text(close_text[end + 2..].to_string(), close_style));
+        }
+        inlines.splice(open..=close, replaced);
+    }
+}
+
 /// Remembers where newly finished top-level blocks came from.
 fn note_sources<T>(src: &str, stack: &[(T, Vec<Block>, Vec<Inline>)], range: &std::ops::Range<usize>, sources: &mut Vec<(usize, u64)>) {
     use std::hash::{Hash, Hasher};
@@ -368,7 +504,7 @@ fn collect_links(blocks: &[Block], top: usize, out: &mut Vec<(String, usize)>) {
     for block in blocks {
         match block {
             Block::Heading(_, inl) | Block::Paragraph(inl) => inline(inl, out),
-            Block::Quote(inner) | Block::Callout(_, inner) => collect_links(inner, top, out),
+            Block::Quote(inner) | Block::Callout(_, _, inner) | Block::Centered(inner) | Block::Details(_, inner, _) => collect_links(inner, top, out),
             Block::List { items, .. } => {
                 for item in items {
                     collect_links(&item.blocks, top, out);
@@ -402,31 +538,52 @@ fn into_callout(mut blocks: Vec<Block>) -> Block {
         _ => None,
     };
     let Some(head) = head else { return Block::Quote(blocks) };
+    let mut title: Vec<Inline> = Vec::new();
     if let Block::Paragraph(inl) = &mut blocks[0] {
         let mut rest = Vec::new();
         let mut found = false;
         for item in inl.drain(..) {
             if found {
                 rest.push(item);
-            } else if let Inline::Text(t, st) | Inline::Link(t, st, _) = &item
-                && let Some((_, after)) = t.split_once('\n')
+            } else if let Inline::Text(t, st) = &item
+                && let Some((before, after)) = t.split_once('\n')
             {
                 found = true;
+                if !before.is_empty() {
+                    title.push(Inline::Text(before.to_string(), *st));
+                }
                 if !after.is_empty() {
                     rest.push(Inline::Text(after.to_string(), *st));
                 }
+            } else {
+                title.push(item);
             }
         }
         *inl = rest;
+        let mut skipped = false;
+        title.retain_mut(|piece| {
+            if skipped {
+                return true;
+            }
+            let Inline::Text(text, _) = piece else { return true };
+            match text.find(']') {
+                Some(close) => {
+                    skipped = true;
+                    *text = text[close + 1..].trim_start_matches(['+', '-']).trim_start().to_string();
+                    !text.is_empty()
+                }
+                None => false,
+            }
+        });
     }
     if matches!(&blocks[0], Block::Paragraph(inl) if inl.is_empty()) {
         blocks.remove(0);
     }
-    Block::Callout(head, blocks)
+    Block::Callout(head, title, blocks)
 }
 
 /// A list item starting with `[c] `: any character but a space means done, as in Obsidian.
-fn take_task_marker(blocks: &mut [Block]) -> Option<bool> {
+fn take_task_marker(blocks: &mut [Block]) -> Option<char> {
     let Some(Block::Paragraph(inl)) = blocks.first_mut() else { return None };
     let text = plain_text(inl);
     let mut chars = text.chars();
@@ -447,10 +604,258 @@ fn take_task_marker(blocks: &mut [Block]) -> Option<bool> {
         }
     }
     *inl = rest;
-    Some(mark != ' ')
+    Some(mark)
 }
 
 /// Text of an HTML block: comments and tags go, Markdown inside stays as it is.
+/// One piece of HTML: a tag with its attributes and content, or text.
+enum HtmlNode {
+    Text(String),
+    Element(String, String, Vec<HtmlNode>),
+}
+
+/// The value of an attribute in a tag.
+fn html_attribute(tag: &str, name: &str) -> Option<String> {
+    let pattern = format!(r#"(?i)\b{name}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#);
+    let c = regex::Regex::new(&pattern).ok()?.captures(tag)?;
+    c.get(1).or_else(|| c.get(2)).or_else(|| c.get(3)).map(|m| m.as_str().to_string())
+}
+
+/// The colour a tag's style or `color` attribute names.
+fn css_color_of(tag: &str) -> Option<u32> {
+    let style = html_attribute(tag, "style").unwrap_or_default();
+    let named = style.split(';').find_map(|part| part.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("color")).map(|(_, v)| v.trim().to_string())).or_else(|| html_attribute(tag, "color"))?;
+    let value = named.to_lowercase();
+    if let Some(hex) = value.strip_prefix('#') {
+        let full = if hex.len() == 3 { hex.chars().flat_map(|c| [c, c]).collect() } else { hex.to_string() };
+        return u32::from_str_radix(&full, 16).ok().filter(|_| full.len() == 6);
+    }
+    Some(match value.as_str() {
+        "red" => 0xe5484d,
+        "green" => 0x30a46c,
+        "blue" => 0x3b82f6,
+        "orange" => 0xf76b15,
+        "yellow" => 0xeab308,
+        "purple" => 0x8e4ec6,
+        "pink" => 0xe93d82,
+        "gray" | "grey" => 0x8b8d98,
+        "white" => 0xffffff,
+        "black" => 0x000000,
+        _ => return None,
+    })
+}
+
+/// Reads HTML as a tree. Broken HTML still gives its text: an unknown closing tag is skipped, open tags end with their parent.
+fn html_tree(html: &str) -> Vec<HtmlNode> {
+    static TOKEN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r#"<(/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"']|"[^"]*"|'[^']*')*)>"#).unwrap());
+    const SINGLE: [&str; 5] = ["br", "hr", "img", "input", "wbr"];
+    let mut frames: Vec<(String, String, Vec<HtmlNode>)> = vec![(String::new(), String::new(), Vec::new())];
+    let mut copied = 0;
+    for c in TOKEN.captures_iter(html) {
+        let whole = c.get(0).unwrap();
+        if whole.start() > copied {
+            frames.last_mut().unwrap().2.push(HtmlNode::Text(html[copied..whole.start()].to_string()));
+        }
+        copied = whole.end();
+        let name = c[2].to_lowercase();
+        if &c[1] == "/" {
+            if let Some(at) = frames.iter().rposition(|f| f.0 == name).filter(|at| *at > 0) {
+                while frames.len() > at {
+                    let (tag, attributes, children) = frames.pop().unwrap();
+                    frames.last_mut().unwrap().2.push(HtmlNode::Element(tag, attributes, children));
+                }
+            }
+        } else if SINGLE.contains(&name.as_str()) || c[3].trim_end().ends_with('/') {
+            frames.last_mut().unwrap().2.push(HtmlNode::Element(name, c[3].to_string(), Vec::new()));
+        } else {
+            frames.push((name, c[3].to_string(), Vec::new()));
+        }
+    }
+    if copied < html.len() {
+        frames.last_mut().unwrap().2.push(HtmlNode::Text(html[copied..].to_string()));
+    }
+    while frames.len() > 1 {
+        let (tag, attributes, children) = frames.pop().unwrap();
+        frames.last_mut().unwrap().2.push(HtmlNode::Element(tag, attributes, children));
+    }
+    frames.pop().map(|f| f.2).unwrap_or_default()
+}
+
+fn html_decoded(text: &str) -> String {
+    text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'")
+}
+
+/// Text and inline tags as the reader's inline pieces.
+fn html_inlines(nodes: &[HtmlNode], style: Style, link: Option<&str>, lift: Option<fn(&str) -> String>, out: &mut Vec<Inline>) {
+    for node in nodes {
+        match node {
+            HtmlNode::Text(t) => {
+                let spaced = collapse_spaces(&t.replace(['\n', '\r'], " "));
+                let decoded = html_decoded(&spaced);
+                let shown = lift.map_or(decoded.clone(), |f| f(&decoded));
+                if !shown.is_empty() {
+                    out.push(match link {
+                        Some(url) => Inline::Link(shown, Style { link: true, ..style }, url.to_string()),
+                        None => Inline::Text(shown, style),
+                    });
+                }
+            }
+            HtmlNode::Element(tag, attributes, children) => {
+                let mut inner = style;
+                let mut inner_link = link.map(str::to_string);
+                let mut inner_lift = lift;
+                match tag.as_str() {
+                    "br" => out.push(Inline::Text("\n".into(), style)),
+                    "img" => {
+                        let src = html_attribute(attributes, "src").unwrap_or_default();
+                        let (w, h) = (html_attribute(attributes, "width"), html_attribute(attributes, "height"));
+                        let size = match (w, h) {
+                            (Some(w), Some(h)) => format!("{w}x{h}"),
+                            (Some(w), None) => w,
+                            _ => String::new(),
+                        };
+                        out.push(Inline::Image(src, size, link.map(str::to_string)));
+                    }
+                    "b" | "strong" => inner.bold = true,
+                    "i" | "em" | "cite" | "var" => inner.italic = true,
+                    "s" | "del" | "strike" => inner.strike = true,
+                    "u" | "ins" | "abbr" => inner.underline = true,
+                    "code" | "kbd" | "samp" | "tt" => inner.code = true,
+                    "mark" => inner.mark = Some(MarkColor::Default),
+                    "small" => inner.small = true,
+                    "sup" => inner_lift = Some(superscript),
+                    "sub" => inner_lift = Some(subscript),
+                    "a" => inner_link = html_attribute(attributes, "href").or(inner_link),
+                    _ => {}
+                }
+                if let Some(color) = css_color_of(attributes) {
+                    inner.color = Some(color);
+                }
+                html_inlines(children, inner, inner_link.as_deref(), inner_lift, out);
+            }
+        }
+    }
+}
+
+fn html_is_block(tag: &str) -> bool {
+    matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "p" | "div" | "section" | "article" | "aside" | "header" | "footer" | "main" | "nav" | "figure" | "figcaption" | "center" | "blockquote" | "ul" | "ol" | "table" | "hr" | "details" | "pre" | "dl" | "dt" | "dd")
+}
+
+/// HTML as the reader's blocks. Script, style and comments never show.
+fn html_blocks(html: &str) -> Vec<Block> {
+    static HIDDEN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?is)<script\b.*?(?:</script\s*>|$)|<style\b.*?(?:</style\s*>|$)|<!--.*?(?:-->|$)").unwrap());
+    let cleaned = HIDDEN.replace_all(html, "");
+    html_nodes_to_blocks(&html_tree(&cleaned))
+}
+
+fn html_nodes_to_blocks(nodes: &[HtmlNode]) -> Vec<Block> {
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut run: Vec<Inline> = Vec::new();
+    let flush = |run: &mut Vec<Inline>, blocks: &mut Vec<Block>| {
+        let taken = std::mem::take(run);
+        if !plain_text(&taken).trim().is_empty() || taken.iter().any(|i| matches!(i, Inline::Image(..))) {
+            blocks.push(Block::Paragraph(taken));
+        }
+    };
+    for node in nodes {
+        let HtmlNode::Element(tag, attributes, children) = node else {
+            html_inlines(std::slice::from_ref(node), Style::default(), None, None, &mut run);
+            continue;
+        };
+        if !html_is_block(tag) {
+            html_inlines(std::slice::from_ref(node), Style::default(), None, None, &mut run);
+            continue;
+        }
+        flush(&mut run, &mut blocks);
+        match tag.as_str() {
+            "hr" => blocks.push(Block::Rule),
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                let mut inl = Vec::new();
+                html_inlines(children, Style::default(), None, None, &mut inl);
+                blocks.push(Block::Heading(tag[1..].parse().unwrap_or(1), inl));
+            }
+            "ul" | "ol" => {
+                let items = children
+                    .iter()
+                    .filter_map(|c| match c {
+                        HtmlNode::Element(t, _, inner) if t == "li" => Some(Item { task: None, line: 0, blocks: html_nodes_to_blocks(inner) }),
+                        _ => None,
+                    })
+                    .collect();
+                blocks.push(Block::List { start: (tag == "ol").then_some(1), items });
+            }
+            "table" => blocks.extend(html_table(children)),
+            "pre" => {
+                let mut inl = Vec::new();
+                html_inlines(children, Style::default(), None, None, &mut inl);
+                blocks.push(Block::Code(None, plain_text(&inl)));
+            }
+            "details" => {
+                let summary = children.iter().find_map(|c| match c {
+                    HtmlNode::Element(t, _, inner) if t == "summary" => Some(inner),
+                    _ => None,
+                });
+                let mut title = Vec::new();
+                if let Some(inner) = summary {
+                    html_inlines(inner, Style::default(), None, None, &mut title);
+                } else {
+                    title.push(Inline::Text(tr("Details"), Style::default()));
+                }
+                let mut inner = Vec::new();
+                for piece in children.iter().filter(|c| !matches!(c, HtmlNode::Element(t, ..) if t == "summary")) {
+                    inner.extend(html_nodes_to_blocks(std::slice::from_ref(piece)));
+                }
+                blocks.push(Block::Details(title, inner, attributes.to_lowercase().contains("open")));
+            }
+            "blockquote" => blocks.push(Block::Quote(html_nodes_to_blocks(children))),
+            _ => {
+                let align = html_attribute(attributes, "align").unwrap_or_default().to_lowercase();
+                let centered = tag == "center" || align == "center" || html_attribute(attributes, "style").is_some_and(|s| s.replace(' ', "").to_lowercase().contains("text-align:center"));
+                let inner = html_nodes_to_blocks(children);
+                if centered {
+                    blocks.push(Block::Centered(inner));
+                } else {
+                    blocks.extend(inner);
+                }
+            }
+        }
+    }
+    flush(&mut run, &mut blocks);
+    blocks
+}
+
+fn html_table(children: &[HtmlNode]) -> Vec<Block> {
+    fn rows_of<'a>(nodes: &'a [HtmlNode], out: &mut Vec<&'a Vec<HtmlNode>>) {
+        for node in nodes {
+            if let HtmlNode::Element(tag, _, inner) = node {
+                match tag.as_str() {
+                    "tr" => out.push(inner),
+                    "thead" | "tbody" | "tfoot" => rows_of(inner, out),
+                    _ => {}
+                }
+            }
+        }
+    }
+    let mut rows = Vec::new();
+    rows_of(children, &mut rows);
+    let cells = |row: &Vec<HtmlNode>| -> Vec<Vec<Inline>> {
+        row.iter()
+            .filter_map(|c| match c {
+                HtmlNode::Element(t, _, inner) if t == "td" || t == "th" => {
+                    let mut inl = Vec::new();
+                    html_inlines(inner, Style::default(), None, None, &mut inl);
+                    Some(inl)
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let Some((first, rest)) = rows.split_first() else { return Vec::new() };
+    let head = cells(first);
+    let aligns = vec![pulldown_cmark::Alignment::None; head.len()];
+    vec![Block::Table { head, rows: rest.iter().map(|r| cells(r)).collect(), aligns }]
+}
+
 fn html_text(html: &str) -> String {
     static COMMENT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?s)<!--.*?-->").unwrap());
     static BREAK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)<br\s*/?>|</(p|div|li|tr|h[1-6])>").unwrap());
@@ -468,6 +873,21 @@ pub struct LinkFocus {
     pub index: Option<usize>,
     /// The note being shown, so it cannot embed itself.
     pub note: Option<PathBuf>,
+    /// The list the note is drawn in, for jumps inside it.
+    pub list: Option<ListState>,
+    /// What the reader has folded, kept across sessions.
+    pub folds: Folds,
+}
+
+/// The foldable things whose state differs from how the note starts.
+pub type Folds = Rc<RefCell<std::collections::HashSet<String>>>;
+
+/// Flips one fold.
+fn toggle_fold(folds: &Folds, key: &str) {
+    let mut set = folds.borrow_mut();
+    if !set.remove(key) {
+        set.insert(key.to_string());
+    }
 }
 
 struct Ctx<'a> {
@@ -482,14 +902,59 @@ struct Ctx<'a> {
     links_seen: &'a Cell<usize>,
 }
 
+/// Whether an image is small enough to stand in a line of text.
+fn fits_in_line(alt: &str, size: f32) -> Option<(f32, f32)> {
+    let (width, height) = image_size(alt);
+    let limit = size * 2.;
+    match (width, height) {
+        (Some(w), Some(h)) if h <= limit => Some((w, h)),
+        (None, Some(h)) if h <= limit => Some((h, h)),
+        (Some(w), None) if w <= limit => Some((w, w)),
+        _ => None,
+    }
+}
+
+/// Text with its big images standing between the lines, where they were written.
 fn styled_text(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
+    let is_big = |i: &Inline| matches!(i, Inline::Image(_, alt, _) if fits_in_line(alt, size).is_none());
+    if !inlines.iter().any(is_big) {
+        return styled_line(inlines, cx, size);
+    }
+    let mut parts: Vec<AnyElement> = Vec::new();
+    let mut run: &[Inline] = inlines;
+    while let Some(at) = run.iter().position(is_big) {
+        if !plain_text(&run[..at]).trim().is_empty() || run[..at].iter().any(|i| matches!(i, Inline::Image(..) | Inline::Math(_))) {
+            parts.push(styled_line(&run[..at], cx, size));
+        }
+        if let Inline::Image(src, alt, target) = &run[at] {
+            parts.push(linked_image(src, alt, target.as_deref(), cx));
+        }
+        run = &run[at + 1..];
+    }
+    if !plain_text(run).trim().is_empty() || run.iter().any(|i| matches!(i, Inline::Image(..) | Inline::Math(_))) {
+        parts.push(styled_line(run, cx, size));
+    }
+    div().flex().flex_col().gap(px(space::S)).children(parts).into_any_element()
+}
+
+/// An image, opening the link around it instead of itself if there is one.
+fn linked_image(src: &str, alt: &str, target: Option<&str>, cx: &Ctx) -> AnyElement {
+    let shown = image(src, alt, cx);
+    let Some(target) = target else { return shown };
+    let order = cx.order.get();
+    cx.order.set(order + 1);
+    let action = link_action(target, cx.base);
+    div().id(("md-image-link", order)).cursor_pointer().on_click(move |_, _, cx| action(cx)).child(shown).into_any_element()
+}
+
+fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
     let t = cx.t;
     let mut text = String::new();
     let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
-    let mut images: Vec<AnyElement> = Vec::new();
     let mut links: Vec<(std::ops::Range<usize>, LinkAction)> = Vec::new();
     let mut hovers: Vec<(std::ops::Range<usize>, String)> = Vec::new();
-    let mut focused_here = false;
+    let mut slots: Vec<InlineSlot> = Vec::new();
+    let mut pills: Vec<std::ops::Range<usize>> = Vec::new();
     for i in inlines {
         match i {
             Inline::Tag(tag) => {
@@ -498,7 +963,8 @@ fn styled_text(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                 text.push_str(tag);
                 let name = tag.clone();
                 links.push((start..text.len(), Rc::new(move |cx| super::state::act(cx, |l| l.show_tag(&name)))));
-                highlights.push((start..text.len(), HighlightStyle { background_color: Some(t.ink.opacity(0.08)), color: Some(t.secondary), ..Default::default() }));
+                pills.push(start..text.len());
+                highlights.push((start..text.len(), HighlightStyle { color: Some(t.accent_text), ..Default::default() }));
             }
             Inline::Text(s, st) | Inline::Link(s, st, _) => {
                 let start = text.len();
@@ -506,13 +972,15 @@ fn styled_text(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                 let mut unresolved = false;
                 if let Inline::Link(_, _, url) = i {
                     unresolved = !is_external(url) && !link_exists(url, cx.base);
+                    if is_external(url) {
+                        text.push_str(" ↗");
+                    }
                     links.push((start..text.len(), link_action(url, cx.base)));
                     hovers.push((start..text.len(), url.clone()));
                     if let Some(focus) = cx.focus {
                         let index = cx.links_seen.get();
                         cx.links_seen.set(index + 1);
                         if focus.index == Some(index) {
-                            focused_here = true;
                             highlights.push((start..text.len(), HighlightStyle { background_color: Some(t.accent.opacity(0.28)), ..Default::default() }));
                         }
                     }
@@ -531,6 +999,15 @@ fn styled_text(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                     h.background_color = Some(t.ink.opacity(0.08));
                     h.color = Some(t.primary);
                 }
+                if st.underline {
+                    h.underline = Some(UnderlineStyle { thickness: px(1.), color: None, wavy: false });
+                }
+                if st.small {
+                    h.fade_out = Some(0.25);
+                }
+                if let Some(color) = st.color {
+                    h.color = Some(rgb(color).into());
+                }
                 if let Some(color) = st.mark {
                     h.background_color = Some(mark_tint(color, t).opacity(0.3));
                 }
@@ -548,20 +1025,25 @@ fn styled_text(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
             Inline::FootnoteRef(id) => {
                 let n = cx.footnote_order.iter().position(|f| f == id).map_or(0, |p| p + 1);
                 let start = text.len();
-                text.push_str(&format!("[{n}]"));
-                highlights.push((start..text.len(), HighlightStyle { color: Some(t.accent), ..Default::default() }));
+                text.push_str(&superscript(&n.to_string()));
+                highlights.push((start..text.len(), HighlightStyle { color: Some(t.accent_text), ..Default::default() }));
+                if let Some(list) = cx.focus.and_then(|f| f.list.clone()) {
+                    links.push((start..text.len(), Rc::new(move |_| list.scroll_to_reveal_item(list.item_count().saturating_sub(1)))));
+                }
             }
-            Inline::Image(src, alt) => images.push(image(src, alt, cx)),
+            Inline::Image(src, alt, target) => {
+                if let Some((w, h)) = fits_in_line(alt, size) {
+                    slots.push(InlineSlot { at: text.len(), kind: InlineKind::Sized(linked_image(src, alt, target.as_deref(), cx), w, h) });
+                }
+            }
+            Inline::Math(source) => slots.push(InlineSlot { at: text.len(), kind: InlineKind::Math(source.clone()) }),
         }
-    }
-    if text.trim().is_empty() && !images.is_empty() {
-        return div().flex().flex_col().gap(px(space::S)).children(images).into_any_element();
     }
     let order = cx.order.get();
     cx.order.set(order + 1);
     let base = cx.base.map(Path::to_path_buf);
-    let body = div().text_size(px(size)).line_height(relative(1.5)).child(selectable(("md-text", order), text, highlights, order, t.accent.opacity(0.3)).links(links).hovers(hovers, base));
-    if images.is_empty() { body.into_any_element() } else { div().flex().flex_col().gap(px(space::S)).child(body).children(images).into_any_element() }
+    let body = div().text_size(px(size)).line_height(relative(1.5)).child(selectable(("md-text", order), text, highlights, order, t.accent.opacity(0.3)).links(links).hovers(hovers, base).inline(slots).pills(pills, t.accent.opacity(0.14)));
+    body.into_any_element()
 }
 
 fn mark_tint(color: MarkColor, t: &Theme) -> Hsla {
@@ -809,12 +1291,34 @@ fn image_at(p: PathBuf, alt: &str, cx: &Ctx) -> AnyElement {
     }
 }
 
-fn code_block(lang: Option<&str>, code: &str, t: &Theme) -> AnyElement {
+thread_local! {
+    static COLOURED: RefCell<HashMap<(Option<String>, String), Rc<Vec<(String, TokenKind)>>>> = RefCell::new(HashMap::new());
+}
+
+/// Colours code once; scrolling draws the same block again and again.
+fn coloured(lang: Option<&str>, code: &str) -> Rc<Vec<(String, TokenKind)>> {
+    let key = (lang.map(str::to_string), code.to_string());
+    COLOURED.with(|c| {
+        let mut cache = c.borrow_mut();
+        if let Some(found) = cache.get(&key) {
+            return found.clone();
+        }
+        if cache.len() > 256 {
+            cache.clear();
+        }
+        let tokens = Rc::new(markdown::highlight(code, lang));
+        cache.insert(key, tokens.clone());
+        tokens
+    })
+}
+
+fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
+    let t = cx.t;
     let mut text = String::new();
     let mut highlights = Vec::new();
-    for (s, kind) in markdown::highlight(code, lang) {
+    for (s, kind) in coloured(lang, code).iter() {
         let start = text.len();
-        text.push_str(&s);
+        text.push_str(s);
         let color = match kind {
             TokenKind::Plain => None,
             TokenKind::Keyword => Some(t.palette("pink")),
@@ -828,18 +1332,46 @@ fn code_block(lang: Option<&str>, code: &str, t: &Theme) -> AnyElement {
             highlights.push((start..text.len(), HighlightStyle { color: Some(c), ..Default::default() }));
         }
     }
+    let order = cx.order.get();
+    cx.order.set(order + 1);
+    let copied = code.to_string();
+    let group = SharedString::from(format!("md-code-{order}"));
     div()
-        .id(SharedString::from(format!("code-{}", text.len())))
-        .w_full()
-        .overflow_x_scroll()
-        .p(px(space::M))
-        .rounded(px(radius::CONTROL))
-        .bg(t.secondary_bg)
-        .border_1()
-        .border_color(t.separator.opacity(0.6))
-        .font_family(Theme::mono_family())
-        .text_size(px(font::CALLOUT))
-        .child(StyledText::new(text).with_highlights(highlights))
+        .relative()
+        .group(group.clone())
+        .child(
+            div()
+                .id(("md-code", order))
+                .w_full()
+                .overflow_x_scroll()
+                .p(px(space::M))
+                .rounded(px(radius::CONTROL))
+                .bg(t.secondary_bg)
+                .border_1()
+                .border_color(t.separator.opacity(0.6))
+                .font_family(Theme::mono_family())
+                .text_size(px(font::CALLOUT))
+                .child(selectable(("md-code-text", order), text, highlights, order, t.accent.opacity(0.3))),
+        )
+        .child(
+            div()
+                .id(("md-code-copy", order))
+                .absolute()
+                .top(px(space::S))
+                .right(px(space::S))
+                .size(px(24.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(radius::SMALL))
+                .bg(t.secondary_bg)
+                .cursor_pointer()
+                .invisible()
+                .group_hover(group, |s| s.visible())
+                .tooltip(super::widgets::tip(tr("Code kopieren")))
+                .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copied.clone())))
+                .child(super::widgets::icon("copy", iconsize::S, t.secondary)),
+        )
         .into_any_element()
 }
 
@@ -853,7 +1385,8 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     1 => font::TITLE,
                     2 => font::TITLE2,
                     3 => font::TITLE3,
-                    _ => font::BODY,
+                    4 => font::BODY,
+                    _ => font::CALLOUT,
                 };
                 div().pt(px(if *level <= 2 { space::S } else { space::XS })).font_weight(if *level == 1 { FontWeight::BOLD } else { FontWeight::SEMIBOLD }).child(styled_text(inl, cx, size)).into_any_element()
             }
@@ -866,17 +1399,51 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                 .into_any_element(),
             Block::Code(lang, code) => match super::embeds::special_block(lang.as_deref(), code, cx.base, cx.order.get(), t) {
                 Some(element) => element,
-                None => code_block(lang.as_deref(), code, t),
+                None => code_block(lang.as_deref(), code, cx),
             },
             Block::Rule => div().h(px(1.)).my(px(space::XS)).bg(t.separator).into_any_element(),
-            Block::Html(h) => div().text_size(px(font::BODY)).line_height(relative(1.5)).child(h.clone()).into_any_element(),
             Block::Nothing => div().hidden().into_any_element(),
             Block::Math(source) => super::embeds::math(source, cx.order.get(), t),
             Block::Properties(props) => properties_row(props, cx),
-            Block::Callout(head, inner) => {
+            Block::Callout(head, title, inner) => {
                 let order = cx.order.get();
                 cx.order.set(order + 1);
-                callout(head, render_blocks(inner, cx), order, t)
+                let shown = (!plain_text(title).trim().is_empty() || title.iter().any(|i| matches!(i, Inline::Link(..) | Inline::Math(_)))).then(|| styled_text(title, cx, font::CALLOUT));
+                let key = format!("c{order}");
+                Callout { head: head.clone(), title: shown, content: render_blocks(inner, cx), id: ElementId::from(("md-callout", order)), tint: callout_tint(head, t), secondary: t.secondary, folds: cx.focus.map(|f| (f.folds.clone(), key)) }.into_any_element()
+            }
+            Block::Centered(inner) => div().w_full().flex().flex_col().items_center().gap(px(space::S)).children(render_blocks(inner, cx)).into_any_element(),
+            Block::Details(summary, inner, open_at_start) => {
+                let order = cx.order.get();
+                cx.order.set(order + 1);
+                let key = format!("d{order}");
+                let folds = cx.focus.map(|f| f.folds.clone());
+                let toggled = folds.as_ref().is_some_and(|f| f.borrow().contains(&key));
+                let is_open = *open_at_start != toggled;
+                let toggle_key = key.clone();
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S))
+                    .child(
+                        div()
+                            .id(("md-details", order))
+                            .flex()
+                            .items_center()
+                            .gap(px(space::XS))
+                            .cursor_pointer()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(super::motion::chevron(("md-details-chevron", order), is_open, t.secondary))
+                            .child(styled_text(summary, cx, font::BODY))
+                            .on_click(move |_, window, _| {
+                                if let Some(f) = &folds {
+                                    toggle_fold(f, &toggle_key);
+                                    window.refresh();
+                                }
+                            }),
+                    )
+                    .when(is_open, |d| d.child(div().pl(px(space::L)).flex().flex_col().gap(px(space::S)).children(render_blocks(inner, cx))))
+                    .into_any_element()
             }
             Block::List { start, items } => div()
                 .flex()
@@ -884,7 +1451,9 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                 .gap(px(space::XS))
                 .children(items.iter().enumerate().map(|(i, item)| {
                     let marker: AnyElement = match (item.task, start) {
-                        (Some(done), _) => {
+                        (Some(mark), _) => {
+                            let done = mark == 'x' || mark == 'X';
+                            let special = !done && mark != ' ';
                             let line = item.line;
                             let toggle = cx.on_toggle.clone();
                             div()
@@ -898,7 +1467,8 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                                 .items_center()
                                 .justify_center()
                                 .when(done, |d| d.bg(t.accent))
-                                .when(!done, |d| d.border_1().border_color(t.secondary))
+                                .when(!done, |d| d.border_1().border_color(if special { t.accent } else { t.secondary }))
+                                .when(special, |d| d.text_size(px(font::CAPTION2)).text_color(t.accent).child(mark.to_string()))
                                 .when(toggle.is_some(), |d| d.cursor_pointer())
                                 .when(done, |d| d.child(super::widgets::icon("check", iconsize::XS, white())))
                                 .on_click(move |_, _, cx| {
@@ -911,19 +1481,60 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                         (None, Some(s)) => div().flex_none().min_w(px(16.)).flex().justify_end().text_size(px(font::BODY)).line_height(relative(1.5)).text_color(t.secondary).child(format!("{}.", s + i as u64)).into_any_element(),
                         (None, None) => div().flex_none().min_w(px(16.)).flex().justify_end().text_size(px(font::BODY)).line_height(relative(1.5)).text_color(t.secondary).child("•").into_any_element(),
                     };
-                    let done = item.task == Some(true);
+                    let done = matches!(item.task, Some('x' | 'X'));
+                    let has_nested = item.blocks.iter().any(|b| matches!(b, Block::List { .. }));
+                    let fold_key = format!("l{}", item.line);
+                    let folds = cx.focus.map(|f| f.folds.clone());
+                    let folded = has_nested && folds.as_ref().is_some_and(|f| f.borrow().contains(&fold_key));
+                    let shown_blocks: Vec<AnyElement> = item
+                        .blocks
+                        .iter()
+                        .filter(|b| !(folded && matches!(b, Block::List { .. })))
+                        .map(|b| {
+                            let inner = render_blocks(std::slice::from_ref(b), cx).into_iter().next().unwrap_or_else(|| div().into_any_element());
+                            if matches!(b, Block::List { .. }) { div().border_l_1().border_color(t.separator).pl(px(space::S)).child(inner).into_any_element() } else { inner }
+                        })
+                        .collect();
+                    let fold_button = (has_nested && folds.is_some()).then(|| {
+                        let line = item.line;
+                        div()
+                            .id(("md-list-fold", line))
+                            .absolute()
+                            .top(px(space::XS))
+                            .left(px(-16.))
+                            .size(px(14.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .on_click(move |_, window, _| {
+                                if let Some(f) = &folds {
+                                    toggle_fold(f, &fold_key);
+                                    window.refresh();
+                                }
+                            })
+                            .child(super::motion::chevron(("md-list-chevron", line), !folded, t.tertiary))
+                    });
                     div()
+                        .relative()
                         .flex()
                         .items_start()
                         .gap(px(space::S))
+                        .children(fold_button)
                         .child(marker)
-                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XS)).when(done, |d| d.text_color(t.secondary).line_through()).children(render_blocks(&item.blocks, cx)))
+                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XS)).when(done, |d| d.text_color(t.secondary).line_through()).children(shown_blocks))
                 })
             )
             .into_any_element(),
             Block::Table { head, rows, aligns } => {
+                let width_of = |inl: &Vec<Inline>| plain_text(inl).chars().count() as f32;
+                let widths: Vec<f32> = (0..head.len())
+                    .map(|c| rows.iter().filter_map(|r| r.get(c)).chain(head.get(c)).map(width_of).fold(4_f32, f32::max).min(40.))
+                    .collect();
+                let total: f32 = widths.iter().sum::<f32>().max(1.);
                 let cell = |inl: &Vec<Inline>, i: usize, bold: bool| {
-                    let d = div().flex_1().min_w(px(80.)).px(px(space::S)).py(px(space::XS)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD));
+                    let share = widths.get(i).copied().unwrap_or(4.) / total;
+                    let d = div().flex_none().w(relative(share)).px(px(space::S)).py(px(space::XS)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD));
                     let d = match aligns.get(i) {
                         Some(pulldown_cmark::Alignment::Center) => d.flex().justify_center(),
                         Some(pulldown_cmark::Alignment::Right) => d.flex().justify_end(),
@@ -933,7 +1544,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                 };
                 let order = cx.order.get();
                 cx.order.set(order + 1);
-                let min_width = px(head.len() as f32 * 140.);
+                let min_width = px(widths.iter().map(|w| w.min(14.) * 9. + space::M).sum::<f32>());
                 div().id(("md-table", order)).w_full().overflow_x_scroll().child(div()
                     .min_w(min_width)
                     .flex()
@@ -1007,13 +1618,12 @@ fn callout_tint(head: &CalloutHead, t: &Theme) -> Hsla {
 }
 
 /// A callout, on the same banner as the app's hints; folds like its other sections.
-fn callout(head: &CalloutHead, content: Vec<AnyElement>, order: u64, t: &Theme) -> AnyElement {
-    Callout { head: head.clone(), content, id: ElementId::from(("md-callout", order)), tint: callout_tint(head, t), secondary: t.secondary }.into_any_element()
-}
 
 #[derive(IntoElement)]
 struct Callout {
     head: CalloutHead,
+    title: Option<AnyElement>,
+    folds: Option<(Folds, String)>,
     content: Vec<AnyElement>,
     id: ElementId,
     tint: Hsla,
@@ -1022,10 +1632,10 @@ struct Callout {
 
 impl RenderOnce for Callout {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let folded = self.head.folded;
-        let open = window.use_keyed_state(self.id.clone(), cx, move |_, _| !folded);
-        let is_open = !self.head.foldable || *open.read(cx);
-        let title = self.head.title.clone().unwrap_or_else(|| tr(self.head.kind.label()));
+        let toggled = self.folds.as_ref().is_some_and(|(f, key)| f.borrow().contains(key));
+        let is_open = !self.head.foldable || self.head.folded == toggled;
+        let title: AnyElement = self.title.unwrap_or_else(|| tr(self.head.kind.label()).into_any_element());
+        let folds = self.folds.clone();
         let tint = self.tint;
         let foldable = self.head.foldable;
         let has_body = !self.content.is_empty();
@@ -1043,11 +1653,11 @@ impl RenderOnce for Callout {
             .child(super::widgets::icon(self.head.kind.icon(), iconsize::S, tint))
             .child(div().flex_1().min_w_0().child(title))
             .when(foldable, |d| {
-                d.child(super::motion::chevron(chevron_id, is_open, self.secondary)).cursor_pointer().on_click(move |_, _, cx| {
-                    open.update(cx, |o, cx| {
-                        *o = !*o;
-                        cx.notify();
-                    })
+                d.child(super::motion::chevron(chevron_id, is_open, self.secondary)).cursor_pointer().on_click(move |_, window, _| {
+                    if let Some((f, key)) = &folds {
+                        toggle_fold(f, key);
+                        window.refresh();
+                    }
                 })
             });
         let body = div().w_full().pt(px(space::S)).flex().flex_col().gap(px(space::S)).children(self.content);
@@ -1063,49 +1673,61 @@ fn properties_row(props: &[frontmatter::Property], cx: &Ctx) -> AnyElement {
     }
     let order = cx.order.get();
     cx.order.set(order + 1);
-    Properties { id: ElementId::from(("md-properties", order)), items: visible.into_iter().map(|p| (p.name.clone(), p.values.join(", "))).collect(), secondary: cx.t.secondary, tertiary: cx.t.tertiary }.into_any_element()
+    Properties { id: ElementId::from(("md-properties", order)), items: visible.into_iter().map(|p| (p.name.clone(), p.values.clone())).collect(), base: cx.base.map(Path::to_path_buf), secondary: cx.t.secondary, separator: cx.t.separator, accent: cx.t.accent_text }.into_any_element()
 }
 
 #[derive(IntoElement)]
 struct Properties {
     id: ElementId,
-    items: Vec<(String, String)>,
+    items: Vec<(String, Vec<String>)>,
+    base: Option<PathBuf>,
     secondary: Hsla,
-    tertiary: Hsla,
+    separator: Hsla,
+    accent: Hsla,
 }
 
 impl RenderOnce for Properties {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let open = window.use_keyed_state(self.id.clone(), cx, |_, _| false);
-        let is_open = *open.read(cx);
-        let summary = self
-            .items
-            .iter()
-            .filter(|(k, _)| !k.ends_with("-plugin") && k != "aliases")
-            .take(4)
-            .map(|(k, v)| {
-                let value: String = v.chars().take(28).collect();
-                if value.is_empty() { k.clone() } else { format!("{k}: {value}") }
-            })
-            .collect::<Vec<_>>()
-            .join(" · ");
-        let chevron_id = ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "chevron".into());
-        let reveal_id = ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "body".into());
-        let head_id = ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "head".into());
-        let (secondary, tertiary) = (self.secondary, self.tertiary);
-        let grid = div().pt(px(space::S)).flex().flex_col().gap(px(space::XS)).children(self.items.iter().map(|(k, v)| div().flex().gap(px(space::M)).child(div().w(px(120.)).flex_none().truncate().text_color(tertiary).child(k.clone())).child(div().flex_1().min_w_0().child(v.clone()))));
-        div()
-            .flex()
-            .flex_col()
-            .text_size(px(font::CALLOUT))
-            .text_color(secondary)
-            .child(div().id(head_id).flex().items_center().gap(px(space::XS)).cursor_pointer().child(super::motion::chevron(chevron_id, is_open, secondary)).child(div().truncate().child(summary)).on_click(move |_, _, cx| {
-                open.update(cx, |o, cx| {
-                    *o = !*o;
-                    cx.notify();
-                })
-            }))
-            .child(super::motion::reveal(reveal_id, is_open, grid))
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let (secondary, separator, accent) = (self.secondary, self.separator, self.accent);
+        let base = self.base.clone();
+        let id = self.id.clone();
+        div().flex().flex_col().pb(px(space::S)).border_b_1().border_color(separator).text_size(px(font::CALLOUT)).children(self.items.into_iter().enumerate().map(move |(i, (name, values))| {
+            let base = base.clone();
+            let row = ElementId::NamedChild(std::sync::Arc::new(id.clone()), SharedString::from(format!("row-{i}")));
+            div()
+                .id(row)
+                .flex()
+                .items_start()
+                .gap(px(space::M))
+                .py(px(space::XXS))
+                .cursor_pointer()
+                .tooltip(super::widgets::tip(tr("In den Details bearbeiten")))
+                .on_click(|_, _, cx| super::state::act(cx, |l| {
+                    l.show_properties = true;
+                    l.show_inspector = true;
+                }))
+                .child(div().flex_none().w(px(140.)).truncate().text_color(secondary).child(name))
+                .child(div().flex_1().min_w_0().flex().flex_wrap().gap(px(space::S)).children(values.into_iter().enumerate().map(move |(n, value)| {
+                    let target = value.strip_prefix("[[").and_then(|v| v.strip_suffix("]]")).map(str::to_string);
+                    match target {
+                        Some(target) => {
+                            let shown = target.split('|').next_back().unwrap_or(&target).to_string();
+                            let action = link_action(&target, base.as_deref());
+                            div()
+                                .id(SharedString::from(format!("md-prop-link-{i}-{n}")))
+                                .text_color(accent)
+                                .cursor_pointer()
+                                .on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    action(cx);
+                                })
+                                .child(shown)
+                                .into_any_element()
+                        }
+                        None => div().child(value).into_any_element(),
+                    }
+                })))
+        }))
     }
 }
 
@@ -1141,7 +1763,34 @@ pub struct Found {
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
     let (order, links_seen) = (Cell::new(0), Cell::new(0));
     let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen };
-    div().flex().flex_col().gap(px(space::M)).children(render_blocks(&note.blocks, &cx)).children(render_footnotes(note, t))
+    div().flex().flex_col().gap(px(space::M)).children(render_blocks(&note.blocks, &cx)).children(render_footnotes(note, None, t))
+}
+
+impl ParsedNote {
+    /// Which top-level blocks a folded heading hides.
+    pub fn hidden_blocks(&self, folds: &Folds) -> Vec<bool> {
+        let set = folds.borrow();
+        let mut hidden = vec![false; self.blocks.len()];
+        if set.is_empty() {
+            return hidden;
+        }
+        let mut folded_level: Option<u8> = None;
+        for (i, block) in self.blocks.iter().enumerate() {
+            if let Block::Heading(level, _) = block {
+                if folded_level.is_some_and(|l| *level <= l) {
+                    folded_level = None;
+                }
+                if folded_level.is_some() {
+                    hidden[i] = true;
+                } else if set.contains(&format!("h{}", self.sources.get(i).map_or(0, |s| s.0))) {
+                    folded_level = Some(*level);
+                }
+            } else if folded_level.is_some() {
+                hidden[i] = true;
+            }
+        }
+        hidden
+    }
 }
 
 /// Renders one top-level block on its own, so long notes only build what is on screen.
@@ -1151,6 +1800,38 @@ pub fn render_block(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle:
     let links_seen = Cell::new(note.links.iter().take_while(|(_, top)| *top < i).count());
     let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen };
     let element = render_blocks(std::slice::from_ref(block), &cx).into_iter().next().unwrap_or_else(|| div().into_any_element());
+    let element = match (block, focus) {
+        (Block::Heading(..), Some(focus)) => {
+            let key = format!("h{}", note.sources.get(i).map_or(0, |s| s.0));
+            let is_open = !focus.folds.borrow().contains(&key);
+            let folds = focus.folds.clone();
+            let group = SharedString::from(format!("md-fold-{i}"));
+            div()
+                .relative()
+                .group(group.clone())
+                .child(element)
+                .child(
+                    div()
+                        .id(("md-fold", i))
+                        .absolute()
+                        .top(px(space::S))
+                        .left(px(-20.))
+                        .size(px(18.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .when(is_open, |d| d.invisible().group_hover(group, |s| s.visible()))
+                        .on_click(move |_, window, _| {
+                            toggle_fold(&folds, &key);
+                            window.refresh();
+                        })
+                        .child(super::motion::chevron(("md-fold-chevron", i), is_open, t.secondary)),
+                )
+                .into_any_element()
+        }
+        _ => element,
+    };
     let accent = t.accent;
     match found.filter(|f| f.block == i) {
         Some(f) => div()
@@ -1163,16 +1844,38 @@ pub fn render_block(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle:
     }
 }
 
-/// The footnotes a note refers to, as they appear at its end.
-pub fn render_footnotes(note: &ParsedNote, t: &Theme) -> Option<AnyElement> {
+/// The footnotes a note refers to, as they appear at its end, each with a way back.
+pub fn render_footnotes(note: &ParsedNote, list: Option<ListState>, t: &Theme) -> Option<AnyElement> {
     let used: Vec<_> = note.footnote_order.iter().filter_map(|id| note.footnotes.iter().find(|(f, _)| f == id)).collect();
     if used.is_empty() {
         return None;
     }
     let (order, links_seen) = (Cell::new(u64::MAX / 2), Cell::new(0));
     let cx = Ctx { t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen };
-    let rows = used.iter().enumerate().map(|(i, (_, inl))| {
-        div().flex().gap(px(space::S)).text_size(px(font::CALLOUT)).line_height(relative(1.5)).child(div().flex_none().text_color(t.secondary).child(format!("{}.", i + 1))).child(div().flex_1().min_w_0().child(styled_text(inl, &cx, font::CALLOUT)))
+    let rows = used.iter().enumerate().map(|(i, (id, blocks))| {
+        let home = note.footnote_homes.get(id).copied().unwrap_or(0);
+        let list = list.clone();
+        div()
+            .flex()
+            .gap(px(space::S))
+            .text_size(px(font::CALLOUT))
+            .line_height(relative(1.5))
+            .child(div().flex_none().text_color(t.secondary).child(format!("{}.", i + 1)))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XS)).children(render_blocks(blocks, &cx)))
+            .child(
+                div()
+                    .id(("md-footnote-back", i))
+                    .flex_none()
+                    .cursor_pointer()
+                    .text_color(t.accent_text)
+                    .tooltip(super::widgets::tip(tr("Zurück zum Text")))
+                    .on_click(move |_, _, _| {
+                        if let Some(l) = &list {
+                            l.scroll_to_reveal_item(home + 1);
+                        }
+                    })
+                    .child("↩"),
+            )
     });
     Some(div().flex().flex_col().gap(px(space::XS)).child(div().h(px(1.)).mt(px(space::S)).mb(px(space::S)).bg(t.separator)).children(rows.collect::<Vec<_>>()).into_any_element())
 }
@@ -1201,7 +1904,7 @@ mod tests {
     fn records_task_lines() {
         let note = parse("# T\n\n- [ ] a\n- [x] b\n\ntext");
         let Some(Block::List { items, .. }) = note.blocks.iter().find(|b| matches!(b, Block::List { .. })) else { panic!("no list") };
-        assert_eq!(items.iter().map(|i| (i.task, i.line)).collect::<Vec<_>>(), vec![(Some(false), 2), (Some(true), 3)]);
+        assert_eq!(items.iter().map(|i| (i.task, i.line)).collect::<Vec<_>>(), vec![(Some(' '), 2), (Some('x'), 3)]);
     }
 }
 
@@ -1221,9 +1924,10 @@ mod reader_tests {
                 Block::List { .. } => "list",
                 Block::Rule => "rule",
                 Block::Table { .. } => "table",
-                Block::Html(_) => "html",
                 Block::Callout(..) => "callout",
                 Block::Properties(_) => "properties",
+                Block::Centered(_) => "centered",
+                Block::Details(..) => "details",
                 Block::Math(_) => "math",
                 Block::Nothing => "nothing",
             })

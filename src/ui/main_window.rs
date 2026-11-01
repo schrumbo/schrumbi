@@ -372,6 +372,14 @@ impl Render for MainWindow {
                 window.focus(&this.focus, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
+            .on_action(|_: &gpui_kit::component::input::Copy, window, cx| {
+                let text = gpui_kit::base::TextSelection::selected_text(window, cx);
+                if text.is_empty() {
+                    cx.propagate();
+                    return;
+                }
+                cx.write_to_clipboard(ClipboardItem::new_string(super::selectable::without_room(&text)));
+            })
             .on_action(cx.listener(|this, _: &SearchUp, _, cx| this.step_results(-1, cx)))
             .on_action(cx.listener(|this, _: &SearchDown, _, cx| this.step_results(1, cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.set_open(!this.sidebar_open, cx)))
