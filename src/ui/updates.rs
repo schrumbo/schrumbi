@@ -138,7 +138,7 @@ impl UpdateSheet {
     fn install(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let me = cx.entity().downgrade();
         let all = super::state::read(cx, |l| l.buffers.keys().cloned().collect());
-        super::documents::resolve_unsaved(all, cx, move |cx| {
+        cx.defer(move |cx| super::documents::resolve_unsaved(all, cx, move |cx| {
             let _ = me.update(cx, |s, cx| {
                 s.phase = Phase::Installing;
                 cx.notify();
@@ -157,7 +157,7 @@ impl UpdateSheet {
                 });
             })
             .detach();
-        });
+        }));
     }
 
     fn skip(&mut self, cx: &mut Context<Self>) {
