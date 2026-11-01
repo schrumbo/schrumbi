@@ -1,0 +1,44 @@
+{
+  "effortLevel": "high",
+  "autoCompactWindow": 300000,
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
+    "CARGO_TERM_QUIET": "true",
+    "CARGO_TERM_COLOR": "never",
+    "CARGO_TERM_PROGRESS_WHEN": "never",
+    "RUST_BACKTRACE": "1"
+  },
+  "enabledPlugins": {
+    "swift-lsp@claude-plugins-official": false,
+    "jdtls-lsp@claude-plugins-official": false
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/bin/gate --init" }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "rust-reviewer|ui-auditor|ux-tester|perf-tester",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/bin/gate --mark" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/bin/gate --hook",
+            "timeout": 590,
+            "statusMessage": "Quality gate"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,362 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+LINTS = [
+    "unwrap_used", "dbg_macro", "todo", "unimplemented", "string_slice",
+    "semicolon_if_nothing_returned", "match_same_arms", "implicit_clone",
+    "redundant_clone", "redundant_closure_for_method_calls", "manual_let_else",
+    "map_unwrap_or", "needless_collect", "or_fun_call", "uninlined_format_args",
+]
+REVIEW_LINES = 30
+AUDIT_LINES = 15
+PERF_LINES = 100
+MAX_OUTPUT = 40
+
+os.environ["PATH"] = f"/opt/homebrew/bin:{Path.home()}/.cargo/bin:{os.environ.get('PATH', '')}"
+os.environ["CARGO_TERM_COLOR"] = "never"
+
+
+def git(*args, env=None):
+    return subprocess.run(["git", *args], capture_output=True, text=True, check=True, env=env).stdout.strip()
+
+
+def snapshot():
+    with tempfile.TemporaryDirectory() as tmp:
+        index = os.path.join(tmp, "index")
+        real = git("rev-parse", "--git-path", "index")
+        if os.path.exists(real):
+            shutil.copy(real, index)
+        env = {**os.environ, "GIT_INDEX_FILE": index}
+        git("add", "-A", env=env)
+        return git("write-tree", env=env)
+
+
+def changed_lines(a, b):
+    out = git("diff", "-U0", a, b, "--", "*.rs")
+    lines, path = {}, None
+    for row in out.splitlines():
+        if row.startswith("+++ "):
+            path = None if row.endswith("/dev/null") else row[6:]
+        elif row.startswith("@@") and path:
+            m = re.search(r"\+(\d+)(?:,(\d+))?", row)
+            start, count = int(m[1]), int(m[2] or 1)
+            lines.setdefault(path, set()).update(range(start, start + count))
+    return lines
+
+
+def churn(a, b, *paths):
+    if a == b:
+        return 0
+    total = 0
+    for row in git("diff", "--numstat", a, b, "--", *paths).splitlines():
+        added, removed, _ = row.split("\t", 2)
+        if added != "-":
+            total += int(added) + int(removed)
+    return total
+
+
+def clippy(scope):
+    args = ["cargo", "clippy", "--all-targets", "--message-format=json", "--"]
+    for lint in LINTS:
+        args += ["-W", f"clippy::{lint}"]
+    run = subprocess.run(args, capture_output=True, text=True)
+    errors, warnings = [], []
+    for row in run.stdout.splitlines():
+        try:
+            item = json.loads(row)
+        except json.JSONDecodeError:
+            continue
+        msg = item.get("message")
+        if item.get("reason") != "compiler-message" or not msg:
+            continue
+        spans = [s for s in msg.get("spans", []) if s.get("is_primary")]
+        if not spans:
+            continue
+        span = spans[0]
+        code = (msg.get("code") or {}).get("code") or ""
+        text = f"{span['file_name']}:{span['line_start']}: {msg['message']}" + (f" [{code}]" if code else "")
+        if msg["level"] == "error":
+            errors.append(text)
+        elif msg["level"] == "warning":
+            if set(range(span["line_start"], span["line_end"] + 1)) & scope.get(span["file_name"], set()):
+                warnings.append(text)
+    if run.returncode and not errors:
+        errors = run.stderr.strip().splitlines()[-15:]
+    return list(dict.fromkeys(errors)), list(dict.fromkeys(warnings))
+
+
+def tests():
+    run = subprocess.run(
+        ["cargo", "nextest", "run", "--status-level", "fail", "--failure-output", "final", "--no-input-handler"],
+        capture_output=True, text=True,
+    )
+    if run.returncode == 0:
+        return []
+    return (run.stdout + run.stderr).strip().splitlines()[-30:]
+
+
+def is_ui(path):
+    return path.startswith("src/ui/") and path.endswith(".rs")
+
+
+def match_back(text, close):
+    depth = 0
+    for i in range(close, -1, -1):
+        if text[i] in ")]}":
+            depth += 1
+        elif text[i] in "([{":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def match_forward(text, opening):
+    depth, quoted, i = 0, False, opening
+    while i < len(text):
+        c = text[i]
+        if quoted:
+            if c == "\\":
+                i += 1
+            elif c == '"':
+                quoted = False
+        elif c == '"':
+            quoted = True
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def chain_of(text, dot):
+    parts, end = [], dot
+    root = None
+    while True:
+        i = end - 1
+        while i >= 0 and text[i].isspace():
+            i -= 1
+        if i < 0 or text[i] != ")":
+            m = re.search(r"[\w:]+$", text[:i + 1]) if i >= 0 else None
+            root = m[0] if m else None
+            break
+        opening = match_back(text, i)
+        m = re.search(r"([\w:]+)(?:::<[^>]*>)?$", text[:opening])
+        if opening < 0 or not m:
+            break
+        before = m.start() - 1
+        name = m[1]
+        args = text[opening:i + 1]
+        if before >= 0 and text[before] == ".":
+            parts.append((name, args))
+            end = before
+        else:
+            root = name
+            break
+    i = match_forward(text, text.index("(", dot))
+    while i >= 0:
+        m = re.match(r"\s*\.(\w+)(?:::<[^>]*>)?\(", text[i + 1:i + 400])
+        if not m:
+            break
+        opening = i + m.end()
+        close = match_forward(text, opening)
+        if close < 0:
+            break
+        parts.append((m[1], text[opening:close + 1]))
+        i = close
+    return root, parts
+
+
+def clickable_without_feedback(text, offset):
+    root, parts = chain_of(text, offset)
+    if root != "div":
+        return False
+    body = " ".join(f".{n}{a}" for n, a in parts if n not in ("child", "children"))
+    names = {n for n, _ in parts}
+    return not (names & {"soft", "hover", "active"} or re.search(r"\.(soft|hover|active)\(", body))
+
+
+def ui_lint(scope):
+    findings = []
+    for path, numbers in sorted(scope.items()):
+        if not is_ui(path) or not os.path.exists(path):
+            continue
+        src = open(path, encoding="utf-8").read().splitlines()
+        name = os.path.basename(path)
+        for n in sorted(numbers):
+            if n > len(src):
+                continue
+            line = src[n - 1]
+            if name != "theme.rs" and re.search(r"\b(rgb|rgba|hsla)\(", line):
+                findings.append(f"{path}:{n}: literal color, use Theme")
+            for value in re.findall(r"\bpx\((\d+(?:\.\d*)?)\)", line):
+                if 2 < float(value) <= 40:
+                    findings.append(f"{path}:{n}: px({value}), use a theme token")
+            if name != "motion.rs" and re.search(r"(with_animation|Animation::new|Transition::new).*from_(milli)?s", line):
+                findings.append(f"{path}:{n}: literal duration, use motion::FAST/MEDIUM/SLOW")
+            if re.search(r"\.(child|label|placeholder)\(\"[^\"]*[A-Za-zÄÖÜäöü]", line) or re.search(r"\btip\(\"", line):
+                findings.append(f"{path}:{n}: untranslated text, use tr()")
+        text = "\n".join(src)
+        for m in re.finditer(r"\.on_click\(", text):
+            n = text.count("\n", 0, m.start()) + 1
+            if n in numbers and clickable_without_feedback(text, m.start()):
+                findings.append(f"{path}:{n}: clickable div without hover/press feedback, use .soft()")
+    return findings
+
+
+def deep():
+    out = []
+    machete = subprocess.run(["cargo", "machete"], capture_output=True, text=True)
+    if machete.returncode:
+        out += [f"machete: {r}" for r in machete.stdout.splitlines() if r.startswith(("\t", " "))][:10]
+    deny = subprocess.run(["cargo", "deny", "check", "bans", "sources"], capture_output=True, text=True)
+    if deny.returncode:
+        out += ["cargo deny: " + r for r in deny.stderr.splitlines() if r.startswith("error")][:10]
+    return out
+
+
+def state_path(session):
+    return Path(git("rev-parse", "--absolute-git-dir")) / "agent-gate" / f"{session}.json"
+
+
+def load(session):
+    path = state_path(session)
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def save(session, state):
+    path = state_path(session)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state))
+
+
+def emit(**kwargs):
+    print(json.dumps(kwargs))
+    sys.exit(0)
+
+
+def cap(lines):
+    if len(lines) <= MAX_OUTPUT:
+        return "\n".join(lines)
+    return "\n".join(lines[:MAX_OUTPUT]) + f"\n... {len(lines) - MAX_OUTPUT} more"
+
+
+def needed_reviews(state, tree):
+    reviewed = state.setdefault("reviewed", {})
+    base = state["base"]
+    need = []
+    if churn(reviewed.get("rust-reviewer", base), tree, "*.rs") >= REVIEW_LINES:
+        need.append("rust-reviewer")
+    if churn(reviewed.get("ui-auditor", base), tree, "src/ui") >= AUDIT_LINES:
+        need.append("ui-auditor")
+    if churn(reviewed.get("ux-tester", base), tree, "src/ui") >= REVIEW_LINES:
+        need.append("ux-tester")
+    if churn(reviewed.get("perf-tester", base), tree, "src") >= PERF_LINES:
+        need.append("perf-tester")
+    return need
+
+
+def hook(data):
+    session = data["session_id"]
+    tree = snapshot()
+    state = load(session)
+    if state is None:
+        save(session, {"base": tree, "green": tree})
+        return
+    if tree != state.get("seen"):
+        state["seen"] = tree
+        if churn(state["green"], tree, "*.rs", "Cargo.toml", "Cargo.lock"):
+            scope = changed_lines(state["green"], tree)
+            errors, warnings = clippy(scope)
+            failed = errors or tests()
+            if failed:
+                save(session, state)
+                emit(decision="block", reason="Gate failed. Fix the cause:\n" + cap(failed + warnings))
+            findings = warnings + ui_lint(scope)
+            state["green"] = tree
+            if findings:
+                save(session, state)
+                emit(decision="block", reason="Gate findings on changed lines. Fix them, or state in one line why one does not apply:\n" + cap(findings))
+    if state["green"] != tree or state.get("asked") == tree:
+        save(session, state)
+        return
+    state["asked"] = tree
+    need = needed_reviews(state, tree)
+    save(session, state)
+    if need:
+        emit(decision="block", reason="Reviews due for this change: " + ", ".join(need) + ". Run them in parallel now and act on the findings. If one does not apply, say why in one line and stop.")
+
+
+def mark(data):
+    session, agent = data["session_id"], data.get("agent_type", "")
+    state = load(session) or {"base": snapshot()}
+    state.setdefault("green", state["base"])
+    state.setdefault("reviewed", {})[agent] = snapshot()
+    save(session, state)
+
+
+def cli(args):
+    if args.lint_all:
+        scope = {}
+        for path in Path("src/ui").rglob("*.rs"):
+            scope[str(path)] = set(range(1, path.read_text(encoding="utf-8").count("\n") + 2))
+        findings = ui_lint(scope)
+        print(cap(findings) if not args.count else len(findings))
+        return 0
+    tree = snapshot()
+    scope = changed_lines(git("rev-parse", f"{args.base}^{{tree}}"), tree)
+    errors, warnings = clippy(scope)
+    failed = list(errors)
+    if not errors:
+        failed += tests()
+    findings = warnings + ui_lint(scope)
+    if args.deep:
+        findings += deep()
+    if failed or findings:
+        print(cap(failed + findings))
+        return 1
+    print("gate green")
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="gate")
+    parser.add_argument("--base", default="HEAD")
+    parser.add_argument("--deep", action="store_true")
+    parser.add_argument("--hook", action="store_true")
+    parser.add_argument("--init", action="store_true")
+    parser.add_argument("--mark", action="store_true")
+    parser.add_argument("--lint-all", action="store_true")
+    parser.add_argument("--count", action="store_true")
+    args = parser.parse_args()
+    try:
+        os.chdir(git("rev-parse", "--show-toplevel"))
+    except subprocess.CalledProcessError:
+        return 0
+    if args.init or args.hook or args.mark:
+        data = json.load(sys.stdin)
+        if args.init:
+            if load(data["session_id"]) is None:
+                tree = snapshot()
+                save(data["session_id"], {"base": tree, "green": tree})
+        elif args.hook:
+            hook(data)
+        else:
+            mark(data)
+        return 0
+    return cli(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -3,6 +3,7 @@ pub mod inspector;
 pub mod main_window;
 pub mod onboarding;
 pub mod pages;
+pub mod perf;
 pub mod platform;
 pub mod selectable;
 pub mod spelling;

@@ -302,6 +302,7 @@ impl MainWindow {
 
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        super::perf::frame_start();
         if !std::mem::replace(&mut self.focused_once, true) && window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
         }
@@ -483,6 +484,7 @@ impl Render for MainWindow {
         if let Some(message) = error {
             root = root.child(error_alert(message, broken, config_path, &t));
         }
+        root = super::perf::frame_end(root);
         if super::chrome::CUSTOM {
             let bar = super::chrome::main_bar(cx);
             return div().size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().relative().child(root)).into_any_element();
