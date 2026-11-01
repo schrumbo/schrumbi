@@ -509,6 +509,17 @@ pub fn set_suspended(card: &Card, suspended: bool) {
     edit_state(card, |s| s.suspended = suspended);
 }
 
+/// Pauses or resumes all cards of a deck in one step.
+pub fn set_deck_suspended(deck: &str, suspended: bool) {
+    let cards = all_cards();
+    let mut store = STORE.write().unwrap();
+    for card in cards.iter().filter(|c| c.in_deck(deck)) {
+        store.file.cards.entry(card.raw.id.clone()).or_insert_with(|| CardState { note: card.note_rel.clone(), question: card.raw.front.clone(), ..Default::default() }).suspended = suspended;
+    }
+    drop(store);
+    save();
+}
+
 /// Puts a card aside until tomorrow.
 pub fn bury(card: &Card, at: i64) {
     edit_state(card, |s| s.buried_until = Some(next_day_start(at)));

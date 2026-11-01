@@ -329,6 +329,90 @@ fn similar_blocks(base: &[&str], other: &[&str]) -> Vec<(Range<usize>, Vec<Strin
     out
 }
 
+/// What a line can be turned into from its menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineKind {
+    Text,
+    Heading(usize),
+    Bullet,
+    Numbered,
+    Task,
+    Quote,
+    Code,
+    Callout,
+    Formula,
+}
+
+/// The line without what makes it a heading, list item or quote; its indent stays out.
+pub fn bare_text(line: &str) -> &str {
+    let t = line.trim_start();
+    let t = t.strip_prefix("> ").or_else(|| t.strip_prefix('>')).unwrap_or(t);
+    let t = t.trim_start_matches('#').trim_start();
+    let at = prefix_len(t);
+    t[at..].trim_start()
+}
+
+/// The same text as another kind of block, in as many lines as that takes.
+pub fn turn_into(lines: &[&str], kind: LineKind) -> Vec<String> {
+    let indent: String = lines.first().map_or(String::new(), |l| l.chars().take_while(|c| c.is_whitespace()).collect());
+    let texts: Vec<&str> = lines.iter().map(|l| bare_text(l)).collect();
+    let prefixed = |prefix: &str| texts.iter().map(|t| format!("{indent}{prefix}{t}")).collect::<Vec<_>>();
+    match kind {
+        LineKind::Text => prefixed(""),
+        LineKind::Heading(level) => prefixed(&format!("{} ", "#".repeat(level.clamp(1, 6)))),
+        LineKind::Bullet => prefixed("- "),
+        LineKind::Numbered => texts.iter().enumerate().map(|(i, t)| format!("{indent}{}. {t}", i + 1)).collect(),
+        LineKind::Task => prefixed("- [ ] "),
+        LineKind::Quote => prefixed("> "),
+        LineKind::Code => std::iter::once("```".to_string()).chain(texts.iter().map(|t| t.to_string())).chain(std::iter::once("```".to_string())).collect(),
+        LineKind::Callout => std::iter::once("> [!note]".to_string()).chain(texts.iter().map(|t| format!("> {t}"))).collect(),
+        LineKind::Formula => std::iter::once("$$".to_string()).chain(texts.iter().map(|t| t.to_string())).chain(std::iter::once("$$".to_string())).collect(),
+    }
+}
+
+/// A table with one more empty row at the end.
+pub fn table_with_row(lines: &[&str]) -> Vec<String> {
+    let columns = lines.first().map_or(1, |l| table_cells(l).len().max(1));
+    let row = format!("|{}", "  |".repeat(columns));
+    lines.iter().map(|l| l.to_string()).chain(std::iter::once(row)).collect()
+}
+
+/// A table with one more empty column on the right.
+pub fn table_with_column(lines: &[&str]) -> Vec<String> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let line = l.trim_end();
+            let line = if line.ends_with('|') { line.to_string() } else { format!("{line} |") };
+            if i == 1 { format!("{line}---|") } else { format!("{line}  |") }
+        })
+        .collect()
+}
+
+/// The formula around a position in a line, without its dollar signs.
+pub fn formula_at(line: &str, caret: usize) -> Option<&str> {
+    let mut start = None;
+    let bytes = line.as_bytes();
+    for (i, b) in bytes.iter().enumerate() {
+        if *b != b'$' || (i > 0 && bytes[i - 1] == b'\\') {
+            continue;
+        }
+        match start {
+            None if bytes.get(i + 1).is_some_and(|b| !b.is_ascii_whitespace()) => start = Some(i),
+            None => {}
+            Some(_) if bytes[i - 1].is_ascii_whitespace() || bytes.get(i + 1).is_some_and(u8::is_ascii_digit) => {}
+            Some(open) => {
+                if caret > open && caret <= i && i > open + 1 {
+                    return line.get(open + 1..i);
+                }
+                start = None;
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,5 +480,29 @@ mod tests {
         assert_eq!(merge(base, "a\nb\nc\nd\ne", "a\nb!\nc\nd\ne").unwrap(), "a\nb!\nc\nd\ne");
         assert_eq!(merge(base, "a\nB\nc\nd\ne", "a\nb2\nc\nd\ne"), None);
         assert_eq!(merge(base, "a\nB\nc\nd\ne", "a\nB\nc\nd\ne").unwrap(), "a\nB\nc\nd\ne");
+    }
+
+    #[test]
+    fn lines_turn_into_other_blocks() {
+        assert_eq!(turn_into(&["# Titel"], LineKind::Bullet), vec!["- Titel"]);
+        assert_eq!(turn_into(&["- [ ] Aufgabe"], LineKind::Heading(2)), vec!["## Aufgabe"]);
+        assert_eq!(turn_into(&["> Zitat"], LineKind::Text), vec!["Zitat"]);
+        assert_eq!(turn_into(&["a"], LineKind::Code), vec!["```", "a", "```"]);
+        assert_eq!(turn_into(&["  - x"], LineKind::Task), vec!["  - [ ] x"]);
+    }
+
+    #[test]
+    fn tables_grow() {
+        let table = ["| a | b |", "|---|---|", "| 1 | 2 |"];
+        assert_eq!(table_with_row(&table).last().unwrap(), "|  |  |");
+        assert_eq!(table_with_column(&table), vec!["| a | b |  |", "|---|---|---|", "| 1 | 2 |  |"]);
+    }
+
+    #[test]
+    fn finds_the_formula_under_the_caret() {
+        assert_eq!(formula_at("a $x^2$ b $y$", 4), Some("x^2"));
+        assert_eq!(formula_at("a $x^2$ b $y$", 1), None);
+        assert_eq!(formula_at("preis 5\\$ und $y$", 15), Some("y"));
+        assert_eq!(formula_at("Preis 5$ und 7$ gesamt", 10), None);
     }
 }

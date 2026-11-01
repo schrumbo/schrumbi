@@ -58,6 +58,13 @@ impl Filter {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Order {
+    Note,
+    Due,
+    Hardest,
+}
+
 /// One line of the deck tree.
 #[derive(Clone, PartialEq)]
 struct DeckRow {
@@ -81,6 +88,8 @@ struct Session {
     ratings: [usize; 4],
     started: i64,
     left: Counts,
+    /// Everything once, before an exam: nothing about the schedule changes.
+    cram: Option<Vec<Card>>,
 }
 
 /// The flashcards room: decks on the left, a deck's state and cards on the right, or a learning session.
@@ -90,11 +99,12 @@ pub struct CardsPage {
     session: Option<Session>,
     query: Entity<InputState>,
     filter: Filter,
+    order: Order,
     selected: Option<String>,
     preview: Option<(String, Arc<ParsedNote>, Arc<ParsedNote>)>,
     focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
-    cached: Option<((u64, i64, String, Filter, String), Rc<Vec<usize>>)>,
+    cached: Option<((u64, i64, String, Filter, Order, String), Rc<Vec<usize>>)>,
     all: Arc<Vec<Card>>,
     _subs: Vec<Subscription>,
 }
@@ -134,7 +144,7 @@ fn deck_rows(all: &[Card], open: &BTreeSet<String>, cx: &App) -> Vec<DeckRow> {
     fn walk(parent: &str, depth: usize, children: &BTreeMap<String, BTreeSet<String>>, totals: &BTreeMap<String, usize>, open: &BTreeSet<String>, cx: &App, out: &mut Vec<DeckRow>) {
         let Some(list) = children.get(parent) else { return };
         let mut sorted: Vec<&String> = list.iter().collect();
-        sorted.sort_by_key(|d| (d.ends_with(".md"), d.to_lowercase()));
+        sorted.sort_by_key(|d| (d.ends_with(".md"), natural_key(d)));
         for deck in sorted {
             let is_open = open.contains(deck);
             let name = deck.rsplit('/').next().unwrap_or(deck);
@@ -154,6 +164,35 @@ fn deck_rows(all: &[Card], open: &BTreeSet<String>, cx: &App) -> Vec<DeckRow> {
 fn counts_pills(counts: Counts, t: &Theme) -> Div {
     let piece = |n: usize, color: Hsla| (n > 0).then(|| div().text_color(color).font_features(tabular()).child(n.to_string()));
     div().flex_none().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).children(piece(counts.new, t.blue)).children(piece(counts.learning, t.orange)).children(piece(counts.review, t.green))
+}
+
+/// Sorts `Modul2` before `Modul10`.
+fn natural_key(text: &str) -> String {
+    let mut out = String::new();
+    let mut digits = String::new();
+    for c in text.to_lowercase().chars() {
+        if c.is_ascii_digit() {
+            digits.push(c);
+        } else {
+            if !digits.is_empty() {
+                out.push_str(&format!("{digits:0>8}"));
+                digits.clear();
+            }
+            out.push(c);
+        }
+    }
+    if !digits.is_empty() {
+        out.push_str(&format!("{digits:0>8}"));
+    }
+    out
+}
+
+fn order_label(order: Order) -> String {
+    match order {
+        Order::Note => tr("In der Notiz"),
+        Order::Due => tr("Nach Fälligkeit"),
+        Order::Hardest => tr("Schwierigste zuerst"),
+    }
 }
 
 fn rating_name(rating: Rating) -> String {
@@ -176,7 +215,7 @@ impl CardsPage {
             }),
             cx.observe(&state::lib(cx), |_, _, cx| cx.notify()),
         ];
-        Self { deck: String::new(), open: BTreeSet::new(), session: None, query, filter: Filter::All, selected: None, preview: None, focus: cx.focus_handle(), list_scroll: UniformListScrollHandle::new(), cached: None, all: Arc::new(Vec::new()), _subs: subs }
+        Self { deck: String::new(), open: BTreeSet::new(), session: None, query, filter: Filter::All, order: Order::Note, selected: None, preview: None, focus: cx.focus_handle(), list_scroll: UniformListScrollHandle::new(), cached: None, all: Arc::new(Vec::new()), _subs: subs }
     }
 
     /// Takes the keyboard, so the keys of the page work right away.
@@ -192,7 +231,19 @@ impl CardsPage {
     }
 
     fn start(&mut self, deck: String, window: &mut Window, cx: &mut Context<Self>) {
-        let mut session = Session { deck, current: None, front: parsed(""), back: parsed(""), shown: false, answered: Vec::new(), ratings: [0; 4], started: cards::now(), left: Counts::default() };
+        let mut session = Session { deck, current: None, front: parsed(""), back: parsed(""), shown: false, answered: Vec::new(), ratings: [0; 4], started: cards::now(), left: Counts::default(), cram: None };
+        Self::advance(&mut session, None);
+        self.session = Some(session);
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// Goes through all cards of a deck once, in random order, leaving their schedule as it is.
+    fn start_cram(&mut self, deck: String, window: &mut Window, cx: &mut Context<Self>) {
+        let now = cards::now();
+        let mut all: Vec<Card> = cards::all_cards().iter().filter(|c| c.in_deck(&deck) && !c.suspended()).cloned().collect();
+        all.sort_by_key(|c| c.id().bytes().fold(now as u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64)));
+        let mut session = Session { deck, current: None, front: parsed(""), back: parsed(""), shown: false, answered: Vec::new(), ratings: [0; 4], started: now, left: Counts::default(), cram: Some(all) };
         Self::advance(&mut session, None);
         self.session = Some(session);
         window.focus(&self.focus, cx);
@@ -201,6 +252,17 @@ impl CardsPage {
 
     /// Moves on to whatever is due now; the card just answered waits unless nothing else is left.
     fn advance(session: &mut Session, last: Option<&str>) {
+        if let Some(rest) = &mut session.cram {
+            let next = (!rest.is_empty()).then(|| rest.remove(0));
+            session.left = Counts { new: 0, learning: 0, review: rest.len() };
+            session.shown = false;
+            if let Some(card) = &next {
+                session.front = parsed(&card.raw.front);
+                session.back = parsed(&card.raw.back);
+            }
+            session.current = next;
+            return;
+        }
         let now = cards::now();
         let queue = cards::queue(&session.deck, now);
         session.left = cards::counts(&session.deck, now);
@@ -224,8 +286,10 @@ impl CardsPage {
     fn rate(&mut self, rating: Rating, cx: &mut Context<Self>) {
         let Some(s) = &mut self.session else { return };
         let Some(card) = s.current.clone().filter(|_| s.shown) else { return };
-        let done = cards::answer(&card, rating, cards::now());
-        s.answered.push(done);
+        if s.cram.is_none() {
+            let done = cards::answer(&card, rating, cards::now());
+            s.answered.push(done);
+        }
         s.ratings[rating as usize - 1] += 1;
         Self::advance(s, Some(card.id()));
         state::lib(cx).update(cx, |_, cx| cx.notify());
@@ -281,14 +345,22 @@ impl CardsPage {
 
     fn visible(&mut self, now: i64, cx: &App) -> Rc<Vec<usize>> {
         let query = fold(self.query.read(cx).value().trim());
-        let key = (index::current().generation, now / 60, self.deck.clone(), self.filter, query.clone());
+        let key = (index::current().generation, now / 60, self.deck.clone(), self.filter, self.order, query.clone());
         if let Some((k, rows)) = &self.cached
             && *k == key
             && !self.all.is_empty()
         {
             return rows.clone();
         }
-        let rows: Vec<usize> = self.all.iter().enumerate().filter(|(_, c)| c.in_deck(&self.deck) && self.filter.keeps(c, now) && (query.is_empty() || fold(&c.raw.front).contains(&query) || fold(&c.raw.back).contains(&query))).map(|(i, _)| i).collect();
+        let mut rows: Vec<usize> = self.all.iter().enumerate().filter(|(_, c)| c.in_deck(&self.deck) && self.filter.keeps(c, now) && (query.is_empty() || fold(&c.raw.front).contains(&query) || fold(&c.raw.back).contains(&query))).map(|(i, _)| i).collect();
+        match self.order {
+            Order::Note => {}
+            Order::Due => rows.sort_by_key(|i| self.all[*i].state.as_ref().filter(|s| s.phase != Phase::New).map_or(i64::MAX, |s| s.due)),
+            Order::Hardest => rows.sort_by(|a, b| {
+                let hard = |i: &usize| self.all[*i].state.as_ref().map_or(0., |s| s.difficulty + s.lapses as f64);
+                hard(b).total_cmp(&hard(a))
+            }),
+        }
         let rows = Rc::new(rows);
         self.cached = Some((key, rows.clone()));
         rows
@@ -460,9 +532,24 @@ impl CardsPage {
                         .on_click(move |_, _, cx| b.update(cx, |p, cx| p.select_deck(deck_b.clone(), cx)))
                         .context_menu(move |menu, _, _| {
                             let (start, new, deck_start, deck_new) = (m_c.clone(), m_d.clone(), deck_c.clone(), deck_d.clone());
+                            let (cram, deck_cram, pause, deck_pause, resume, deck_resume) = (m_c.clone(), deck_c.clone(), m_c.clone(), deck_c.clone(), m_c.clone(), deck_c.clone());
                             menu.item(PopupMenuItem::new(tr("Lernen")).icon(menu_icon("graduation-cap")).on_click(move |_, window, cx| {
                                 let deck = deck_start.clone();
                                 start.update(cx, |p, cx| p.start(deck, window, cx));
+                            }))
+                            .item(PopupMenuItem::new(tr("Alles wiederholen")).icon(menu_icon("repeat")).on_click(move |_, window, cx| {
+                                let deck = deck_cram.clone();
+                                cram.update(cx, |p, cx| p.start_cram(deck, window, cx));
+                            }))
+                            .item(PopupMenuItem::new(tr("Alle pausieren")).icon(menu_icon("pause")).on_click(move |_, _, cx| {
+                                cards::set_deck_suspended(&deck_pause, true);
+                                pause.update(cx, |_, cx| cx.notify());
+                                state::lib(cx).update(cx, |_, cx| cx.notify());
+                            }))
+                            .item(PopupMenuItem::new(tr("Alle fortsetzen")).icon(menu_icon("rotate-ccw")).on_click(move |_, _, cx| {
+                                cards::set_deck_suspended(&deck_resume, false);
+                                resume.update(cx, |_, cx| cx.notify());
+                                state::lib(cx).update(cx, |_, cx| cx.notify());
                             }))
                             .item(PopupMenuItem::new(tr("Neue Karte…")).icon(menu_icon("plus")).on_click(move |_, window, cx| {
                                 let deck = deck_new.clone();
@@ -707,13 +794,14 @@ impl CardsPage {
         } else {
             tr("Alles gelernt.")
         };
-        let start_deck = deck.clone();
+        let (start_deck, cram_deck) = (deck.clone(), deck.clone());
         let head = div()
             .flex_none()
             .flex()
             .items_center()
             .gap(px(space::M))
             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).truncate().child(title)).child(div().text_color(t.secondary).truncate().child(status)))
+            .child(Button::new("cards-cram").ghost().icon(menu_icon("repeat")).tooltip(tr("Wiederholt alle Karten, ohne die Planung zu ändern. Gut vor Prüfungen.")).disabled(stats.total == 0).on_click(cx.listener(move |p, _, window, cx| p.start_cram(cram_deck.clone(), window, cx))))
             .child(Button::new("cards-new").icon(menu_icon("plus")).label(tr("Neue Karte")).tooltip(tr("Neue Karte (N)")).on_click(cx.listener(|p, _, window, cx| p.compose(None, window, cx))))
             .child(Button::new("cards-learn").primary().icon(menu_icon("graduation-cap")).label(if total > 0 { trf("Lernen (%@)", &[&total.to_string()]) } else { tr("Lernen") }).tooltip(tr("Lernen (Leertaste)")).disabled(total == 0).on_click(cx.listener(move |p, _, window, cx| p.start(start_deck.clone(), window, cx))));
         let retention = stats.true_retention.map_or_else(|| "–".to_string(), |r| format!("{:.0} %", r * 100.));
@@ -744,6 +832,7 @@ impl CardsPage {
             .into_any_element()
         };
         let current_filter = self.filter;
+        let current_order = self.order;
         let filters = div().flex().flex_wrap().gap(px(space::XXS)).children(Filter::ALL.iter().map(|f| {
             let (f, on) = (*f, *f == current_filter);
             div().id(SharedString::from(format!("filter-{f:?}"))).px(px(space::S)).h(px(control::S)).flex().items_center().rounded(px(radius::INNER)).cursor_pointer().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.1))).when(!on, |d| d.text_color(t.secondary).soft(t.ink.opacity(0.05), radius::INNER)).child(f.label()).on_click(cx.listener(move |p, _, _, cx| {
@@ -751,7 +840,19 @@ impl CardsPage {
                 cx.notify();
             }))
         }));
-        let browser = div().flex_1().min_h_0().flex().flex_col().child(div().flex_none().px(px(space::L)).py(px(space::S)).flex().flex_wrap().items_center().gap(px(space::S)).border_t_1().border_b_1().border_color(t.separator).child(div().w(px(220.)).child(Input::new(&self.query).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary)))).child(filters).child(div().flex_1()).child(caption(if rows.len() == 1 { tr("1 Karte") } else { trf("%@ Karten", &[&rows.len().to_string()]) }, t))).child(div().flex_1().min_h_0().child(list));
+        let browser = div().flex_1().min_h_0().flex().flex_col().child(div().flex_none().px(px(space::L)).py(px(space::S)).flex().flex_wrap().items_center().gap(px(space::S)).border_t_1().border_b_1().border_color(t.separator).child(div().w(px(220.)).child(Input::new(&self.query).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary)))).child(filters).child(div().flex_1()).child(Button::new("cards-order").ghost().small().label(order_label(current_order)).dropdown_caret(true).tooltip(tr("Sortierung")).dropdown_menu({
+                    let me = cx.entity();
+                    move |mut menu, _, _| {
+                        for choice in [Order::Note, Order::Due, Order::Hardest] {
+                            let e = me.clone();
+                            menu = menu.item(PopupMenuItem::new(order_label(choice)).checked(choice == current_order).on_click(move |_, _, cx| e.update(cx, |p, cx| {
+                                p.order = choice;
+                                cx.notify();
+                            })));
+                        }
+                        menu
+                    }
+                })).child(caption(if rows.len() == 1 { tr("1 Karte") } else { trf("%@ Karten", &[&rows.len().to_string()]) }, t))).child(div().flex_1().min_h_0().child(list));
         let chosen = self.selected.as_ref().and_then(|id| self.all.iter().find(|c| c.id() == id)).cloned();
         let summary: AnyElement = if wide { div().flex().gap(px(space::XL)).child(div().flex_1().min_w_0().child(tiles)).child(div().w(px(340.)).flex_none().child(forecast)).into_any_element() } else { tiles.into_any_element() };
         let main = div().flex_1().min_w_0().h_full().flex().flex_col().child(div().flex_none().p(px(space::XL)).pb(px(space::L)).flex().flex_col().gap(px(space::L)).child(head).child(summary)).child(browser);
@@ -822,7 +923,7 @@ impl CardsPage {
                 p.cached = None;
                 cx.notify();
             })))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(deck_title(&s.deck, cx)))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(if s.cram.is_some() { format!("{} · {}", deck_title(&s.deck, cx), tr("Prüfungsmodus")) } else { deck_title(&s.deck, cx) }))
             .child(count_piece(s.left.new, t.blue, phase == Phase::New, tr("neu")))
             .child(count_piece(s.left.learning, t.orange, matches!(phase, Phase::Learning | Phase::Relearning), tr("lernen")))
             .child(count_piece(s.left.review, t.green, phase == Phase::Review, tr("fällig")))
@@ -865,6 +966,7 @@ impl CardsPage {
             );
         let footer: AnyElement = if shown {
             let choices = cards::options(card.id(), card.state.as_ref(), &card.note_rel, &card.raw.front, now);
+            let cramming = self.session.as_ref().is_some_and(|s| s.cram.is_some());
             let colors = [t.red, t.orange, t.green, t.blue];
             div()
                 .flex_none()
@@ -895,7 +997,7 @@ impl CardsPage {
                         .key_nav()
                         .hover(move |d| d.bg(hover))
                         .active(move |d| d.bg(color.opacity(0.26)))
-                        .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child(cards::wait_label(now, choices[i].due)))
+                        .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child(if cramming { String::new() } else { cards::wait_label(now, choices[i].due) }))
                         .child(div().flex().items_baseline().gap(px(space::XS)).child(div().font_weight(FontWeight::SEMIBOLD).text_color(t.readable(color)).child(rating_name(rating))).child(div().text_size(px(font::CAPTION2)).text_color(t.tertiary).child((i + 1).to_string())))
                         .on_click(cx.listener(move |p, _, _, cx| p.rate(rating, cx)))
                 }))
