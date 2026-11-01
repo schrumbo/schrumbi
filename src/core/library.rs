@@ -1569,8 +1569,11 @@ impl Library {
         out
     }
 
-    /// Convention name for a new note in `folder`, or a plain name outside modules.
+    /// The file name of something new in `folder`: notes are called what you call them, other files follow the module's convention.
     pub fn note_name(&self, title: &str, folder: &Path, ext: &str) -> String {
+        if ext == "md" {
+            return format!("{}.md", title.trim().chars().map(|c| if "\\/:".contains(c) { '-' } else { c }).collect::<String>());
+        }
         let Some(naming) = self.module_containing(folder).and_then(|m| self.naming(&m.id)) else { return format!("{}.{ext}", Naming::clean(title)) };
         naming.render(title, self.today(), ext, &[], self.lecture_week_containing(self.today()).map(|w| w.index), None, None)
     }

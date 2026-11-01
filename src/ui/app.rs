@@ -113,7 +113,8 @@ pub fn init(cx: &mut App) {
         act(cx, |l| {
             if l.root.is_some() {
                 let module_id = if let Route::Module(id) = l.route() { Some(id.clone()) } else { None };
-                l.new_note = Some(NewNoteRequest { module_id, folder: None });
+                let beside = if let Route::Doc(p) = l.route() { p.parent().map(std::path::Path::to_path_buf) } else { None };
+                l.new_note = Some(NewNoteRequest { module_id, folder: beside });
             }
         })
     });

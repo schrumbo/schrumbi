@@ -86,6 +86,7 @@ pub fn parse(src: &str) -> ParsedNote {
     let mut image: Option<(String, String)> = None;
     let mut footnotes: Vec<(String, Vec<Inline>)> = Vec::new();
     let mut footnote_order: Vec<String> = Vec::new();
+    let mut html_block: Option<String> = None;
     let flush_inline = |stack: &mut Vec<(Option<Tag>, Vec<Block>, Vec<Inline>)>| {
         let top = stack.last_mut().unwrap();
         if !top.2.is_empty() {
@@ -131,7 +132,14 @@ pub fn parse(src: &str) -> ParsedNote {
         match event {
             Event::Start(tag) => match tag {
                 Tag::MetadataBlock(_) => metadata = Some(String::new()),
-                Tag::Paragraph | Tag::Heading { .. } | Tag::BlockQuote(_) | Tag::FootnoteDefinition(_) => stack.push((Some(tag), Vec::new(), Vec::new())),
+                Tag::Paragraph | Tag::Heading { .. } | Tag::BlockQuote(_) | Tag::FootnoteDefinition(_) => {
+                    flush_inline(&mut stack);
+                    stack.push((Some(tag), Vec::new(), Vec::new()));
+                }
+                Tag::HtmlBlock => {
+                    flush_inline(&mut stack);
+                    html_block = Some(String::new());
+                }
                 Tag::Item => {
                     flush_inline(&mut stack);
                     item_meta.push((None, line_of(src, range.start)));
@@ -150,7 +158,10 @@ pub fn parse(src: &str) -> ParsedNote {
                     };
                     code = Some((lang, String::new()));
                 }
-                Tag::Table(a) => table = Some((Vec::new(), Vec::new(), a, false)),
+                Tag::Table(a) => {
+                    flush_inline(&mut stack);
+                    table = Some((Vec::new(), Vec::new(), a, false));
+                }
                 Tag::TableHead => {
                     if let Some(t) = table.as_mut() {
                         t.3 = true;
@@ -171,13 +182,18 @@ pub fn parse(src: &str) -> ParsedNote {
             },
             Event::End(end) => match end {
                 TagEnd::Paragraph => {
-                    let (_, _, mut inl) = stack.pop().unwrap();
-                    let block = if strip_block_id(&mut inl) && plain_text(&inl).trim().is_empty() { Block::Nothing } else { Block::Paragraph(inl) };
-                    stack.last_mut().unwrap().1.push(block);
+                    let (_, inner, mut inl) = stack.pop().unwrap();
+                    let had_blocks = !inner.is_empty();
+                    stack.last_mut().unwrap().1.extend(inner);
+                    if !(had_blocks && inl.is_empty()) {
+                        let block = if strip_block_id(&mut inl) && plain_text(&inl).trim().is_empty() { Block::Nothing } else { Block::Paragraph(inl) };
+                        stack.last_mut().unwrap().1.push(block);
+                    }
                 }
                 TagEnd::Heading(level) => {
-                    let (_, _, inl) = stack.pop().unwrap();
+                    let (_, inner, inl) = stack.pop().unwrap();
                     stack.last_mut().unwrap().1.push(Block::Heading(markdown::heading_number(level), inl));
+                    stack.last_mut().unwrap().1.extend(inner);
                 }
                 TagEnd::BlockQuote(_) => {
                     flush_inline(&mut stack);
@@ -228,6 +244,12 @@ pub fn parse(src: &str) -> ParsedNote {
                         stack.last_mut().unwrap().1.push(Block::Table { head, rows, aligns });
                     }
                 }
+                TagEnd::HtmlBlock => {
+                    let text = html_text(&html_block.take().unwrap_or_default());
+                    if !text.trim().is_empty() {
+                        stack.last_mut().unwrap().1.push(Block::Html(text.trim().to_string()));
+                    }
+                }
                 TagEnd::Emphasis => style.italic = false,
                 TagEnd::Strong => style.bold = false,
                 TagEnd::Strikethrough => style.strike = false,
@@ -262,11 +284,19 @@ pub fn parse(src: &str) -> ParsedNote {
                 stack.last_mut().unwrap().1.push(Block::Math(m.to_string()));
             }
             Event::HardBreak => stack.last_mut().unwrap().2.push(Inline::Text("\n".into(), style)),
-            Event::Rule => stack.last_mut().unwrap().1.push(Block::Rule),
+            Event::Rule => {
+                flush_inline(&mut stack);
+                stack.last_mut().unwrap().1.push(Block::Rule);
+            }
             Event::Html(h) => {
-                let text = html_text(&h);
-                if !text.trim().is_empty() {
-                    stack.last_mut().unwrap().1.push(Block::Html(text.trim_end().to_string()));
+                if let Some(buffer) = html_block.as_mut() {
+                    buffer.push_str(&h);
+                } else {
+                    flush_inline(&mut stack);
+                    let text = html_text(&h);
+                    if !text.trim().is_empty() {
+                        stack.last_mut().unwrap().1.push(Block::Html(text.trim().to_string()));
+                    }
                 }
             }
             Event::InlineHtml(h) => match h.trim().to_lowercase().as_str() {
@@ -373,7 +403,9 @@ fn html_text(html: &str) -> String {
     static COMMENT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?s)<!--.*?-->").unwrap());
     static BREAK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)<br\s*/?>|</(p|div|li|tr|h[1-6])>").unwrap());
     static TAG: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"<[^>]+>").unwrap());
-    let text = COMMENT.replace_all(html, "");
+    static HIDDEN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?is)<script\b.*?(?:</script\s*>|$)|<style\b.*?(?:</style\s*>|$)").unwrap());
+    let text = HIDDEN.replace_all(html, "");
+    let text = COMMENT.replace_all(&text, "");
     let text = BREAK.replace_all(&text, "\n");
     TAG.replace_all(&text, "").replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
 }
@@ -953,8 +985,8 @@ impl RenderOnce for Callout {
                     })
                 })
             });
-        let body = div().pt(px(space::S)).flex().flex_col().gap(px(space::S)).children(self.content);
-        super::widgets::banner(tint).w_full().px(px(space::M)).py(px(space::S)).flex().flex_col().child(row).when(has_body, |d| d.child(super::motion::reveal(reveal_id, is_open, body)))
+        let body = div().w_full().pt(px(space::S)).flex().flex_col().gap(px(space::S)).children(self.content);
+        super::widgets::banner(tint).w_full().px(px(space::M)).py(px(space::S)).flex().flex_col().child(row).when(has_body, |d| d.child(div().w_full().child(super::motion::reveal(reveal_id, is_open, body))))
     }
 }
 
@@ -1115,5 +1147,54 @@ mod tests {
         let note = parse("# T\n\n- [ ] a\n- [x] b\n\ntext");
         let Some(Block::List { items, .. }) = note.blocks.iter().find(|b| matches!(b, Block::List { .. })) else { panic!("no list") };
         assert_eq!(items.iter().map(|i| (i.task, i.line)).collect::<Vec<_>>(), vec![(Some(false), 2), (Some(true), 3)]);
+    }
+}
+
+#[cfg(test)]
+mod reader_tests {
+    use super::{Block, html_text, parse};
+
+    fn kinds(src: &str) -> Vec<&'static str> {
+        parse(src)
+            .blocks
+            .iter()
+            .map(|b| match b {
+                Block::Heading(..) => "heading",
+                Block::Paragraph(_) => "paragraph",
+                Block::Quote(_) => "quote",
+                Block::Code(..) => "code",
+                Block::List { .. } => "list",
+                Block::Rule => "rule",
+                Block::Table { .. } => "table",
+                Block::Html(_) => "html",
+                Block::Callout(..) => "callout",
+                Block::Properties(_) => "properties",
+                Block::Math(_) => "math",
+                Block::Nothing => "nothing",
+            })
+            .collect()
+    }
+
+    #[test]
+    fn display_math_reaches_the_reader_in_order() {
+        assert_eq!(kinds("$$\na^2\n$$\n"), ["math"]);
+        assert_eq!(kinds("Text $$a$$ mehr\n"), ["paragraph", "math", "paragraph"]);
+        assert_eq!(kinds("$$a$$\n\nDanach\n"), ["math", "paragraph"]);
+    }
+
+    #[test]
+    fn scripts_styles_and_comments_stay_hidden() {
+        assert_eq!(kinds("<script>\nvar a = 1;\n\nvar b = 2;\n</script>\n\nText\n"), ["paragraph"]);
+        assert_eq!(kinds("<!--\nverborgen\nauch das\n-->\n\nText\n"), ["paragraph"]);
+        assert_eq!(kinds("<style>\na { color: red }\n</style>\n"), [] as [&str; 0]);
+        assert_eq!(html_text("<div>sichtbar</div><script>weg</script>").trim(), "sichtbar");
+    }
+
+    #[test]
+    fn blocks_in_a_tight_list_keep_their_order() {
+        let parsed = parse("- Liste\n  > Zitat\n");
+        let Block::List { items, .. } = &parsed.blocks[0] else { panic!() };
+        assert!(matches!(items[0].blocks[0], Block::Paragraph(_)), "text comes first");
+        assert!(matches!(items[0].blocks[1], Block::Quote(_)));
     }
 }

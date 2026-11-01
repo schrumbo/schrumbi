@@ -202,7 +202,7 @@ impl ShortcutAction {
             Self::ToggleInspector => s("i", true, false, true, false),
             Self::Refresh => s("r", true, false, false, false),
             Self::Sync => s("s", true, true, false, false),
-            Self::DailyNote => s("d", true, false, true, false),
+            Self::DailyNote => s("t", true, false, true, false),
             Self::OpenInObsidian => s("o", true, false, true, false),
             Self::CloseTab => s("w", true, false, false, false),
             Self::NextTab => s("tab", false, false, false, true),

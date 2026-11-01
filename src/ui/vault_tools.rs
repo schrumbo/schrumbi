@@ -23,19 +23,6 @@ pub fn in_vault(path: &Path, cx: &App) -> bool {
     }
 }
 
-/// Whether writing in this note happens in Obsidian, with Schrumbi for reading and managing.
-pub fn writes_in_obsidian(path: &Path, cx: &App) -> bool {
-    use crate::core::vault::config::Reach;
-    if !in_vault(path, cx) {
-        return false;
-    }
-    match crate::core::prefs::get().edit_notes_in.as_str() {
-        "obsidian" => true,
-        "schrumbi" => false,
-        _ => index::current().reach == Some(Reach::Known),
-    }
-}
-
 /// Opens a file in Obsidian, or says why that cannot work here.
 pub fn open_in_obsidian(path: &Path, cx: &mut App) {
     use crate::core::vault::config::{self, Reach};

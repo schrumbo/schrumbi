@@ -335,7 +335,7 @@ impl Render for Setup {
                 .flex_col()
                 .gap(px(space::L))
                 .child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Das ist ein Obsidian-Vault")))
-                .child(div().text_color(t.secondary).child(tr("Du schreibst weiter in Obsidian. Schrumbi liest mit, zeigt was ansteht und hilft beim Einsortieren. Welche Ordner sind Module? Alles andere bleibt einfach Notizen.")))
+                .child(div().text_color(t.secondary).child(tr("Deine Notizen bleiben normale Dateien. Du kannst sie hier schreiben und in Obsidian, auch gleichzeitig. Welche Ordner sind Module? Alles andere bleibt einfach Notizen.")))
                 .child(grouped(&t).children(folders.into_iter().enumerate().map(|(i, module)| {
                     let selected = self.draft.modules.iter().any(|m| m.id == module.id);
                     let label = module.folder.clone();

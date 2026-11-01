@@ -315,7 +315,7 @@ fn vault_hits(query: &str) -> Vec<VaultHit> {
     }
     hits.sort_by(|a, b| a.label.cmp(&b.label));
     hits.truncate(20);
-    if vault.resolve(query, None).is_none() {
+    if vault.resolve(query, None).is_none() && !query.contains(['|', '#', '^', '[', ']', '\\', ':', '*', '?', '"', '<', '>']) {
         hits.push(VaultHit { label: trf("Neue Notiz „%@“ anlegen", &[&query.to_string()]), detail: String::new(), icon: "file-plus", open: None, create: Some(query.to_string()) });
     }
     hits
@@ -574,9 +574,6 @@ impl NewNote {
                 if let Some(p) = act(cx, |l| l.create_note(&title, &folder, ext)) {
                     cx.emit(Dismissed);
                     act(cx, |l| l.open_file(&p));
-                    if super::vault_tools::writes_in_obsidian(&p, cx) {
-                        super::vault_tools::open_in_obsidian(&p, cx);
-                    }
                 }
             }
         }

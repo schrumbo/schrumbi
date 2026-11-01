@@ -20,6 +20,8 @@ pub struct Property {
     pub name: String,
     pub kind: PropertyKind,
     pub values: Vec<String>,
+    /// Holds nested data that fields cannot show. It stays readable and is never written back.
+    pub nested: bool,
 }
 
 /// The byte range of the front matter's content, between the `---` lines, if the note has any.
@@ -82,20 +84,22 @@ pub fn infer_kind(name: &str, v: &Value) -> PropertyKind {
     }
 }
 
-/// Reads the properties; `None` when the block is not valid YAML or holds nested data the fields cannot show.
+/// Reads the properties; `None` when the block is not valid YAML. One nested value never hides the others.
 pub fn properties(text: &str) -> Option<Vec<Property>> {
     let r = range(text)?;
     let value: Value = serde_yaml_ng::from_str(&text[r]).ok()?;
     let Value::Mapping(map) = value else { return Some(Vec::new()) };
     let mut out = Vec::new();
     for (k, v) in &map {
-        let name = scalar(k)?;
-        let kind = infer_kind(&name, v);
-        let values = match v {
-            Value::Sequence(items) => items.iter().map(scalar).collect::<Option<Vec<_>>>()?,
-            other => vec![scalar(other)?],
+        let Some(name) = scalar(k) else { continue };
+        let simple = match v {
+            Value::Sequence(items) => items.iter().map(scalar).collect::<Option<Vec<_>>>(),
+            other => scalar(other).map(|s| vec![s]),
         };
-        out.push(Property { name, kind, values });
+        let nested = simple.is_none();
+        let kind = if nested { PropertyKind::Text } else { infer_kind(&name, v) };
+        let values = simple.unwrap_or_else(|| vec![serde_yaml_ng::to_string(v).unwrap_or_default().trim().to_string()]);
+        out.push(Property { name, kind, values, nested });
     }
     Some(out)
 }
@@ -200,6 +204,16 @@ pub fn rename(text: &str, old: &str, new: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_nested_value_hides_nothing_else() {
+        let text = "---\ntags: [a]\naliases: [B]\nmeta:\n  x: 1\nstatus: offen\n---\nText";
+        let props = properties(text).unwrap();
+        assert_eq!(props.len(), 4);
+        assert!(props.iter().find(|p| p.name == "meta").unwrap().nested);
+        assert_eq!(aliases(text), ["B"]);
+        assert_eq!(tags(text), ["a"]);
+    }
+
     const NOTE: &str = "---\ntitle: Hallo\nanzahl: 3\nfertig: true\ndatum: 2026-10-31\nzeit: 2026-10-31T12:00:00\ntags:\n  - a\n  - b/c\naliases: [Eins, Zwei]\nlink: \"[[Ziel]]\"\n---\nText\n";
 
     #[test]
@@ -223,7 +237,7 @@ mod tests {
         assert_eq!(range("Text\n---\n"), None);
         assert_eq!(properties("---\nnicht: geschlossen\n"), None);
         assert_eq!(properties("---\n: : kaputt\n  x\n---\n"), None);
-        assert_eq!(properties("---\na:\n  b: verschachtelt\n---\n"), None);
+        assert!(properties("---\na:\n  b: verschachtelt\n---\n").unwrap()[0].nested);
     }
 
     #[test]

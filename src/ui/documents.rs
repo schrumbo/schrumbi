@@ -400,11 +400,6 @@ impl NoteView {
         let (e1, path, p2, p3) = (me.clone(), self.path.clone(), self.path.clone(), self.path.clone());
         let embedded = self.embedded;
         let in_vault = super::vault_tools::in_vault(&self.path, cx);
-        let writes_there = super::vault_tools::writes_in_obsidian(&self.path, cx);
-        let hand_over = in_vault.then(|| {
-            let button = super::vault_tools::obsidian_button("note-obsidian", self.path.clone());
-            if writes_there { button.icon(menu_icon("pencil")).label(tr("In Obsidian bearbeiten")) } else { button }
-        });
         let headings = self.parsed.as_ref().filter(|_| self.mode != Mode::Edit).map(|(_, p)| p.headings()).unwrap_or_default();
         let anchors = self.heading_anchors.clone();
         let toc = (headings.len() >= 2 && anchors.len() == headings.len()).then(|| {
@@ -422,8 +417,7 @@ impl NoteView {
             .flex()
             .items_center()
             .gap(px(space::S))
-            .when(!writes_there || self.mode != Mode::Read, |d| d.child(modes))
-            .children(hand_over)
+            .child(modes)
             .children(toc)
             .child(Button::new("note-pdf").small().icon(menu_icon("share")).label("PDF").tooltip(tr("Als PDF neben der Notiz sichern (⇧⌘E)")).disabled(exporting).on_click(move |_, _, cx| e1.update(cx, |n, cx| n.export(cx))))
             .child(Button::new("note-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, _, _| {
@@ -439,8 +433,9 @@ impl NoteView {
                     .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| library::reveal(&b)))
                     .item(PopupMenuItem::new(tr("Mit Standard-App öffnen")).icon(menu_icon("square-arrow-out-up-right")).on_click(move |_, _, _| library::open_path(&c)));
                 if in_vault {
-                    let (h, g) = (d.clone(), d.clone());
+                    let (o, h, g) = (d.clone(), d.clone(), d.clone());
                     menu = menu
+                        .item(PopupMenuItem::new(tr("In Obsidian öffnen")).icon(menu_icon("external-link")).on_click(move |_, _, cx| super::vault_tools::open_in_obsidian(&o, cx)))
                         .item(PopupMenuItem::new(tr("Graph um diese Notiz")).icon(menu_icon("waypoints")).on_click(move |_, _, cx| {
                             let p = g.clone();
                             act(cx, |l| l.show_graph(Some(p)));
@@ -618,6 +613,19 @@ impl NoteView {
                 let (s, r) = n.with_text(cx);
                 n.apply(edit_ops::shift_lines(&s, r, -1), w, cx)
             }))
+            .capture_key_down(cx.listener(|n, e: &KeyDownEvent, w, cx| {
+                let k = &e.keystroke;
+                if k.modifiers.platform || k.modifiers.control || !n.editor.read(cx).focus_handle(cx).is_focused(w) {
+                    return;
+                }
+                let Some((open, close)) = k.key_char.as_deref().and_then(edit_ops::surround_pair) else { return };
+                let (s, r) = n.with_text(cx);
+                if r.is_empty() {
+                    return;
+                }
+                n.apply(edit_ops::surround(&s, r, open, close), w, cx);
+                cx.stop_propagation();
+            }))
             .on_action(cx.listener(|n, _: &ListNewline, w, cx| {
                 if n.editor.read(cx).completion_menu_state().open {
                     cx.propagate();
@@ -685,13 +693,10 @@ impl Render for NoteView {
         }
         let t = Theme::get(cx);
         let lib = state::lib(cx);
-        let (missing, text, conflict, dirty) = lib.update(cx, |l, _| {
+        let (missing, text, conflict) = lib.update(cx, |l, _| {
             let b = l.buffer(&self.path);
-            (b.missing, b.text.clone(), b.conflict.is_some(), b.dirty)
+            (b.missing, b.text.clone(), b.conflict.is_some())
         });
-        if self.mode != Mode::Read && !dirty && !conflict && !self.editor.read(cx).focus_handle(cx).is_focused(window) && super::vault_tools::writes_in_obsidian(&self.path, cx) {
-            self.mode = Mode::Read;
-        }
         let request = take_find_request(&self.path, cx);
         if let Some((term, nth)) = request {
             self.reveal(&term, nth, &text, window, cx);
@@ -739,17 +744,10 @@ impl Render for NoteView {
             .track_focus(&self.focus)
             .key_context("NoteView")
             .on_action(cx.listener(|n, _: &super::app::TogglePreview, w, cx| {
-                if super::vault_tools::writes_in_obsidian(&n.path, cx) {
-                    super::vault_tools::open_in_obsidian(&n.path, cx);
-                    return;
-                }
                 let m = if n.mode == Mode::Read { Mode::Edit } else { Mode::Read };
                 n.set_mode(m, w, cx)
             }))
             .on_action(cx.listener(|n, _: &super::app::SplitPreview, w, cx| {
-                if super::vault_tools::writes_in_obsidian(&n.path, cx) {
-                    return;
-                }
                 let m = if n.mode == Mode::Split { Mode::Edit } else { Mode::Split };
                 n.set_mode(m, w, cx)
             }))

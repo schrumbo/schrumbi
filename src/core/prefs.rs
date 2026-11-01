@@ -101,6 +101,8 @@ pub struct Prefs {
     pub pdf_header: bool,
     pub pdf_page_numbers: bool,
     pub editor_font_size: f32,
+    /// Notes save while typing since this was the default; older settings move over once.
+    pub saves_while_typing: bool,
     pub note_save_mode: NoteSaveMode,
     pub note_save_delay: f64,
     pub file_grouping: FileGrouping,
@@ -122,8 +124,6 @@ pub struct Prefs {
     pub shortcuts: BTreeMap<String, Shortcut>,
     pub disabled_shortcuts: BTreeSet<String>,
     pub git: BTreeMap<String, GitPrefs>,
-    /// Where notes of a vault are written: `obsidian`, `schrumbi`, or empty for Obsidian whenever it knows the vault.
-    pub edit_notes_in: String,
     /// An Obsidian vault outside the workspace, by workspace path.
     pub vaults: BTreeMap<String, std::path::PathBuf>,
     /// A Git to use instead of the one found automatically.
@@ -157,8 +157,9 @@ impl Default for Prefs {
             pdf_header: true,
             pdf_page_numbers: true,
             editor_font_size: 13.,
-            note_save_mode: NoteSaveMode::Focus,
-            note_save_delay: 5.,
+            saves_while_typing: false,
+            note_save_mode: NoteSaveMode::Delay,
+            note_save_delay: 2.,
             file_grouping: FileGrouping::Week,
             file_kind: "documents".into(),
             workspace: None,
@@ -173,7 +174,6 @@ impl Default for Prefs {
             shortcuts: BTreeMap::new(),
             disabled_shortcuts: BTreeSet::new(),
             git: BTreeMap::new(),
-            edit_notes_in: String::new(),
             vaults: BTreeMap::new(),
             git_path: None,
             tray: true,
@@ -211,7 +211,13 @@ static PREFS: LazyLock<RwLock<Prefs>> = LazyLock::new(|| {
     if let (None, Some(_), Some(f)) = (&loaded, &bytes, &file) {
         let _ = std::fs::copy(f, f.with_extension("defekt.json"));
     }
-    RwLock::new(loaded.unwrap_or_default())
+    let mut prefs: Prefs = loaded.unwrap_or_default();
+    if !prefs.saves_while_typing {
+        prefs.saves_while_typing = true;
+        prefs.note_save_mode = NoteSaveMode::Delay;
+        prefs.note_save_delay = 2.;
+    }
+    RwLock::new(prefs)
 });
 
 /// A copy of the current settings.

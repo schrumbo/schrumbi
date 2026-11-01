@@ -166,7 +166,40 @@ pub fn shift_lines(s: &str, sel: Range<usize>, direction: i32) -> Edit {
         .collect::<Vec<_>>()
         .join("\n");
     let end = r.start + text.len();
+    if sel.is_empty() {
+        let first = s[r.clone()].split('\n').next().unwrap_or_default();
+        let moved = if direction > 0 { 2 } else { first.len().saturating_sub(first.strip_prefix("  ").or_else(|| first.strip_prefix(' ')).unwrap_or(first).len()) };
+        let caret = if direction > 0 { sel.start + moved } else { sel.start.saturating_sub(moved).max(r.start) };
+        return Edit { range: r.clone(), text, select: caret..caret };
+    }
     Edit { range: r.clone(), text, select: r.start..end }
+}
+
+/// What typing a character around a selection puts on both sides, as in Obsidian.
+pub fn surround_pair(typed: &str) -> Option<(&'static str, &'static str)> {
+    Some(match typed {
+        "*" => ("*", "*"),
+        "_" => ("_", "_"),
+        "`" => ("`", "`"),
+        "=" => ("=", "="),
+        "~" => ("~", "~"),
+        "$" => ("$", "$"),
+        "%" => ("%", "%"),
+        "\"" => ("\"", "\""),
+        "'" => ("'", "'"),
+        "[" => ("[", "]"),
+        "(" => ("(", ")"),
+        "{" => ("{", "}"),
+        _ => return None,
+    })
+}
+
+/// Puts a pair around the selection and keeps the selection on the text, so a second `*` makes it bold.
+pub fn surround(s: &str, sel: Range<usize>, open: &str, close: &str) -> Edit {
+    let inner = &s[sel.clone()];
+    let start = sel.start + open.len();
+    let select = start..start + inner.len();
+    Edit { text: format!("{open}{inner}{close}"), range: sel, select }
 }
 
 /// Whether Tab should indent: a selection, or a caret on a list line.
@@ -235,6 +268,41 @@ pub fn shift_offset(offset: usize, changed: &Range<usize>, inserted: usize) -> u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn applied(s: &str, e: &Edit) -> String {
+        format!("{}{}{}", &s[..e.range.start], e.text, &s[e.range.end..])
+    }
+
+    #[test]
+    fn tab_in_a_list_keeps_the_caret_and_no_selection() {
+        let s = "- a\n- b";
+        let e = shift_lines(s, 7..7, 1);
+        assert_eq!(applied(s, &e), "- a\n  - b");
+        assert_eq!(e.select, 9..9);
+        let t = applied(s, &e);
+        let back = shift_lines(&t, 9..9, -1);
+        assert_eq!(applied(&t, &back), s);
+        assert_eq!(back.select, 7..7);
+        let sel = shift_lines(s, 0..7, 1);
+        assert_eq!(sel.select.start, 0);
+        assert!(sel.select.end > 7, "a selection stays a selection");
+        let at_start = shift_lines("  - a", 1..1, -1);
+        assert_eq!(at_start.select, 0..0, "the caret never leaves its line");
+    }
+
+    #[test]
+    fn typing_around_a_selection_keeps_it_on_the_text() {
+        let s = "hallo welt";
+        let (o, c) = surround_pair("*").unwrap();
+        let e = surround(s, 6..10, o, c);
+        let once = applied(s, &e);
+        assert_eq!(once, "hallo *welt*");
+        assert_eq!(&once[e.select.clone()], "welt");
+        let twice = applied(&once, &surround(&once, e.select.clone(), o, c));
+        assert_eq!(twice, "hallo **welt**");
+        assert_eq!(surround_pair("["), Some(("[", "]")));
+        assert_eq!(surround_pair("a"), None);
+    }
 
     #[test]
     fn minimal_change_finds_only_what_differs() {

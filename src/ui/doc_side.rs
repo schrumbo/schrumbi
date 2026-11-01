@@ -465,8 +465,10 @@ impl Render for PropertyEditor {
         for (i, p) in props.iter().enumerate() {
             let Property { name, values, .. } = p.clone();
             let kind = known_kind(&name).unwrap_or(p.kind);
+            let nested = p.nested;
             let key = format!("{}:{name}", path.display());
             let control: AnyElement = match kind {
+                _ if nested => caption(values.join(" "), &t).line_clamp(2).into_any_element(),
                 PropertyKind::Checkbox => {
                     let (name, editor) = (name.clone(), me.clone());
                     Switch::new(("prop-check", i)).checked(values.first().is_some_and(|v| v == "true")).on_click(move |v, _, cx| {

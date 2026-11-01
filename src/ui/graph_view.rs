@@ -36,6 +36,10 @@ pub struct GraphView {
     pan: (f32, f32),
     zoom: f32,
     fitted: bool,
+    /// Set once the user panned or zoomed; from then on the view stays where it is.
+    hand_moved: bool,
+    /// The point pressed, to tell a click from dragging.
+    pressed: Option<(u32, Point<Pixels>)>,
     bounds: Rc2,
     hover: Option<u32>,
     selected: Option<u32>,
@@ -69,6 +73,8 @@ impl GraphView {
             pan: (0., 0.),
             zoom: 1.,
             fitted: false,
+            hand_moved: false,
+            pressed: None,
             bounds: Default::default(),
             hover: None,
             selected: None,
@@ -118,6 +124,7 @@ impl GraphView {
         self.selected = None;
         self.hover = None;
         self.fitted = false;
+        self.hand_moved = false;
         let shared = self.layout.clone();
         let reduce = cx.reduce_motion();
         self.running = Some(cx.spawn(async move |this, cx| {
@@ -140,7 +147,7 @@ impl GraphView {
                 let alive = this
                     .update(cx, |v, cx| {
                         v.positions = positions;
-                        if !v.fitted || (done && !v.moved_by_hand()) {
+                        if !v.hand_moved {
                             v.fit();
                         }
                         if done {
@@ -155,10 +162,6 @@ impl GraphView {
                 cx.background_executor().timer(Duration::from_millis(16)).await;
             }
         }));
-    }
-
-    fn moved_by_hand(&self) -> bool {
-        self.fitted
     }
 
     fn remember(&self, cx: &mut Context<Self>) {
@@ -330,6 +333,8 @@ impl Render for GraphView {
                     if any_strong && let Ok(path) = strong.build() {
                         window.paint_path(path, accent);
                     }
+                });
+                window.paint_layer(bounds, |window| {
                     for (i, node) in graph.nodes.iter().enumerate() {
                         let Some(p) = positions.get(i) else { continue };
                         let c = screen(*p);
@@ -379,6 +384,7 @@ impl Render for GraphView {
             .when(empty, |d| d.child(div().absolute().inset_0().flex().items_center().justify_center().child(unavailable("waypoints", tr("Noch keine Verknüpfungen"), tr("Sobald Notizen sich verlinken, erscheinen sie hier."), &t))))
             .on_scroll(cx.listener(|v, e: &ScrollEvent, window, cx| {
                 let delta = e.delta.pixel_delta(px(20.));
+                v.hand_moved = true;
                 if e.modifiers.platform || e.modifiers.control {
                     let o = v.bounds.get().origin;
                     v.zoom_at(1. + f32::from(delta.y) * 0.004, f32::from(e.position.x - o.x), f32::from(e.position.y - o.y));
@@ -391,6 +397,7 @@ impl Render for GraphView {
             }))
             .on_pinch(cx.listener(|v, e: &PinchEvent, _, cx| {
                 let o = v.bounds.get().origin;
+                v.hand_moved = true;
                 v.zoom_at(1. + e.delta, f32::from(e.position.x - o.x), f32::from(e.position.y - o.y));
                 cx.notify();
             }))
@@ -398,7 +405,7 @@ impl Render for GraphView {
                 window.focus(&v.focus, cx);
                 if let Some(hit) = v.hit(e.position) {
                     v.selected = Some(hit);
-                    v.open(hit, cx);
+                    v.pressed = Some((hit, e.position));
                 } else {
                     v.drag = Some((e.position, v.pan));
                 }
@@ -406,6 +413,7 @@ impl Render for GraphView {
             }))
             .on_mouse_move(cx.listener(|v, e: &MouseMoveEvent, _, cx| {
                 if let Some((start, pan)) = v.drag {
+                    v.hand_moved = true;
                     v.pan = (pan.0 + f32::from(e.position.x - start.x), pan.1 + f32::from(e.position.y - start.y));
                     cx.notify();
                 } else {
@@ -416,8 +424,18 @@ impl Render for GraphView {
                     }
                 }
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|v, _, _, _| v.drag = None))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(|v, _, _, _| v.drag = None))
+            .on_mouse_up(MouseButton::Left, cx.listener(|v, e: &MouseUpEvent, _, cx| {
+                v.drag = None;
+                if let Some((hit, at)) = v.pressed.take()
+                    && (f32::from(e.position.x - at.x).abs() + f32::from(e.position.y - at.y).abs()) < 6.
+                {
+                    v.open(hit, cx);
+                }
+            }))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|v, _, _, _| {
+                v.drag = None;
+                v.pressed = None;
+            }))
             .on_key_down(cx.listener(|v, e: &KeyDownEvent, _, cx| {
                 match e.keystroke.key.as_str() {
                     "left" => v.step_to_neighbor(-1., 0.),

@@ -187,13 +187,22 @@ pub fn block_ids(text: &str) -> Vec<(String, usize)> {
 pub fn headings(text: &str) -> Vec<(u8, String, usize)> {
     static HEADING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(#{1,6})[ \t]+(.+?)[ \t#]*$").unwrap());
     let code = code_ranges(text);
+    let body = super::frontmatter::body_offset(text);
     let mut offset = 0;
     let mut out = Vec::new();
+    let mut previous: Option<(&str, usize)> = None;
     for (line_no, line) in text.split('\n').enumerate() {
-        if !inside(&code, offset)
-            && let Some(c) = HEADING.captures(line)
-        {
-            out.push((c[1].len() as u8, c[2].to_string(), line_no));
+        let usable = offset >= body && !inside(&code, offset);
+        if usable {
+            let bare = line.trim_end();
+            if let Some(c) = HEADING.captures(line) {
+                out.push((c[1].len() as u8, c[2].to_string(), line_no));
+            } else if let Some((title, at)) = previous.filter(|_| !bare.is_empty() && (bare.chars().all(|c| c == '=') || bare.chars().all(|c| c == '-')) && !line.starts_with("    ")) {
+                out.push((if bare.starts_with('=') { 1 } else { 2 }, title.trim().to_string(), at));
+            }
+            previous = (!bare.is_empty() && !HEADING.is_match(line)).then_some((line, line_no));
+        } else {
+            previous = None;
         }
         offset += line.len() + 1;
     }
@@ -236,6 +245,13 @@ pub fn occurrences_before(text: &str, term: &str, line: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headings_skip_front_matter_and_know_setext() {
+        let text = "---\n# Kommentar\ntags: a\n---\nTitel\n=====\n\nZweite\n---\n\n# Echt\n```\n# Code\n```\n";
+        let found: Vec<(u8, String)> = headings(text).into_iter().map(|(l, t, _)| (l, t)).collect();
+        assert_eq!(found, [(1, "Titel".to_string()), (2, "Zweite".to_string()), (1, "Echt".to_string())]);
+    }
 
     #[test]
     fn targets_parse_like_obsidian() {

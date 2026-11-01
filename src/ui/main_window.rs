@@ -265,6 +265,9 @@ impl Render for MainWindow {
             .line_height(relative(1.22))
             .text_color(t.primary)
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
+                if window.context_stack().iter().any(|c| c.contains("NoteEditor")) {
+                    return;
+                }
                 let typing = window.context_stack().iter().any(|c| c.contains("Input"));
                 if !typing {
                     act(cx, |l| {
