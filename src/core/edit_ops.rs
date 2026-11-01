@@ -209,9 +209,62 @@ pub fn tab_indents(s: &str, sel: &Range<usize>) -> bool {
 
 /// Return in a list continues it (`- `, `1.` → `2.`, `- [ ] `); on an empty item it ends the list.
 /// Outside lists the new line keeps the indentation. `None` means a plain newline.
+/// The `> ` marks a line of a quote or callout starts with.
+fn quote_prefix(line: &str) -> Option<&str> {
+    let end = line.char_indices().find(|(_, c)| !matches!(c, '>' | ' ')).map_or(line.len(), |(i, _)| i);
+    let prefix = &line[..end];
+    prefix.trim_start().starts_with('>').then_some(prefix)
+}
+
+/// Puts a mark in front of each line, or takes it away if all have it.
+pub fn toggle_line_mark(s: &str, sel: Range<usize>, mark: &str) -> Edit {
+    let r = selected_lines(s, &sel);
+    let all = s[r.clone()].split('\n').all(|l| l.trim_start().starts_with(mark));
+    edit_lines(s, sel, |line| {
+        let bare = line.trim_start();
+        let indent = &line[..line.len() - bare.len()];
+        if all {
+            format!("{indent}{}", bare.strip_prefix(mark).unwrap_or(bare))
+        } else if line.trim().is_empty() {
+            line.to_string()
+        } else {
+            format!("{indent}{mark}{bare}")
+        }
+    })
+}
+
+/// Sets the heading level of the lines; the same level again takes it away.
+pub fn set_heading(s: &str, sel: Range<usize>, level: usize) -> Edit {
+    let mark = format!("{} ", "#".repeat(level));
+    edit_lines(s, sel, |line| {
+        let bare = line.trim_start_matches('#').trim_start();
+        if line.starts_with(&mark) { bare.to_string() } else { format!("{mark}{bare}") }
+    })
+}
+
+/// Whether pasted text is a web address that can become the link of a selection.
+pub fn pasted_link(s: &str, sel: Range<usize>, pasted: &str) -> Option<Edit> {
+    let url = pasted.trim();
+    let is_url = (url.starts_with("http://") || url.starts_with("https://")) && !url.contains(char::is_whitespace);
+    if sel.is_empty() || !is_url {
+        return None;
+    }
+    let text = format!("[{}]({url})", &s[sel.clone()]);
+    let end = sel.start + text.len();
+    Some(Edit { range: sel, text, select: end..end })
+}
+
 pub fn newline(s: &str, caret: usize) -> Option<Edit> {
     let start = line_start(s, caret);
     let current = &s[start..caret];
+    if let Some(quote) = quote_prefix(current) {
+        if quote.len() == current.len() {
+            return Some(Edit { range: start..caret, text: String::new(), select: start..start });
+        }
+        let text = format!("\n{quote}");
+        let end = caret + text.len();
+        return Some(Edit { range: caret..caret, text, select: end..end });
+    }
     let Some(c) = LIST_PREFIX.captures(current) else {
         let indent: String = current.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
         if indent.is_empty() {
@@ -268,6 +321,28 @@ pub fn shift_offset(offset: usize, changed: &Range<usize>, inserted: usize) -> u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quotes_and_callouts_continue() {
+        let s = "> [!tip] Titel";
+        let e = newline(s, s.len()).unwrap();
+        assert_eq!(e.text, "\n> ");
+        let empty = "> a\n> ";
+        let cleared = newline(empty, empty.len()).unwrap();
+        assert_eq!(cleared.text, "");
+        assert_eq!(cleared.range, 4..6);
+    }
+
+    #[test]
+    fn marks_headings_and_pasted_links() {
+        assert_eq!(toggle_line_mark("a\nb", 0..3, "> ").text, "> a\n> b");
+        assert_eq!(toggle_line_mark("> a", 0..0, "> ").text, "a");
+        assert_eq!(set_heading("## a", 0..0, 1).text, "# a");
+        assert_eq!(set_heading("# a", 0..0, 1).text, "a");
+        assert_eq!(pasted_link("wort", 0..4, "https://x.org").unwrap().text, "[wort](https://x.org)");
+        assert!(pasted_link("wort", 0..0, "https://x.org").is_none());
+        assert!(pasted_link("wort", 0..4, "kein link").is_none());
+    }
 
     fn applied(s: &str, e: &Edit) -> String {
         format!("{}{}{}", &s[..e.range.start], e.text, &s[e.range.end..])

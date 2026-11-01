@@ -13,7 +13,6 @@ pub enum ShortcutAction {
     NextTab,
     PreviousTab,
     TogglePreview,
-    SplitPreview,
     ExportPdf,
     ToggleInspector,
     Refresh,
@@ -63,7 +62,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 33] = [
+    pub const ALL: [ShortcutAction; 32] = [
         Self::QuickOpen,
         Self::SearchFiles,
         Self::NewEntry,
@@ -73,7 +72,6 @@ impl ShortcutAction {
         Self::NextTab,
         Self::PreviousTab,
         Self::TogglePreview,
-        Self::SplitPreview,
         Self::ExportPdf,
         Self::ToggleInspector,
         Self::Refresh,
@@ -111,7 +109,6 @@ impl ShortcutAction {
             Self::NextTab => "nextTab",
             Self::PreviousTab => "previousTab",
             Self::TogglePreview => "togglePreview",
-            Self::SplitPreview => "splitPreview",
             Self::ExportPdf => "exportPDF",
             Self::ToggleInspector => "toggleInspector",
             Self::Refresh => "refresh",
@@ -141,7 +138,7 @@ impl ShortcutAction {
     pub fn group(self) -> Group {
         match self {
             Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::NewEntry | Self::NewFile | Self::GoBack | Self::ToggleInspector | Self::Refresh => Group::General,
-            Self::CloseTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf => Group::Documents,
+            Self::CloseTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::ExportPdf => Group::Documents,
             _ => Group::Editor,
         }
     }
@@ -162,7 +159,6 @@ impl ShortcutAction {
             Self::NextTab => "Nächster Tab",
             Self::PreviousTab => "Vorheriger Tab",
             Self::TogglePreview => "Lesen / Bearbeiten wechseln",
-            Self::SplitPreview => "Geteilte Ansicht",
             Self::ExportPdf => "Als PDF exportieren",
             Self::Bold => "Fett",
             Self::Italic => "Kursiv",
@@ -208,7 +204,6 @@ impl ShortcutAction {
             Self::NextTab => s("tab", false, false, false, true),
             Self::PreviousTab => s("tab", false, true, false, true),
             Self::TogglePreview => s("e", true, false, false, false),
-            Self::SplitPreview => s("v", true, false, true, false),
             Self::ExportPdf => s("e", true, true, false, false),
             Self::Bold => s("b", true, false, false, false),
             Self::Italic => s("i", true, false, false, false),

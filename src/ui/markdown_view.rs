@@ -65,10 +65,18 @@ struct Item {
     blocks: Vec<Block>,
 }
 
+/// Where a top-level block came from.
+#[derive(Clone, Copy, PartialEq)]
+pub struct BlockSource {
+    pub line: usize,
+    pub end_line: usize,
+    pub hash: u64,
+}
+
 /// A parsed note, kept between frames so long notes don't re-parse while scrolling.
 pub struct ParsedNote {
-    /// Source line and content hash of each top-level block, in order.
-    sources: Vec<(usize, u64)>,
+    /// Where each top-level block came from, in order.
+    sources: Vec<BlockSource>,
     /// Every link in reading order, with the top-level block it sits in.
     links: Vec<(String, usize)>,
     blocks: Vec<Block>,
@@ -107,7 +115,7 @@ pub fn parse(src: &str) -> ParsedNote {
             top.1.push(Block::Paragraph(inl));
         }
     };
-    let mut sources: Vec<(usize, u64)> = Vec::new();
+    let mut sources: Vec<BlockSource> = Vec::new();
     let mut footnote_homes: HashMap<String, usize> = HashMap::new();
     let mut last_range = 0..0;
     let mut bare_wikilink = false;
@@ -482,14 +490,31 @@ fn join_marks(inlines: &mut Vec<Inline>) {
 }
 
 /// Remembers where newly finished top-level blocks came from.
-fn note_sources<T>(src: &str, stack: &[(T, Vec<Block>, Vec<Inline>)], range: &std::ops::Range<usize>, sources: &mut Vec<(usize, u64)>) {
+fn note_sources<T>(src: &str, stack: &[(T, Vec<Block>, Vec<Inline>)], range: &std::ops::Range<usize>, sources: &mut Vec<BlockSource>) {
     use std::hash::{Hash, Hasher};
     let [(_, blocks, _)] = stack else { return };
     while sources.len() < blocks.len() {
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         src.get(range.clone()).unwrap_or_default().hash(&mut hash);
-        sources.push((line_of(src, range.start), hash.finish()));
+        let text = src.get(range.clone()).unwrap_or_default();
+        let line = line_of(src, range.start);
+        sources.push(BlockSource { line, end_line: line + text.trim_end_matches('\n').matches('\n').count() + 1, hash: hash.finish() });
     }
+}
+
+/// Finds where a place in drawn text sits in its source: the drawn text leaves out marks, the source has them.
+pub fn source_offset(source: &str, drawn: &str, at: usize) -> usize {
+    let cleaned = super::selectable::without_room(drawn.get(..at).unwrap_or(drawn));
+    let first_words: String = drawn.chars().take_while(|c| !"\n*_`=~[]".contains(*c)).take(24).collect();
+    let mut from = if first_words.trim().is_empty() { 0 } else { source.find(first_words.trim()).unwrap_or(0) };
+    for c in cleaned.chars() {
+        let window_end = (from + 400).min(source.len());
+        let Some(tail) = source.get(from..window_end) else { break };
+        if let Some(found) = tail.find(c) {
+            from += found + c.len_utf8();
+        }
+    }
+    from.min(source.len())
 }
 
 /// Lists a block's links in the order they are drawn.
@@ -875,9 +900,14 @@ pub struct LinkFocus {
     pub note: Option<PathBuf>,
     /// The list the note is drawn in, for jumps inside it.
     pub list: Option<ListState>,
+    /// Plain clicks on text in a top-level block.
+    pub text_click: Option<BlockClick>,
     /// What the reader has folded, kept across sessions.
     pub folds: Folds,
 }
+
+/// Called with a top-level block, the drawn text and the byte clicked.
+pub type BlockClick = Rc<dyn Fn(usize, &str, usize, &mut Window, &mut App)>;
 
 /// The foldable things whose state differs from how the note starts.
 pub type Folds = Rc<RefCell<std::collections::HashSet<String>>>;
@@ -900,6 +930,8 @@ struct Ctx<'a> {
     chain: Vec<PathBuf>,
     focus: Option<&'a LinkFocus>,
     links_seen: &'a Cell<usize>,
+    /// The top-level block being drawn.
+    block: usize,
 }
 
 /// Whether an image is small enough to stand in a line of text.
@@ -945,6 +977,12 @@ fn linked_image(src: &str, alt: &str, target: Option<&str>, cx: &Ctx) -> AnyElem
     cx.order.set(order + 1);
     let action = link_action(target, cx.base);
     div().id(("md-image-link", order)).cursor_pointer().on_click(move |_, _, cx| action(cx)).child(shown).into_any_element()
+}
+
+/// What a plain click on text in this block should do.
+fn text_click_of(cx: &Ctx) -> Option<super::selectable::TextClick> {
+    let (click, block) = (cx.focus.and_then(|f| f.text_click.clone())?, cx.block);
+    Some(Rc::new(move |text, at, window, app| click(block, text, at, window, app)))
 }
 
 fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
@@ -1042,7 +1080,7 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
     let order = cx.order.get();
     cx.order.set(order + 1);
     let base = cx.base.map(Path::to_path_buf);
-    let body = div().text_size(px(size)).line_height(relative(1.5)).child(selectable(("md-text", order), text, highlights, order, t.accent.opacity(0.3)).links(links).hovers(hovers, base).inline(slots).pills(pills, t.accent.opacity(0.14)));
+    let body = div().text_size(px(size)).line_height(relative(1.5)).child(selectable(("md-text", order), text, highlights, order, t.accent.opacity(0.3)).links(links).hovers(hovers, base).inline(slots).pills(pills, t.accent.opacity(0.14)).on_text_click(text_click_of(cx)));
     body.into_any_element()
 }
 
@@ -1238,7 +1276,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
     let note = embedded_note(&path, target);
     let mut chain = cx.chain.clone();
     chain.push(path.clone());
-    let inner = Ctx { t, base: path.parent(), on_toggle: None, footnote_order: &note.footnote_order, order: cx.order, chain, focus: None, links_seen: cx.links_seen };
+    let inner = Ctx { t, base: path.parent(), on_toggle: None, footnote_order: &note.footnote_order, order: cx.order, chain, focus: None, links_seen: cx.links_seen, block: cx.block };
     let blocks = render_blocks(&note.blocks, &inner);
     div()
         .flex()
@@ -1351,7 +1389,7 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
                 .border_color(t.separator.opacity(0.6))
                 .font_family(Theme::mono_family())
                 .text_size(px(font::CALLOUT))
-                .child(selectable(("md-code-text", order), text, highlights, order, t.accent.opacity(0.3))),
+                .child(selectable(("md-code-text", order), text, highlights, order, t.accent.opacity(0.3)).on_text_click(text_click_of(cx))),
         )
         .child(
             div()
@@ -1568,8 +1606,8 @@ impl ParsedNote {
         self.blocks.len()
     }
 
-    /// Source line and content hash of each top-level block.
-    pub fn sources(&self) -> &[(usize, u64)] {
+    /// Where each top-level block came from.
+    pub fn sources(&self) -> &[BlockSource] {
         &self.sources
     }
 
@@ -1762,7 +1800,7 @@ pub struct Found {
 /// Renders a parsed note; task boxes call `on_toggle` with their source line.
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
     let (order, links_seen) = (Cell::new(0), Cell::new(0));
-    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen };
+    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0 };
     div().flex().flex_col().gap(px(space::M)).children(render_blocks(&note.blocks, &cx)).children(render_footnotes(note, None, t))
 }
 
@@ -1782,7 +1820,7 @@ impl ParsedNote {
                 }
                 if folded_level.is_some() {
                     hidden[i] = true;
-                } else if set.contains(&format!("h{}", self.sources.get(i).map_or(0, |s| s.0))) {
+                } else if set.contains(&format!("h{}", self.sources.get(i).map_or(0, |s| s.line))) {
                     folded_level = Some(*level);
                 }
             } else if folded_level.is_some() {
@@ -1798,11 +1836,11 @@ pub fn render_block(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle:
     let Some(block) = note.blocks.get(i) else { return div().into_any_element() };
     let order = Cell::new((i as u64 + 1) * 100_000);
     let links_seen = Cell::new(note.links.iter().take_while(|(_, top)| *top < i).count());
-    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen };
+    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: i };
     let element = render_blocks(std::slice::from_ref(block), &cx).into_iter().next().unwrap_or_else(|| div().into_any_element());
     let element = match (block, focus) {
         (Block::Heading(..), Some(focus)) => {
-            let key = format!("h{}", note.sources.get(i).map_or(0, |s| s.0));
+            let key = format!("h{}", note.sources.get(i).map_or(0, |s| s.line));
             let is_open = !focus.folds.borrow().contains(&key);
             let folds = focus.folds.clone();
             let group = SharedString::from(format!("md-fold-{i}"));
@@ -1851,7 +1889,7 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<ListState>, t: &Theme) -
         return None;
     }
     let (order, links_seen) = (Cell::new(u64::MAX / 2), Cell::new(0));
-    let cx = Ctx { t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen };
+    let cx = Ctx { t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0 };
     let rows = used.iter().enumerate().map(|(i, (id, blocks))| {
         let home = note.footnote_homes.get(id).copied().unwrap_or(0);
         let list = list.clone();

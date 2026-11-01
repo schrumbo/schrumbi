@@ -15,6 +15,8 @@ use crate::core::vault::index;
 enum Context_ {
     /// `[[` with the text typed so far, and where the `[[` starts in the line.
     Link { typed: String, start: usize },
+    /// `#` with the tag typed so far, and where the `#` starts in the line.
+    Tag { typed: String, start: usize },
     /// `/` at the start of a line.
     Slash { typed: String, start: usize },
 }
@@ -26,6 +28,13 @@ fn context_at(line: &str, column: usize) -> Option<Context_> {
     {
         let start = before[..open].chars().count();
         return Some(Context_::Link { typed: before[open + 2..].to_string(), start });
+    }
+    let word_start = before.rfind(char::is_whitespace).map_or(0, |i| i + before[i..].chars().next().map_or(1, char::len_utf8));
+    if let Some(rest) = before[word_start..].strip_prefix('#')
+        && (word_start > 0 || !rest.is_empty())
+        && rest.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '/'))
+    {
+        return Some(Context_::Tag { typed: rest.to_string(), start: before[..word_start].chars().count() });
     }
     let trimmed = before.trim_start();
     if let Some(rest) = trimmed.strip_prefix('/')
@@ -65,6 +74,22 @@ impl NoteCompletion {
         let vault = index::current();
         let close = "]]";
         let from = Some(self.note.as_path());
+        let across = typed.strip_prefix("##").map(|q| (q, true)).or_else(|| typed.strip_prefix("^^").map(|q| (q, false)));
+        if let Some((query, headings)) = across {
+            let mut found: Vec<(i64, String, String, String)> = Vec::new();
+            for (path, facts) in &vault.notes {
+                let link = vault.link_path(from, path);
+                let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                if headings {
+                    found.extend(facts.headings.iter().filter_map(|(_, h, _)| score(h, query).map(|s| (s, h.clone(), name.clone(), format!("[[{link}#{h}{close}")))));
+                } else {
+                    found.extend(facts.blocks.iter().filter_map(|(id, _)| score(id, query).map(|s| (s, format!("^{id}"), name.clone(), format!("[[{link}#^{id}{close}")))));
+                }
+            }
+            found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+            found.truncate(40);
+            return found.into_iter().enumerate().map(|(i, (_, label, note, text))| item(label, Some(note), format!("{i:05}"), range, text)).collect();
+        }
         if let Some((file, sub)) = typed.split_once('#') {
             let target = if file.is_empty() { Some(self.note.clone()) } else { vault.resolve(file, from) };
             let Some(target) = target else { return Vec::new() };
@@ -119,11 +144,21 @@ impl NoteCompletion {
         items
     }
 
+    fn tag_items(&self, typed: &str, range: Range) -> Vec<CompletionItem> {
+        let mut found: Vec<(i64, String, usize)> = index::current().tag_tree().into_iter().filter_map(|(tag, count)| score(&tag, typed).map(|s| (s - count as i64, tag, count))).collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        found.truncate(30);
+        found.into_iter().enumerate().map(|(i, (_, tag, count))| item(format!("#{tag}"), Some(count.to_string()), format!("{i:05}"), range, format!("#{tag}"))).collect()
+    }
+
     fn slash_items(&self, typed: &str, range: Range) -> Vec<CompletionItem> {
-        let commands: [(&str, &str); 12] = [
+        let commands: [(&str, &str); 15] = [
             ("Überschrift 1", "# "),
             ("Überschrift 2", "## "),
             ("Überschrift 3", "### "),
+            ("Überschrift 4", "#### "),
+            ("Fußnote", "[^1]"),
+            ("Eingebettete Notiz", "![["),
             ("Aufgabe", "- [ ] "),
             ("Liste", "- "),
             ("Nummerierte Liste", "1. "),
@@ -155,6 +190,11 @@ impl CompletionProvider for NoteCompletion {
                 let end = if line[column..].starts_with("]]") { caret + 2 } else { caret };
                 let range = Range { start: Position { line: line_number, character: start_utf16 }, end: Position { line: line_number, character: end } };
                 self.link_items(&typed, range, &open)
+            }
+            Some(Context_::Tag { typed, start }) => {
+                let start_utf16: u32 = line.chars().take(start).map(|c| c.len_utf16() as u32).sum();
+                let range = Range { start: Position { line: line_number, character: start_utf16 }, end: Position { line: line_number, character: caret } };
+                self.tag_items(&typed, range)
             }
             Some(Context_::Slash { typed, start }) => {
                 let start_utf16: u32 = line.chars().take(start).map(|c| c.len_utf16() as u32).sum();

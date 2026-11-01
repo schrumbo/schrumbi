@@ -15,6 +15,7 @@ pub struct SelectableStyled {
     placed: Vec<Placed>,
     pills: Vec<Range<usize>>,
     pill_color: Hsla,
+    on_click: Option<TextClick>,
     order: u64,
     color: Hsla,
     links: Vec<(Range<usize>, LinkAction)>,
@@ -39,6 +40,9 @@ struct Placed {
     element: AnyElement,
     size: Size<Pixels>,
 }
+
+/// Called with the drawn text and the byte a plain click landed on.
+pub type TextClick = Rc<dyn Fn(&str, usize, &mut Window, &mut App)>;
 
 /// A letter nothing wraps inside of, drawn invisibly to keep room in the line.
 const ROOM: char = 'ı';
@@ -65,10 +69,16 @@ pub type LinkAction = Rc<dyn Fn(&mut App)>;
 /// Wraps `text` and its highlights; `order` is its place in reading order.
 pub fn selectable(id: impl Into<ElementId>, text: String, highlights: Vec<(Range<usize>, HighlightStyle)>, order: u64, color: Hsla) -> SelectableStyled {
     let text = SharedString::from(text);
-    SelectableStyled { id: id.into(), styled: StyledText::new(text.clone()).with_highlights(highlights.clone()), highlights, slots: Vec::new(), placed: Vec::new(), pills: Vec::new(), pill_color: transparent_black(), text, order, color, links: Vec::new(), hovers: Vec::new(), hover_base: None }
+    SelectableStyled { id: id.into(), styled: StyledText::new(text.clone()).with_highlights(highlights.clone()), highlights, slots: Vec::new(), placed: Vec::new(), pills: Vec::new(), pill_color: transparent_black(), on_click: None, text, order, color, links: Vec::new(), hovers: Vec::new(), hover_base: None }
 }
 
 impl SelectableStyled {
+    /// Reports plain clicks on the text.
+    pub fn on_text_click(mut self, on_click: Option<TextClick>) -> Self {
+        self.on_click = on_click;
+        self
+    }
+
     /// Puts rounded backgrounds behind parts of the text, as for tags.
     pub fn pills(mut self, pills: Vec<Range<usize>>, color: Hsla) -> Self {
         self.pills = pills;
@@ -240,9 +250,6 @@ impl Element for SelectableStyled {
         for placed in &mut self.placed {
             placed.element.paint(window, cx);
         }
-        if self.links.is_empty() {
-            return;
-        }
         let link_at = |links: &[(Range<usize>, LinkAction)], position: Point<Pixels>| layout.index_for_position(position).ok().and_then(|i| links.iter().find(|(r, _)| r.contains(&i)).map(|(_, a)| a.clone()));
         if hitbox.is_hovered(window) && link_at(&self.links, window.mouse_position()).is_some() {
             window.set_cursor_style(CursorStyle::PointingHand, hitbox);
@@ -257,10 +264,20 @@ impl Element for SelectableStyled {
             });
         }
         let (links, hitbox, layout) = (std::mem::take(&mut self.links), hitbox.clone(), layout.clone());
+        let clicked_text = self.text.clone();
+        let on_click = self.on_click.take();
         window.on_mouse_event(move |e: &MouseUpEvent, phase, window, cx| {
             if phase.bubble() && e.button == MouseButton::Left && hitbox.is_hovered(window) && TextSelection::selected_text(window, cx).is_empty() {
                 let action = layout.index_for_position(e.position).ok().and_then(|i| links.iter().find(|(r, _)| r.contains(&i)).map(|(_, a)| a.clone()));
+                if action.is_none()
+                    && let Some(on_click) = &on_click
+                {
+                    let at = layout.index_for_position(e.position).unwrap_or_else(|i| i);
+                    on_click(&clicked_text, at, window, cx);
+                    cx.stop_propagation();
+                }
                 if let Some(action) = action {
+                    cx.stop_propagation();
                     crate::core::library::LINK_IN_NEW_TAB.store(e.modifiers.platform || e.modifiers.control, std::sync::atomic::Ordering::Relaxed);
                     action(cx);
                     crate::core::library::LINK_IN_NEW_TAB.store(false, std::sync::atomic::Ordering::Relaxed);

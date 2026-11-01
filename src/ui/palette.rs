@@ -104,7 +104,6 @@ fn commands(cx: &App) -> Vec<Command> {
     add(&view, S::Refresh.label(), "refresh-cw", keys(S::Refresh), Run::Action(Box::new(app::Refresh)));
     if state::read(cx, |l| matches!(l.route(), Route::Doc(_))) {
         add(&view, S::TogglePreview.label(), "book-open", keys(S::TogglePreview), Run::Action(Box::new(app::TogglePreview)));
-        add(&view, S::SplitPreview.label(), "columns-2", keys(S::SplitPreview), Run::Action(Box::new(app::SplitPreview)));
         add(&view, S::ExportPdf.label(), "share", keys(S::ExportPdf), Run::Action(Box::new(app::ExportPdf)));
         add(&view, S::CloseTab.label(), "x", keys(S::CloseTab), Run::Action(Box::new(app::CloseTab)));
     }

@@ -32,7 +32,6 @@ actions!(
         ReopenTab,
         CloseWindow,
         TogglePreview,
-        SplitPreview,
         ExportPdf,
         ToggleInspector,
         Refresh,
@@ -290,7 +289,6 @@ pub fn bind_keys(cx: &mut App) {
             binding(ShortcutAction::NextTab, NextTab, None),
             binding(ShortcutAction::PreviousTab, PreviousTab, None),
             binding(ShortcutAction::TogglePreview, TogglePreview, None),
-            binding(ShortcutAction::SplitPreview, SplitPreview, None),
             binding(ShortcutAction::ExportPdf, ExportPdf, None),
         ]
         .into_iter()
@@ -373,7 +371,6 @@ pub fn rebuild_menus(cx: &mut App) {
         ]),
         Menu::new(tr("Darstellung")).items([
             MenuItem::action(tr("Lesen / Bearbeiten"), TogglePreview),
-            MenuItem::action(tr("Geteilte Ansicht"), SplitPreview),
             MenuItem::action(tr("Notiz als PDF exportieren"), ExportPdf),
             MenuItem::separator(),
             MenuItem::action(tr("Details ein-/ausblenden"), ToggleInspector),
