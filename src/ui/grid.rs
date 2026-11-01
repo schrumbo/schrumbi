@@ -396,7 +396,7 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .cursor_pointer().key_nav()
         .tooltip(tip(format!("{} · {} · {}", a.title, when, e.status.label())))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(sel.clone()))))
-        .child(div().absolute().top_0().bottom_0().left_0().w(px(3.)).rounded_l(px(radius::CONTROL)).bg(tint.opacity(if e.status.is_closed() { 0.35 } else { 1. })))
+        .child(super::board::edge_bar(tint.opacity(if e.status.is_closed() { 0.35 } else { 1. })))
         .child(status_toggle(a, lib, iconsize::M, t))
         .child(
             div()

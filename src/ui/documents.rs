@@ -238,14 +238,14 @@ impl NoteView {
         ];
         let mode = match prefs::get().note_editor {
             prefs::NoteEditor::Live => Mode::Live,
-            prefs::NoteEditor::Code => if text.trim().chars().count() < 40 { Mode::Source } else { Mode::Read },
+            prefs::NoteEditor::Code => Mode::Source,
         };
         let revision = state::lib(cx).update(cx, |l, _| l.buffer(&path).revision);
         let reader_list = ListState::new(0, ListAlignment::Top, px(1000.));
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Source, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -989,7 +989,7 @@ impl NoteView {
         if self.link_focus.index.is_none() {
             let plain = !k.modifiers.platform && !k.modifiers.control;
             match k.key.as_str() {
-                "escape" if state::read(cx, |l| l.is_vault) => {
+                "escape" if self.embedded => {
                     act(cx, |l| l.focus_explorer = true);
                     cx.stop_propagation();
                     return;
@@ -1134,16 +1134,14 @@ impl NoteView {
                 let source_view = source_me.clone();
                 let is_source = current_mode == Mode::Source;
                 menu = menu.when(live_editor, |menu| menu.item(PopupMenuItem::new(tr("Quelltext")).icon(menu_icon("code")).checked(is_source).on_click(move |_, window, cx| source_view.update(cx, |n, cx| n.set_mode(if is_source { Mode::Live } else { Mode::Source }, window, cx)))));
-                if in_vault {
-                    let (o, h, g) = (d.clone(), d.clone(), d.clone());
-                    menu = menu
-                        .item(PopupMenuItem::new(tr("In Obsidian öffnen")).icon(menu_icon("external-link")).on_click(move |_, _, cx| super::vault_tools::open_in_obsidian(&o, cx)))
-                        .item(PopupMenuItem::new(tr("Graph um diese Notiz")).icon(menu_icon("waypoints")).on_click(move |_, _, cx| {
+                let g = d.clone();
+                menu = menu.item(PopupMenuItem::new(tr("Graph um diese Notiz")).icon(menu_icon("waypoints")).on_click(move |_, _, cx| {
                             let p = g.clone();
                             act(cx, |l| l.show_graph(Some(p)));
-                        }))
-                        ;
-                    let _ = h;
+                        }));
+                if in_vault {
+                    let o = d.clone();
+                    menu = menu.item(PopupMenuItem::new(tr("In Obsidian öffnen")).icon(menu_icon("external-link")).on_click(move |_, _, cx| super::vault_tools::open_in_obsidian(&o, cx)));
                 }
                 menu = menu.item(PopupMenuItem::new(tr("Verlauf")).icon(menu_icon("history")).on_click(|_, _, cx| {
                     act(cx, |l| {
@@ -2063,7 +2061,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
             menu
         })
     });
-    let show_files = (state::read(cx, |l| l.is_vault) && prefs::get().notes_explorer_hidden).then(|| Button::new("explorer-show").ghost().small().icon(menu_icon("panel-left")).tooltip(tr("Dateien einblenden")).on_click(|_, _, cx| super::notes_page::set_hidden(false, cx)));
+    let show_files = prefs::get().notes_explorer_hidden.then(|| Button::new("explorer-show").ghost().small().icon(menu_icon("panel-left")).tooltip(tr("Dateien einblenden")).on_click(|_, _, cx| super::notes_page::set_hidden(false, cx)));
     let mut tabs = div().flex().gap(px(space::XXS)).py(px(space::S));
     for (i, doc) in docs.iter().enumerate() {
         let active = doc.as_path() == current;

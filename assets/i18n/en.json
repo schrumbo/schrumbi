@@ -112,7 +112,7 @@
   "Trennen": "Disconnect",
   "Diese Werte kommen aus Obsidian und lassen sich dort ändern.": "These values come from Obsidian and can be changed there.",
   "Vault verbinden…": "Connect vault…",
-  "Ein Vault außerhalb dieses Ordners wird mitdurchsucht und synchronisiert. Schrumbi verändert seine Einstellungen nicht.": "A vault outside this folder is searched and synced along. Schrumbi doesn’t change its settings.",
+  "Optional. Ein Vault außerhalb dieses Ordners wird mitdurchsucht und synchronisiert. Schrumbi verändert seine Einstellungen nicht.": "Optional. A vault outside this folder is searched and synced along. Schrumbi doesn’t change its settings.",
   "Vault": "Vault",
   "Der Vault konnte nicht synchronisiert werden: %@": "The vault couldn’t be synced: %@",
   "Konnte nicht in den Papierkorb gelegt werden. Prüfe, ob die Datei noch in einer anderen App geöffnet ist.": "Couldn’t move to the trash. Check whether the file is still open in another app.",

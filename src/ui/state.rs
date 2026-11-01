@@ -261,10 +261,8 @@ pub fn watch_vault(cx: &mut App) {
 /// Coming back from another app: what happened there shows right away.
 pub fn came_back(cx: &mut App) {
     reload_buffers(cx);
-    if read(cx, |l| l.is_vault) {
-        cx.global_mut::<Store>().pending_index = None;
-        reindex(cx);
-    }
+    cx.global_mut::<Store>().pending_index = None;
+    reindex(cx);
 }
 
 fn changed(c: Change, cx: &mut App) {
@@ -297,18 +295,11 @@ fn changed(c: Change, cx: &mut App) {
         cx.global_mut::<Store>().pending_reload = Some(task);
     }
     if c.structural || c.content || c.vault_settings {
-        let vault = read(cx, |l| l.is_vault);
-        let delay = match (vault, c.structural) {
-            (true, _) => 2,
-            (false, true) => 3,
-            (false, false) => 10,
-        };
-        let store = cx.global_mut::<Store>();
-        if vault && store.pending_index.is_some() {
+        if cx.global::<Store>().pending_index.is_some() {
             return;
         }
         let task = cx.spawn(async move |cx| {
-            cx.background_executor().timer(Duration::from_secs(delay)).await;
+            cx.background_executor().timer(Duration::from_secs(2)).await;
             cx.update(|cx| {
                 cx.global_mut::<Store>().pending_index = None;
                 reindex(cx);

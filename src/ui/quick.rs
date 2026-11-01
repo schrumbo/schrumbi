@@ -280,7 +280,7 @@ struct VaultHit {
 fn vault_hits(query: &str) -> Vec<VaultHit> {
     let query = query.trim();
     let vault = index::current();
-    if query.is_empty() || vault.root.as_os_str().is_empty() || !vault.config.is_vault {
+    if query.is_empty() || vault.root.as_os_str().is_empty() {
         return Vec::new();
     }
     let relative = |p: &FilePath| p.strip_prefix(&vault.root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();

@@ -124,39 +124,42 @@ fn commands(cx: &App) -> Vec<Command> {
     if super::sync::enabled_here(cx) {
         add(&general, tr("Sync-Einstellungen"), "settings", None, Run::Call(Rc::new(|cx| super::settings::open_sync(cx))));
     }
-    if state::read(cx, |l| l.is_vault) {
-        let vault = tr("Obsidian");
-        let active = state::read(cx, |l| l.active_document.clone().filter(|p| crate::core::markdown::is_markdown(p) && matches!(l.route(), Route::Doc(_))));
-        add(&vault, tr("Tagesnotiz öffnen"), "calendar", keys(S::DailyNote), Run::Action(Box::new(app::DailyNote)));
-        add(&vault, tr("Eindeutige Notiz anlegen"), "file-plus", None, Run::Call(Rc::new(|cx| {
-            act(cx, |l| l.open_unique_note());
-            state::reindex(cx);
+    let notes = tr("Notizen");
+    let obsidian = state::read(cx, |l| l.is_vault);
+    let active = state::read(cx, |l| l.active_document.clone().filter(|p| crate::core::markdown::is_markdown(p) && matches!(l.route(), Route::Doc(_))));
+    add(&notes, tr("Tagesnotiz öffnen"), "calendar", keys(S::DailyNote), Run::Action(Box::new(app::DailyNote)));
+    add(&notes, tr("Eindeutige Notiz anlegen"), "file-plus", None, Run::Call(Rc::new(|cx| {
+        act(cx, |l| l.open_unique_note());
+        state::reindex(cx);
+    })));
+    add(&notes, tr("Zufällige Notiz öffnen"), "shuffle", None, Run::Call(Rc::new(|cx| act(cx, |l| l.open_random_note()))));
+    add(&notes, tr("Notizen zeigen"), "book-open", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_notes()))));
+    add(&notes, tr("Dateien ein- oder ausblenden"), "panel-left", None, Run::Call(Rc::new(|cx| super::notes_page::set_hidden(!crate::core::prefs::get().notes_explorer_hidden, cx))));
+    add(&notes, tr("Graph zeigen"), "waypoints", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_graph(None)))));
+    if let Some(note) = active {
+        let (a, b, c, d, e) = (note.clone(), note.clone(), note.clone(), note.clone(), note);
+        add(&notes, tr("Graph um diese Notiz"), "waypoints", None, Run::Call(Rc::new(move |cx| {
+            let p = a.clone();
+            act(cx, |l| l.show_graph(Some(p)));
         })));
-        add(&vault, tr("Zufällige Notiz öffnen"), "shuffle", None, Run::Call(Rc::new(|cx| act(cx, |l| l.open_random_note()))));
-        add(&vault, tr("Notizen zeigen"), "book-open", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_notes()))));
-        add(&vault, tr("Dateien ein- oder ausblenden"), "panel-left", None, Run::Call(Rc::new(|cx| super::notes_page::set_hidden(!crate::core::prefs::get().notes_explorer_hidden, cx))));
-        add(&vault, tr("Graph zeigen"), "waypoints", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_graph(None)))));
-        if let Some(note) = active {
-            let (a, b, c, d, e) = (note.clone(), note.clone(), note.clone(), note.clone(), note);
-            add(&vault, tr("Graph um diese Notiz"), "waypoints", None, Run::Call(Rc::new(move |cx| {
-                let p = a.clone();
-                act(cx, |l| l.show_graph(Some(p)));
-            })));
-            add(&vault, tr("Vorlage einfügen"), "file-plus", None, Run::Call(Rc::new(move |cx| {
+        if obsidian {
+            add(&notes, tr("Vorlage einfügen"), "file-plus", None, Run::Call(Rc::new(move |cx| {
                 let p = b.clone();
                 act(cx, |l| l.note_pick = Some((false, p)));
             })));
-            add(&vault, tr("Mit anderer Notiz zusammenführen"), "merge", None, Run::Call(Rc::new(move |cx| {
-                let p = c.clone();
-                act(cx, |l| l.note_pick = Some((true, p)));
-            })));
-            add(&vault, tr("Als Folien zeigen"), "presentation", None, Run::Call(Rc::new(move |cx| {
-                let p = d.clone();
-                act(cx, |l| l.slides = Some(p));
-            })));
-            add(&vault, tr("In Obsidian öffnen"), "external-link", keys(S::OpenInObsidian), Run::Call(Rc::new(move |cx| super::vault_tools::open_in_obsidian(&e, cx))));
-            add(&vault, tr("Auswahl in neue Notiz auslagern"), "scissors", None, Run::Action(Box::new(super::documents::ExtractSelection)));
         }
+        add(&notes, tr("Mit anderer Notiz zusammenführen"), "merge", None, Run::Call(Rc::new(move |cx| {
+            let p = c.clone();
+            act(cx, |l| l.note_pick = Some((true, p)));
+        })));
+        add(&notes, tr("Als Folien zeigen"), "presentation", None, Run::Call(Rc::new(move |cx| {
+            let p = d.clone();
+            act(cx, |l| l.slides = Some(p));
+        })));
+        if obsidian {
+            add(&tr("Obsidian"), tr("In Obsidian öffnen"), "external-link", keys(S::OpenInObsidian), Run::Call(Rc::new(move |cx| super::vault_tools::open_in_obsidian(&e, cx))));
+        }
+        add(&notes, tr("Auswahl in neue Notiz auslagern"), "scissors", None, Run::Action(Box::new(super::documents::ExtractSelection)));
     }
     add(&general, tr("Einstellungen…"), "settings", Some(fixed_keys(",")), Run::Action(Box::new(app::OpenSettings)));
     add(&general, tr("Tastenkürzel anzeigen"), "keyboard", Some(fixed_keys("/")), Run::Action(Box::new(app::ShowShortcuts)));

@@ -2680,12 +2680,6 @@ impl Library {
         self.open_document(&next);
     }
 
-    pub fn show_documents(&mut self) {
-        if let Some(d) = self.active_document.clone().or_else(|| self.open_documents.first().cloned()) {
-            self.set_route(Route::Doc(d));
-        }
-    }
-
     pub fn go_back(&mut self) {
         if self.step_tab(true) {
             return;

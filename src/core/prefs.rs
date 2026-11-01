@@ -64,9 +64,9 @@ pub enum FileGrouping {
 #[serde(rename_all = "camelCase")]
 pub enum NoteEditor {
     /// The note stays drawn; only the line with the caret shows its marks.
-    #[default]
     Live,
     /// The whole note as source text with line numbers.
+    #[default]
     Code,
 }
 
@@ -132,7 +132,8 @@ pub struct Prefs {
     pub notes_column: Option<f32>,
     pub notes_explorer_hidden: bool,
     pub spell_check: bool,
-    /// How notes are written.
+    /// How notes are written. Stored under a new name, so everyone starts on the code editor once.
+    #[serde(rename = "noteEditorMode")]
     pub note_editor: NoteEditor,
     /// What was folded in each note's reading view.
     pub note_folds: HashMap<String, Vec<String>>,

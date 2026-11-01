@@ -207,7 +207,7 @@ impl ShortcutAction {
             Self::CloseTab => s("w", true, false, false, false),
             Self::NextTab => s("tab", false, false, false, true),
             Self::PreviousTab => s("tab", false, true, false, true),
-            Self::TogglePreview => s("e", true, false, false, false),
+            Self::TogglePreview => s("v", true, true, false, false),
             Self::SplitPreview => s("v", true, false, true, false),
             Self::ExportPdf => s("e", true, true, false, false),
             Self::Bold => s("b", true, false, false, false),

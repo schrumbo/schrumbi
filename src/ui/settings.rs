@@ -636,7 +636,7 @@ impl Settings {
         let sidebar = section(
             Some(tr("Seitenleiste")),
             Some(tr("Ausgeblendete Einträge bleiben über Kürzel und Befehlspalette erreichbar. Rechtsklick auf einen Eintrag blendet ihn direkt aus.")),
-            [("semester", tr("Semester")), ("record", tr("Leistungen")), ("inbox", tr("Inbox")), ("checks", tr("Aufräumen"))]
+            [("semester", tr("Semester")), ("record", tr("Leistungen")), ("inbox", tr("Inbox")), ("notes", tr("Notizen")), ("checks", tr("Aufräumen"))]
                 .into_iter()
                 .map(|(key, label)| {
                     let shown = !hidden.iter().any(|k| k == key);
@@ -1461,7 +1461,7 @@ impl Settings {
             }
             menu.separator().item(PopupMenuItem::new(tr("Ordner wählen…")).on_click(move |_, _, cx| super::platform::choose_folder(cx, move |path, cx| connect(path, cx))))
         });
-        section(Some(tr("Obsidian")), Some(tr("Ein Vault außerhalb dieses Ordners wird mitdurchsucht und synchronisiert. Schrumbi verändert seine Einstellungen nicht.")), vec![row(tr("Vault"), picker, t)], t)
+        section(Some(tr("Obsidian")), Some(tr("Optional. Ein Vault außerhalb dieses Ordners wird mitdurchsucht und synchronisiert. Schrumbi verändert seine Einstellungen nicht.")), vec![row(tr("Vault"), picker, t)], t)
     }
 
     fn notes(&mut self, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
@@ -1508,10 +1508,25 @@ impl Settings {
             ),
             None => div().into_any_element(),
         };
+        let editor_kind = prefs::get().note_editor;
+        let editor_label = |k: prefs::NoteEditor| if k == prefs::NoteEditor::Live { tr("Live: Text bleibt gezeichnet") } else { tr("Code-Editor: Quelltext mit Zeilennummern") };
+        let editor_row = row(
+            tr("Notizen schreiben"),
+            picker("n-editor", editor_label(editor_kind), move |mut menu| {
+                for k in [prefs::NoteEditor::Code, prefs::NoteEditor::Live] {
+                    menu = menu.item(PopupMenuItem::new(editor_label(k)).checked(k == editor_kind).on_click(move |_, _, cx| {
+                        prefs::update(|p| p.note_editor = k);
+                        cx.refresh_windows();
+                    }));
+                }
+                menu
+            }),
+            t,
+        );
         let editor = section(
             Some(tr("Editor")),
             Some(tr("Doppelklick auf .md-Dateien in Schrumbi öffnet immer den eigenen Editor.")),
-            vec![markdown_row, row(tr("Rechtschreibung prüfen"), Switch::new("n-spell").checked(p.spell_check).on_click(|v, _, cx| {
+            vec![editor_row, markdown_row, row(tr("Rechtschreibung prüfen"), Switch::new("n-spell").checked(p.spell_check).on_click(|v, _, cx| {
                 let on = *v;
                 prefs::update(|p| p.spell_check = on);
                 cx.refresh_windows();
@@ -1527,21 +1542,7 @@ impl Settings {
             )],
             t,
         );
-        let editor_kind = prefs::get().note_editor;
-        let editor_label = |k: prefs::NoteEditor| if k == prefs::NoteEditor::Live { tr("Live: Text bleibt gezeichnet") } else { tr("Code-Editor: Quelltext mit Zeilennummern") };
         let mut save_rows = vec![row(
-            tr("Notizen schreiben"),
-            picker("n-editor", editor_label(editor_kind), move |mut menu| {
-                for k in [prefs::NoteEditor::Live, prefs::NoteEditor::Code] {
-                    menu = menu.item(PopupMenuItem::new(editor_label(k)).checked(k == editor_kind).on_click(move |_, _, cx| {
-                        prefs::update(|p| p.note_editor = k);
-                        cx.refresh_windows();
-                    }));
-                }
-                menu
-            }),
-            t,
-        ), row(
             tr("Sichern"),
             picker("n-mode", mode_label(mode), move |mut menu| {
                 for m in [NoteSaveMode::Focus, NoteSaveMode::Delay] {
@@ -1616,7 +1617,7 @@ impl Settings {
         );
         let obsidian = self.obsidian_section(&mut fields, window, cx, t);
         self.fields = fields;
-        div().flex().flex_col().gap(px(space::XL)).child(editor).child(obsidian).child(section(Some(tr("Sichern")), Some(save_footer), save_rows, t)).child(pdf)
+        div().flex().flex_col().gap(px(space::XL)).child(editor).child(section(Some(tr("Sichern")), Some(save_footer), save_rows, t)).child(pdf).child(obsidian)
     }
 
     fn shortcuts(&mut self, t: &Theme, cx: &mut Context<Self>) -> Div {

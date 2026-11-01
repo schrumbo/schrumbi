@@ -282,10 +282,10 @@ impl Pages {
             .clone()
     }
 
-    /// The notes room: the vault's files beside whatever note is shown.
+    /// The notes room: the workspace's files beside whatever note is shown.
     fn with_explorer(&mut self, body: AnyElement, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let (vault, route) = state::read(cx, |l| (l.is_vault, l.route().clone()));
-        if !vault || !matches!(route, Route::Doc(_) | Route::Notes) {
+        let route = state::read(cx, |l| l.route().clone());
+        if !matches!(route, Route::Doc(_) | Route::Notes) {
             return body;
         }
         let page = self.notes_page.get_or_insert_with(|| cx.new(|cx| super::notes_page::NotesPage::new(window, cx))).clone();

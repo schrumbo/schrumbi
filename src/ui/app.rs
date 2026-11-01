@@ -86,10 +86,8 @@ pub fn init(cx: &mut App) {
         }
     });
     cx.on_action(|_: &DailyNote, cx| {
-        if state::read(cx, |l| l.is_vault) {
-            act(cx, |l| l.open_daily_note());
-            state::reindex(cx);
-        }
+        act(cx, |l| l.open_daily_note());
+        state::reindex(cx);
     });
     cx.on_action(|_: &SyncNow, cx| {
         if super::sync::get(cx).git.is_some() {
@@ -109,11 +107,7 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &Undo, cx| act(cx, |l| l.undo()));
     cx.on_action(|_: &Redo, cx| act(cx, |l| l.redo()));
     cx.on_action(|_: &ShowGraph, cx| {
-        act(cx, |l| {
-            if l.is_vault {
-                l.show_graph(None);
-            }
-        })
+        act(cx, |l| if l.root.is_some() { l.show_graph(None) })
     });
     cx.on_action(|_: &CommandPalette, cx| act(cx, |l| if l.root.is_some() { l.show_palette = true }));
     cx.on_action(|_: &ShowShortcuts, cx| act(cx, |l| if l.root.is_some() { l.show_shortcuts = true }));
@@ -122,7 +116,7 @@ pub fn init(cx: &mut App) {
         act(cx, |l| {
             if l.root.is_some() {
                 let module_id = if let Route::Module(id) = l.route() { Some(id.clone()) } else { None };
-                if l.is_vault && module_id.is_none() {
+                if module_id.is_none() {
                     if let Some(made) = l.new_untitled_note(None) {
                         l.rename_request = Some(made);
                         l.quiet_open = true;

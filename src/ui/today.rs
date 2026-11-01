@@ -40,14 +40,11 @@ pub fn render(lib: &Library, width: f32, t: &Theme) -> Div {
                 .child(board::render(lib, &days, width < 7. * 100. + 36. + 48., t)),
         )
         .children(exams(lib, t))
-        .children(recent_notes(lib, t))
+        .children(recent_notes(t))
 }
 
-/// Back from Obsidian: what was written last, one click away.
-fn recent_notes(lib: &Library, t: &Theme) -> Option<Div> {
-    if !lib.is_vault {
-        return None;
-    }
+/// What was written last, one click away.
+fn recent_notes(t: &Theme) -> Option<Div> {
     let vault = crate::core::vault::index::current();
     let mut notes: Vec<(&std::path::PathBuf, f64)> = vault.notes.iter().filter(|(p, _)| !vault.is_template(p)).filter(|(p, _)| crate::core::markdown::is_markdown(p)).map(|(p, f)| (p, f.modified)).collect();
     notes.sort_by(|a, b| b.1.total_cmp(&a.1));

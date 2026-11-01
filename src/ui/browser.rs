@@ -202,7 +202,7 @@ impl FileBrowser {
             Results { best, groups: group(rest, searching, grouping, today, &module_order), total: matching.len(), other_kinds: if searching { other_kinds } else { 0 }, searching, query: q.clone(), loaded: true }
         };
         self.query_error = None;
-        if searching && l.is_vault && vault_query::is_structured(&self.query) {
+        if searching && vault_query::is_structured(&self.query) {
             match vault_query::parse(&self.query) {
                 Err(e) => {
                     self.query_error = Some(e);
@@ -901,7 +901,7 @@ impl FileBrowser {
                 menu
             }, t));
         }
-        if lib.is_vault && vault_query::is_structured(&self.query) {
+        if vault_query::is_structured(&self.query) {
             let sorts = [(vault_query::Sort::NameAsc, tr("Name A–Z")), (vault_query::Sort::NameDesc, tr("Name Z–A")), (vault_query::Sort::ModifiedNew, tr("Zuletzt geändert")), (vault_query::Sort::ModifiedOld, tr("Am längsten unverändert")), (vault_query::Sort::CreatedNew, tr("Zuletzt erstellt")), (vault_query::Sort::CreatedOld, tr("Zuerst erstellt"))];
             let label = sorts.iter().find(|(s, _)| *s == self.vault_sort).map_or_else(String::new, |(_, l)| l.clone());
             let e2 = e.clone();
@@ -917,19 +917,17 @@ impl FileBrowser {
                 menu
             }));
         }
-        if lib.is_vault {
-            bar = bar.child(Button::new("vault-operators").ghost().small().icon(menu_icon("circle-help")).tooltip(tr("Suchbefehle")).dropdown_menu(|mut menu, _, _| {
-                for op in ["file:", "path:", "content:", "tag:", "line:()", "block:()", "section:()", "task:", "task-todo:", "task-done:", "match-case:", "ignore-case:", "[property]", "[property:wert]", "/regex/", "-ausschließen", "OR"] {
-                    menu = menu.item(PopupMenuItem::new(op.to_string()).on_click(move |_, _, cx| {
-                        act(cx, |l| {
-                            let spacer = if l.search_query.is_empty() || l.search_query.ends_with(' ') { "" } else { " " };
-                            l.search_query = format!("{}{spacer}{op}", l.search_query);
-                        });
-                    }));
-                }
-                menu
-            }));
-        }
+        bar = bar.child(Button::new("vault-operators").ghost().small().icon(menu_icon("circle-help")).tooltip(tr("Suchbefehle")).dropdown_menu(|mut menu, _, _| {
+            for op in ["file:", "path:", "content:", "tag:", "line:()", "block:()", "section:()", "task:", "task-todo:", "task-done:", "match-case:", "ignore-case:", "[property]", "[property:wert]", "/regex/", "-ausschließen", "OR"] {
+                menu = menu.item(PopupMenuItem::new(op.to_string()).on_click(move |_, _, cx| {
+                    act(cx, |l| {
+                        let spacer = if l.search_query.is_empty() || l.search_query.ends_with(' ') { "" } else { " " };
+                        l.search_query = format!("{}{spacer}{op}", l.search_query);
+                    });
+                }));
+            }
+            menu
+        }));
         let typed_week = self.results.query.week;
         let active_week = typed_week.or(self.week_filter);
         let weeks: Vec<(u32, u32)> = lib.weeks().iter().filter(|w| current.is_none_or(|c| w.index <= c)).rev().map(|w| (w.index, w.iso_week)).collect();

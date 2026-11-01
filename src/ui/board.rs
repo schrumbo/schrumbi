@@ -173,6 +173,11 @@ fn session_chip(m: &Module, s: &Session, t: &Theme) -> Stateful<Div> {
         )
 }
 
+/// The module's colour at a card's left edge, inset so the card's corners stay free.
+pub fn edge_bar(color: Hsla) -> Div {
+    div().absolute().top(px(space::S)).bottom(px(space::S)).left(px(space::XS)).w(px(3.)).rounded_full().bg(color)
+}
+
 pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
     let e = lib.evaluation(a);
     let module = lib.module(a);
@@ -201,7 +206,7 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .relative()
         .w_full()
         .py(px(space::S))
-        .pl(px(space::S))
+        .pl(px(space::M))
         .pr(px(space::S))
         .flex()
         .flex_col()
@@ -213,7 +218,7 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .tooltip(tip(help))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(select_id.clone()))))
         .when(!closed, |c| c.on_drag(DraggedCard { id: a.id.clone(), title: a.title.clone(), tint }, |d, _, _, cx| cx.new(|_| d.clone())))
-        .child(div().absolute().top_0().bottom_0().left_0().w(px(3.)).rounded_l(px(radius::CONTROL)).bg(tint.opacity(if closed { 0.35 } else { 1. })))
+        .child(edge_bar(tint.opacity(if closed { 0.35 } else { 1. })))
         .child(
             div()
                 .flex()

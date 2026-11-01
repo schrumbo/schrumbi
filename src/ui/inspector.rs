@@ -260,14 +260,9 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         .child(info)
         .child(actions);
 
-    let notes: Vec<std::path::PathBuf> = if l.is_vault {
-        let mut found: Vec<_> = crate::core::vault::index::current().notes.keys().filter(|p| p.starts_with(&a.folder)).cloned().collect();
-        found.sort();
-        found.truncate(20);
-        found
-    } else {
-        Vec::new()
-    };
+    let mut notes: Vec<std::path::PathBuf> = crate::core::vault::index::current().notes.keys().filter(|p| p.starts_with(&a.folder)).cloned().collect();
+    notes.sort();
+    notes.truncate(20);
     if !notes.is_empty() {
         let rows = notes.into_iter().enumerate().map(|(i, path)| {
             let open = path.clone();

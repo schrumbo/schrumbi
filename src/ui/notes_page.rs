@@ -58,7 +58,7 @@ struct Cache {
     open_tasks: usize,
 }
 
-/// The left side of the notes room: everything in the vault, with the document beside it.
+/// The left side of the notes room: everything in the workspace or vault, with the document beside it.
 pub struct NotesPage {
     view: View,
     order: Order,
@@ -763,7 +763,10 @@ impl Render for NotesPage {
             self.start_rename(path, window, cx);
         }
         let t = Theme::get(cx);
-        let (tag, active) = state::read(cx, |l| (l.notes_tag.clone(), l.active_document.clone()));
+        let (tag, active, obsidian) = state::read(cx, |l| (l.notes_tag.clone(), l.active_document.clone(), l.is_vault));
+        if self.view == View::Marks && !obsidian {
+            self.view = View::Files;
+        }
         if self.view == View::Search {
             self.search_vault(cx);
         }
@@ -773,6 +776,7 @@ impl Render for NotesPage {
         let view = self.view;
         let order = self.order;
         let me = cx.entity();
+        let marks = obsidian.then(|| self.view_button(View::Marks, "bookmark", tr("Lesezeichen"), 0, &t, cx));
         let header = div()
             .flex_none()
             .h(px(control::SUBBAR))
@@ -785,7 +789,7 @@ impl Render for NotesPage {
             .child(self.view_button(View::Files, "folder-tree", tr("Dateien"), 0, &t, cx))
             .child(self.view_button(View::Search, "search", tr("Suche"), 0, &t, cx))
             .child(self.view_button(View::Tags, "tag", tr("Tags"), 0, &t, cx))
-            .child(self.view_button(View::Marks, "bookmark", tr("Lesezeichen"), 0, &t, cx))
+            .children(marks)
             .child(self.view_button(View::Tasks, "circle-check", tr("Aufgaben"), open_tasks, &t, cx))
             .child(div().flex_1())
             .child(Button::new("explorer-hide").ghost().small().icon(menu_icon("panel-left-close")).tooltip(tr("Dateien ausblenden")).on_click(|_, _, cx| set_hidden(true, cx)))
@@ -860,7 +864,7 @@ impl Render for NotesPage {
             .flex_none()
             .flex()
             .on_key_down(cx.listener(Self::on_key))
-            .on_action(|_: &super::app::TogglePreview, _, cx| act(cx, |l| l.toggle_mode = true))
+            .on_action(|_: &super::app::TogglePreview, _, cx| act(cx, |l| l.toggle_mode = l.active_document.as_deref().is_some_and(markdown::is_markdown)))
             .on_mouse_up(MouseButton::Left, cx.listener(|s, _, _, _| crate::core::prefs::update(|p| p.notes_column = Some(s.width))))
             .child(div().w(px(width)).h_full().flex().flex_col().bg(t.column).child(header).child(filter).child(div().flex_1().min_h_0().child(body)))
             .child(handle)
