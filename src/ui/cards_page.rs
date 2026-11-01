@@ -166,6 +166,10 @@ fn counts_pills(counts: Counts, t: &Theme) -> Div {
     div().flex_none().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).children(piece(counts.new, t.blue)).children(piece(counts.learning, t.orange)).children(piece(counts.review, t.green))
 }
 
+fn state_sidebar_open(_: &App) -> bool {
+    crate::core::prefs::get().sidebar_open
+}
+
 /// Sorts `Modul2` before `Modul10`.
 fn natural_key(text: &str) -> String {
     let mut out = String::new();
@@ -800,7 +804,8 @@ impl CardsPage {
             .into_any_element()
     }
 
-    fn overview(&mut self, now: i64, wide: bool, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn overview(&mut self, now: i64, room: f32, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let room = room - if self.selected.is_some() { 320. } else { 0. };
         let deck = self.deck.clone();
         let counts = cards::counts(&deck, now);
         let stats = cards::stats(&deck, now);
@@ -903,8 +908,14 @@ impl CardsPage {
                     }
                 })).child(caption(if rows.len() == 1 { tr("1 Karte") } else { trf("%@ Karten", &[&rows.len().to_string()]) }, t))).child(div().flex_1().min_h_0().child(list));
         let chosen = self.selected.as_ref().and_then(|id| self.all.iter().find(|c| c.id() == id)).cloned();
-        let summary: AnyElement = if wide { div().flex().gap(px(space::XL)).child(div().flex_1().min_w_0().child(tiles)).child(div().w(px(340.)).flex_none().child(forecast)).into_any_element() } else { tiles.into_any_element() };
-        let main = div().flex_1().min_w_0().h_full().flex().flex_col().child(div().flex_none().p(px(space::XL)).pb(px(space::L)).flex().flex_col().gap(px(space::L)).child(head).child(summary)).child(browser);
+        let summary: Option<AnyElement> = if room >= 900. {
+            Some(div().flex().gap(px(space::XL)).child(div().flex_1().min_w_0().child(tiles)).child(div().w(px(340.)).flex_none().child(forecast)).into_any_element())
+        } else if room >= 560. {
+            Some(tiles.into_any_element())
+        } else {
+            None
+        };
+        let main = div().flex_1().min_w_0().h_full().flex().flex_col().child(div().flex_none().p(px(space::XL)).pb(px(space::L)).flex().flex_col().gap(px(space::L)).child(head).children(summary)).child(browser);
         div().size_full().flex().child(main).when_some(chosen, |d, card| d.child(self.detail_panel(&card, t, cx))).into_any_element()
     }
 
@@ -1151,7 +1162,8 @@ impl Render for CardsPage {
         } else if self.all.is_empty() {
             self.empty_room(&t, cx)
         } else {
-            self.overview(now, width > 1260., &t, cx)
+            let room = width - if state_sidebar_open(cx) { super::sidebar::WIDTH } else { super::sidebar::RAIL } - if width > 860. { 260. } else { 0. };
+            self.overview(now, room, &t, cx)
         };
         let side = (!reviewing && !self.all.is_empty() && width > 860.).then(|| self.deck_column(now, &t, cx));
         let accent = t.accent;
@@ -1167,6 +1179,19 @@ impl Render for CardsPage {
             .on_drop(cx.listener(|_, paths: &ExternalPaths, window, cx| {
                 if let Some(path) = paths.paths().iter().find(|p| p.extension().is_some_and(|e| matches!(e.to_string_lossy().to_lowercase().as_str(), "apkg" | "colpkg" | "txt" | "tsv" | "csv"))) {
                     open_import(path.clone(), window, cx);
+                }
+            }))
+            .capture_action(cx.listener(|p, _: &super::main_window::Dismiss, _, cx| {
+                if p.session.is_some() {
+                    p.session = None;
+                    p.cached = None;
+                    cx.stop_propagation();
+                    cx.notify();
+                } else if p.selected.is_some() {
+                    p.selected = None;
+                    p.preview = None;
+                    cx.stop_propagation();
+                    cx.notify();
                 }
             }))
             .capture_action(cx.listener(|p, _: &super::app::Undo, _, cx| {
@@ -1293,6 +1318,11 @@ impl CardComposer {
     }
 
     fn refresh_preview(&mut self, cx: &mut Context<Self>) {
+        if self.editing.is_none() {
+            let (f, b) = (self.front.read(cx).value().to_string(), self.back.read(cx).value().to_string());
+            let kind = self.kind;
+            DRAFT.with(|d| *d.borrow_mut() = (!f.trim().is_empty() || !b.trim().is_empty()).then_some((f, b, kind)));
+        }
         let written = self.written(cx);
         let found = crate::core::cards::parse::cards_in(&written);
         let (front, back) = found.first().map_or((String::new(), String::new()), |c| (c.front.clone(), c.back.clone()));
@@ -1389,7 +1419,6 @@ impl CardComposer {
                 crate::core::prefs::update(|p| p.card_target = Some(rel));
             }
             self.added += 1;
-            DRAFT.with(|d| d.borrow_mut().take());
             state::reindex(cx);
             self.front.update(cx, |s, cx| {
                 s.set_value("", window, cx);
@@ -1397,18 +1426,11 @@ impl CardComposer {
             });
             self.back.update(cx, |s, cx| s.set_value("", window, cx));
             self.refresh_preview(cx);
+            DRAFT.with(|d| d.borrow_mut().take());
         }
     }
 
-    /// Closing never loses what was typed: an unsaved new card comes back next time.
     fn close(&mut self, cx: &mut Context<Self>) {
-        if self.editing.is_none() {
-            let (f, b) = (self.front.read(cx).value().to_string(), self.back.read(cx).value().to_string());
-            if !f.trim().is_empty() || !b.trim().is_empty() {
-                let kind = self.kind;
-                DRAFT.with(|d| *d.borrow_mut() = Some((f, b, kind)));
-            }
-        }
         cx.emit(super::quick::Dismissed);
     }
 
