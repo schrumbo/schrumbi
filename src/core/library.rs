@@ -34,6 +34,7 @@ pub enum Route {
     Doc(PathBuf),
     Notes,
     Graph,
+    Cards,
 }
 
 /// How many pages Back remembers.
@@ -180,7 +181,10 @@ impl IndexJob {
             }
             catalog.extend(catalog::build(&all, vault, &mapped));
         }
-        super::vault::index::rebuild(self.vault.as_ref().unwrap_or(&self.root), &self.exclude);
+        let vault_root = self.vault.as_ref().unwrap_or(&self.root);
+        super::vault::index::rebuild(vault_root, &self.exclude);
+        super::cards::open(&dunce::canonicalize(vault_root).unwrap_or_else(|_| vault_root.clone()));
+        super::cards::reconcile();
         (count, catalog)
     }
 }
@@ -248,6 +252,8 @@ pub struct Library {
     pub config_broken: bool,
     read_only: bool,
     pub needs_setup: bool,
+    /// A deck the flashcards page should open and start.
+    pub cards_request: Option<String>,
     pub filing_request: Option<FilingRequest>,
     pub missing_folder_count: usize,
     action_items: Vec<Assignment>,
@@ -389,6 +395,7 @@ impl Library {
             config_broken: false,
             read_only: false,
             needs_setup: false,
+            cards_request: None,
             filing_request: None,
             missing_folder_count: 0,
             action_items: Vec::new(),

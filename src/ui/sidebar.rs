@@ -62,6 +62,7 @@ fn entries(lib: &Library) -> Vec<Entry> {
         Entry { key: Some("inbox"), route: Route::Inbox, icon: "inbox", label: tr("Inbox"), shortcut: Some("4"), badge: lib.inbox.len(), urgent: false },
     ];
     v.push(Entry { key: Some("notes"), route: Route::Notes, icon: "book-open", label: tr("Notizen"), shortcut: None, badge: 0, urgent: false });
+    v.push(Entry { key: Some("cards"), route: Route::Cards, icon: "layers", label: tr("Karten"), shortcut: Some("6"), badge: crate::core::cards::counts("", crate::core::cards::now()).total(), urgent: false });
     if issues > 0 || matches!(lib.route(), Route::Checks) {
     v.push(Entry { key: Some("checks"), route: Route::Checks, icon: "list-checks", label: tr("Aufräumen"), shortcut: Some("5"), badge: issues, urgent: false });
     }

@@ -10,6 +10,12 @@ pub fn merge_file(path: &str, base: Option<&str>, ours: &str, theirs: &str) -> O
     if !path_is_root(path) {
         return None;
     }
+    if name == crate::core::cards::STORE_NAME {
+        return crate::core::cards::merge_store(ours, theirs);
+    }
+    if name == crate::core::cards::LOG_NAME {
+        return Some(crate::core::cards::merge_log(ours, theirs));
+    }
     if name == CONFIG_NAME {
         let merged = merge_values(base, ours, theirs, Policy::Config)?;
         let typed: StudyConfig = serde_json::from_value(merged).ok()?;

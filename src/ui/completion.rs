@@ -152,7 +152,7 @@ impl NoteCompletion {
     }
 
     fn slash_items(&self, typed: &str, range: Range) -> Vec<CompletionItem> {
-        let commands: [(&str, &str); 15] = [
+        let commands: [(&str, &str); 17] = [
             ("Überschrift 1", "# "),
             ("Überschrift 2", "## "),
             ("Überschrift 3", "### "),
@@ -168,6 +168,8 @@ impl NoteCompletion {
             ("Tabelle", "|  |  |\n|--|--|\n|  |  |\n"),
             ("Trennlinie", "---\n"),
             ("Formel", "$$\n\n$$"),
+            ("Karteikarte", " :: "),
+            ("Lückentext", "{{c1::}}"),
         ];
         commands.iter().enumerate().filter(|(_, (name, _))| score(&tr(name), typed).is_some()).map(|(i, (name, text))| item(tr(name), None, format!("{i:05}"), range, text.to_string())).collect()
     }

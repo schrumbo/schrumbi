@@ -126,6 +126,12 @@ pub struct Prefs {
     pub pdf_page_numbers: bool,
     pub editor_font_size: f32,
     pub theme: ThemeChoice,
+    /// The chance of remembering a card that reviews aim for.
+    pub card_retention: f64,
+    pub card_new_per_day: u32,
+    pub card_reviews_per_day: u32,
+    /// The note new cards went to last, relative to the vault.
+    pub card_target: Option<String>,
     /// Notes save while typing since this was the default; older settings move over once.
     pub saves_while_typing: bool,
     pub note_save_mode: NoteSaveMode,
@@ -190,6 +196,10 @@ impl Default for Prefs {
             pdf_page_numbers: true,
             editor_font_size: 13.,
             theme: ThemeChoice::System,
+            card_retention: 0.9,
+            card_new_per_day: 20,
+            card_reviews_per_day: 200,
+            card_target: None,
             saves_while_typing: false,
             note_save_mode: NoteSaveMode::Delay,
             note_save_delay: 2.,

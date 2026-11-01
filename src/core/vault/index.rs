@@ -27,6 +27,8 @@ pub struct NoteFacts {
     pub tasks: Vec<(usize, String)>,
     /// Footnote definitions: label, text and line.
     pub footnotes: Vec<(String, String, usize)>,
+    /// The flashcards written in the note.
+    pub cards: Vec<crate::core::cards::RawCard>,
 }
 
 /// A place where a note is linked or mentioned.
@@ -72,6 +74,7 @@ pub fn current() -> Arc<VaultIndex> {
 pub fn reset() {
     *CURRENT.write().unwrap() = Arc::new(VaultIndex::default());
     CACHE.lock().unwrap().clear();
+    crate::core::cards::close();
 }
 
 /// Reads what a note's text says.
@@ -92,7 +95,7 @@ pub fn facts_of(text: &str, modified: f64) -> NoteFacts {
     tags.dedup();
     static FOOTNOTE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\[\^([^\]]+)\]:\s*(.*)$").unwrap());
     let footnotes = lines.iter().enumerate().filter_map(|(i, l)| FOOTNOTE.captures(l).map(|c| (c[1].to_string(), c[2].to_string(), i))).collect();
-    NoteFacts { tasks: open_tasks(text), footnotes, modified, links, tags, aliases: frontmatter::aliases(text), headings: links::headings(text), blocks: links::block_ids(text), properties: frontmatter::properties(text).unwrap_or_default(), words: text.split_whitespace().count() }
+    NoteFacts { cards: crate::core::cards::parse::cards_in(text), tasks: open_tasks(text), footnotes, modified, links, tags, aliases: frontmatter::aliases(text), headings: links::headings(text), blocks: links::block_ids(text), properties: frontmatter::properties(text).unwrap_or_default(), words: text.split_whitespace().count() }
 }
 
 /// The tasks of a note still to be done. Any other mark counts as done, as in Obsidian.

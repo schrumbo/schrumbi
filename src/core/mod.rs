@@ -1,6 +1,7 @@
 pub mod catalog;
 pub mod crash;
 pub mod day;
+pub mod cards;
 pub mod filing;
 pub mod folders;
 pub mod git;

@@ -240,6 +240,27 @@ impl DocSide {
                 .into_any_element();
             list = list.child(self.section("side-missing", tr("Fehlende Ziele"), count, body, t, cx));
         }
+        if !facts.cards.is_empty() {
+            let count = facts.cards.len();
+            let deck = from.strip_prefix(&index::current().root).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+            let waiting = crate::core::cards::counts(&deck, crate::core::cards::now()).total();
+            let body = div()
+                .flex()
+                .items_center()
+                .gap(px(space::S))
+                .px(px(space::L))
+                .py(px(space::XS))
+                .child(div().flex_1().min_w_0().text_size(px(font::CALLOUT)).text_color(t.secondary).child(if waiting == 0 { tr("Heute nichts fällig") } else if waiting == 1 { tr("1 Karte wartet") } else { trf("%@ Karten warten", &[&waiting.to_string()]) }))
+                .child(Button::new("side-cards-learn").small().label(tr("Lernen")).on_click(move |_, _, cx| {
+                    let deck = deck.clone();
+                    act(cx, |l| {
+                        l.cards_request = Some(deck);
+                        l.set_route(crate::core::library::Route::Cards);
+                    })
+                }))
+                .into_any_element();
+            list = list.child(self.section("side-cards", tr("Karten"), count, body, t, cx));
+        }
         if !facts.headings.is_empty() {
             let count = facts.headings.len();
             let source = from.clone();

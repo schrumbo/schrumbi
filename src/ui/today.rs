@@ -31,6 +31,7 @@ pub fn render(lib: &Library, width: f32, t: &Theme) -> Div {
         .when(empty, |d| d.child(getting_started(t)))
         .children(attention(lib, t))
         .children(inbox_hint(lib, t))
+        .children(cards_hint(t))
         .child(
             div()
                 .flex()
@@ -305,6 +306,26 @@ fn inbox_hint(lib: &Library, t: &Theme) -> Option<Div> {
             .child(icon("inbox", iconsize::S, t.accent))
             .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(inbox_text(count)))
             .child(Button::new("file-now").small().label(tr("Jetzt ablegen")).on_click(|_, _, cx| act(cx, |l| l.set_route(Route::Inbox))))
+    })
+}
+
+/// Cards waiting today, one key away.
+fn cards_hint(t: &Theme) -> Option<Div> {
+    let count = crate::core::cards::counts("", crate::core::cards::now()).total();
+    (count > 0).then(|| {
+        banner(t.accent)
+            .py(px(space::S))
+            .flex()
+            .items_center()
+            .gap(px(space::S))
+            .child(icon("layers", iconsize::S, t.accent))
+            .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(if count == 1 { tr("1 Karte wartet") } else { trf("%@ Karten warten", &[&count.to_string()]) }))
+            .child(Button::new("cards-now").small().label(tr("Lernen")).on_click(|_, _, cx| {
+                act(cx, |l| {
+                    l.cards_request = Some(String::new());
+                    l.set_route(Route::Cards);
+                })
+            }))
     })
 }
 

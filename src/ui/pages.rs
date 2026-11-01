@@ -33,6 +33,8 @@ pub struct Pages {
     version_pane: Option<Entity<super::history::VersionPane>>,
     notes_page: Option<Entity<super::notes_page::NotesPage>>,
     graph_page: Option<Entity<super::graph_view::GraphView>>,
+    cards_page: Option<Entity<super::cards_page::CardsPage>>,
+    cards_shown: bool,
     split_share: f32,
     shown_doc: Option<std::path::PathBuf>,
     /// The shown document gets the keyboard once no dialog holds it any more.
@@ -97,6 +99,8 @@ impl Pages {
             version_pane: None,
             notes_page: None,
             graph_page: None,
+            cards_page: None,
+            cards_shown: false,
             split_share: crate::core::prefs::get().split_share,
             shown_doc: None,
             doc_needs_focus: false,
@@ -371,6 +375,9 @@ impl Render for Pages {
             window.on_next_frame(move |window, cx| inbox.update(cx, |i, cx| i.activate(window, cx)));
         }
         self.inbox_shown = on_inbox;
+        if !matches!(route, Route::Cards) {
+            self.cards_shown = false;
+        }
         let mut fields = std::mem::take(&mut self.fields);
         let body: AnyElement = match route {
             Route::Grid => div().relative().size_full().child(div().id("grid-scroll").size_full().overflow_y_scroll().track_scroll(&self.grid.scroll).child(grid::render(lib.read(cx), &self.grid, view, &t))).vertical_scrollbar(&self.grid.scroll).into_any_element(),
@@ -396,6 +403,14 @@ impl Render for Pages {
             Route::Doc(path) => self.document(path, window, cx),
             Route::Graph => {
                 let page = self.graph_page.get_or_insert_with(|| cx.new(|cx| super::graph_view::GraphView::new(window, cx))).clone();
+                page.into_any_element()
+            }
+            Route::Cards => {
+                let page = self.cards_page.get_or_insert_with(|| cx.new(|cx| super::cards_page::CardsPage::new(window, cx))).clone();
+                if !std::mem::replace(&mut self.cards_shown, true) {
+                    let focus = page.clone();
+                    window.on_next_frame(move |window, cx| focus.update(cx, |p, cx| p.take_focus(window, cx)));
+                }
                 page.into_any_element()
             }
             Route::Notes => unavailable("book-open", tr("Keine Notiz offen"), tr("Wähle links eine Notiz oder lege mit ⌘N eine neue an."), &t).into_any_element(),

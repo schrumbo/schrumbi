@@ -47,6 +47,7 @@ actions!(
         GoGrid,
         GoRecord,
         GoInbox,
+        GoCards,
         GoChecks,
         SearchFiles,
         NextTab,
@@ -166,6 +167,7 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &GoGrid, cx| route(Route::Grid)(cx));
     cx.on_action(|_: &GoRecord, cx| route(Route::Record)(cx));
     cx.on_action(|_: &GoInbox, cx| route(Route::Inbox)(cx));
+    cx.on_action(|_: &GoCards, cx| route(Route::Cards)(cx));
     cx.on_action(|_: &GoChecks, cx| route(Route::Checks)(cx));
     cx.on_action(|_: &SearchFiles, cx| route(Route::Search)(cx));
     cx.on_action(|a: &GoModule, cx| route(Route::Module(a.0.clone()))(cx));
@@ -278,6 +280,7 @@ pub fn bind_keys(cx: &mut App) {
         kb(cmd("3"), GoRecord, None),
         kb(cmd("4"), GoInbox, None),
         kb(cmd("5"), GoChecks, None),
+        kb(cmd("6"), GoCards, None),
         kb(cmd("m"), Minimize, None),
         kb(if cfg!(target_os = "macos") { "ctrl-cmd-f" } else { "f11" }.to_string(), ToggleFullscreen, None),
         kb(cmd("shift-t"), ReopenTab, None),
@@ -339,6 +342,7 @@ pub fn rebuild_menus(cx: &mut App) {
         MenuItem::action(tr("Semester"), GoGrid),
         MenuItem::action(tr("Leistungen"), GoRecord),
         MenuItem::action(tr("Inbox"), GoInbox),
+        MenuItem::action(tr("Karten"), GoCards),
         MenuItem::action(tr("Aufräumen"), GoChecks),
         MenuItem::separator(),
         MenuItem::action(tr("In allen Dateien suchen"), SearchFiles),

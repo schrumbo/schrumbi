@@ -160,6 +160,7 @@ impl MainWindow {
             Route::Checks => tr("Aufräumen"),
             Route::Notes => tr("Notizen"),
             Route::Graph => tr("Graph"),
+            Route::Cards => tr("Karten"),
             Route::Module(id) => lib.module_by_id(id).map_or(id.clone(), |m| m.display_name()),
             Route::Doc(p) => lib.note_title(p),
         }

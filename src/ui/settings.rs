@@ -31,6 +31,7 @@ enum Tab {
     Semester,
     Modules,
     Notes,
+    Cards,
     Sync,
     Shortcuts,
 }
@@ -83,6 +84,11 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("spell", "Rechtschreibung prüfen"),
     ("ects", "Bezeichnung der Punkte"),
     ("note", "Notensystem"),
+    ("flashcard", "Lernen"),
+    ("karteikarten", "Lernen"),
+    ("fsrs", "Erinnerungsziel"),
+    ("algorithmus", "Erinnerungsziel"),
+    ("retention", "Erinnerungsziel"),
     ("shortcut", "Tastenkürzel"),
     ("hotkey", "Tastenkürzel"),
     ("keybinding", "Tastenkürzel"),
@@ -157,6 +163,11 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Verbindung", Tab::Notes),
     ("Vault", Tab::Notes),
     ("Tastenkürzel", Tab::Shortcuts),
+    ("Lernen", Tab::Cards),
+    ("Erinnerungsziel", Tab::Cards),
+    ("Neue Karten pro Tag", Tab::Cards),
+    ("Wiederholungen pro Tag", Tab::Cards),
+    ("Karten schreiben", Tab::Cards),
     ("Editor", Tab::Notes),
     ("Notizen schreiben", Tab::Notes),
     ("Rechtschreibung prüfen", Tab::Notes),
@@ -435,6 +446,7 @@ fn tab_name(tab: Tab) -> String {
         Tab::Semester => tr("Semester"),
         Tab::Modules => tr("Module"),
         Tab::Notes => tr("Notizen"),
+        Tab::Cards => tr("Karten"),
         Tab::Sync => tr("Sync"),
         Tab::Shortcuts => tr("Tastenkürzel"),
     }
@@ -602,6 +614,7 @@ impl Settings {
             (Tab::Semester, tr("Semester"), "calendar"),
             (Tab::Modules, tr("Module"), "library"),
             (Tab::Notes, tr("Notizen"), "square-pen"),
+            (Tab::Cards, tr("Karten"), "layers"),
             (Tab::Sync, tr("Sync"), "cloud"),
             (Tab::Shortcuts, tr("Tastenkürzel"), "command"),
         ] {
@@ -860,7 +873,7 @@ impl Settings {
         let sidebar = section(
             Some(tr("Seitenleiste")),
             Some(tr("Ausgeblendete Einträge bleiben über Kürzel und Befehlspalette erreichbar. Rechtsklick auf einen Eintrag blendet ihn direkt aus.")),
-            [("semester", tr("Semester")), ("record", tr("Leistungen")), ("inbox", tr("Inbox")), ("notes", tr("Notizen")), ("checks", tr("Aufräumen"))]
+            [("semester", tr("Semester")), ("record", tr("Leistungen")), ("inbox", tr("Inbox")), ("notes", tr("Notizen")), ("cards", tr("Karten")), ("checks", tr("Aufräumen"))]
                 .into_iter()
                 .map(|(key, label)| {
                     let shown = !hidden.iter().any(|k| k == key);
@@ -1844,6 +1857,44 @@ impl Settings {
         div().flex().flex_col().gap(px(space::XL)).child(editor).child(section(Some(tr("Sichern")), Some(save_footer), save_rows, t)).child(pdf).child(obsidian)
     }
 
+    fn cards_tab(&mut self, t: &Theme) -> Div {
+        let p = prefs::get();
+        let (retention, new, reviews) = (p.card_retention, p.card_new_per_day, p.card_reviews_per_day);
+        let step = |id: &'static str, value: String, dec: Box<dyn Fn(&mut App)>, inc: Box<dyn Fn(&mut App)>| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::S))
+                .child(Button::new(SharedString::from(format!("{id}-dec"))).small().icon(menu_icon("minus")).tooltip(tr("Weniger")).on_click(move |_, _, cx| {
+                    dec(cx);
+                    cx.refresh_windows();
+                }))
+                .child(div().w(px(64.)).text_center().font_features(tabular()).child(value))
+                .child(Button::new(SharedString::from(format!("{id}-inc"))).small().icon(menu_icon("plus")).tooltip(tr("Mehr")).on_click(move |_, _, cx| {
+                    inc(cx);
+                    cx.refresh_windows();
+                }))
+        };
+        let learning = section(
+            Some(tr("Lernen")),
+            Some(tr("Geplant wird mit FSRS-6, dem aus Millionen echter Wiederholungen ermittelten Verfahren, das auch Anki nutzt. Ein höheres Ziel heißt mehr Wiederholungen: Über 95 % kostet viel Zeit und bringt wenig.")),
+            vec![
+                row(tr("Erinnerungsziel"), step("c-retention", format!("{:.0} %", retention * 100.), Box::new(move |_| prefs::update(|p| p.card_retention = (retention - 0.01).max(0.7))), Box::new(move |_| prefs::update(|p| p.card_retention = (retention + 0.01).min(0.97)))), t),
+                row(tr("Neue Karten pro Tag"), step("c-new", new.to_string(), Box::new(move |_| prefs::update(|p| p.card_new_per_day = new.saturating_sub(5))), Box::new(move |_| prefs::update(|p| p.card_new_per_day = new + 5))), t),
+                row(tr("Wiederholungen pro Tag"), step("c-reviews", reviews.to_string(), Box::new(move |_| prefs::update(|p| p.card_reviews_per_day = reviews.saturating_sub(50))), Box::new(move |_| prefs::update(|p| p.card_reviews_per_day = reviews + 50))), t),
+            ],
+            t,
+        );
+        let example = |text: &str, meaning: String| div().flex().items_center().gap(px(space::M)).px(px(space::L)).py(px(space::S)).child(div().flex_1().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(text.to_string())).child(div().flex_none().text_color(t.secondary).child(meaning)).into_any_element();
+        let syntax = section(
+            Some(tr("Karten schreiben")),
+            Some(tr("In Notizen mit #flashcards oder #karten zählen auch {{Lücke}} und ==Markiertes== als Lücken. cards: false in den Eigenschaften nimmt eine Notiz aus. Code und Formeln ergeben nie eine Karte.")),
+            vec![example("Frage :: Antwort", tr("Eine Karte")), example("Begriff ::: Erklärung", tr("In beide Richtungen")), example("Lange Frage\n?\nAntwort", tr("Über mehrere Zeilen")), example("Der {{c1::Satz}} gilt", tr("Lückentext"))],
+            t,
+        );
+        div().flex().flex_col().gap(px(space::XL)).child(learning).child(syntax)
+    }
+
     fn shortcuts(&mut self, t: &Theme, cx: &mut Context<Self>) -> Div {
         let filter = self.filter.read(cx).value().to_lowercase();
         let any_custom = ShortcutAction::ALL.iter().any(|a| a.is_customized());
@@ -1976,6 +2027,7 @@ impl Render for Settings {
         let body: AnyElement = match (config, self.tab) {
             _ if searching => self.search_results(&t, cx),
             (_, Tab::Notes) => div().id("notes-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.notes(window, cx, &t)).into_any_element(),
+            (_, Tab::Cards) => div().id("cards-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.cards_tab(&t)).into_any_element(),
             (_, Tab::Sync) => div().id("sync-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.sync_tab(cx, &t)).into_any_element(),
             (_, Tab::Shortcuts) => div().id("sc-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.shortcuts(&t, cx)).into_any_element(),
             (None, _) => unavailable("folder", tr("Kein Ordner gewählt"), tr("Wähle zuerst im Hauptfenster deinen Studienordner."), &t).into_any_element(),

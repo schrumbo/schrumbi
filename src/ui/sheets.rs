@@ -97,3 +97,9 @@ fn show<V: Render + EventEmitter<Dismissed>>(view: Entity<V>, width: f32, window
     .detach();
     window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(width)).p_0().child(view.clone()));
 }
+
+/// Opens a sheet built on the spot, for pages with their own forms.
+pub fn show_sheet<V: Render + EventEmitter<Dismissed>>(width: f32, window: &mut Window, cx: &mut App, build: impl FnOnce(&mut Window, &mut Context<V>) -> V) {
+    let view = cx.new(|cx| build(window, cx));
+    show(view, width, window, cx);
+}

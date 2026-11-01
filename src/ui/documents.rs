@@ -34,7 +34,7 @@ actions!(
     schrumbi_editor,
     [
         Bold, Italic, InsertLink, InlineCode, ToggleTask, ToggleComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine, SelectLine, IndentLines, OutdentLines, ZoomIn, ZoomOut, ZoomReset,
-        ListNewline, ListTab, ListBacktab, ExtractSelection, PlainNewline, Strike, Mark, InlineMath, Quote, BulletList, NumberedList, Heading1, Heading2, Heading3
+        ListNewline, ListTab, ListBacktab, ExtractSelection, CardFromSelection, PlainNewline, Strike, Mark, InlineMath, Quote, BulletList, NumberedList, Heading1, Heading2, Heading3
     ]
 );
 
@@ -1496,6 +1496,12 @@ impl NoteView {
                     n.apply(edit_ops::link(&s, r), w, cx)
                 }
             }))
+            .on_action(cx.listener(|n, _: &CardFromSelection, w, cx| {
+                let (text, range) = n.with_text(cx);
+                let chosen = text.get(range).unwrap_or_default().trim().to_string();
+                let path = n.path.clone();
+                super::cards_page::card_from_selection(chosen, path, w, cx);
+            }))
             .on_action(cx.listener(|n, _: &ExtractSelection, w, cx| {
                 let (_, range) = n.with_text(cx);
                 let path = n.path.clone();
@@ -2278,5 +2284,7 @@ fn writing_menu(field: Editor) -> Editor {
             .menu(tr("Nummerierte Liste"), Box::new(NumberedList))
             .menu(tr("Aufgabe"), Box::new(ToggleTask))
             .menu(tr("Link"), Box::new(InsertLink))
+            .separator()
+            .menu(tr("Karte aus Auswahl…"), Box::new(CardFromSelection))
     })
 }
