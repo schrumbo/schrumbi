@@ -1,3 +1,4 @@
+use gpui_kit::component::WindowExt;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::component::Sizable;
@@ -237,7 +238,7 @@ pub fn split_slides(text: &str) -> Vec<String> {
 
 impl Render for Slides {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.focused {
+        if !self.focus.contains_focused(window, cx) && !window.has_active_dialog(cx) {
             self.focused = true;
             window.focus(&self.focus, cx);
         }

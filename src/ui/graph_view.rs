@@ -231,6 +231,14 @@ impl GraphView {
         self.zoom = next;
     }
 
+    /// Zooms around the middle of the view.
+    fn zoom_by(&mut self, factor: f32, cx: &mut Context<Self>) {
+        let size = self.bounds.get().size;
+        self.hand_moved = true;
+        self.zoom_at(factor, f32::from(size.width) / 2., f32::from(size.height) / 2.);
+        cx.notify();
+    }
+
     /// Arrow keys walk along the links towards the point lying most in that direction.
     fn step_to_neighbor(&mut self, dx: f32, dy: f32) {
         let Some(current) = self.selected.or_else(|| (!self.positions.is_empty()).then_some(0)) else { return };
@@ -319,6 +327,8 @@ impl Render for GraphView {
                     menu
                 })
             }))
+            .child(Button::new("graph-zoom-out").ghost().small().icon(menu_icon("minus")).tooltip(tr("Verkleinern")).on_click(cx.listener(|v, _, _, cx| v.zoom_by(0.75, cx))))
+            .child(Button::new("graph-zoom-in").ghost().small().icon(menu_icon("plus")).tooltip(tr("Vergrößern")).on_click(cx.listener(|v, _, _, cx| v.zoom_by(1.33, cx))))
             .child(Button::new("graph-fit").ghost().small().icon(menu_icon("maximize")).tooltip(tr("Einpassen")).on_click(cx.listener(|v, _, _, cx| {
                 v.hand_moved = false;
                 v.fit();

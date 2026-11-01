@@ -48,7 +48,15 @@ pub fn math_markup(latex: &str, display: bool) -> Result<String, String> {
 
 /// A Mermaid diagram as SVG.
 pub fn mermaid_svg(code: &str, dark: bool) -> Result<String, String> {
-    let theme = if dark { mermaid_rs_renderer::Theme::dark() } else { mermaid_rs_renderer::Theme::modern() };
+    let mut theme = if dark { mermaid_rs_renderer::Theme::dark() } else { mermaid_rs_renderer::Theme::modern() };
+    let (fill, border, line, text) = if dark { ("#2B3442", "#82AAF5", "#8E939B", "#EDEDED") } else { ("#E8EEF9", "#1F5FCC", "#68707C", "#1F1F1F") };
+    theme.primary_color = fill.into();
+    theme.primary_border_color = border.into();
+    theme.primary_text_color = text.into();
+    theme.line_color = line.into();
+    theme.text_color = text.into();
+    theme.background = "transparent".into();
+    theme.edge_label_background = "transparent".into();
     let options = mermaid_rs_renderer::RenderOptions { theme, ..Default::default() };
     let caught = std::panic::catch_unwind(|| mermaid_rs_renderer::render_with_options(code, options));
     match caught {

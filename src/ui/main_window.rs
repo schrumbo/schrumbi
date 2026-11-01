@@ -453,16 +453,16 @@ impl Render for MainWindow {
                     .top_0()
                     .bottom_0()
                     .left(px(left))
-                    .right(px(inspector_w))
+                    .right_0()
                     .border_l_1()
                     .border_color(t.separator)
                     .flex()
                     .flex_col()
-                    .child(self.toolbar(l, left, page_width, &t))
-                    .child(div().flex_1().min_h_0().child(page).with_animation(("page", page_key), Animation::new(page_motion).with_easing(ease_out_quint()), |d, p| d.opacity(0.4 + 0.6 * p))),
+                    .child(self.toolbar(l, left, page_width + inspector_w, &t))
+                    .child(div().flex_1().min_h_0().mr(px(inspector_w)).child(page).with_animation(("page", page_key), Animation::new(page_motion).with_easing(ease_out_quint()), |d, p| d.opacity(0.4 + 0.6 * p))),
             )
             .when(l.show_inspector, |d| {
-                d.child(div().absolute().top_0().bottom_0().right_0().w(px(inspector_w)).border_l_1().border_color(t.separator).bg(t.content).pt(px(control::BAR)).child(self.inspector.clone()))
+                d.child(div().absolute().top(px(control::BAR)).bottom_0().right_0().w(px(inspector_w)).border_l_1().border_t_1().border_color(t.separator).bg(t.content).child(self.inspector.clone()))
             })
             .children(super::link_card::overlay(cx))
             .children(slides)
