@@ -250,6 +250,21 @@ pub fn section(text: &str, target: &LinkTarget) -> String {
     lines[start..end].join("\n").trim_end().to_string()
 }
 
+/// Turns the first plain mention of a note's name on a line into a link.
+pub fn link_mention(text: &str, line: usize, name: &str) -> Option<String> {
+    let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+    let row = lines.get_mut(line)?;
+    let lower = row.to_lowercase();
+    let at = lower.find(&name.to_lowercase())?;
+    if lower.len() != row.len() || !row.is_char_boundary(at) || !row.is_char_boundary(at + name.len()) {
+        return None;
+    }
+    let found = row[at..at + name.len()].to_string();
+    let link = if found == name { format!("[[{name}]]") } else { format!("[[{name}|{found}]]") };
+    row.replace_range(at..at + name.len(), &link);
+    Some(lines.join("\n"))
+}
+
 /// How many times `term` occurs before `line`, so a search can land on that line.
 pub fn occurrences_before(text: &str, term: &str, line: usize) -> usize {
     let offset: usize = text.split_inclusive('\n').take(line).map(str::len).sum();
@@ -259,6 +274,13 @@ pub fn occurrences_before(text: &str, term: &str, line: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mention_becomes_a_link_and_keeps_how_it_was_written() {
+        assert_eq!(link_mention("a\nsiehe ziel hier", 1, "Ziel").unwrap(), "a\nsiehe [[Ziel|ziel]] hier");
+        assert_eq!(link_mention("Ziel", 0, "Ziel").unwrap(), "[[Ziel]]");
+        assert!(link_mention("nichts", 0, "Ziel").is_none());
+    }
 
     #[test]
     fn a_block_id_on_a_list_item_takes_the_item_and_what_hangs_under_it() {

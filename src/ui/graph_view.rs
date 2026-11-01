@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::switch::Switch;
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -44,6 +44,12 @@ pub struct GraphView {
     hover: Option<u32>,
     selected: Option<u32>,
     drag: Option<(Point<Pixels>, (f32, f32))>,
+    /// A point being carried to another place.
+    carried: Option<u32>,
+    /// Point indices by how many links they have, the order labels get room in.
+    order: Arc<Vec<u32>>,
+    /// Each group's colour, by the module it is or by its turn.
+    cluster_tints: Vec<Hsla>,
     filter: Entity<InputState>,
     focus: FocusHandle,
     running: Option<Task<()>>,
@@ -79,6 +85,9 @@ impl GraphView {
             hover: None,
             selected: None,
             drag: None,
+            carried: None,
+            order: Arc::default(),
+            cluster_tints: Vec::new(),
             filter,
             focus: cx.focus_handle(),
             running: None,
@@ -101,20 +110,14 @@ impl GraphView {
             None => full,
         });
         let t = Theme::get(cx);
-        let folders: Vec<(String, Hsla)> = state::read(cx, |l| l.config.as_ref().map_or(Vec::new(), |c| c.modules.iter().map(|m| (m.notes_folder.clone().unwrap_or_else(|| m.folder.clone()), t.palette(&m.color))).collect()));
-        let tint_root = vault.root.clone();
-        self.tints = graph
-            .nodes
-            .iter()
-            .map(|n| {
-                let NodeKind::Note(path) = &n.kind else { return None };
-                let relative = path.strip_prefix(&tint_root).ok()?.to_string_lossy().replace('\\', "/");
-                folders.iter().find(|(f, _)| relative.starts_with(&format!("{f}/"))).map(|(_, c)| *c)
-            })
-            .collect();
+        let modules: Vec<(String, Hsla)> = state::read(cx, |l| l.config.as_ref().map_or(Vec::new(), |c| c.modules.iter().map(|m| (m.folder.rsplit('/').next().unwrap_or(&m.folder).to_string(), t.palette(&m.color))).collect()));
+        const TURNS: [&str; 8] = ["blue", "teal", "orange", "pink", "purple", "green", "brown", "indigo"];
+        self.cluster_tints = graph.clusters.iter().enumerate().map(|(i, name)| modules.iter().find(|(f, _)| f == name).map_or_else(|| t.palette(TURNS[i % TURNS.len()]), |(_, c)| *c)).collect();
+        self.tints = graph.nodes.iter().map(|n| n.cluster.and_then(|c| self.cluster_tints.get(c as usize).copied())).collect();
+        self.order = Arc::new(graph.by_importance());
         let known = cx.try_global::<KnownPositions>().map(|k| k.0.clone()).unwrap_or_default();
         let nodes = graph.nodes.clone();
-        let mut layout = Layout::new(nodes.len(), |i| known.get(&nodes[i].name).copied());
+        let mut layout = Layout::for_graph(&graph, |i| known.get(&nodes[i].name).copied());
         if nodes.iter().all(|n| known.contains_key(&n.name)) && !nodes.is_empty() {
             layout.heat = 0.2;
         }
@@ -246,15 +249,30 @@ impl GraphView {
         }
     }
 
-    fn toggle(&self, id: &'static str, label: String, on: bool, set: fn(&mut Options, bool), cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let me = cx.entity();
-        div().flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).child(Switch::new(id).small().checked(on).on_click(move |v, _, cx| {
-            let value = *v;
+    /// A filter in the menu.
+    fn filter_item(menu: gpui_kit::component::menu::PopupMenu, me: &Entity<Self>, label: String, on: bool, set: fn(&mut Options, bool)) -> gpui_kit::component::menu::PopupMenu {
+        let me = me.clone();
+        menu.item(PopupMenuItem::new(label).checked(on).on_click(move |_, _, cx| {
             me.update(cx, |g, cx| {
-                set(&mut g.options, value);
+                set(&mut g.options, !on);
                 cx.notify();
-            });
-        })).child(label)
+            })
+        }))
+    }
+
+    /// Selecting shows the note beside the graph; the graph stays where it is.
+    fn select(&mut self, index: u32, cx: &mut Context<Self>) {
+        self.selected = Some(index);
+        let picked = self.graph.nodes.get(index as usize).map(|n| n.kind.clone());
+        act(cx, |l| {
+            l.graph_selection = match picked {
+                Some(NodeKind::Note(path)) => Some(path),
+                _ => None,
+            };
+            if l.graph_selection.is_some() {
+                l.show_inspector = true;
+            }
+        });
     }
 }
 
@@ -264,6 +282,11 @@ impl Render for GraphView {
         let t = Theme::get(cx);
         let count = self.graph.nodes.len();
         let local = self.focus_note.clone();
+        let vault = index::current();
+        let missing_total = vault.missing.len();
+        let mut missing_names: Vec<(String, usize)> = vault.missing.iter().map(|(name, from)| (name.clone(), from.len())).collect();
+        missing_names.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        missing_names.truncate(30);
         let bar = div()
             .flex_none()
             .p(px(space::M))
@@ -274,10 +297,30 @@ impl Render for GraphView {
             .border_b_1()
             .border_color(t.separator)
             .child(div().w(px(220.)).child(Input::new(&self.filter).small()))
-            .child(self.toggle("graph-tags", tr("Tags"), self.options.tags, |o, v| o.tags = v, cx))
-            .child(self.toggle("graph-attachments", tr("Anhänge"), self.options.attachments, |o, v| o.attachments = v, cx))
-            .child(self.toggle("graph-missing", tr("Nicht angelegt"), self.options.missing, |o, v| o.missing = v, cx))
-            .child(self.toggle("graph-orphans", tr("Ohne Links"), self.options.orphans, |o, v| o.orphans = v, cx))
+            .child(Button::new("graph-filters").ghost().small().icon(menu_icon("sliders-horizontal")).label(tr("Anzeigen")).dropdown_menu({
+                let (me, options) = (cx.entity(), self.options.clone());
+                move |menu, _, _| {
+                    let menu = Self::filter_item(menu, &me, tr("Tags"), options.tags, |o, v| o.tags = v);
+                    let menu = Self::filter_item(menu, &me, tr("Anhänge"), options.attachments, |o, v| o.attachments = v);
+                    let menu = Self::filter_item(menu, &me, tr("Nicht angelegt"), options.missing, |o, v| o.missing = v);
+                    Self::filter_item(menu, &me, tr("Ohne Links"), options.orphans, |o, v| o.orphans = v)
+                }
+            }))
+            .children((missing_total > 0).then(|| {
+                let names = missing_names.clone();
+                Button::new("graph-missing-list").ghost().small().label(trf("Fehlt noch: %@", &[&missing_total.to_string()])).dropdown_menu(move |mut menu, _, _| {
+                    for (name, count) in &names {
+                        let target = name.clone();
+                        menu = menu.item(PopupMenuItem::new(format!("{name} · {count}")).on_click(move |_, _, cx| act(cx, |l| l.create_link_target(&target, None))));
+                    }
+                    menu
+                })
+            }))
+            .child(Button::new("graph-fit").ghost().small().icon(menu_icon("maximize")).tooltip(tr("Einpassen")).on_click(cx.listener(|v, _, _, cx| {
+                v.hand_moved = false;
+                v.fit();
+                cx.notify();
+            })))
             .when_some(local, |d, (path, depth)| {
                 let (p1, p2) = (path.clone(), path.clone());
                 d.child(caption(trf("Um %@", &[&path.file_stem().unwrap_or_default().to_string_lossy()]), &t))
@@ -299,6 +342,8 @@ impl Render for GraphView {
         let highlight = hover.or(selected);
         let neighbors: std::collections::HashSet<u32> = highlight.map_or_else(Default::default, |h| graph.neighbors(h).into_iter().collect());
         let tints = self.tints.clone();
+        let order = self.order.clone();
+        let cluster_tints = self.cluster_tints.clone();
         let colors = (t.secondary, t.accent, t.ink, t.separator, t.content);
         let view = canvas(
             move |b, _, _| measured.set(b),
@@ -316,6 +361,10 @@ impl Render for GraphView {
                         if !bounds.contains(&s) && !bounds.contains(&e) && graph.edges.len() > 2000 {
                             continue;
                         }
+                        let quiet = graph.edges.len() > 6000 && zoom < 0.3 && graph.nodes[a as usize].links + graph.nodes[b as usize].links < 12;
+                        if quiet && highlight != Some(a) && highlight != Some(b) {
+                            continue;
+                        }
                         if highlight == Some(a) || highlight == Some(b) {
                             strong.move_to(s);
                             strong.line_to(e);
@@ -327,8 +376,9 @@ impl Render for GraphView {
                         }
                     }
                     if any_normal && let Ok(path) = normal.build() {
-                        let fade = (zoom * 1.5).clamp(0.12, 1.);
-                        window.paint_path(path, line.opacity(if highlight.is_some() { fade * 0.4 } else { fade }));
+                        let density = (1500. / graph.edges.len().max(1) as f32).clamp(0.14, 1.);
+                        let fade = density * (zoom * 2.5).clamp(0.5, 1.);
+                        window.paint_path(path, ink.opacity(if highlight.is_some() { fade * 0.12 } else { fade * 0.3 }));
                     }
                     if any_strong && let Ok(path) = strong.build() {
                         window.paint_path(path, accent);
@@ -350,7 +400,7 @@ impl Render for GraphView {
                             _ if on => accent,
                             NodeKind::Note(_) => tints.get(i as usize).copied().flatten().unwrap_or(secondary),
                             NodeKind::Attachment(_) => ink.opacity(0.35),
-                            NodeKind::Tag(_) => accent.opacity(0.7),
+                            NodeKind::Tag(_) => accent,
                             NodeKind::Missing(_) => bg,
                         };
                         let color = if dim { color.opacity(0.3) } else { color };
@@ -358,13 +408,61 @@ impl Render for GraphView {
                         let area = Bounds::new(point(c.x - px(r), c.y - px(r)), size(px(r * 2.), px(r * 2.)));
                         let border = if hollow { secondary } else { transparent_black() };
                         window.paint_quad(PaintQuad { bounds: area, corner_radii: Corners::all(px(r)), background: color.into(), border_widths: Edges::all(px(if hollow { 1. } else { 0. })), border_color: border, border_style: BorderStyle::Solid });
-                        if on || near || zoom >= 0.75 {
-                            let font_size = px(font::CAPTION);
-                            let text: SharedString = node.name.clone().into();
-                            let run = TextRun { len: text.len(), font: window.text_style().font(), color: if dim { secondary.opacity(0.4) } else { ink }, background_color: None, underline: None, strikethrough: None };
-                            let shaped = window.text_system().shape_line(text, font_size, &[run], None);
-                            let at = point(c.x - shaped.width / 2., c.y + px(r + 2.));
-                            let _ = shaped.paint(at, px(14.), TextAlign::Left, None, window, cx);
+                    }
+                    let room_key = |x: Pixels, y: Pixels, dx: i32, dy: i32| ((f32::from(x) / 110.) as i32 + dx, (f32::from(y) / 18.) as i32 + dy);
+                    let mut taken = std::collections::HashSet::new();
+                    let mut label = |window: &mut Window, cx: &mut App, text: String, at: Point<Pixels>, color: Hsla, bold: bool, force: bool| {
+                        let free = (-1..=1).all(|dx| !taken.contains(&room_key(at.x, at.y, dx, 0)));
+                        if !force && !free {
+                            return false;
+                        }
+                        taken.insert(room_key(at.x, at.y, 0, 0));
+                        let mut font = window.text_style().font();
+                        if bold {
+                            font.weight = FontWeight::SEMIBOLD;
+                        }
+                        let text: SharedString = text.into();
+                        let run = TextRun { len: text.len(), font, color, background_color: None, underline: None, strikethrough: None };
+                        let shaped = window.text_system().shape_line(text, px(if bold { font::CALLOUT } else { font::CAPTION }), &[run], None);
+                        let _ = shaped.paint(point(at.x - shaped.width / 2., at.y), px(16.), TextAlign::Left, None, window, cx);
+                        true
+                    };
+                    if let Some(h) = highlight {
+                        for i in std::iter::once(h).chain(neighbors.iter().copied()).take(60) {
+                            let (Some(p), Some(node)) = (positions.get(i as usize), graph.nodes.get(i as usize)) else { continue };
+                            let c = screen(*p);
+                            label(window, cx, node.name.clone(), point(c.x, c.y + px(10.)), ink, i == h, i == h);
+                        }
+                    } else if zoom >= 0.3 {
+                        let budget = if zoom >= 0.8 { 140 } else { 40 };
+                        let mut shown = 0;
+                        for &i in order.iter() {
+                            if shown >= budget {
+                                break;
+                            }
+                            let (Some(p), Some(node)) = (positions.get(i as usize), graph.nodes.get(i as usize)) else { continue };
+                            let c = screen(*p);
+                            if bounds.contains(&c) && label(window, cx, node.name.clone(), point(c.x, c.y + px(8.)), secondary, false, false) {
+                                shown += 1;
+                            }
+                        }
+                    }
+                    if zoom < 0.8 && highlight.is_none() {
+                        let mut sums = vec![(0_f32, 0_f32, 0_u32); graph.clusters.len()];
+                        for (i, node) in graph.nodes.iter().enumerate() {
+                            if let (Some(c), Some(p)) = (node.cluster, positions.get(i)) {
+                                let s = &mut sums[c as usize];
+                                s.0 += p.0;
+                                s.1 += p.1;
+                                s.2 += 1;
+                            }
+                        }
+                        for (c, s) in sums.iter().enumerate() {
+                            if s.2 >= 2 && !graph.clusters[c].is_empty() {
+                                let center = screen((s.0 / s.2 as f32, s.1 / s.2 as f32));
+                                let tint = cluster_tints.get(c).copied().unwrap_or(ink);
+                                label(window, cx, format!("{} · {}", graph.clusters[c], s.2), center, tint, true, true);
+                            }
                         }
                     }
                 });
@@ -404,8 +502,10 @@ impl Render for GraphView {
             .on_mouse_down(MouseButton::Left, cx.listener(|v, e: &MouseDownEvent, window, cx| {
                 window.focus(&v.focus, cx);
                 if let Some(hit) = v.hit(e.position) {
-                    v.selected = Some(hit);
                     v.pressed = Some((hit, e.position));
+                    if e.click_count >= 2 {
+                        v.open(hit, cx);
+                    }
                 } else {
                     v.drag = Some((e.position, v.pan));
                 }
@@ -416,6 +516,22 @@ impl Render for GraphView {
                     v.hand_moved = true;
                     v.pan = (pan.0 + f32::from(e.position.x - start.x), pan.1 + f32::from(e.position.y - start.y));
                     cx.notify();
+                } else if let Some((hit, at)) = v.pressed {
+                    if v.carried.is_some() || (f32::from(e.position.x - at.x).abs() + f32::from(e.position.y - at.y).abs()) >= 6. {
+                        v.carried = Some(hit);
+                        let o = v.bounds.get().origin;
+                        let spot = ((f32::from(e.position.x - o.x) - v.pan.0) / v.zoom, (f32::from(e.position.y - o.y) - v.pan.1) / v.zoom);
+                        v.hand_moved = true;
+                        if let Some(p) = v.positions.get_mut(hit as usize) {
+                            *p = spot;
+                        }
+                        if let Ok(mut layout) = v.layout.lock()
+                            && let Some(p) = layout.positions.get_mut(hit as usize)
+                        {
+                            *p = spot;
+                        }
+                        cx.notify();
+                    }
                 } else {
                     let hit = v.hit(e.position);
                     if hit != v.hover {
@@ -426,15 +542,21 @@ impl Render for GraphView {
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|v, e: &MouseUpEvent, _, cx| {
                 v.drag = None;
+                let carried = v.carried.take().is_some();
+                if carried {
+                    v.remember(cx);
+                }
                 if let Some((hit, at)) = v.pressed.take()
+                    && !carried
                     && (f32::from(e.position.x - at.x).abs() + f32::from(e.position.y - at.y).abs()) < 6.
                 {
-                    v.open(hit, cx);
+                    v.select(hit, cx);
                 }
             }))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|v, _, _, _| {
                 v.drag = None;
                 v.pressed = None;
+                v.carried = None;
             }))
             .on_key_down(cx.listener(|v, e: &KeyDownEvent, _, cx| {
                 match e.keystroke.key.as_str() {
@@ -447,13 +569,27 @@ impl Render for GraphView {
                             v.open(s, cx);
                         }
                     }
-                    "0" if e.keystroke.modifiers.platform => v.fit(),
+                    "0" if e.keystroke.modifiers.platform => {
+                        v.hand_moved = false;
+                        v.fit();
+                    }
                     "escape" => v.selected = None,
                     _ => return,
                 }
                 cx.stop_propagation();
                 cx.notify();
             }));
-        div().size_full().flex().flex_col().child(bar).child(surface)
+        let mut sizes: Vec<(usize, usize)> = (0..self.graph.clusters.len()).map(|c| (self.graph.nodes.iter().filter(|n| n.cluster == Some(c as u32)).count(), c)).collect();
+        sizes.sort_by_key(|s| std::cmp::Reverse(s.0));
+        let legend = sizes.iter().take(8).filter(|(n, c)| *n > 0 && !self.graph.clusters[*c].is_empty()).map(|(n, c)| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::XS))
+                .child(div().size(px(space::S)).rounded_full().bg(self.cluster_tints.get(*c).copied().unwrap_or(t.secondary)))
+                .child(div().max_w(px(140.)).truncate().child(format!("{} · {n}", self.graph.clusters[*c])))
+        });
+        let legend = div().absolute().left(px(space::M)).bottom(px(space::M)).flex().flex_col().gap(px(space::XXS)).p(px(space::S)).rounded(px(super::theme::radius::INNER)).bg(t.content.opacity(0.85)).text_size(px(font::CAPTION)).text_color(t.secondary).children(legend.collect::<Vec<_>>());
+        div().size_full().flex().flex_col().child(bar).child(surface.when(self.graph.clusters.len() > 1, |d| d.child(legend)))
     }
 }

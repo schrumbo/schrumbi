@@ -279,6 +279,8 @@ pub struct Library {
     pub notes_tag: Option<String>,
     /// The tab that the next opened note replaces, until it is edited or opened for good.
     pub preview_document: Option<PathBuf>,
+    /// The note picked in the graph, shown beside it.
+    pub graph_selection: Option<PathBuf>,
     /// Where each tab came from and went to while following links.
     tab_trails: HashMap<PathBuf, (Vec<PathBuf>, Vec<PathBuf>)>,
     /// A file whose name the explorer should turn into a field.
@@ -364,6 +366,7 @@ impl Library {
             split_document: None,
             last_renamed: None,
             preview_document: None,
+            graph_selection: None,
             tab_trails: HashMap::new(),
             rename_request: None,
             reveal_folder: None,
@@ -794,6 +797,11 @@ impl Library {
         self.route = Route::Doc(new.to_path_buf());
         self.save_documents();
         self.changed();
+    }
+
+    /// Walks to a note in the shown tab, as a link does.
+    pub fn follow_path(&mut self, path: &Path) {
+        self.follow(path);
     }
 
     /// Follows a link: inside the shown tab, or a new one when asked. Nothing unsaved is lost on the way.

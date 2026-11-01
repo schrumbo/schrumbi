@@ -1,4 +1,11 @@
 {
+  "Klicke einen Punkt an, um die Notiz hier zu sehen. Doppelklick öffnet sie.": "Click a point to see the note here. Double-click opens it.",
+  "Anzeigen": "Show",
+  "Fehlt noch: %@": "Still missing: %@",
+  "Verlinken": "Link",
+  "Erwähnung verlinkt": "Mention linked",
+  "%@ weitere": "%@ more",
+  "+%@ weitere": "+%@ more",
   "Quelltext": "Source",
   "Leere Notiz. Klicke hier, um zu schreiben.": "Empty note. Click here to write.",
   "Eingefügtes Bild": "Pasted image",

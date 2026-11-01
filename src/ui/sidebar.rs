@@ -69,7 +69,9 @@ fn entries(lib: &Library) -> Vec<Entry> {
     if !lib.is_vault && let Some(doc_path) = lib.active_document.clone().or_else(|| lib.open_documents.first().cloned()) {
         doc = Some(Entry { key: None, route: Route::Doc(doc_path), icon: "files", label: tr("Dokumente"), shortcut: None, badge: lib.open_documents.len(), urgent: false });
     }
+    if issues > 0 || matches!(lib.route(), Route::Checks) {
     v.push(Entry { key: Some("checks"), route: Route::Checks, icon: "list-checks", label: tr("Aufräumen"), shortcut: Some("5"), badge: issues, urgent: false });
+    }
     v.extend(doc);
     v
 }

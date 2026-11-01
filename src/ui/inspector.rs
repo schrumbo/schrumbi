@@ -21,6 +21,7 @@ use crate::core::model::{Assignment, Kind, Status};
 
 /// Details of the selected assignment: status actions, files, drop zone, note and the editor for manual entries.
 pub struct Inspector {
+    graph_preview: Option<(std::path::PathBuf, std::rc::Rc<super::markdown_view::ParsedNote>)>,
     shown: Option<String>,
     note: Entity<TextareaState>,
     title: Entity<InputState>,
@@ -66,7 +67,7 @@ impl Inspector {
             cx.subscribe(&due, |this, _, _: &DatePickerEvent, cx| this.save_manual(cx)),
         ];
         let doc_side = cx.new(|cx| super::doc_side::DocSide::new(window, cx));
-        Self { shown: None, note, title, due, syncing: false, doc_side, _subs: subs }
+        Self { graph_preview: None, shown: None, note, title, due, syncing: false, doc_side, _subs: subs }
     }
 
     fn save_manual(&mut self, cx: &mut Context<Self>) {
@@ -166,6 +167,12 @@ impl Render for Inspector {
         let l = lib.read(cx);
         if matches!(l.route(), crate::core::library::Route::Doc(_)) {
             return self.doc_side.clone().into_any_element();
+        }
+        if matches!(l.route(), crate::core::library::Route::Graph) {
+            return match l.graph_selection.clone() {
+                Some(path) => graph_card(&path, &t, &mut self.graph_preview).into_any_element(),
+                None => unavailable("waypoints", tr("Nichts ausgewählt"), tr("Klicke einen Punkt an, um die Notiz hier zu sehen. Doppelklick öffnet sie."), &t).into_any_element(),
+            };
         }
         let Some(a) = l.selected().cloned() else {
             return unavailable("panel-right", tr("Nichts ausgewählt"), tr("Wähle eine Abgabe, um Details, Dateien und Notizen zu sehen."), &t).into_any_element();
@@ -394,4 +401,36 @@ fn drop_zone(id: String, has_files: bool, t: &Theme) -> impl IntoElement {
         .child(icon("arrow-down-to-line", iconsize::L, secondary))
         .child(div().text_size(px(font::CALLOUT)).child(if has_files { tr("Weitere Datei hierher ziehen") } else { tr("Datei hierher ziehen") }))
         .child(link_button("pick-files", tr("oder auswählen…"), t).text_size(px(font::CAPTION)).on_click(move |_, _, cx| super::platform::pick_files_for_filing(Some(pick_id.clone()), cx)))
+}
+
+/// A note picked in the graph: readable here, and one click from being opened.
+fn graph_card(path: &std::path::Path, t: &Theme, kept: &mut Option<(std::path::PathBuf, std::rc::Rc<super::markdown_view::ParsedNote>)>) -> impl IntoElement {
+    let note = match kept {
+        Some((known, note)) if known == path => note.clone(),
+        _ => {
+            let text = std::fs::read_to_string(path).unwrap_or_default();
+            let cut = text.char_indices().nth(4000).map_or(text.len(), |(i, _)| i);
+            let note = std::rc::Rc::new(super::markdown_view::parse(&text[..cut]));
+            *kept = Some((path.to_path_buf(), note.clone()));
+            note
+        }
+    };
+    let (open, around) = (path.to_path_buf(), path.to_path_buf());
+    div()
+        .id("graph-card")
+        .size_full()
+        .overflow_y_scrollbar()
+        .p(px(space::L))
+        .flex()
+        .flex_col()
+        .gap(px(space::M))
+        .child(div().font_weight(FontWeight::BOLD).text_size(px(font::TITLE3)).child(path.file_stem().unwrap_or_default().to_string_lossy().to_string()))
+        .child(
+            div()
+                .flex()
+                .gap(px(space::S))
+                .child(Button::new("graph-open").primary().small().label(tr("Öffnen")).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))))
+                .child(Button::new("graph-around").small().label(tr("Graph um diese Notiz")).on_click(move |_, _, cx| act(cx, |l| l.show_graph(Some(around.clone()))))),
+        )
+        .child(super::markdown_view::render(&note, path.parent(), None, t))
 }

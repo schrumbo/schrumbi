@@ -319,7 +319,11 @@ impl CanvasView {
         };
         let field = if matches!(node.kind, NodeKind::Text(_)) {
             let area = cx.new(|cx| TextareaState::new(window, cx).default_value(value));
-            area.update(cx, |s, cx| s.focus(window, cx));
+            area.update(cx, |s, cx| {
+                s.focus(window, cx);
+                let end = s.value().len();
+                s.set_selected_range(end..end, cx);
+            });
             self._subs = vec![cx.subscribe_in(&area, window, |this, _, e: &InputEvent, window, cx| {
                 if matches!(e, InputEvent::Blur) {
                     this.finish_edit(window, cx);
@@ -707,6 +711,7 @@ impl CanvasView {
             return title(name).into_any_element();
         }
         match &node.kind {
+            NodeKind::Text(text) if (zoom - 1.).abs() < 0.3 => card_note(text, t),
             NodeKind::Text(text) => mini_markdown(text, zoom, t),
             NodeKind::Link(url) => div().p(px(space::S * zoom)).flex().items_center().gap(px(space::XS * zoom)).child(icon("link", 14. * zoom, t.secondary)).child(div().truncate().text_size(px(size)).text_color(t.accent_text).child(url.clone())).into_any_element(),
             NodeKind::Group { background: Some(picture), style, .. } => {
@@ -1112,3 +1117,18 @@ impl Render for CanvasView {
     }
 }
 
+thread_local! {
+    static CARD_NOTES: std::cell::RefCell<std::collections::HashMap<String, std::rc::Rc<super::markdown_view::ParsedNote>>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// A text card drawn as the note it is, not a sketch of it.
+fn card_note(text: &str, t: &Theme) -> AnyElement {
+    let note = CARD_NOTES.with(|cards| {
+        let mut cards = cards.borrow_mut();
+        if cards.len() > 512 {
+            cards.clear();
+        }
+        cards.entry(text.to_string()).or_insert_with(|| std::rc::Rc::new(super::markdown_view::parse(text))).clone()
+    });
+    super::markdown_view::render(&note, None, None, t).into_any_element()
+}

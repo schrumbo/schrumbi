@@ -14,7 +14,7 @@ use super::motion::{Soft, chevron, reveal};
 use super::state::{self, act};
 use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
-use crate::core::i18n::tr;
+use crate::core::i18n::{tr, trf};
 use crate::core::markdown;
 use crate::core::vault::frontmatter::{self, Property, PropertyKind};
 use crate::core::vault::index::{self, Mention};
@@ -30,6 +30,8 @@ pub enum Side {
 
 /// The details column beside a document.
 pub struct DocSide {
+    /// How many mentions are listed before asking for more.
+    mentions_shown: usize,
     side: Side,
     versions: Entity<VersionList>,
     properties: Entity<PropertyEditor>,
@@ -40,7 +42,7 @@ pub struct DocSide {
 
 impl DocSide {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self { side: Side::Links, versions: cx.new(VersionList::new), properties: cx.new(|cx| PropertyEditor::new(window, cx)), closed: Default::default(), unlinked: None, focus_versions: false }
+        Self { mentions_shown: 50, side: Side::Links, versions: cx.new(VersionList::new), properties: cx.new(|cx| PropertyEditor::new(window, cx)), closed: Default::default(), unlinked: None, focus_versions: false }
     }
 
     pub fn show(&mut self, side: Side, cx: &mut Context<Self>) {
@@ -98,34 +100,46 @@ impl DocSide {
             .child(reveal((key, 1usize), open, body))
     }
 
-    fn mention_rows(key: &'static str, list: &[Mention], name: &str, t: &Theme) -> AnyElement {
+    fn mention_rows(&mut self, key: &'static str, list: &[Mention], name: &str, linkable: bool, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let hover = t.ink.opacity(0.05);
-        div()
-            .flex()
-            .flex_col()
-            .children(list.iter().take(200).enumerate().map(|(i, m)| {
-                let (open, line) = (m.source.clone(), m.line);
-                let file = m.source.file_stem().unwrap_or_default().to_string_lossy().to_string();
-                let text = m.text.clone();
-                let start = text.to_lowercase().find(&name.to_lowercase());
-                let highlighted: AnyElement = match start {
-                    Some(at) if !name.is_empty() && text.is_char_boundary(at) && text.is_char_boundary(at + name.len()) => StyledText::new(text.clone()).with_highlights(vec![(at..at + name.len(), HighlightStyle { color: Some(t.accent_text), ..Default::default() })]).into_any_element(),
-                    _ => text.clone().into_any_element(),
-                };
-                div()
-                    .id((key, i))
-                    .px(px(space::L))
-                    .py(px(space::XS))
-                    .flex()
-                    .flex_col()
-                    .cursor_pointer()
-                    .key_nav()
-                    .soft(hover, 0.)
-                    .child(div().truncate().font_weight(FontWeight::MEDIUM).text_size(px(font::CALLOUT)).child(file))
-                    .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).line_clamp(2).child(highlighted))
-                    .on_click(move |_, _, cx| open_at(&open, line, cx))
+        let limit = self.mentions_shown;
+        let more = list.len().saturating_sub(limit);
+        let rows = list.iter().take(limit).enumerate().map(|(i, m)| {
+            let (open, line) = (m.source.clone(), m.line);
+            let file = m.source.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let note = super::markdown_view::parse(m.text.trim_start_matches(['-', '*', '+', '>', ' ', '\t']));
+            let target_name = name.to_string();
+            let source = m.source.clone();
+            let turn_into_link = linkable.then(|| {
+                Button::new(SharedString::from(format!("{key}-link-{i}"))).ghost().xsmall().label(tr("Verlinken")).on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    let (path, wanted) = (source.clone(), target_name.clone());
+                    act(cx, |l| {
+                        l.edit_note(&path, "link", tr("Erwähnung verlinkt"), |text| crate::core::vault::links::link_mention(text, line, &wanted).unwrap_or_else(|| text.to_string()));
+                    });
+                    state::reindex(cx);
+                })
+            });
+            div()
+                .id((key, i))
+                .px(px(space::L))
+                .py(px(space::XS))
+                .flex()
+                .flex_col()
+                .cursor_pointer()
+                .key_nav()
+                .soft(hover, 0.)
+                .child(div().flex().items_center().gap(px(space::S)).child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).text_size(px(font::CALLOUT)).child(file)).children(turn_into_link))
+                .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).max_h(px(60.)).overflow_hidden().child(super::markdown_view::render(&note, m.source.parent(), None, t)))
+                .on_click(move |_, _, cx| open_at(&open, line, cx))
+        });
+        let show_more = (more > 0).then(|| {
+            link_button(SharedString::from(format!("{key}-more")), trf("%@ weitere", &[&more.to_string()]), t).mx(px(space::L)).my(px(space::XS)).on_click(cx.listener(|s, _, _, cx| {
+                s.mentions_shown += 50;
+                cx.notify();
             }))
-            .into_any_element()
+        });
+        div().flex().flex_col().children(rows.collect::<Vec<_>>()).children(show_more).into_any_element()
     }
 
     fn links_view(&mut self, path: &Path, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -173,6 +187,9 @@ impl DocSide {
         };
         let mut list = div().flex().flex_col().py(px(space::S));
         let around = path.to_path_buf();
+        if let Some(mini) = mini_graph(path, &vault, t) {
+            list = list.child(mini);
+        }
         list = list.child(div().px(px(space::M)).pb(px(space::S)).child(Button::new("side-graph").ghost().small().icon(menu_icon("waypoints")).label(tr("Graph um diese Notiz")).on_click(move |_, _, cx| {
             let p = around.clone();
             act(cx, |l| l.show_graph(Some(p)));
@@ -182,11 +199,11 @@ impl DocSide {
             return unavailable("link", tr("Noch keine Verknüpfungen"), tr("Tippe [[ im Editor, um eine Notiz zu verlinken."), t).into_any_element();
         }
         if !backlinks.is_empty() {
-            let body = Self::mention_rows("backlink", &backlinks, &name, t);
+            let body = self.mention_rows("backlink", &backlinks, &name, false, t, cx);
             list = list.child(self.section("side-backlinks", tr("Rückverweise"), backlinks.len(), body, t, cx));
         }
         if !unlinked.is_empty() {
-            let body = Self::mention_rows("unlinked", &unlinked, &name, t);
+            let body = self.mention_rows("unlinked", &unlinked, &name, true, t, cx);
             list = list.child(self.section("side-unlinked", tr("Erwähnungen ohne Link"), unlinked.len(), body, t, cx));
         }
         if !existing.is_empty() {
@@ -613,4 +630,87 @@ fn module_view(module: &str, t: &Theme, cx: &App) -> AnyElement {
             .child(due_label(l, &a, t).flex_none())
     });
     div().id("module-deadlines").size_full().overflow_y_scrollbar().py(px(space::S)).children(rows).into_any_element()
+}
+
+/// What hangs at this note: the note in the middle, its links around it. A click walks there in the same tab.
+fn mini_graph(path: &Path, vault: &index::VaultIndex, t: &Theme) -> Option<AnyElement> {
+    let facts = vault.notes.get(path)?;
+    let mut around: Vec<(PathBuf, bool)> = Vec::new();
+    for (link, _, _) in &facts.links {
+        if let Some(target) = vault.resolver.resolve(&link.target, Some(path))
+            && target != path
+            && !around.iter().any(|(p, _)| *p == target)
+        {
+            around.push((target, false));
+        }
+    }
+    for mention in vault.backlinks.get(path).into_iter().flatten() {
+        if mention.source != path && !around.iter().any(|(p, _)| *p == mention.source) {
+            around.push((mention.source.clone(), true));
+        }
+    }
+    if around.is_empty() {
+        return None;
+    }
+    let hidden = around.len().saturating_sub(10);
+    around.truncate(10);
+    let (width, height) = (300., 190.);
+    let center = (width / 2., height / 2.);
+    let count = around.len() as f32;
+    let spot = |i: usize| {
+        let angle = i as f32 / count * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+        (center.0 + angle.cos() * (width / 2. - 56.), center.1 + angle.sin() * (height / 2. - 22.))
+    };
+    let spots: Vec<(f32, f32)> = (0..around.len()).map(spot).collect();
+    let (line, lines_at) = (t.separator, spots.clone());
+    let lines = canvas(|_, _, _| (), move |bounds, _, window, _| {
+        let mut path = PathBuilder::stroke(px(1.));
+        for s in &lines_at {
+            path.move_to(bounds.origin + point(px(center.0), px(center.1)));
+            path.line_to(bounds.origin + point(px(s.0), px(s.1)));
+        }
+        if let Ok(built) = path.build() {
+            window.paint_path(built, line);
+        }
+    })
+    .absolute()
+    .size_full();
+    let hover = t.ink.opacity(0.12);
+    let nodes = around.iter().zip(&spots).enumerate().map(|(i, ((target, _), s))| {
+        let open = target.clone();
+        div()
+            .id(("mini-graph", i))
+            .absolute()
+            .left(px(s.0 - 52.))
+            .top(px(s.1 - 11.))
+            .w(px(104.))
+            .h(px(22.))
+            .px(px(space::XS))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(radius::SMALL))
+            .bg(t.secondary_bg)
+            .cursor_pointer()
+            .key_nav()
+            .soft(hover, radius::SMALL)
+            .text_size(px(font::CAPTION))
+            .tooltip(tip(target.file_stem().unwrap_or_default().to_string_lossy().to_string()))
+            .on_click(move |_, _, cx| act(cx, |l| l.follow_path(&open)))
+            .child(div().truncate().child(target.file_stem().unwrap_or_default().to_string_lossy().to_string()))
+    });
+    let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+    Some(
+        div()
+            .relative()
+            .w(px(width))
+            .h(px(height))
+            .mx_auto()
+            .mb(px(space::S))
+            .child(lines)
+            .children(nodes.collect::<Vec<_>>())
+            .child(div().absolute().left(px(center.0 - 56.)).top(px(center.1 - 12.)).w(px(112.)).h(px(24.)).px(px(space::XS)).flex().items_center().justify_center().rounded(px(radius::SMALL)).bg(t.accent).text_color(white()).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).child(div().truncate().child(name)))
+            .children((hidden > 0).then(|| div().absolute().right(px(space::XS)).bottom(px(0.)).text_size(px(font::CAPTION)).text_color(t.secondary).child(trf("+%@ weitere", &[&hidden.to_string()]))))
+            .into_any_element(),
+    )
 }
