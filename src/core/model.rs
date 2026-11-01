@@ -15,7 +15,7 @@ fn default_exclude() -> Vec<String> {
     [".git", "node_modules", "build", "DerivedData", ".build", "Pods"].map(String::from).to_vec()
 }
 
-fn new_id() -> String {
+pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string().to_uppercase()
 }
 

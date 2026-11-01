@@ -58,8 +58,8 @@ pub fn parse(text: &str) -> Vec<CalendarEvent> {
                 continue;
             }
             "END:VEVENT" | "END:VTODO" => {
-                if let Some(e) = fields.take().as_ref().and_then(event) {
-                    events.push(e);
+                if let Some(f) = fields.take() {
+                    events.extend(occurrences(&f));
                 }
                 continue;
             }
@@ -73,6 +73,30 @@ pub fn parse(text: &str) -> Vec<CalendarEvent> {
     }
     events.sort_by_key(|e| e.due);
     events
+}
+
+/// An event with all its dates: `RRULE` by day or week, what a course calendar uses. A cancelled one has none.
+fn occurrences(f: &HashMap<String, (String, String)>) -> Vec<CalendarEvent> {
+    if f.get("STATUS").is_some_and(|s| s.1.eq_ignore_ascii_case("CANCELLED")) {
+        return Vec::new();
+    }
+    let Some(first) = event(f) else { return Vec::new() };
+    let Some(rule) = f.get("RRULE").map(|r| r.1.to_uppercase()) else { return vec![first] };
+    let part = |name: &str| rule.split(';').find_map(|p| p.strip_prefix(&format!("{name}=")).map(str::to_string));
+    let step = match part("FREQ").as_deref() {
+        Some("DAILY") => 1,
+        Some("WEEKLY") => 7,
+        _ => return vec![first],
+    } * part("INTERVAL").and_then(|i| i.parse::<i64>().ok()).unwrap_or(1).max(1);
+    let count = part("COUNT").and_then(|c| c.parse::<usize>().ok()).unwrap_or(60).min(60);
+    let until = part("UNTIL").and_then(|u| date(&u, ""));
+    let skipped: Vec<i64> = f.get("EXDATE").map_or(Vec::new(), |e| e.1.split(',').filter_map(|d| date(d, &e.0)).map(|d| d.timestamp()).collect());
+    (0..count as i64)
+        .map(|n| first.due + Duration::days(n * step))
+        .take_while(|due| until.is_none_or(|u| *due <= u))
+        .filter(|due| !skipped.contains(&due.timestamp()))
+        .map(|due| CalendarEvent { uid: format!("{}#{}", first.uid, due.timestamp()), due, ..first.clone() })
+        .collect()
 }
 
 fn event(f: &HashMap<String, (String, String)>) -> Option<CalendarEvent> {
@@ -129,7 +153,10 @@ pub fn export(assignments: &[&Assignment], config: &StudyConfig, alarm_hours: i6
         "VERSION:2.0".into(),
         "PRODID:-//Schrumbi//EN".into(),
         "CALSCALE:GREGORIAN".into(),
-        format!("X-WR-CALNAME:{} Abgaben", escape(&config.name)),
+        "METHOD:PUBLISH".into(),
+        format!("X-WR-CALNAME:{}", escape(&config.name)),
+        "REFRESH-INTERVAL;VALUE=DURATION:PT1H".into(),
+        "X-PUBLISHED-TTL:PT1H".into(),
     ];
     for a in assignments {
         let title = [config.module(&a.module_id).map(|m| m.code.clone()), Some(a.title.clone())].into_iter().flatten().collect::<Vec<_>>().join(" · ");
@@ -141,7 +168,7 @@ pub fn export(assignments: &[&Assignment], config: &StudyConfig, alarm_hours: i6
             format!("DTSTART:{}", utc(due - Duration::minutes(30))),
             format!("DTEND:{}", utc(due)),
             format!("SUMMARY:{}", escape(&title)),
-            format!("DESCRIPTION:{}", escape(&a.folder.to_string_lossy())),
+            format!("DESCRIPTION:{}", escape(&config.module(&a.module_id).map_or(String::new(), |m| m.name.clone()))),
             "BEGIN:VALARM".into(),
             "ACTION:DISPLAY".into(),
             format!("DESCRIPTION:{}", escape(&title)),
@@ -150,8 +177,69 @@ pub fn export(assignments: &[&Assignment], config: &StudyConfig, alarm_hours: i6
             "END:VEVENT".into(),
         ]);
     }
+    for semester in &config.semesters {
+        for module in config.modules.iter().filter(|m| m.semester == semester.id) {
+            lines.extend(session_events(module, semester, &stamp));
+        }
+    }
     lines.push("END:VCALENDAR".into());
-    lines.join("\r\n") + "\r\n"
+    lines.iter().map(|l| fold(l)).collect::<Vec<_>>().join("\r\n") + "\r\n"
+}
+
+/// A module's weekly sessions for its semester, at the same wall clock time all along, without breaks and holidays.
+fn session_events(module: &Module, semester: &super::model::Semester, stamp: &str) -> Vec<String> {
+    use chrono::Datelike;
+    let (Some(start), Some(end)) = (day::parse(&semester.start), day::parse(&semester.end)) else { return Vec::new() };
+    let mut out = Vec::new();
+    for session in &module.sessions {
+        let offset = (session.weekday as i64 - start.weekday().number_from_monday() as i64).rem_euclid(7);
+        let first = start + Duration::days(offset);
+        if first > end {
+            continue;
+        }
+        let clock = |t: &str| t.replace(':', "");
+        let free: Vec<String> = std::iter::successors(Some(first), |d| Some(*d + Duration::days(7)))
+            .take_while(|d| *d <= end)
+            .filter(|d| {
+                let text = d.format("%Y-%m-%d").to_string();
+                semester.holidays.iter().any(|h| h.date == text) || semester.breaks.iter().any(|b| b.start <= text && text <= b.end)
+            })
+            .map(|d| format!("{}T{}00", d.format("%Y%m%d"), clock(&session.start)))
+            .collect();
+        let title = if session.title.is_empty() { module.code.clone() } else { format!("{} {}", module.code, session.title) };
+        out.extend([
+            "BEGIN:VEVENT".to_string(),
+            format!("UID:{}.{}@schrumbi.local", module.id, session.id),
+            format!("DTSTAMP:{stamp}"),
+            format!("DTSTART:{}T{}00", first.format("%Y%m%d"), clock(&session.start)),
+            format!("DTEND:{}T{}00", first.format("%Y%m%d"), clock(&session.end)),
+            format!("RRULE:FREQ=WEEKLY;UNTIL={}T235959", end.format("%Y%m%d")),
+        ]);
+        if !free.is_empty() {
+            out.push(format!("EXDATE:{}", free.join(",")));
+        }
+        out.push(format!("SUMMARY:{}", escape(&title)));
+        if !session.location.is_empty() {
+            out.push(format!("LOCATION:{}", escape(&session.location)));
+        }
+        out.push("END:VEVENT".into());
+    }
+    out
+}
+
+/// Lines longer than 75 bytes continue on the next one; some calendars insist on it.
+fn fold(line: &str) -> String {
+    let mut out = String::with_capacity(line.len() + 8);
+    let mut used = 0;
+    for c in line.chars() {
+        if used + c.len_utf8() > 75 {
+            out.push_str("\r\n ");
+            used = 1;
+        }
+        out.push(c);
+        used += c.len_utf8();
+    }
+    out
 }
 
 fn utc(d: DateTime<Utc>) -> String {
@@ -169,6 +257,37 @@ pub fn local(d: DateTime<Utc>) -> DateTime<Local> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeats_and_cancellations_are_read() {
+        let ics = "BEGIN:VEVENT\r\nUID:a\r\nSUMMARY:Blatt\r\nDTSTART:20261102T170000Z\r\nRRULE:FREQ=WEEKLY;COUNT=3\r\nEXDATE:20261109T170000Z\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:b\r\nSUMMARY:Weg\r\nSTATUS:CANCELLED\r\nDTSTART:20261102T170000Z\r\nEND:VEVENT\r\n";
+        let found = parse(ics);
+        assert_eq!(found.len(), 2);
+        assert_ne!(found[0].uid, found[1].uid);
+        assert_eq!((found[1].due - found[0].due).num_days(), 14);
+    }
+
+    #[test]
+    fn long_lines_fold_and_read_back() {
+        let line = format!("SUMMARY:{}", "ä".repeat(60));
+        let folded = fold(&line);
+        assert!(folded.split("\r\n").all(|l| l.len() <= 75));
+        assert_eq!(folded.replace("\r\n ", ""), line);
+    }
+
+    #[test]
+    fn sessions_become_weekly_events_without_free_days() {
+        let mut config = StudyConfig::default();
+        let semester = crate::core::model::Semester { id: "s".into(), start: "2026-10-05".into(), end: "2026-11-30".into(), holidays: vec![crate::core::model::Holiday { name: "x".into(), date: "2026-10-13".into() }], ..Default::default() };
+        let module = Module { id: "m".into(), code: "CA1".into(), semester: "s".into(), sessions: vec![crate::core::model::Session { id: "v".into(), title: "VL".into(), weekday: 2, start: "10:15".into(), end: "11:45".into(), location: "HS, 1".into() }], ..Default::default() };
+        config.semesters.push(semester);
+        config.modules.push(module);
+        let out = export(&[], &config, 24).replace("\r\n ", "");
+        assert!(out.contains("DTSTART:20261006T101500"), "{out}");
+        assert!(out.contains("RRULE:FREQ=WEEKLY;UNTIL=20261130T235959"));
+        assert!(out.contains("EXDATE:20261013T101500"));
+        assert!(out.contains("LOCATION:HS\\, 1"));
+    }
 
     #[test]
     fn parses_moodle_events() {

@@ -4,6 +4,7 @@ use std::time::Duration;
 use gpui_kit::{App, AppContext, Entity, Global, ScrollHandle, Task};
 use notify::{EventKind, RecursiveMode, Watcher};
 
+use crate::core::i18n::{tr, trf};
 use crate::core::library::{Library, Reminder};
 use crate::core::workspace::{CONFIG_NAME, STATE_NAME};
 
@@ -56,6 +57,13 @@ pub fn init(cx: &mut App) {
         loop {
             cx.background_executor().timer(Duration::from_secs(30)).await;
             cx.update(|cx| act(cx, |l| l.tick()));
+        }
+    })
+    .detach();
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(Duration::from_secs(3600)).await;
+            cx.update(|cx| refresh_calendar(false, cx));
         }
     })
     .detach();
@@ -156,6 +164,7 @@ pub fn open_workspace(path: &Path, cx: &mut App) {
     act(cx, |l| l.open(path));
     watch(path.to_path_buf(), cx);
     reindex(cx);
+    refresh_calendar(false, cx);
     super::sync::workspace_opened(path, cx);
 }
 
@@ -396,11 +405,55 @@ pub fn reschedule_reminders(cx: &mut App) {
     sync_reminders(cx);
 }
 
+/// The calendar address this workspace fetches deadlines from.
+pub fn calendar_source(cx: &App) -> Option<String> {
+    let root = read(cx, |l| l.root.clone())?;
+    crate::core::prefs::get().calendar_sources.get(root.to_string_lossy().as_ref()).filter(|u| !u.trim().is_empty()).cloned()
+}
+
+fn fetch_calendar(address: &str) -> Result<String, String> {
+    let address = address.trim();
+    let address = address.strip_prefix("webcal://").map_or_else(|| address.to_string(), |rest| format!("https://{rest}"));
+    if !(address.starts_with("https://") || address.starts_with("http://")) {
+        return Err(tr("Die Adresse muss mit https:// oder webcal:// beginnen."));
+    }
+    let agent = ureq::Agent::new_with_config(ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).build());
+    let text = agent.get(&address).call().map_err(|e| e.to_string())?.body_mut().read_to_string().map_err(|e| e.to_string())?;
+    if !text.contains("BEGIN:VCALENDAR") {
+        return Err(tr("Unter dieser Adresse liegt kein Kalender."));
+    }
+    Ok(text)
+}
+
+/// Fetches the subscribed calendar. Quietly in the background; when asked, it opens the import to choose and reports errors.
+pub fn refresh_calendar(asked: bool, cx: &mut App) {
+    let Some(address) = calendar_source(cx) else { return };
+    let task = cx.background_spawn(async move { fetch_calendar(&address) });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        cx.update(|cx| match result {
+            Ok(text) if asked => {
+                let file = std::env::temp_dir().join(format!("schrumbi-kalender-{}.ics", std::process::id()));
+                if std::fs::write(&file, text).is_ok() {
+                    act(cx, |l| l.import_path = Some(file));
+                }
+            }
+            Ok(text) => {
+                act(cx, |l| l.refresh_events(&text));
+            }
+            Err(e) if asked => act(cx, |l| l.last_error = Some(trf("Kalender konnte nicht geladen werden: %@", &[&e]))),
+            Err(_) => {}
+        });
+    })
+    .detach();
+}
+
 pub fn sync_reminders(cx: &mut App) {
     if crate::core::prefs::get().calendar_feed
         && let (Some(root), Some(ics)) = read(cx, |l| (l.root.clone(), l.ics()))
     {
         let path = root.join("Schrumbi-Kalender.ics");
+        crate::core::calendar_server::serve(path.clone());
         let strip = |s: &str| s.lines().filter(|l| !l.starts_with("DTSTAMP:")).collect::<Vec<_>>().join("\n");
         if std::fs::read_to_string(&path).map_or(true, |old| strip(&old) != strip(&ics)) {
             let _ = std::fs::write(&path, ics);

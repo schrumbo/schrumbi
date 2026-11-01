@@ -141,6 +141,11 @@ impl FileBrowser {
         b
     }
 
+    /// Gives the keyboard to the list.
+    pub fn take_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+    }
+
     pub fn set_scope(&mut self, module: Option<String>, cx: &mut Context<Self>) {
         if self.scope_module != module {
             self.scope_module = module;
@@ -640,7 +645,7 @@ impl FileBrowser {
         if let (true, Some(w)) = (show_week, f.week) {
             meta = meta.child(format!("W{w:02}"));
         }
-        if !f.place.is_empty() {
+        if !f.place.is_empty() && (prefs::get().file_grouping != prefs::FileGrouping::Folder || !self.query.is_empty() || show_week) {
             meta = meta.child(div().truncate().child(f.place.join(" › ")));
         }
         if f.title.is_some() && !self.query.is_empty() {
@@ -814,7 +819,7 @@ impl FileBrowser {
             }
             GroupKind::Week(None) => title = title.child(div().font_weight(FontWeight::SEMIBOLD).child(tr("Ohne Woche"))),
             GroupKind::Folder(m, place) => {
-                if let Some(m) = m.as_deref().and_then(|id| lib.module_by_id(id)) {
+                if let Some(m) = m.as_deref().and_then(|id| lib.module_by_id(id)).filter(|_| self.scope_module.is_none()) {
                     title = title.child(module_chip(&m.badge(), t.palette(&m.color)));
                 }
                 title = title.child(div().truncate().font_weight(FontWeight::SEMIBOLD).child(if place.is_empty() { tr("Hauptordner") } else { place.join(" › ") }));

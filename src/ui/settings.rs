@@ -81,6 +81,10 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("benachrichtigung", "Mitteilungen vor Deadlines"),
     ("notification", "Mitteilungen vor Deadlines"),
     ("ics", "Kalenderdatei aktuell halten"),
+    ("outlook", "Im Kalender zeigen"),
+    ("thunderbird", "Im Kalender zeigen"),
+    ("google", "Im Kalender zeigen"),
+    ("moodle", "Kalender abonnieren"),
     ("spell", "Rechtschreibung prüfen"),
     ("ects", "Bezeichnung der Punkte"),
     ("note", "Notensystem"),
@@ -120,6 +124,10 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Erinnern", Tab::General),
     ("Zusätzlich am Vortag (Pflichtabgaben)", Tab::General),
     ("Kalenderdatei aktuell halten", Tab::General),
+    ("Adresse", Tab::General),
+    ("Kalender abonnieren", Tab::General),
+    ("Im Kalender zeigen", Tab::General),
+    ("Abonnieren oder importieren", Tab::General),
     ("System", Tab::General),
     ("Bei Anmeldung starten", Tab::General),
     ("Automatisch nach Updates suchen", Tab::General),
@@ -834,14 +842,59 @@ impl Settings {
             ],
             t,
         );
+        let source_root = state::read(cx, |l| l.root.clone()).unwrap_or_default().to_string_lossy().to_string();
+        let source_value = p.calendar_sources.get(&source_root).cloned().unwrap_or_default();
+        let mut fields = std::mem::take(&mut self.fields);
+        let source_field = fields.input("calendar-source", &source_value, "https://…", window, cx, move |v, _| {
+            let (root, v) = (source_root.clone(), v.trim().to_string());
+            prefs::update(|p| {
+                if v.is_empty() {
+                    p.calendar_sources.remove(&root);
+                } else {
+                    p.calendar_sources.insert(root, v);
+                }
+            });
+        });
+        self.fields = fields;
+        let incoming = section(
+            Some(tr("Kalender abonnieren")),
+            Some(tr("Trage die Kalenderadresse von Moodle ein (Kalender → Exportieren → Kalender-URL abrufen). Neue und geänderte Abgaben kommen dann von selbst, beim Start und jede Stunde. „Abrufen“ zeigt alles und ordnet Kurse zu.")),
+            vec![row(tr("Adresse"), div().flex().items_center().gap(px(space::S)).child(div().w(px(280.)).child(Input::new(&source_field).small())).child(Button::new("calendar-fetch").small().label(tr("Abrufen")).disabled(source_value.trim().is_empty()).on_click(|_, _, cx| state::refresh_calendar(true, cx))), t)],
+            t,
+        );
+        let feed_on = p.calendar_feed;
+        let feed_file = state::read(cx, |l| l.root.clone()).map(|r| r.join("Schrumbi-Kalender.ics")).unwrap_or_default();
+        let how = if cfg!(target_os = "macos") {
+            tr("Apple Kalender: Ablage → Neues Kalenderabonnement, Adresse einfügen. Outlook für Mac kann die Datei einmalig importieren.")
+        } else if cfg!(target_os = "windows") {
+            tr("Outlook (klassisch): Datei → Kontoeinstellungen → Internetkalender → Neu, Adresse einfügen. Thunderbird: Neuer Kalender → Im Netzwerk. Neues Outlook und die Windows-Kalender-App können nur einmalig importieren.")
+        } else {
+            tr("Thunderbird: Neuer Kalender → Im Netzwerk, Adresse einfügen. GNOME Kalender und Evolution: Neuer Kalender → Aus dem Web. KDE Merkuro: Kalender hinzufügen → iCal-Datei, dort die Datei wählen.")
+        };
+        let mut outgoing_rows = vec![row(tr("Kalenderdatei aktuell halten"), Switch::new("g-cal").checked(feed_on).on_click(|v, _, cx| {
+            let v = *v;
+            prefs::update(|p| p.calendar_feed = v);
+            state::sync_reminders(cx);
+            cx.refresh_windows();
+        }), t)];
+        if feed_on {
+            let (open_file, reveal_file) = (feed_file.clone(), feed_file.clone());
+            outgoing_rows.push(row(tr("Abonnieren oder importieren"), div().flex().gap(px(space::S))
+                .child(Button::new("calendar-copy").small().label(tr("Adresse kopieren")).on_click(|_, _, cx| {
+                    if let Some(address) = crate::core::calendar_server::address() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(address));
+                        state::act(cx, |l| l.notify(tr("Adresse kopiert"), "link", None, None));
+                    }
+                }))
+                .child(Button::new("calendar-once").small().ghost().label(tr("Einmalig importieren")).on_click(move |_, _, _| {
+                    let _ = opener::open(&open_file);
+                }))
+                .child(Button::new("calendar-reveal").small().ghost().icon(menu_icon("folder")).tooltip(super::platform::reveal_label()).on_click(move |_, _, _| crate::core::library::reveal(&reveal_file))), t));
+        }
         let calendar = section(
-            None,
-            Some(tr("Hält die Datei „Schrumbi-Kalender.ics“ im Studienordner aktuell. Abonniere sie in Apple Kalender, Outlook oder Thunderbird, dann erscheinen die Deadlines dort und auf dem Handy.")),
-            vec![row(tr("Kalenderdatei aktuell halten"), Switch::new("g-cal").checked(p.calendar_feed).on_click(|v, _, cx| {
-                let v = *v;
-                prefs::update(|p| p.calendar_feed = v);
-                state::sync_reminders(cx);
-            }), t)],
+            Some(tr("Im Kalender zeigen")),
+            Some(format!("{} {} {}", tr("Abgaben, Prüfungen und Termine erscheinen in deiner Kalender-App."), how, tr("Die Adresse gilt auf diesem Computer, solange Schrumbi läuft; die App behält den letzten Stand. Fürs Handy oder Google Kalender braucht es eine Adresse im Netz, etwa den Freigabelink der Datei aus Dropbox."))),
+            outgoing_rows,
             t,
         );
         let login = self.launch_at_login;
@@ -883,7 +936,7 @@ impl Settings {
                 .collect(),
             t,
         );
-        div().flex().flex_col().gap(px(space::XL)).child(language).child(studium).child(grades).child(sidebar).child(reminders).child(calendar).child(system).child(search).child(storage)
+        div().flex().flex_col().gap(px(space::XL)).child(language).child(studium).child(grades).child(sidebar).child(reminders).child(incoming).child(calendar).child(system).child(search).child(storage)
     }
 }
 

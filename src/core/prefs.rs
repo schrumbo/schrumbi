@@ -180,6 +180,8 @@ pub struct Prefs {
     pub note_folds: HashMap<String, Vec<String>>,
     /// Width of the deadlines column on module pages.
     pub module_column: Option<f32>,
+    /// The view last open on module pages.
+    pub module_tab: String,
     pub shortcuts: BTreeMap<String, Shortcut>,
     pub disabled_shortcuts: BTreeSet<String>,
     pub git: BTreeMap<String, GitPrefs>,
@@ -194,6 +196,10 @@ pub struct Prefs {
     pub update_skip: String,
     /// Keeps `Schrumbi-Kalender.ics` in the workspace up to date for calendar subscriptions.
     pub calendar_feed: bool,
+    /// Part of the local subscription address, so only who was given it reads the calendar.
+    pub calendar_token: String,
+    /// Calendar addresses to fetch deadlines from, by workspace.
+    pub calendar_sources: BTreeMap<String, String>,
     pub sidebar_open: bool,
     /// Sidebar entries the user hid; they stay reachable by shortcut and palette.
     pub hidden_tabs: Vec<String>,
@@ -223,6 +229,7 @@ impl Default for Prefs {
             card_reviews_per_day: 200,
             card_target: None,
             note_mode: NoteMode::default(),
+            module_tab: String::new(),
             heading_titled: BTreeSet::new(),
             card_deck: String::new(),
             card_open: Vec::new(),
@@ -254,6 +261,8 @@ impl Default for Prefs {
             update_check: true,
             update_skip: String::new(),
             calendar_feed: false,
+            calendar_token: String::new(),
+            calendar_sources: BTreeMap::new(),
             sidebar_open: true,
             hidden_tabs: Vec::new(),
             main_window: None,

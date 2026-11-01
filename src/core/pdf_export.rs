@@ -466,13 +466,10 @@ impl<'a> Converter<'a> {
                 },
                 Event::Text(t) => {
                     let mut rest: &str = t;
-                    static CUSTOM_TASK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[([^\s\]xX])\] ").unwrap());
-                    if self.items.last().is_some_and(|it| it.0.is_none()) && self.stack.last().is_some_and(String::is_empty)
-                        && let Some(c) = CUSTOM_TASK.captures(rest)
-                    {
-                        let mark = format!("{TASK_MARK}{}{TASK_MARK}", &c[1]);
-                        self.out().push_str(&mark);
-                        rest = &rest[c.get(0).map_or(0, |m| m.end())..];
+                    if let Some(mark) = rest.strip_prefix(TASK_MARK).and_then(|r| r.split_once(TASK_MARK)).filter(|_| self.stack.last().is_some_and(String::is_empty)) {
+                        let opened = format!("{TASK_MARK}{}{TASK_MARK}", mark.0);
+                        self.out().push_str(&opened);
+                        rest = mark.1;
                     }
                     if let Some(after) = rest.strip_prefix(CALLOUT_OPEN) {
                         let (kind, title) = after.split_once(CALLOUT_KIND_END).unwrap_or(("note", after));
@@ -681,6 +678,9 @@ fn mark_fill(color: vault::syntax::MarkColor) -> &'static str {
 
 /// A card's gaps read as marked answers; inside a formula the formula's own preparation takes them.
 fn gaps_shown(text: &str) -> String {
+    static TASK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^(\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+)\[([^\s\]xX])\]\s").unwrap());
+    let marked = TASK.replace_all(text, |c: &regex::Captures| format!("{}{TASK_MARK}{}{TASK_MARK}", &c[1], &c[2]));
+    let text: &str = &marked;
     static GAP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{c\d+::((?:[^{}]|\{[^{}]*\})*?)(?:::[^{}]*)?\}\}").unwrap());
     if !text.contains("{{c") {
         return text.to_string();

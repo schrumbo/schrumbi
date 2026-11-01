@@ -1,3 +1,4 @@
+pub mod calendar_server;
 pub mod catalog;
 pub mod crash;
 pub mod day;

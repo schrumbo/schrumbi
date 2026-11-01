@@ -161,7 +161,7 @@ impl MainWindow {
             Route::Notes => tr("Notizen"),
             Route::Graph => tr("Graph"),
             Route::Cards => tr("Karten"),
-            Route::Module(id) => lib.module_by_id(id).map_or(id.clone(), |m| m.display_name()),
+            Route::Module(id) => lib.module_by_id(id).map_or(id.clone(), |m| m.code.clone()),
             Route::Doc(p) => lib.note_title(p),
         }
     }

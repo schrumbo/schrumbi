@@ -2528,6 +2528,30 @@ impl Library {
     }
 
     /// Adds or updates calendar events; returns how many were added and updated.
+    /// Takes over what a subscribed calendar says, quietly when nothing changed.
+    pub fn refresh_events(&mut self, text: &str) -> usize {
+        let events = ics::parse(text);
+        let modules: Vec<Module> = self.semester_modules().into_iter().cloned().collect();
+        let now = Utc::now();
+        let items: Vec<(CalendarEvent, String, Kind)> = events
+            .into_iter()
+            .filter_map(|event| {
+                let known = self.state.manual.iter().find(|m| m.external_id.as_deref() == Some(event.uid.as_str()));
+                if known.is_some_and(|m| m.title == event.title() && m.due == event.due) || (known.is_none() && event.due < now) {
+                    return None;
+                }
+                let module = known.map(|m| m.module.clone()).or_else(|| ics::module_for(&event.course, &modules).map(|m| m.id.clone()))?;
+                let kind = known.map_or_else(|| event.guessed_kind(), |m| m.kind);
+                Some((event, module, kind))
+            })
+            .collect();
+        let count = items.len();
+        if count > 0 {
+            self.import_events(items);
+        }
+        count
+    }
+
     pub fn import_events(&mut self, items: Vec<(CalendarEvent, String, Kind)>) -> (usize, usize) {
         let (Some(root), Some(config)) = (self.root.clone(), self.config.clone()) else { return (0, 0) };
         let (mut added, mut updated) = (0, 0);
