@@ -29,6 +29,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         bind(S::ZoomIn, ZoomIn),
         bind(S::ZoomOut, ZoomOut),
         bind(S::ZoomReset, ZoomReset),
+        Some(kb(super::app::cmd("alt-f"), gpui_kit::component::input::Replace, ctx)),
         Some(kb("enter".into(), ListNewline, ctx)),
         Some(kb("shift-enter".into(), PlainNewline, ctx)),
         Some(kb(super::app::cmd("shift-x"), Strike, ctx)),

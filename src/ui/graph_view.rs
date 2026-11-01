@@ -46,6 +46,7 @@ pub struct GraphView {
     drag: Option<(Point<Pixels>, (f32, f32))>,
     /// A point being carried to another place.
     carried: Option<u32>,
+    double_press: bool,
     /// Point indices by how many links they have, the order labels get room in.
     order: Arc<Vec<u32>>,
     /// Each group's colour, by the module it is or by its turn.
@@ -86,6 +87,7 @@ impl GraphView {
             selected: None,
             drag: None,
             carried: None,
+            double_press: false,
             order: Arc::default(),
             cluster_tints: Vec::new(),
             filter,
@@ -429,7 +431,8 @@ impl Render for GraphView {
                         true
                     };
                     if let Some(h) = highlight {
-                        for i in std::iter::once(h).chain(neighbors.iter().copied()).take(60) {
+                        let near_first = order.iter().copied().filter(|i| neighbors.contains(i)).take(40);
+                        for i in std::iter::once(h).chain(near_first) {
                             let (Some(p), Some(node)) = (positions.get(i as usize), graph.nodes.get(i as usize)) else { continue };
                             let c = screen(*p);
                             label(window, cx, node.name.clone(), point(c.x, c.y + px(10.)), ink, i == h, i == h);
@@ -507,9 +510,7 @@ impl Render for GraphView {
                 window.focus(&v.focus, cx);
                 if let Some(hit) = v.hit(e.position) {
                     v.pressed = Some((hit, e.position));
-                    if e.click_count >= 2 {
-                        v.open(hit, cx);
-                    }
+                    v.double_press = e.click_count >= 2;
                 } else {
                     v.drag = Some((e.position, v.pan));
                 }
@@ -554,7 +555,11 @@ impl Render for GraphView {
                     && !carried
                     && (f32::from(e.position.x - at.x).abs() + f32::from(e.position.y - at.y).abs()) < 6.
                 {
-                    v.select(hit, cx);
+                    if std::mem::take(&mut v.double_press) {
+                        v.open(hit, cx);
+                    } else {
+                        v.select(hit, cx);
+                    }
                 }
             }))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|v, _, _, _| {

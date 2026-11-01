@@ -104,6 +104,7 @@ pub fn init(cx: &mut App) {
             act(cx, |l| l.show_conflicts = true);
         }
     });
+    quit_on_terminate(cx);
     cx.on_action(|_: &Undo, cx| act(cx, |l| l.undo()));
     cx.on_action(|_: &Redo, cx| act(cx, |l| l.redo()));
     cx.on_action(|_: &ShowGraph, cx| {
@@ -216,6 +217,32 @@ fn close_active_window(cx: &mut App) {
 }
 
 /// Saves or asks about unsaved notes, then quits.
+/// Being told to end by the system saves like quitting does, so what was just typed stays.
+#[cfg(unix)]
+fn quit_on_terminate(cx: &mut App) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static ASKED: AtomicBool = AtomicBool::new(false);
+    extern "C" fn asked(_: libc::c_int) {
+        ASKED.store(true, Ordering::Relaxed);
+    }
+    let handler: extern "C" fn(libc::c_int) = asked;
+    unsafe {
+        libc::signal(libc::SIGTERM, handler as libc::sighandler_t);
+    }
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+            if ASKED.swap(false, Ordering::Relaxed) {
+                cx.update(quit);
+            }
+        }
+    })
+    .detach();
+}
+
+#[cfg(not(unix))]
+fn quit_on_terminate(_: &mut App) {}
+
 pub fn quit(cx: &mut App) {
     super::documents::prepare_to_quit(cx);
 }

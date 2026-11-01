@@ -860,6 +860,7 @@ impl Render for NotesPage {
             .flex_none()
             .flex()
             .on_key_down(cx.listener(Self::on_key))
+            .on_action(|_: &super::app::TogglePreview, _, cx| act(cx, |l| l.toggle_mode = true))
             .on_mouse_up(MouseButton::Left, cx.listener(|s, _, _, _| crate::core::prefs::update(|p| p.notes_column = Some(s.width))))
             .child(div().w(px(width)).h_full().flex().flex_col().bg(t.column).child(header).child(filter).child(div().flex_1().min_h_0().child(body)))
             .child(handle)

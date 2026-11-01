@@ -47,7 +47,9 @@ pub enum Mode {
 }
 
 /// What the field leaves free on its left, taken back so text stays where the drawn block had it.
-const LIVE_GUTTER: f32 = 30.;
+const LIVE_GUTTER: f32 = 12.;
+/// What the field leaves free above and below its text.
+const LIVE_INSET: f32 = 9.5;
 
 /// The block being written in the live view.
 struct LiveBlock {
@@ -67,6 +69,10 @@ pub struct NoteView {
     block_sources: Vec<markdown_view::BlockSource>,
     reader_width: Pixels,
     spell_task: Option<Task<()>>,
+    /// Where writing last happened in this note.
+    last_line: Option<usize>,
+    /// Whether this view has looked for changes it inherited, as after an outside move.
+    took_over: bool,
     /// What is being written in the live view, in a field of its own.
     block: Entity<EditorState>,
     live: Option<LiveBlock>,
@@ -98,7 +104,7 @@ impl NoteView {
         let text = state::lib(cx).update(cx, |l, _| l.buffer(&path).text.clone());
         let editor = cx.new(|cx| EditorState::new(window, cx).language("markdown").soft_wrap(true).line_number(true).default_value(text.clone()));
         editor.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(path.clone())));
-        let block = cx.new(|cx| EditorState::new(window, cx).language("markdown").soft_wrap(true).line_number(false).folding(false).smart_indent(false).scroll_beyond_last_line(Some(0)));
+        let block = cx.new(|cx| EditorState::new(window, cx).soft_wrap(true).line_number(false).folding(false).smart_indent(false).scroll_beyond_last_line(Some(0)));
         block.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(path.clone())));
         let lib = state::lib(cx);
         let p = path.clone();
@@ -144,10 +150,25 @@ impl NoteView {
                 _ => {}
             }),
             cx.observe_in(&lib, window, move |this, lib, window, cx| {
+                if lib.read(cx).active_document.as_ref() == Some(&p) && lib.update(cx, |l, _| std::mem::take(&mut l.toggle_mode)) {
+                    let next = if this.mode == Mode::Live { Mode::Read } else { Mode::Live };
+                    this.mode = next;
+                    this.finish_block(cx);
+                }
+                if lib.read(cx).active_document.as_ref() != Some(&p) && this.place_restored {
+                    this.remember_place();
+                }
                 let Some((rev, text)) = lib.read(cx).buffers.get(&p).map(|b| (b.revision, b.text.clone())) else { return };
                 if rev != this.revision {
                     this.revision = rev;
-                    this.live = None;
+                    let reopen = this.live.take().map(|l| (l.first_line, this.block.read(cx).cursor()));
+                    if let Some((line, caret)) = reopen {
+                        this.parsed = None;
+                        window.on_next_frame({
+                            let me = cx.entity();
+                            move |window, cx| me.update(cx, |n, cx| n.open_line(line, Some(caret), window, cx))
+                        });
+                    }
                     this.syncing = true;
                     this.editor.update(cx, |s, cx| {
                         let old = s.value().to_string();
@@ -187,7 +208,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: false, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, reveal_block: None, block_sources: Vec::new(), reader_width: px(720.), spell_task: None, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: false, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, reveal_block: None, block_sources: Vec::new(), reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -289,7 +310,8 @@ impl NoteView {
 
     /// Closes the block being written; the note is drawn fresh from what is in it now.
     fn finish_block(&mut self, cx: &mut Context<Self>) {
-        if self.live.take().is_some() {
+        if let Some(live) = self.live.take() {
+            self.last_line = Some(live.first_line);
             self.parsed = None;
             self.reader_list.remeasure();
             cx.notify();
@@ -370,6 +392,73 @@ impl NoteView {
         self.schedule_autosave(cx);
     }
 
+    /// Esc closes the open block and leaves the note ready for the keyboard; a suggestion list closes first.
+    fn leave_block(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.live.is_none() || self.block.read(cx).completion_menu_state().open {
+            return;
+        }
+        cx.stop_propagation();
+        self.finish_block(cx);
+        window.focus(&self.focus, cx);
+    }
+
+    /// Whether the caret stands on the first or last drawn line of the open block.
+    fn at_block_edge(&self, down: bool, window: &mut Window, cx: &App) -> bool {
+        if self.live.is_none() {
+            return false;
+        }
+        let b = self.block.read(cx);
+        let (value, range) = (b.value().to_string(), b.selected_range());
+        if !range.is_empty() || b.completion_menu_state().open {
+            return false;
+        }
+        let line_start = value[..range.start].rfind('\n').map_or(0, |i| i + 1);
+        let line_end = value[range.start..].find('\n').map_or(value.len(), |i| range.start + i);
+        if (down && line_end != value.len()) || (!down && line_start != 0) {
+            return false;
+        }
+        let line = &value[line_start..line_end];
+        if line.is_empty() {
+            return true;
+        }
+        let style = window.text_style();
+        let size = self.block_font_size(&value);
+        let run = TextRun { len: line.len(), font: style.font(), color: style.color, background_color: None, underline: None, strikethrough: None };
+        let Ok(shaped) = window.text_system().shape_text(line.to_string().into(), px(size), &[run], Some(self.block_width()), None) else { return true };
+        let Some(wrapped) = shaped.first() else { return true };
+        let height = px(size * 1.5);
+        let row = |at: usize| wrapped.position_for_index(at, height).map_or(0., |p| f32::from(p.y));
+        if down { row(range.start - line_start) >= row(line.len()) } else { row(range.start - line_start) < 1. }
+    }
+
+    fn block_width(&self) -> Pixels {
+        (self.reader_width.min(px(720.)) - px(space::XXL * 2.)).max(px(120.))
+    }
+
+    /// An open heading keeps its size, so the page does not jump.
+    fn block_font_size(&self, value: &str) -> f32 {
+        let hashes = value.chars().take_while(|c| *c == '#').count();
+        if !value.contains('\n') && value[hashes..].starts_with(' ') {
+            match hashes {
+                1 => return font::TITLE,
+                2 => return font::TITLE2,
+                3 => return font::TITLE3,
+                _ => {}
+            }
+        }
+        font::BODY
+    }
+
+    /// Typing with nothing open starts in the block in view, so no keystroke is lost.
+    fn open_for_typing(&mut self, inserted: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        let top = self.reader_list.logical_scroll_top().item_ix.saturating_sub(1);
+        let line = self.parsed.as_ref().and_then(|(_, p)| p.sources().get(top).map(|s| s.line)).unwrap_or(0);
+        self.open_line(self.last_line.unwrap_or(line), None, window, cx);
+        if let Some(text) = inserted {
+            self.block.update(cx, |b, cx| b.replace(text, window, cx));
+        }
+    }
+
     /// Leaves the block at its edge for the one above or below.
     fn cross_block(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(live) = &self.live else { return };
@@ -417,15 +506,15 @@ impl NoteView {
 
     /// The field of the block being written, as tall as its text.
     fn live_field(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let width = (self.reader_width.min(px(720.)) - px(space::XXL * 2.)).max(px(120.));
+        let width = self.block_width();
         let value = self.block.read(cx).value().to_string();
         let style = window.text_style();
-        let font_size = px(font::BODY);
+        let size = self.block_font_size(&value);
         let run = TextRun { len: value.len(), font: style.font(), color: style.color, background_color: None, underline: None, strikethrough: None };
-        let rows: usize = window.text_system().shape_text(value.clone().into(), font_size, &[run], Some(width), None).map_or(1, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum());
-        let line = self.block.read(cx).line_height().unwrap_or(px(font::BODY * 1.5));
-        let height = line * (rows.max(1) as f32 + 0.5);
-        let field = writing_menu(Editor::new(&self.block).appearance(false).font_family(Theme::font_family()).text_size(font_size).h(height).ml(px(-LIVE_GUTTER)));
+        let rows: usize = window.text_system().shape_text(value.clone().into(), px(size), &[run], Some(width), None).map_or(1, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum());
+        let line = px(size * 1.5);
+        let height = line * (rows.max(1) as f32);
+        let field = writing_menu(Editor::new(&self.block).appearance(false).font_family(Theme::font_family()).text_size(px(size)).line_height(line).when(size > font::BODY, |e| e.font_weight(FontWeight::BOLD)).w(width + px(LIVE_GUTTER)).h(height + px(LIVE_INSET * 2.)).mt(px(-LIVE_INSET)).ml(px(-LIVE_GUTTER)));
         div().key_context("LiveBlock").h(height).child(self.note_editor_wrapper(field.into_any_element(), cx)).into_any_element()
     }
 
@@ -502,7 +591,7 @@ impl NoteView {
         let offset = top.item_ix as f32 + f32::from(top.offset_in_item).clamp(0., 4095.) / 4096.;
         let key = self.path.to_string_lossy().to_string();
         let known = prefs::get().note_places.get(&key).copied().unwrap_or(0.);
-        if self.place_restored && (known - offset).abs() > 1. {
+        if self.place_restored && (known - offset).abs() > 0.001 {
             prefs::update(|p| {
                 p.note_places.insert(key, offset);
                 while p.note_places.len() > NOTE_PLACES {
@@ -572,6 +661,27 @@ impl NoteView {
             return;
         }
         let k = &e.keystroke;
+        if self.link_focus.index.is_none() {
+            let plain = !k.modifiers.platform && !k.modifiers.control;
+            match k.key.as_str() {
+                "escape" if state::read(cx, |l| l.is_vault) => {
+                    act(cx, |l| l.focus_explorer = true);
+                    cx.stop_propagation();
+                    return;
+                }
+                "enter" | "up" | "down" if plain && self.mode == Mode::Live => {
+                    self.open_for_typing(None, window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+                _ if plain && self.mode == Mode::Live && k.key_char.as_deref().is_some_and(|c| !c.is_empty() && c != "\t") => {
+                    self.open_for_typing(k.key_char.clone(), window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+                _ => {}
+            }
+        }
         let url = self.link_focus.index.and_then(|i| self.parsed.as_ref().and_then(|(_, p)| p.links().get(i).map(|(u, _)| u.clone())));
         match k.key.as_str() {
             "enter" if url.is_some() => {
@@ -791,7 +901,7 @@ impl NoteView {
             if i + 1 == items {
                 let end_me = me.clone();
                 let last_line = block_lines.last().map_or(0, |b| b.0);
-                let footer = div().id("note-end").min_h(px(160.)).pb(px(space::XXL)).children(markdown_view::render_footnotes(&parsed, Some(footnote_list.clone()), &t)).when(live_mode, |d| d.cursor_text().on_click(move |_, window, cx| end_me.update(cx, |n, cx| n.open_line(last_line, None, window, cx))));
+                let footer = div().id("note-end").min_h(px(160.)).pb(px(space::XXL)).children(markdown_view::render_footnotes(&parsed, Some(footnote_list.clone()), &t)).when(live_mode, |d| d.cursor_text().on_mouse_up(MouseButton::Left, move |_, window, cx| end_me.update(cx, |n, cx| n.open_line(last_line, None, window, cx))));
                 return content(footer.into_any_element());
             }
             if hidden.get(i - 1).copied().unwrap_or(false) {
@@ -807,7 +917,10 @@ impl NoteView {
             }
             let click_me = me.clone();
             let (line, _) = block_lines[i - 1];
-            content(drawn.cursor_text().on_click(move |_, window, cx| {
+            content(drawn.cursor_text().on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                if markdown_view::take_control_press() {
+                    return;
+                }
                 if !gpui_kit::base::TextSelection::selected_text(window, cx).is_empty() {
                     return;
                 }
@@ -1091,38 +1204,25 @@ impl NoteView {
                     n.step_history(false, w, cx);
                 }
             }))
+            .capture_action(cx.listener(|n, _: &gpui_kit::component::input::MoveUp, w, cx| {
+                if n.at_block_edge(false, w, cx) {
+                    cx.stop_propagation();
+                    n.cross_block(false, w, cx);
+                }
+            }))
+            .capture_action(cx.listener(|n, _: &gpui_kit::component::input::MoveDown, w, cx| {
+                if n.at_block_edge(true, w, cx) {
+                    cx.stop_propagation();
+                    n.cross_block(true, w, cx);
+                }
+            }))
+            .capture_action(cx.listener(|n, _: &super::main_window::Dismiss, w, cx| n.leave_block(w, cx)))
+            .capture_action(cx.listener(|n, _: &gpui_kit::component::input::Escape, w, cx| n.leave_block(w, cx)))
             .capture_key_down(cx.listener(|n, e: &KeyDownEvent, w, cx| {
-                if n.live.is_none() {
-                    return;
-                }
-                let key = e.keystroke.key.as_str();
-                let plain = !e.keystroke.modifiers.platform && !e.keystroke.modifiers.control && !e.keystroke.modifiers.shift && !e.keystroke.modifiers.alt;
-                if !plain {
-                    return;
-                }
-                let (value, range) = {
-                    let b = n.block.read(cx);
-                    (b.value().to_string(), b.selected_range())
-                };
-                match key {
-                    "up" if range.is_empty() && !value[..range.start].contains('\n') && n.block.read(cx).completion_menu_state().open.eq(&false) => {
-                        cx.stop_propagation();
-                        n.cross_block(false, w, cx);
-                    }
-                    "down" if range.is_empty() && !value[range.start..].contains('\n') && n.block.read(cx).completion_menu_state().open.eq(&false) => {
-                        cx.stop_propagation();
-                        n.cross_block(true, w, cx);
-                    }
-                    "backspace" if range == (0..0) => {
-                        cx.stop_propagation();
-                        n.join_up(w, cx);
-                    }
-                    "escape" if n.block.read(cx).completion_menu_state().open.eq(&false) => {
-                        cx.stop_propagation();
-                        n.finish_block(cx);
-                        w.focus(&n.focus, cx);
-                    }
-                    _ => {}
+                let m = &e.keystroke.modifiers;
+                if n.live.is_some() && e.keystroke.key == "backspace" && !m.platform && !m.control && !m.shift && !m.alt && n.block.read(cx).selected_range() == (0..0) {
+                    cx.stop_propagation();
+                    n.join_up(w, cx);
                 }
             }))
             .child(field)
@@ -1150,6 +1250,9 @@ impl Render for NoteView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if std::mem::take(&mut self.needs_focus) {
             self.activate(window, cx);
+        }
+        if !std::mem::replace(&mut self.took_over, true) && state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.dirty)) {
+            self.schedule_autosave(cx);
         }
         let t = Theme::get(cx);
         let lib = state::lib(cx);

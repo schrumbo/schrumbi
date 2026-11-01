@@ -291,6 +291,8 @@ pub struct Library {
     pub focus_document: bool,
     /// Opens the next document without moving the keyboard to it.
     pub quiet_open: bool,
+    /// Asks the shown note to switch between reading and writing, when the keyboard is elsewhere.
+    pub toggle_mode: bool,
     pub show_sync_setup: bool,
     pub show_conflicts: bool,
     /// The toast asked to take back the last conflict resolution.
@@ -373,6 +375,7 @@ impl Library {
             focus_explorer: false,
             focus_document: false,
             quiet_open: false,
+            toggle_mode: false,
             back_routes: Vec::new(),
             forward_routes: Vec::new(),
             toast_hovered: false,
@@ -1317,7 +1320,11 @@ impl Library {
 
     /// Whether a route can still be shown; closed documents drop out of the history.
     fn route_exists(&self, r: &Route) -> bool {
-        !matches!(r, Route::Doc(p) if !self.open_documents.contains(p))
+        match r {
+            Route::Doc(p) => self.open_documents.contains(p),
+            Route::Notes => self.open_documents.is_empty(),
+            _ => true,
+        }
     }
 
     pub fn can_go_back(&self) -> bool {

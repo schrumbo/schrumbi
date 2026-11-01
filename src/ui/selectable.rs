@@ -280,6 +280,7 @@ impl Element for SelectableStyled {
                     cx.stop_propagation();
                     crate::core::library::LINK_IN_NEW_TAB.store(e.modifiers.platform || e.modifiers.control, std::sync::atomic::Ordering::Relaxed);
                     action(cx);
+                    super::link_card::hide(cx);
                     crate::core::library::LINK_IN_NEW_TAB.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
             }

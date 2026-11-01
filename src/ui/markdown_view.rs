@@ -922,6 +922,20 @@ pub type BlockClick = Rc<dyn Fn(usize, &str, usize, &mut Window, &mut App)>;
 /// The foldable things whose state differs from how the note starts.
 pub type Folds = Rc<RefCell<std::collections::HashSet<String>>>;
 
+thread_local! {
+    static CONTROL_PRESSED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Remembers that a press landed on a control inside a block, so the block does not open for it.
+fn press_control() {
+    CONTROL_PRESSED.with(|c| c.set(true));
+}
+
+/// Whether the press now ending landed on a control; asking ends it.
+pub fn take_control_press() -> bool {
+    CONTROL_PRESSED.with(Cell::take)
+}
+
 /// Flips one fold.
 fn toggle_fold(folds: &Folds, key: &str) {
     let mut set = folds.borrow_mut();
@@ -942,6 +956,8 @@ struct Ctx<'a> {
     links_seen: &'a Cell<usize>,
     /// The top-level block being drawn.
     block: usize,
+    /// Drawing the head of a foldable block, where a click folds instead of opening.
+    head_text: Cell<bool>,
 }
 
 /// Whether an image is small enough to stand in a line of text.
@@ -986,11 +1002,14 @@ fn linked_image(src: &str, alt: &str, target: Option<&str>, cx: &Ctx) -> AnyElem
     let order = cx.order.get();
     cx.order.set(order + 1);
     let action = link_action(target, cx.base);
-    div().id(("md-image-link", order)).cursor_pointer().on_click(move |_, _, cx| action(cx)).child(shown).into_any_element()
+    div().id(("md-image-link", order)).cursor_pointer().capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| action(cx)).child(shown).into_any_element()
 }
 
 /// What a plain click on text in this block should do.
 fn text_click_of(cx: &Ctx) -> Option<super::selectable::TextClick> {
+    if cx.head_text.get() {
+        return None;
+    }
     let (click, block) = (cx.focus.and_then(|f| f.text_click.clone())?, cx.block);
     Some(Rc::new(move |text, at, window, app| click(block, text, at, window, app)))
 }
@@ -1286,7 +1305,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
     let note = embedded_note(&path, target);
     let mut chain = cx.chain.clone();
     chain.push(path.clone());
-    let inner = Ctx { t, base: path.parent(), on_toggle: None, footnote_order: &note.footnote_order, order: cx.order, chain, focus: None, links_seen: cx.links_seen, block: cx.block };
+    let inner = Ctx { t, base: path.parent(), on_toggle: None, footnote_order: &note.footnote_order, order: cx.order, chain, focus: None, links_seen: cx.links_seen, block: cx.block, head_text: Cell::new(false) };
     let blocks = render_blocks(&note.blocks, &inner);
     div()
         .flex()
@@ -1335,7 +1354,7 @@ fn image_at(p: PathBuf, alt: &str, cx: &Ctx) -> AnyElement {
         let order = cx.order.get();
         cx.order.set(order + 1);
         let open = p.clone();
-        div().id(("md-image", order)).cursor_pointer().on_click(move |_, _, cx| super::preview::show(&open, cx)).child(img(p).when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL))).into_any_element()
+        div().id(("md-image", order)).cursor_pointer().capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| super::preview::show(&open, cx)).child(img(p).when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL))).into_any_element()
     }
 }
 
@@ -1404,6 +1423,7 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
         .child(
             div()
                 .id(("md-code-copy", order))
+                .capture_any_mouse_down(|_, _, _| press_control())
                 .absolute()
                 .top(px(space::S))
                 .right(px(space::S))
@@ -1417,7 +1437,10 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
                 .invisible()
                 .group_hover(group, |s| s.visible())
                 .tooltip(super::widgets::tip(tr("Code kopieren")))
-                .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copied.clone())))
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
+                })
                 .child(super::widgets::icon("copy", iconsize::S, t.secondary)),
         )
         .into_any_element()
@@ -1456,7 +1479,12 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
             Block::Callout(head, title, inner) => {
                 let order = cx.order.get();
                 cx.order.set(order + 1);
-                let shown = (!plain_text(title).trim().is_empty() || title.iter().any(|i| matches!(i, Inline::Link(..) | Inline::Math(_)))).then(|| styled_text(title, cx, font::CALLOUT));
+                let shown = (!plain_text(title).trim().is_empty() || title.iter().any(|i| matches!(i, Inline::Link(..) | Inline::Math(_)))).then(|| {
+                    cx.head_text.set(true);
+                    let drawn = styled_text(title, cx, font::CALLOUT);
+                    cx.head_text.set(false);
+                    drawn
+                });
                 let key = format!("c{order}");
                 Callout { head: head.clone(), title: shown, content: render_blocks(inner, cx), id: ElementId::from(("md-callout", order)), tint: callout_tint(head, t), secondary: t.secondary, folds: cx.focus.map(|f| (f.folds.clone(), key)) }.into_any_element()
             }
@@ -1480,13 +1508,15 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                             .items_center()
                             .gap(px(space::XS))
                             .cursor_pointer()
+                            .capture_any_mouse_down(|_, _, _| press_control())
                             .font_weight(FontWeight::MEDIUM)
                             .child(super::motion::chevron(("md-details-chevron", order), is_open, t.secondary))
                             .child(styled_text(summary, cx, font::BODY))
-                            .on_click(move |_, window, _| {
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
                                 if let Some(f) = &folds {
                                     toggle_fold(f, &toggle_key);
-                                    window.refresh();
+                                    cx.refresh_windows();
                                 }
                             }),
                     )
@@ -1506,6 +1536,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                             let toggle = cx.on_toggle.clone();
                             div()
                                 .id(SharedString::from(format!("task-{line}")))
+                .capture_any_mouse_down(|_, _, _| press_control())
                                 .mt(px(space::XS))
                                 .ml(px(space::XXS))
                                 .size(px(14.))
@@ -1520,6 +1551,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                                 .when(toggle.is_some(), |d| d.cursor_pointer())
                                 .when(done, |d| d.child(super::widgets::icon("check", iconsize::XS, white())))
                                 .on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
                                     if let Some(f) = &toggle {
                                         f(line, cx);
                                     }
@@ -1547,6 +1579,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                         let line = item.line;
                         div()
                             .id(("md-list-fold", line))
+                .capture_any_mouse_down(|_, _, _| press_control())
                             .absolute()
                             .top(px(space::XS))
                             .left(px(-16.))
@@ -1555,10 +1588,11 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .on_click(move |_, window, _| {
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
                                 if let Some(f) = &folds {
                                     toggle_fold(f, &fold_key);
-                                    window.refresh();
+                                    cx.refresh_windows();
                                 }
                             })
                             .child(super::motion::chevron(("md-list-chevron", line), !folded, t.tertiary))
@@ -1701,10 +1735,11 @@ impl RenderOnce for Callout {
             .child(super::widgets::icon(self.head.kind.icon(), iconsize::S, tint))
             .child(div().flex_1().min_w_0().child(title))
             .when(foldable, |d| {
-                d.child(super::motion::chevron(chevron_id, is_open, self.secondary)).cursor_pointer().on_click(move |_, window, _| {
+                d.child(super::motion::chevron(chevron_id, is_open, self.secondary)).cursor_pointer().capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| {
+                    cx.stop_propagation();
                     if let Some((f, key)) = &folds {
                         toggle_fold(f, key);
-                        window.refresh();
+                        cx.refresh_windows();
                     }
                 })
             });
@@ -1715,7 +1750,7 @@ impl RenderOnce for Callout {
 
 /// One quiet line of a note's properties; opens to all of them.
 fn properties_row(props: &[frontmatter::Property], cx: &Ctx) -> AnyElement {
-    let visible: Vec<&frontmatter::Property> = props.iter().filter(|p| p.name != "title").collect();
+    let visible: Vec<&frontmatter::Property> = props.iter().collect();
     if visible.is_empty() {
         return div().hidden().into_any_element();
     }
@@ -1810,7 +1845,7 @@ pub struct Found {
 /// Renders a parsed note; task boxes call `on_toggle` with their source line.
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
     let (order, links_seen) = (Cell::new(0), Cell::new(0));
-    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0 };
+    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false) };
     div().flex().flex_col().gap(px(space::M)).children(render_blocks(&note.blocks, &cx)).children(render_footnotes(note, None, t))
 }
 
@@ -1846,7 +1881,7 @@ pub fn render_block(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle:
     let Some(block) = note.blocks.get(i) else { return div().into_any_element() };
     let order = Cell::new((i as u64 + 1) * 100_000);
     let links_seen = Cell::new(note.links.iter().take_while(|(_, top)| *top < i).count());
-    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: i };
+    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: i, head_text: Cell::new(false) };
     let element = render_blocks(std::slice::from_ref(block), &cx).into_iter().next().unwrap_or_else(|| div().into_any_element());
     let element = match (block, focus) {
         (Block::Heading(..), Some(focus)) => {
@@ -1861,6 +1896,7 @@ pub fn render_block(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle:
                 .child(
                     div()
                         .id(("md-fold", i))
+                .capture_any_mouse_down(|_, _, _| press_control())
                         .absolute()
                         .top(px(space::S))
                         .left(px(-20.))
@@ -1870,9 +1906,10 @@ pub fn render_block(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle:
                         .justify_center()
                         .cursor_pointer()
                         .when(is_open, |d| d.invisible().group_hover(group, |s| s.visible()))
-                        .on_click(move |_, window, _| {
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
                             toggle_fold(&folds, &key);
-                            window.refresh();
+                            cx.refresh_windows();
                         })
                         .child(super::motion::chevron(("md-fold-chevron", i), is_open, t.secondary)),
                 )
@@ -1899,7 +1936,7 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<ListState>, t: &Theme) -
         return None;
     }
     let (order, links_seen) = (Cell::new(u64::MAX / 2), Cell::new(0));
-    let cx = Ctx { t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0 };
+    let cx = Ctx { t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false) };
     let rows = used.iter().enumerate().map(|(i, (id, blocks))| {
         let home = note.footnote_homes.get(id).copied().unwrap_or(0);
         let list = list.clone();

@@ -703,6 +703,7 @@ fn mini_graph(path: &Path, vault: &index::VaultIndex, t: &Theme) -> Option<AnyEl
     Some(
         div()
             .relative()
+            .flex_none()
             .w(px(width))
             .h(px(height))
             .mx_auto()

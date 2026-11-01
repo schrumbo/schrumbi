@@ -409,8 +409,9 @@ fn graph_card(path: &std::path::Path, t: &Theme, kept: &mut Option<(std::path::P
         Some((known, note)) if known == path => note.clone(),
         _ => {
             let text = std::fs::read_to_string(path).unwrap_or_default();
-            let cut = text.char_indices().nth(4000).map_or(text.len(), |(i, _)| i);
-            let note = std::rc::Rc::new(super::markdown_view::parse(&text[..cut]));
+            let body = &text[crate::core::vault::frontmatter::body_offset(&text).min(text.len())..];
+            let cut = body.char_indices().nth(4000).map_or(body.len(), |(i, _)| i);
+            let note = std::rc::Rc::new(super::markdown_view::parse(&body[..cut]));
             *kept = Some((path.to_path_buf(), note.clone()));
             note
         }
