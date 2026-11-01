@@ -42,17 +42,18 @@ cmd="${1:-help}"
 [ $# -gt 0 ] && shift
 case "$cmd" in
   start)
-    profile=perf; extra=(); notes=60
+    profile=perf; extra=(); notes=60; build=1
     while [ $# -gt 0 ]; do
       case "$1" in
         --debug) profile=dev ;;
+        --no-build) build=0 ;;
         --light) extra+=(-NSRequiresAquaSystemAppearance YES) ;;
         --notes) notes="$2"; shift ;;
       esac
       shift
     done
     stop
-    (cd "$ROOT" && cargo build --profile "$profile") || exit 1
+    [ "$build" = 0 ] || (cd "$ROOT" && cargo build --profile "$profile") || exit 1
     dir=$profile; [ "$profile" = dev ] && dir=debug
     rm -rf "$WORK/home" "$WORK/data"
     mkdir -p "$WORK/home"
@@ -102,7 +103,7 @@ case "$cmd" in
   log) tail -"${1:-40}" "$WORK/log" ;;
   *)
     cat <<'EOF'
-app start [--debug] [--light] [--notes N]
+app start [--debug] [--no-build] [--light] [--notes N]
                                   build (perf profile), fresh scratch data, one window
 app perf begin                    start measuring; then drive the app
 app perf end <scenario>           frames, p50, p95, max, over budget, CPU, memory, last result
@@ -118,6 +119,7 @@ app wheel <x> <y> <steps> [mods]
 app list                          window id x y w h title
 app log [lines]
 Coordinates are points inside the window. Input is refused unless the app is frontmost.
+Screenshots are 1500 px wide: point = pixel * window width / 1500 (app list gives the width).
 EOF
     ;;
 esac
