@@ -96,6 +96,11 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&go, tr("Leistungen"), "award", Some(fixed_keys("3")), Run::Action(Box::new(app::GoRecord)));
         add(&go, tr("Inbox"), "inbox", Some(fixed_keys("4")), Run::Action(Box::new(app::GoInbox)));
         add(&go, tr("Karten"), "layers", Some(fixed_keys("6")), Run::Action(Box::new(app::GoCards)));
+        add(&go, tr("Aus Anki importieren…"), "download", None, Run::Call(Rc::new(|cx| {
+            if let Some(window) = cx.active_window() {
+                let _ = window.update(cx, |_, window, cx| super::cards_page::choose_import(window, cx));
+            }
+        })));
         add(&go, tr("Notizen"), "book-open", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_notes()))));
         add(&go, tr("Aufräumen"), "list-checks", Some(fixed_keys("5")), Run::Action(Box::new(app::GoChecks)));
         add(&go, S::SearchFiles.label(), "search", keys(S::SearchFiles), Run::Action(Box::new(app::SearchFiles)));

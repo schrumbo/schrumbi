@@ -49,6 +49,7 @@ typst-svg = "0.15.1"
 mitex = "0.2.4"
 mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 resvg = { version = "0.45.1", default-features = false }
+ruzstd = "0.8"
 rodio = "0.23"
 lsp-types = { version = "0.97", features = ["proposed"] }
 ropey = "=2.0.0-beta.1"

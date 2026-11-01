@@ -14,7 +14,7 @@ use gpui_kit::*;
 use super::markdown_view::{self, ParsedNote};
 use super::motion::{Soft, chevron};
 use super::state::{self, act};
-use super::theme::{Theme, control, font, iconsize, note_size, radius, space};
+use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::cards::fsrs::{self, Rating};
 use crate::core::cards::{self, Card, CardKind, Counts, Phase};
@@ -316,6 +316,7 @@ impl CardsPage {
     fn set_aside(&mut self, suspend: bool, cx: &mut Context<Self>) {
         let Some(s) = &mut self.session else { return };
         let Some(card) = s.current.clone() else { return };
+        s.answered.push(cards::before_change(&card));
         if suspend {
             cards::set_suspended(&card, true);
         } else {
@@ -352,7 +353,13 @@ impl CardsPage {
         {
             return rows.clone();
         }
-        let mut rows: Vec<usize> = self.all.iter().enumerate().filter(|(_, c)| c.in_deck(&self.deck) && self.filter.keeps(c, now) && (query.is_empty() || fold(&c.raw.front).contains(&query) || fold(&c.raw.back).contains(&query))).map(|(i, _)| i).collect();
+        let vault = index::current();
+        let tag = query.strip_prefix('#').map(str::to_string);
+        let fits = |c: &Card| match &tag {
+            Some(tag) => vault.notes.get(&c.note).is_some_and(|f| f.tags.iter().any(|t| fold(t).starts_with(tag.as_str()))),
+            None => query.is_empty() || fold(&c.raw.front).contains(&query) || fold(&c.raw.back).contains(&query),
+        };
+        let mut rows: Vec<usize> = self.all.iter().enumerate().filter(|(_, c)| c.in_deck(&self.deck) && self.filter.keeps(c, now) && fits(c)).map(|(i, _)| i).collect();
         match self.order {
             Order::Note => {}
             Order::Due => rows.sort_by_key(|i| self.all[*i].state.as_ref().filter(|s| s.phase != Phase::New).map_or(i64::MAX, |s| s.due)),
@@ -372,7 +379,7 @@ impl CardsPage {
         }
         let key = e.keystroke.key.as_str();
         let m = &e.keystroke.modifiers;
-        if m.platform || m.control || m.alt {
+        if m.platform || m.control || m.alt || (e.is_held && self.session.is_some()) {
             return;
         }
         if self.session.is_some() {
@@ -420,6 +427,23 @@ impl CardsPage {
                 self.compose(card, window, cx);
             }
             "n" => self.compose(None, window, cx),
+            "i" => choose_import(window, cx),
+            "e" | "s" | "backspace" if self.selected.is_some() => {
+                let Some(card) = self.selected.as_ref().and_then(|id| self.all.iter().find(|c| c.id() == id)).cloned() else { return };
+                match key {
+                    "e" => self.compose(Some(card), window, cx),
+                    "s" => {
+                        cards::set_suspended(&card, !card.suspended());
+                        state::lib(cx).update(cx, |_, cx| cx.notify());
+                    }
+                    _ => {
+                        delete_card(&card, cx);
+                        self.selected = None;
+                        self.preview = None;
+                    }
+                }
+                cx.notify();
+            }
             "/" => self.query.update(cx, |q, cx| q.focus(window, cx)),
             "escape" if self.selected.is_some() => {
                 self.selected = None;
@@ -637,7 +661,13 @@ impl CardsPage {
                     .child(divider(t))
                     .child(example("Der {{c1::Satz}} gilt", tr("Lückentext"))),
             )
-            .child(Button::new("cards-first").primary().label(tr("Erste Karte schreiben")).on_click(cx.listener(|p, _, window, cx| p.compose(None, window, cx))))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(space::S))
+                    .child(Button::new("cards-import-first").icon(menu_icon("download")).label(tr("Aus Anki importieren…")).on_click(|_, window, cx| choose_import(window, cx)))
+                    .child(Button::new("cards-first").primary().label(tr("Erste Karte schreiben")).on_click(cx.listener(|p, _, window, cx| p.compose(None, window, cx)))),
+            )
             .into_any_element()
     }
 
@@ -794,6 +824,14 @@ impl CardsPage {
         } else {
             tr("Alles gelernt.")
         };
+        let exam = state::read(cx, |l| {
+            let module = l.config.as_ref()?.modules.iter().find(|m| m.folder == deck)?.id.clone();
+            l.semester_assignments().iter().filter(|a| a.module_id == module && a.kind == crate::core::model::Kind::Exam && a.due.timestamp() > now).map(|a| a.due.timestamp()).min()
+        });
+        let status = match exam {
+            Some(at) => format!("{status} · {}", trf("Prüfung in %@", &[&cards::wait_label(now, at)])),
+            None => status,
+        };
         let (start_deck, cram_deck) = (deck.clone(), deck.clone());
         let head = div()
             .flex_none()
@@ -801,7 +839,18 @@ impl CardsPage {
             .items_center()
             .gap(px(space::M))
             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).truncate().child(title)).child(div().text_color(t.secondary).truncate().child(status)))
-            .child(Button::new("cards-cram").ghost().icon(menu_icon("repeat")).tooltip(tr("Wiederholt alle Karten, ohne die Planung zu ändern. Gut vor Prüfungen.")).disabled(stats.total == 0).on_click(cx.listener(move |p, _, window, cx| p.start_cram(cram_deck.clone(), window, cx))))
+            .child(Button::new("cards-more").ghost().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu({
+                let me = cx.entity();
+                move |menu, _, _| {
+                    let (e, deck) = (me.clone(), cram_deck.clone());
+                    menu.item(PopupMenuItem::new(tr("Alles wiederholen")).icon(menu_icon("repeat")).on_click(move |_, window, cx| {
+                        let deck = deck.clone();
+                        e.update(cx, |p, cx| p.start_cram(deck, window, cx));
+                    }))
+                    .separator()
+                    .item(PopupMenuItem::new(tr("Aus Anki importieren…")).icon(menu_icon("download")).on_click(|_, window, cx| choose_import(window, cx)))
+                }
+            }))
             .child(Button::new("cards-new").icon(menu_icon("plus")).label(tr("Neue Karte")).tooltip(tr("Neue Karte (N)")).on_click(cx.listener(|p, _, window, cx| p.compose(None, window, cx))))
             .child(Button::new("cards-learn").primary().icon(menu_icon("graduation-cap")).label(if total > 0 { trf("Lernen (%@)", &[&total.to_string()]) } else { tr("Lernen") }).tooltip(tr("Lernen (Leertaste)")).disabled(total == 0).on_click(cx.listener(move |p, _, window, cx| p.start(start_deck.clone(), window, cx))));
         let retention = stats.true_retention.map_or_else(|| "–".to_string(), |r| format!("{:.0} %", r * 100.));
@@ -871,6 +920,8 @@ impl CardsPage {
         let bar = div().w(px(360.)).h(px(space::S)).rounded_full().overflow_hidden().flex().children(s.ratings.iter().enumerate().filter(|(_, n)| **n > 0).map(|(i, n)| div().h_full().w(relative(*n as f32 / total)).bg(colors[i])));
         let legend = div().flex().gap(px(space::L)).children(Rating::ALL.iter().enumerate().map(|(i, rating)| div().flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).child(div().size(px(space::S)).rounded_full().bg(colors[i])).child(rating_name(*rating)).child(div().text_color(t.secondary).font_features(tabular()).child(s.ratings[i].to_string()))));
         let can_undo = !s.answered.is_empty();
+        let more = if s.cram.is_none() { cards::new_waiting(&deck, now) } else { 0 };
+        let more_deck = deck.clone();
         div()
             .size_full()
             .flex()
@@ -888,6 +939,13 @@ impl CardsPage {
                     .flex()
                     .gap(px(space::S))
                     .when(can_undo, |d| d.child(Button::new("cards-undo-last").icon(menu_icon("undo-2")).label(tr("Letzte Antwort zurück")).on_click(cx.listener(|p, _, _, cx| p.undo(cx)))))
+                    .when(more > 0, |d| {
+                        d.child(Button::new("cards-more-new").icon(menu_icon("plus")).label(trf("%@ neue mehr", &[&more.min(10).to_string()])).tooltip(tr("Heute mehr neue Karten als das Tageslimit")).on_click(cx.listener(move |p, _, window, cx| {
+                            cards::allow_more_new(more.min(10), cards::now());
+                            let deck = more_deck.clone();
+                            p.start(deck, window, cx);
+                        })))
+                    })
                     .child(Button::new("cards-done").primary().label(tr("Fertig")).on_click(cx.listener(|p, _, _, cx| {
                         p.session = None;
                         p.cached = None;
@@ -905,8 +963,8 @@ impl CardsPage {
         let phase = card.phase();
         let now = cards::now();
         let base = card.note.parent().map(Path::to_path_buf);
-        let front = markdown_view::render(&s.front, base.as_deref(), None, t);
-        let back = s.shown.then(|| markdown_view::render(&s.back, base.as_deref(), None, t));
+        let front = super::theme::with_note_scale(1.3, || markdown_view::render(&s.front, base.as_deref(), None, t));
+        let back = s.shown.then(|| super::theme::with_note_scale(1.3, || markdown_view::render(&s.back, base.as_deref(), None, t)));
         let shown = s.shown;
         let can_undo = !s.answered.is_empty();
         let count_piece = |n: usize, color: Hsla, on: bool, label: String| div().px(px(space::S)).h(px(control::S)).flex().items_center().rounded(px(radius::INNER)).when(on, |d| d.bg(color.opacity(0.16))).text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).font_features(tabular()).text_color(color).child(format!("{n} {label}"));
@@ -951,7 +1009,7 @@ impl CardsPage {
             .min_h_0()
             .overflow_y_scrollbar()
             .child(
-                div().w_full().min_h_full().flex().flex_col().items_center().justify_center().p(px(space::XL)).child(
+                div().w_full().flex().flex_col().items_center().px(px(space::XL)).pt(px(space::XXL * 2.)).pb(px(space::XL)).child(
                     div()
                         .w_full()
                         .max_w(px(720. * super::theme::note_scale()))
@@ -960,7 +1018,7 @@ impl CardsPage {
                         .gap(px(space::L))
                         .children(leech)
                         .children(crumbs)
-                        .child(div().text_size(px(note_size(font::TITLE3))).child(front))
+                        .child(front)
                         .when_some(back, |d, back| d.child(div().h(px(1.)).bg(t.separator)).child(back)),
                 ),
             );
@@ -991,14 +1049,14 @@ impl CardsPage {
                         .gap(px(space::XXS))
                         .rounded(px(radius::CONTROL))
                         .border_1()
-                        .border_color(color.opacity(0.45))
-                        .bg(color.opacity(0.08))
+                        .border_color(color.opacity(if rating == Rating::Good { 0.9 } else { 0.4 }))
+                        .bg(color.opacity(if rating == Rating::Good { 0.16 } else { 0.07 }))
                         .cursor_pointer()
                         .key_nav()
                         .hover(move |d| d.bg(hover))
                         .active(move |d| d.bg(color.opacity(0.26)))
                         .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child(if cramming { String::new() } else { cards::wait_label(now, choices[i].due) }))
-                        .child(div().flex().items_baseline().gap(px(space::XS)).child(div().font_weight(FontWeight::SEMIBOLD).text_color(t.readable(color)).child(rating_name(rating))).child(div().text_size(px(font::CAPTION2)).text_color(t.tertiary).child((i + 1).to_string())))
+                        .child(div().flex().items_baseline().gap(px(space::XS)).child(div().font_weight(FontWeight::SEMIBOLD).text_color(t.readable(color)).child(rating_name(rating))).child(div().text_size(px(font::CAPTION2)).text_color(t.tertiary).child(if rating == Rating::Good { format!("{} · {}", i + 1, tr("Leertaste")) } else { (i + 1).to_string() })))
                         .on_click(cx.listener(move |p, _, _, cx| p.rate(rating, cx)))
                 }))
                 .into_any_element()
@@ -1068,6 +1126,20 @@ impl Render for CardsPage {
                 self.start(request, window, cx);
             }
         }
+        if let Some(s) = &mut self.session
+            && s.cram.is_none()
+            && let Some(current) = s.current.clone()
+        {
+            match self.all.iter().find(|c| c.id() == current.id()) {
+                Some(found) if found.raw != current.raw => {
+                    s.front = parsed(&found.raw.front);
+                    s.back = parsed(&found.raw.back);
+                    s.current = Some(found.clone());
+                }
+                Some(_) => {}
+                None => Self::advance(s, None),
+            }
+        }
         if self.session.as_ref().is_none() && !self.deck.is_empty() && !self.all.iter().any(|c| c.in_deck(&self.deck)) {
             self.deck.clear();
         }
@@ -1082,6 +1154,7 @@ impl Render for CardsPage {
             self.overview(now, width > 1260., &t, cx)
         };
         let side = (!reviewing && !self.all.is_empty() && width > 860.).then(|| self.deck_column(now, &t, cx));
+        let accent = t.accent;
         div()
             .id("cards-page")
             .track_focus(&self.focus)
@@ -1090,6 +1163,12 @@ impl Render for CardsPage {
             .flex()
             .bg(t.content)
             .on_key_down(cx.listener(Self::on_key))
+            .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(accent.opacity(0.06)))
+            .on_drop(cx.listener(|_, paths: &ExternalPaths, window, cx| {
+                if let Some(path) = paths.paths().iter().find(|p| p.extension().is_some_and(|e| matches!(e.to_string_lossy().to_lowercase().as_str(), "apkg" | "colpkg" | "txt" | "tsv" | "csv"))) {
+                    open_import(path.clone(), window, cx);
+                }
+            }))
             .capture_action(cx.listener(|p, _: &super::app::Undo, _, cx| {
                 if p.session.as_ref().is_some_and(|s| !s.answered.is_empty()) {
                     cx.stop_propagation();
@@ -1104,6 +1183,10 @@ impl Render for CardsPage {
             .children(side)
             .child(div().flex_1().min_w_0().h_full().child(body))
     }
+}
+
+thread_local! {
+    static DRAFT: std::cell::RefCell<Option<(String, String, ComposeKind)>> = const { std::cell::RefCell::new(None) };
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1176,6 +1259,12 @@ impl CardComposer {
         if let Some((text, note)) = draft {
             target = note;
             front.update(cx, |s, cx| s.set_value(text, window, cx));
+        } else if editing.is_none()
+            && let Some((f, b, k)) = DRAFT.with(|d| d.borrow_mut().take())
+        {
+            kind = k;
+            front.update(cx, |s, cx| s.set_value(f, window, cx));
+            back.update(cx, |s, cx| s.set_value(b, window, cx));
         }
         let subs = vec![
             cx.subscribe(&front, |this, _, e: &InputEvent, cx| {
@@ -1244,17 +1333,31 @@ impl CardComposer {
         let target = self.target.clone();
         if let Some(card) = self.editing.clone() {
             let (first, last) = card.raw.lines;
+            let moved = target != card.note;
             let replacement = written.clone();
             let saved = act(cx, |l| {
-                l.edit_note(&card.note, "card", tr("Karte geändert"), |text| {
+                l.edit_note(&card.note, "card", if moved { tr("Karte verschoben") } else { tr("Karte geändert") }, |text| {
                     let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
                     let end = (last + 1).min(lines.len());
                     if first < end {
-                        lines.splice(first..end, replacement.split('\n').map(str::to_string));
+                        lines.splice(first..end, if moved { Vec::new() } else { replacement.split('\n').map(str::to_string).collect() });
                     }
                     lines.join("\n")
                 })
             });
+            if moved && saved {
+                if !target.exists() {
+                    let _ = target.parent().map(std::fs::create_dir_all);
+                    let _ = std::fs::write(&target, "");
+                }
+                let line = written.clone();
+                act(cx, |l| {
+                    l.edit_note(&target, "card", tr("Karte verschoben"), |text| {
+                        let joined = if text.is_empty() || text.ends_with("\n\n") { text.to_string() } else if text.ends_with('\n') { format!("{text}\n") } else { format!("{text}\n\n") };
+                        format!("{joined}{line}\n")
+                    })
+                });
+            }
             if saved {
                 let new = crate::core::cards::parse::cards_in(&written);
                 let same_kind = new.iter().find(|c| c.kind == card.raw.kind).or(new.first());
@@ -1286,6 +1389,7 @@ impl CardComposer {
                 crate::core::prefs::update(|p| p.card_target = Some(rel));
             }
             self.added += 1;
+            DRAFT.with(|d| d.borrow_mut().take());
             state::reindex(cx);
             self.front.update(cx, |s, cx| {
                 s.set_value("", window, cx);
@@ -1296,8 +1400,35 @@ impl CardComposer {
         }
     }
 
+    /// Closing never loses what was typed: an unsaved new card comes back next time.
     fn close(&mut self, cx: &mut Context<Self>) {
+        if self.editing.is_none() {
+            let (f, b) = (self.front.read(cx).value().to_string(), self.back.read(cx).value().to_string());
+            if !f.trim().is_empty() || !b.trim().is_empty() {
+                let kind = self.kind;
+                DRAFT.with(|d| *d.borrow_mut() = Some((f, b, kind)));
+            }
+        }
         cx.emit(super::quick::Dismissed);
+    }
+
+    /// Why the card cannot be saved yet, or what to know before saving it.
+    fn notice(&self, cx: &App) -> Option<String> {
+        let written = self.written(cx);
+        if self.front.read(cx).value().trim().is_empty() {
+            return None;
+        }
+        let found = crate::core::cards::parse::cards_in(&written);
+        if found.is_empty() {
+            return Some(match self.kind {
+                ComposeKind::Cloze => tr("Markiere ein Wort und drück „Lücke“."),
+                _ if self.back.read(cx).value().trim().is_empty() => tr("Die Rückseite fehlt noch."),
+                _ => tr("Das ergibt keine Karte."),
+            });
+        }
+        let editing = self.editing.as_ref().map(|c| c.id().to_string());
+        let same = cards::all_cards().iter().find(|c| found.iter().any(|f| f.id == c.id()) && Some(c.id()) != editing.as_deref()).map(|c| c.note_rel.clone());
+        same.map(|note| trf("Diese Frage gibt es schon in %@. Der Fortschritt beider wäre derselbe.", &[&note.trim_end_matches(".md").to_string()]))
     }
 }
 
@@ -1324,11 +1455,17 @@ impl Render for CardComposer {
         let target_name = self.target.strip_prefix(&root).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
         let mut notes: Vec<PathBuf> = cards::all_cards().iter().map(|c| c.note.clone()).collect();
         notes.dedup();
+        let in_modules: Vec<PathBuf> = state::read(cx, |l| l.config.as_ref().map(|c| c.modules.iter().map(|m| root.join(&m.folder).join(format!("{}.md", tr("Karteikarten")))).collect()).unwrap_or_default());
+        for note in in_modules {
+            if !notes.contains(&note) {
+                notes.push(note);
+            }
+        }
         notes.retain(|n| *n != self.target);
-        notes.truncate(30);
+        notes.truncate(40);
         let me = cx.entity();
         let editing = self.editing.is_some();
-        let picker = Button::new("card-target").small().ghost().icon(menu_icon("file-text")).label(target_name.trim_end_matches(".md").to_string()).dropdown_caret(true).disabled(editing).dropdown_menu(move |mut menu, _, _| {
+        let picker = Button::new("card-target").small().ghost().icon(menu_icon("file-text")).label(target_name.trim_end_matches(".md").to_string()).dropdown_caret(true).tooltip(tr("Notiz, in der die Karte steht")).dropdown_menu(move |mut menu, _, _| {
             let list_root = root.clone();
             for note in &notes {
                 let (e, path) = (me.clone(), note.clone());
@@ -1353,10 +1490,13 @@ impl Render for CardComposer {
             .flex()
             .flex_col()
             .gap(px(space::S))
-            .child(div().flex().items_center().justify_between().child(field_label(if cloze { tr("Text mit Lücken") } else { tr("Vorderseite") })).child(Button::new("card-gap").ghost().small().icon(menu_icon("scan")).label(tr("Lücke")).tooltip(tr("Macht aus der Auswahl eine Lücke")).on_click(cx.listener(|c, _, window, cx| c.make_gap(window, cx)))))
+            .child(div().flex().items_center().justify_between().child(field_label(if cloze { tr("Text mit Lücken") } else { tr("Vorderseite") })).child(Button::new("card-gap").ghost().small().icon(menu_icon("scan")).label(tr("Lücke")).tooltip(tr("Macht aus der Auswahl eine Lücke (⌘⇧C)")).on_click(cx.listener(|c, _, window, cx| c.make_gap(window, cx)))))
             .child(Textarea::new(&self.front))
             .when(!cloze, |d| d.child(field_label(tr("Rückseite"))).child(Textarea::new(&self.back)))
-            .child(caption(tr("Markdown, Formeln mit $…$ und Bilder gehen überall."), &t));
+            .child(match self.notice(cx) {
+                Some(text) => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange).child(icon("triangle-alert", iconsize::XS, t.orange)).child(text),
+                None => caption(tr("Markdown, Formeln mit $…$ und Bilder gehen überall."), &t),
+            });
         let preview = div()
             .id("card-preview")
             .w(px(300.))
@@ -1386,7 +1526,10 @@ impl Render for CardComposer {
             }))
             .capture_key_down(cx.listener(|c, e: &KeyDownEvent, window, cx| {
                 let m = &e.keystroke.modifiers;
-                if e.keystroke.key == "escape" {
+                if e.keystroke.key == "c" && m.shift && (m.platform || m.control) {
+                    c.make_gap(window, cx);
+                    cx.stop_propagation();
+                } else if e.keystroke.key == "escape" {
                     c.close(cx);
                     cx.stop_propagation();
                 } else if e.keystroke.key == "tab" && !m.shift && c.front.read(cx).focus_handle(cx).is_focused(window) && c.kind != ComposeKind::Cloze {
@@ -1411,7 +1554,164 @@ impl Render for CardComposer {
                     .child(div().flex_1())
                     .when(self.added > 0, |d| d.child(caption(if self.added == 1 { tr("1 Karte angelegt") } else { trf("%@ Karten angelegt", &[&self.added.to_string()]) }, &t)))
                     .child(Button::new("card-close").label(if self.added > 0 { tr("Fertig") } else { tr("Abbrechen") }).on_click(cx.listener(|c, _, _, cx| c.close(cx))))
-                    .child(Button::new("card-save").primary().label(if editing { tr("Sichern") } else { tr("Anlegen") }).tooltip(tr("⌘↩")).disabled(!valid).on_click(cx.listener(|c, _, window, cx| c.save(window, cx)))),
+                    .child(caption("⌘↩", &t))
+                    .child(Button::new("card-save").primary().label(if editing { tr("Sichern") } else { tr("Anlegen") }).disabled(!valid).on_click(cx.listener(|c, _, window, cx| c.save(window, cx)))),
+            )
+    }
+}
+
+/// Asks for an Anki export and shows what it holds.
+pub fn choose_import(window: &mut Window, cx: &mut App) {
+    let handle = window.window_handle();
+    let options = PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some(tr("Importieren").into()) };
+    super::platform::pick(options, cx, move |paths, cx| {
+        if let Some(path) = paths.into_iter().next() {
+            let _ = handle.update(cx, |_, window, cx| open_import(path, window, cx));
+        }
+    });
+}
+
+/// Shows what an Anki export holds, before anything is written.
+pub fn open_import(path: PathBuf, window: &mut Window, cx: &mut App) {
+    super::sheets::show_sheet(560., window, cx, move |window, cx| CardImport::new(path, window, cx));
+}
+
+/// One Anki export on its way into the notes.
+pub struct CardImport {
+    path: PathBuf,
+    package: Option<cards::anki::Package>,
+    error: Option<String>,
+    working: bool,
+    keep_progress: bool,
+    folder: Entity<InputState>,
+    _load: Option<Task<()>>,
+    _enter: Subscription,
+}
+
+impl EventEmitter<super::quick::Dismissed> for CardImport {}
+
+impl CardImport {
+    fn new(path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let folder = cx.new(|cx| InputState::new(window, cx).default_value("Anki"));
+        let enter = cx.subscribe(&folder, |this: &mut Self, _, e: &InputEvent, cx| {
+            if matches!(e, InputEvent::PressEnter { .. }) && !this.working {
+                this.start(cx);
+            }
+        });
+        folder.update(cx, |f, cx| f.focus(window, cx));
+        let source = path.clone();
+        let task = cx.background_spawn(async move { cards::anki::read(&source) });
+        let load = cx.spawn(async move |this, cx| {
+            let read = task.await;
+            let _ = this.update(cx, |s, cx| {
+                match read {
+                    Ok(package) => s.package = Some(package),
+                    Err(e) => s.error = Some(e.to_string()),
+                }
+                cx.notify();
+            });
+        });
+        Self { path, package: None, error: None, working: false, keep_progress: true, folder, _load: Some(load), _enter: enter }
+    }
+
+    fn start(&mut self, cx: &mut Context<Self>) {
+        let Some(package) = self.package.take() else { return };
+        let root = index::current().root.clone();
+        let name = self.folder.read(cx).value().trim().to_string();
+        if root.as_os_str().is_empty() || name.contains("..") {
+            self.package = Some(package);
+            return;
+        }
+        let target = root.join(if name.is_empty() { "Anki" } else { &name });
+        let (keep, known) = (self.keep_progress, cards::known_ids());
+        self.working = true;
+        cx.notify();
+        let rel_root = root.clone();
+        let task = cx.background_spawn(async move { cards::anki::write(package, &target, keep, &known, |p| p.strip_prefix(&rel_root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default()) });
+        self._load = Some(cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |s, cx| {
+                s.working = false;
+                match result {
+                    Ok(done) => {
+                        cards::adopt_import(done.states, done.log);
+                        act(cx, |l| l.cards_imported(done.created, done.added, done.duplicates));
+                        state::reindex(cx);
+                        cx.emit(super::quick::Dismissed);
+                    }
+                    Err(e) => s.error = Some(e.to_string()),
+                }
+                cx.notify();
+            });
+        }));
+    }
+}
+
+impl Render for CardImport {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::get(cx);
+        let name = self.path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let body: AnyElement = if let Some(error) = &self.error {
+            div().flex().items_center().gap(px(space::S)).text_color(t.red).child(icon("triangle-alert", iconsize::S, t.red)).child(div().flex_1().child(error.clone())).into_any_element()
+        } else if let Some(package) = &self.package {
+            let decks = package.decks.len();
+            let summary = [
+                if package.cards == 1 { tr("1 Karte") } else { trf("%@ Karten", &[&package.cards.to_string()]) },
+                if decks == 1 { tr("1 Stapel") } else { trf("%@ Stapel", &[&decks.to_string()]) },
+                if package.media.len() == 1 { tr("1 Mediendatei") } else { trf("%@ Mediendateien", &[&package.media.len().to_string()]) },
+            ]
+            .join(" · ");
+            let mut list = div().flex().flex_col();
+            for (deck, notes) in package.decks.iter().take(100) {
+                list = list.child(div().flex().items_center().gap(px(space::S)).px(px(space::M)).py(px(space::XS)).child(icon("layers", iconsize::S, t.secondary)).child(div().flex_1().min_w_0().truncate().child(deck.join(" › "))).child(caption(notes.len().to_string(), &t).font_features(tabular())));
+            }
+            let (keep, with_progress) = (self.keep_progress, package.with_progress);
+            let me = cx.entity();
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(space::M))
+                .child(div().font_weight(FontWeight::MEDIUM).child(summary))
+                .child(div().id("import-decks").max_h(px(180.)).overflow_y_scrollbar().rounded(px(radius::CONTROL)).border_1().border_color(t.separator).child(list))
+                .child(div().flex().items_center().gap(px(space::M)).child(div().flex_1().child(tr("Zielordner"))).child(div().w(px(200.)).child(Input::new(&self.folder).small())))
+                .when(with_progress > 0, |d| {
+                    d.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(space::M))
+                            .child(div().flex_1().flex().flex_col().child(tr("Lernfortschritt übernehmen")).child(caption(trf("%@ Karten wurden schon gelernt. Termine und Stabilität kommen mit.", &[&with_progress.to_string()]), &t)))
+                            .child(gpui_kit::component::switch::Switch::new("import-progress").checked(keep).on_click(move |v, _, cx| {
+                                let on = *v;
+                                me.update(cx, |s, cx| {
+                                    s.keep_progress = on;
+                                    cx.notify();
+                                });
+                            })),
+                    )
+                })
+                .child(caption(tr("Die Karten landen als Text in Notizen, je Stapel eine. Doppelte werden übersprungen."), &t))
+                .into_any_element()
+        } else {
+            div().h(px(80.)).flex().items_center().justify_center().child(super::motion::loading(iconsize::L, t.secondary)).into_any_element()
+        };
+        let ready = self.package.is_some() && !self.working;
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(div().px(px(space::XL)).pt(px(space::L)).flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(tr("Aus Anki importieren"))).child(caption(name, &t).truncate()))
+            .child(div().p(px(space::XL)).child(body))
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(space::S))
+                    .p(px(space::L))
+                    .border_t_1()
+                    .border_color(t.separator)
+                    .child(Button::new("import-cancel").label(tr("Abbrechen")).on_click(cx.listener(|_, _, _, cx| cx.emit(super::quick::Dismissed))))
+                    .child(Button::new("import-start").primary().label(if self.working { tr("Importiere …") } else { tr("Importieren") }).disabled(!ready).on_click(cx.listener(|s, _, _, cx| s.start(cx)))),
             )
     }
 }

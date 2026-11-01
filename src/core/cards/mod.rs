@@ -1,4 +1,5 @@
 //! Flashcards: written in notes, scheduled by FSRS. See `parse` for the syntax, `store` for what is remembered.
+pub mod anki;
 pub mod fsrs;
 pub mod parse;
 pub mod store;

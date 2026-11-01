@@ -218,6 +218,16 @@ pub fn header(lib: &Library, m: &Module, split: bool, width: f32, st: &ModuleSta
         .gap(px(space::S))
         .child(button("module-folder", "folder", tr("Ordner"), tr("Modulordner im Finder öffnen")).on_click(move |_, _, _| library::open_folder(&f1)))
         .child(button("module-file", "inbox", tr("Ablegen"), trf("Dateien in %@ ablegen", &[&code])).on_click(move |_, _, cx| super::platform::pick_files_for_filing(next_entry.clone(), cx)))
+        .when(crate::core::cards::all_cards().iter().any(|c| c.in_deck(&m.folder)), |d| {
+            let (deck, waiting) = (m.folder.clone(), crate::core::cards::counts(&m.folder, crate::core::cards::now()).total());
+            d.child(button("module-cards", "layers", if waiting > 0 { trf("Lernen (%@)", &[&waiting.to_string()]) } else { tr("Karten") }, tr("Karten dieses Moduls")).on_click(move |_, _, cx| {
+                let deck = deck.clone();
+                act(cx, |l| {
+                    l.cards_request = Some(deck);
+                    l.set_route(library::Route::Cards);
+                })
+            }))
+        })
         .child(button("module-new", "file-plus", tr("Neue Datei"), trf("Notiz, Textdatei oder Ordner in %@ anlegen", &[&m.code])).on_click(move |_, _, cx| {
             let id = mid.clone();
             act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: Some(id), folder: None }))

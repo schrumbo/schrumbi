@@ -88,6 +88,15 @@ pub fn set_note_scale(size: f32) {
     NOTE_SCALE.store((size / font::BODY).to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Draws something at a larger note size for a moment, like the text of a flashcard.
+pub fn with_note_scale<R>(factor: f32, draw: impl FnOnce() -> R) -> R {
+    let before = NOTE_SCALE.load(std::sync::atomic::Ordering::Relaxed);
+    NOTE_SCALE.store((f32::from_bits(before) * factor).to_bits(), std::sync::atomic::Ordering::Relaxed);
+    let out = draw();
+    NOTE_SCALE.store(before, std::sync::atomic::Ordering::Relaxed);
+    out
+}
+
 /// A size from the type scale, as written in notes.
 pub fn note_size(base: f32) -> f32 {
     (base * note_scale() * 2.).round() / 2.

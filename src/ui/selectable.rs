@@ -31,7 +31,8 @@ pub struct InlineSlot {
 }
 
 pub enum InlineKind {
-    Math(String),
+    /// A formula and the note scale it is drawn at.
+    Math(String, f32),
     Sized(AnyElement, f32, f32),
 }
 
@@ -111,7 +112,7 @@ impl SelectableStyled {
         let mut tallest = px(0.);
         for slot in std::mem::take(&mut self.slots) {
             let (element, size) = match slot.kind {
-                InlineKind::Math(formula) => match super::embeds::inline_math(&formula, cx) {
+                InlineKind::Math(formula, scale) => match super::embeds::inline_math(&formula, scale, cx) {
                     Some((image, w, h)) => (Some(img(image).w(px(w)).h(px(h)).into_any_element()), size(px(w), px(h))),
                     None => (None, size(px(formula.len() as f32 * 7.), line)),
                 },

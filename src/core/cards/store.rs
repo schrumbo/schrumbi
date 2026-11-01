@@ -133,6 +133,8 @@ struct Store {
 
 static STORE: LazyLock<RwLock<Store>> = LazyLock::new(Default::default);
 static SAVED: AtomicU64 = AtomicU64::new(0);
+/// New cards allowed on top of the daily limit today, with the day it counts for.
+static EXTRA_NEW: Mutex<(Option<NaiveDate>, usize)> = Mutex::new((None, 0));
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn now() -> i64 {
@@ -432,6 +434,12 @@ pub struct Answered {
     pub id: String,
     before: Option<CardState>,
     buried: Vec<(String, Option<CardState>)>,
+    logged: bool,
+}
+
+/// Remembers a card as it is, so a change that is not an answer can be taken back too.
+pub fn before_change(card: &Card) -> Answered {
+    Answered { id: card.raw.id.clone(), before: STORE.read().unwrap().file.cards.get(&card.raw.id).cloned(), buried: Vec::new(), logged: false }
 }
 
 /// Saves an answer and puts the other cards of the same place aside until tomorrow.
@@ -459,7 +467,7 @@ pub fn answer(card: &Card, rating: Rating, at: i64) -> Answered {
         append_log(&root, &log);
     }
     save();
-    Answered { id: card.raw.id.clone(), before, buried }
+    Answered { id: card.raw.id.clone(), before, buried, logged: true }
 }
 
 /// Takes an answer back, also out of the log.
@@ -483,14 +491,16 @@ pub fn undo(answered: Answered) {
             }
         }
     }
-    if let Some(at) = store.log.iter().rposition(|l| l.card == answered.id) {
-        store.log.remove(at);
-    }
-    let rest: String = store.log.iter().filter_map(|l| serde_json::to_string(l).ok()).map(|l| l + "\n").collect();
-    if let Some(root) = store.root.clone() {
-        let (tmp, path) = (root.join(format!("{LOG_NAME}.tmp")), root.join(LOG_NAME));
-        if std::fs::write(&tmp, rest).is_ok() {
-            let _ = std::fs::rename(tmp, path);
+    if answered.logged {
+        if let Some(at) = store.log.iter().rposition(|l| l.card == answered.id) {
+            store.log.remove(at);
+        }
+        let rest: String = store.log.iter().filter_map(|l| serde_json::to_string(l).ok()).map(|l| l + "\n").collect();
+        if let Some(root) = store.root.clone() {
+            let (tmp, path) = (root.join(format!("{LOG_NAME}.tmp")), root.join(LOG_NAME));
+            if std::fs::write(&tmp, rest).is_ok() {
+                let _ = std::fs::rename(tmp, path);
+            }
         }
     }
     drop(store);
@@ -556,7 +566,8 @@ pub fn queue(deck: &str, at: i64) -> Vec<Card> {
     let cards = all_cards();
     let p = prefs::get();
     let log_counts = done_today(&STORE.read().unwrap().log, at);
-    let new_room = (p.card_new_per_day as usize).saturating_sub(log_counts.0);
+    let extra = EXTRA_NEW.lock().map_or(0, |e| if e.0 == Some(day_of(at)) { e.1 } else { 0 });
+    let new_room = (p.card_new_per_day as usize + extra).saturating_sub(log_counts.0);
     let review_room = (p.card_reviews_per_day as usize).saturating_sub(log_counts.1);
     let usable = cards.iter().filter(|c| c.in_deck(deck) && !c.suspended() && !c.buried(at));
     let mut learning: Vec<&Card> = Vec::new();
@@ -606,6 +617,21 @@ pub fn queue(deck: &str, at: i64) -> Vec<Card> {
     }
     out.extend(next_new.cloned());
     out
+}
+
+/// Lets more new cards come today than the daily limit says.
+pub fn allow_more_new(count: usize, at: i64) {
+    if let Ok(mut extra) = EXTRA_NEW.lock() {
+        let today = day_of(at);
+        *extra = (Some(today), if extra.0 == Some(today) { extra.1 + count } else { count });
+    }
+    let mut store = STORE.write().unwrap();
+    store.counts.clear();
+}
+
+/// New cards of a deck that the daily limit holds back.
+pub fn new_waiting(deck: &str, at: i64) -> usize {
+    all_cards().iter().filter(|c| c.in_deck(deck) && c.phase() == Phase::New && !c.suspended() && !c.buried(at)).count()
 }
 
 /// The counts of a deck for right now; the sidebar asks often, so they are kept for a minute.
@@ -720,6 +746,29 @@ pub fn stats(deck: &str, at: i64) -> Stats {
     result
 }
 
+/// Adds what an import brought along: progress and past reviews.
+pub fn adopt_import(states: Vec<(String, CardState)>, log: Vec<ReviewLog>) {
+    let mut store = STORE.write().unwrap();
+    for (id, state) in states {
+        store.file.cards.insert(id, state);
+    }
+    let root = store.root.clone();
+    store.log.extend(log.iter().cloned());
+    store.log.sort_by_key(|l| l.at);
+    drop(store);
+    if let Some(root) = root {
+        for entry in &log {
+            append_log(&root, entry);
+        }
+    }
+    save();
+}
+
+/// The cards known so far, to leave out what an import already finds.
+pub fn known_ids() -> HashSet<String> {
+    all_cards().iter().map(|c| c.raw.id.clone()).collect()
+}
+
 /// When the next card of a deck comes up after today.
 pub fn next_due(deck: &str, at: i64) -> Option<i64> {
     all_cards().iter().filter(|c| c.in_deck(deck) && !c.suspended()).filter_map(|c| c.state.as_ref()).filter(|s| s.phase != Phase::New && s.due > at).map(|s| s.due).min()
@@ -747,7 +796,7 @@ pub fn merge_log(ours: &str, theirs: &str) -> String {
 
 /// A plain sentence for lists: formulas, links and marks are written out briefly.
 pub fn plain_text(markdown_text: &str) -> String {
-    static NOISE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"[*_`]|\[\[|\]\]|==").unwrap());
+    static NOISE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"[*_`$]|\[\[|\]\]|==|(?:^|\s)#[\p{L}\p{N}/_-]+").unwrap());
     NOISE.replace_all(markdown_text, "").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

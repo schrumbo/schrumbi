@@ -2195,6 +2195,17 @@ impl Library {
         Naming::with_author(m, c.semester(&m.semester), BRIEF_TAG, "", CoauthorStyle::Initial).parse(file_name)
     }
 
+    /// Reports an import of flashcards; taking it back removes the new files.
+    pub fn cards_imported(&mut self, created: Vec<PathBuf>, added: usize, duplicates: usize) {
+        self.refresh();
+        let message = match (added, duplicates) {
+            (1, 0) => tr("1 Karte importiert"),
+            (n, 0) => trf("%@ Karten importiert", &[&n.to_string()]),
+            (n, d) => trf("%@ Karten importiert, %@ waren schon da", &[&n.to_string(), &d.to_string()]),
+        };
+        self.commit(message, "layers", created.into_iter().map(Change::Trash).collect());
+    }
+
     /// Remembers the open tabs under a name.
     pub fn save_layout(&mut self, name: &str) {
         let Some(root) = self.root.clone() else { return };

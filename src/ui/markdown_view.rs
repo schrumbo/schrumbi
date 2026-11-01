@@ -441,6 +441,13 @@ fn collapse_spaces(text: &str) -> String {
 
 /// Bare web addresses in the text become links.
 fn push_with_autolinks(target: &mut Vec<Inline>, text: &str, style: Style) {
+    static SEPARATOR: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r" :::? ").unwrap());
+    if !style.code && let Some(found) = SEPARATOR.find(text) {
+        push_with_autolinks(target, &text[..found.start()], style);
+        target.push(Inline::Text(found.as_str().to_string(), Style { color: Some(0x8E8E93), ..style }));
+        push_with_autolinks(target, &text[found.end()..], style);
+        return;
+    }
     static URL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"https?://[^\s<>\]\)]+|\bwww\.[a-zA-Z0-9-]+\.[^\s<>\]\)]+|\b[\w.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9.-]+").unwrap());
     let mut copied = 0;
     for hit in URL.find_iter(text) {
@@ -1153,7 +1160,7 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                     slots.push(InlineSlot { at: text.len(), kind: InlineKind::Sized(linked_image(src, alt, target.as_deref(), cx), w, h) });
                 }
             }
-            Inline::Math(source) => slots.push(InlineSlot { at: text.len(), kind: InlineKind::Math(source.clone()) }),
+            Inline::Math(source) => slots.push(InlineSlot { at: text.len(), kind: InlineKind::Math(source.clone(), super::theme::note_scale()) }),
         }
     }
     let order = cx.order.get();

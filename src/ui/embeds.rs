@@ -73,6 +73,7 @@ fn picture(key: String, dark: bool, make: impl FnOnce() -> Result<(String, f32, 
 struct Formula {
     source: String,
     id: u64,
+    scale: f32,
 }
 
 impl RenderOnce for Formula {
@@ -82,7 +83,7 @@ impl RenderOnce for Formula {
         let source = self.source.clone();
         let painted = picture(format!("math:{source}"), t.dark, move || render::math_svg(&source, true, color), cx);
         let body: AnyElement = match painted {
-            Painted::Done(image, w, h) => img(image).w(px(w * super::theme::note_scale())).h(px(h * super::theme::note_scale())).flex_none().into_any_element(),
+            Painted::Done(image, w, h) => img(image).w(px(w * self.scale)).h(px(h * self.scale)).flex_none().into_any_element(),
             Painted::Busy => div().h(px(32.)).child(loading(iconsize::S, t.tertiary)).into_any_element(),
             Painted::Failed(e) => source_with_error(&self.source, &e, &t).into_any_element(),
         };
@@ -95,18 +96,18 @@ fn source_with_error(source: &str, error: &str, t: &Theme) -> Div {
 }
 
 /// A formula for inside a sentence, once it is drawn; `None` while it is not.
-pub fn inline_math(source: &str, cx: &mut App) -> Option<(Arc<Image>, f32, f32)> {
+pub fn inline_math(source: &str, scale: f32, cx: &mut App) -> Option<(Arc<Image>, f32, f32)> {
     let dark = Theme::get(cx).dark;
     let color = if dark { "#EDEDED" } else { "#1F1F1F" };
     let formula = source.to_string();
     match picture(format!("imath:{source}"), dark, move || render::math_svg(&formula, false, color), cx) {
-        Painted::Done(image, w, h) => Some((image, w * 1.15 * super::theme::note_scale(), h * 1.15 * super::theme::note_scale())),
+        Painted::Done(image, w, h) => Some((image, w * 1.15 * scale, h * 1.15 * scale)),
         _ => None,
     }
 }
 
 pub fn math(source: &str, id: u64, _: &Theme) -> AnyElement {
-    Formula { source: source.to_string(), id }.into_any_element()
+    Formula { source: source.to_string(), id, scale: super::theme::note_scale() }.into_any_element()
 }
 
 #[derive(IntoElement)]

@@ -259,8 +259,15 @@ pub fn cards_in(text: &str) -> Vec<RawCard> {
                 end += 1;
             }
             let back = lines[i + 2..end].iter().map(|l| strip_quote(l)).collect::<Vec<_>>().join("\n");
-            if !back.trim().is_empty() {
-                add_basic(strip_marks(line).trim().to_string(), back.trim().to_string(), both, (i, end - 1), &crumbs, &mut out);
+            let front = strip_marks(line).trim();
+            if !gaps_in(front, tagged).is_empty() {
+                let from = out.len();
+                cloze_cards(front, (i, end - 1), &crumbs, tagged, &mut out);
+                for card in &mut out[from..] {
+                    card.back = format!("{}\n\n{}", card.back, back.trim());
+                }
+            } else if !back.trim().is_empty() {
+                add_basic(front.to_string(), back.trim().to_string(), both, (i, end - 1), &crumbs, &mut out);
             }
             i = end;
             continue;
@@ -292,7 +299,8 @@ pub fn write_card(front: &str, back: &str, both: bool) -> String {
     if back.is_empty() {
         return front.to_string();
     }
-    if front.contains('\n') || back.contains('\n') {
+    let needs_lines = |t: &str| t.contains(" :: ") || t.contains(" ::: ") || t.contains('\n');
+    if needs_lines(front) || needs_lines(back) {
         let front = front.split('\n').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
         let back = back.split('\n').filter(|l| !l.trim().is_empty()).collect::<Vec<_>>().join("\n");
         format!("{front}\n{}\n{back}", if both { "??" } else { "?" })
@@ -362,6 +370,19 @@ mod tests {
     fn tagged_notes_count_marks_as_gaps() {
         assert_eq!(cards_in("#karten\nDas ist ==wichtig== und {{auch}}.").len(), 2);
         assert_eq!(cards_in("---\ntags: [flashcards]\n---\nDas ist ==wichtig==.").len(), 1);
+    }
+
+    #[test]
+    fn a_gap_can_have_more_behind_it() {
+        let cards = cards_in("Der {{c1::Satz}}\n?\nMehr dazu");
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].back, "Der ==Satz==\n\nMehr dazu");
+    }
+
+    #[test]
+    fn answers_with_separators_stay_whole() {
+        let written = write_card("F", "a :: b", false);
+        assert_eq!(cards_in(&written)[0].back, "a :: b");
     }
 
     #[test]
