@@ -1367,5 +1367,14 @@
   "In der Notiz": "In the note",
   "Nach Fälligkeit": "By due date",
   "Schwierigste zuerst": "Hardest first",
-  "Prüfungsmodus": "Exam mode"
+  "Prüfungsmodus": "Exam mode",
+  "Eingebettete Seite: %@": "Embedded page: %@",
+  "Arbeitsbereich „%@“ gesichert": "Workspace “%@” saved",
+  "Arbeitsbereich sichern…": "Save workspace…",
+  "Arbeitsbereich sichern": "Save workspace",
+  "Arbeitsbereich laden: %@": "Load workspace: %@",
+  "Lesezeichen setzen oder entfernen": "Add or remove bookmark",
+  "Lesezeichen gesetzt": "Bookmark added",
+  "Lesezeichen entfernt": "Bookmark removed",
+  "Lesezeichen setzt du über die Befehlspalette, sie stehen auch in Obsidian.": "Set bookmarks from the command palette; they also show in Obsidian."
 }

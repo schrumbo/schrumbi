@@ -16,10 +16,15 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     }
     let pending = {
         let l = lib.read(cx);
-        l.note_pick.is_some() || l.show_sync_setup || l.show_conflicts || l.filing_request.is_some() || l.show_quick_add || l.show_quick_open || l.show_palette || l.show_shortcuts || l.new_note.is_some() || l.import_path.is_some() || l.reschedule_id.is_some() || l.needs_setup
+        l.show_save_layout || l.note_pick.is_some() || l.show_sync_setup || l.show_conflicts || l.filing_request.is_some() || l.show_quick_add || l.show_quick_open || l.show_palette || l.show_shortcuts || l.new_note.is_some() || l.import_path.is_some() || l.reschedule_id.is_some() || l.needs_setup
     };
     if pending {
         window.activate_window();
+    }
+    if lib.update(cx, |l, _| std::mem::take(&mut l.show_save_layout)) {
+        let view = cx.new(|cx| super::quick::SaveLayout::new(window, cx));
+        show(view, 420., window, cx);
+        return;
     }
     let (sync_setup, conflicts) = lib.update(cx, |l, _| (std::mem::take(&mut l.show_sync_setup), std::mem::take(&mut l.show_conflicts)));
     if sync_setup {

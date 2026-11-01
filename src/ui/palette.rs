@@ -167,6 +167,11 @@ fn commands(cx: &App) -> Vec<Command> {
         state::reindex(cx);
     })));
     add(&notes, tr("Zufällige Notiz öffnen"), "shuffle", None, Run::Call(Rc::new(|cx| act(cx, |l| l.open_random_note()))));
+    add(&notes, tr("Arbeitsbereich sichern…"), "layout-grid", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_save_layout = true))));
+    for name in state::read(cx, |l| l.layouts()) {
+        let label = trf("Arbeitsbereich laden: %@", &[&name]);
+        add(&notes, label, "layout-grid", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.open_layout(&name)))));
+    }
     if in_notes {
         add(&notes, tr("Dateien ein- oder ausblenden"), "panel-left", None, Run::Call(Rc::new(|cx| super::notes_page::set_hidden(!crate::core::prefs::get().notes_explorer_hidden, cx))));
     }
@@ -192,6 +197,17 @@ fn commands(cx: &App) -> Vec<Command> {
             act(cx, |l| l.slides = Some(p));
         })));
         if obsidian {
+            let mark = e.clone();
+            add(&notes, tr("Lesezeichen setzen oder entfernen"), "bookmark", None, Run::Call(Rc::new(move |cx| {
+                let root = crate::core::vault::index::current().root.clone();
+                if let Ok(rel) = mark.strip_prefix(&root) {
+                    let rel = rel.to_string_lossy().replace('\\', "/");
+                    if crate::core::vault::config::toggle_bookmark(&root, &rel).is_ok() {
+                        act(cx, |l| l.notify(if crate::core::vault::config::is_bookmarked(&root, &rel) { tr("Lesezeichen gesetzt") } else { tr("Lesezeichen entfernt") }, "bookmark", None, None));
+                        state::reindex(cx);
+                    }
+                }
+            })));
             add(&tr("Obsidian"), tr("In Obsidian öffnen"), "external-link", keys(S::OpenInObsidian), Run::Call(Rc::new(move |cx| super::vault_tools::open_in_obsidian(&e, cx))));
         }
         add(&notes, tr("Auswahl in neue Notiz auslagern"), "scissors", None, Run::NoteAction(Box::new(super::documents::ExtractSelection)));

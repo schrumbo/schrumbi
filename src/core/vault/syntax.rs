@@ -4,9 +4,33 @@ use regex::Regex;
 
 use super::links::code_ranges;
 
+/// `[![[bild.png|20]]](url)` as Markdown, which can hold a link around an image.
+fn linked_embeds(text: &str) -> std::borrow::Cow<'_, str> {
+    static EMBED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[!\[\[([^\]|\n]+)(?:\|([^\]\n]*))?\]\]\]\(([^)\n]+)\)").unwrap());
+    if !text.contains("[![[") {
+        return text.into();
+    }
+    let code = code_ranges(text);
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for c in EMBED.captures_iter(text) {
+        let whole = c.get(0).unwrap();
+        if code.iter().any(|r| r.contains(&whole.start())) {
+            continue;
+        }
+        out.push_str(&text[copied..whole.start()]);
+        out.push_str(&format!("[![{}]({})]({})", c.get(2).map_or("", |m| m.as_str()), c[1].replace(' ', "%20"), &c[3]));
+        copied = whole.end();
+    }
+    out.push_str(&text[copied..]);
+    out.into()
+}
+
 /// Removes `%%comments%%` and rewrites `^[inline footnotes]` so a Markdown parser understands the note.
 /// Line numbers stay as they were, ticking a task relies on them. An unclosed comment hides the rest of the note.
 pub fn prepare(text: &str) -> String {
+    let linked = linked_embeds(text);
+    let text: &str = &linked;
     let code = code_ranges(text);
     let is_code = |at: usize| code.iter().any(|r| r.contains(&at));
     let mut out = String::with_capacity(text.len());

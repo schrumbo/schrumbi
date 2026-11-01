@@ -210,6 +210,37 @@ pub fn bookmarks(root: &Path) -> Vec<Bookmark> {
     out
 }
 
+/// Whether a file of the vault has a bookmark.
+pub fn is_bookmarked(root: &Path, rel: &str) -> bool {
+    bookmarks(root).iter().any(|b| b.path.as_deref() == Some(rel))
+}
+
+/// Adds or removes a file's bookmark in the file Obsidian uses; other bookmarks and groups stay as they are.
+pub fn toggle_bookmark(root: &Path, rel: &str) -> std::io::Result<()> {
+    let path = root.join(".obsidian/bookmarks.json");
+    let mut value: serde_json::Value = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_else(|| serde_json::json!({ "items": [] }));
+    if !value.get("items").is_some_and(serde_json::Value::is_array) {
+        value["items"] = serde_json::json!([]);
+    }
+    fn remove(items: &mut Vec<serde_json::Value>, rel: &str) -> bool {
+        let before = items.len();
+        items.retain(|i| !(i.get("type").and_then(|t| t.as_str()) == Some("file") && i.get("path").and_then(|p| p.as_str()) == Some(rel) && i.get("subpath").is_none()));
+        let mut found = items.len() != before;
+        for item in items.iter_mut() {
+            if let Some(inner) = item.get_mut("items").and_then(|v| v.as_array_mut()) {
+                found |= remove(inner, rel);
+            }
+        }
+        found
+    }
+    let items = value["items"].as_array_mut().expect("checked above");
+    if !remove(items, rel) {
+        items.push(serde_json::json!({ "type": "file", "ctime": chrono::Utc::now().timestamp_millis(), "path": rel }));
+    }
+    std::fs::create_dir_all(root.join(".obsidian"))?;
+    std::fs::write(path, serde_json::to_vec_pretty(&value).unwrap_or_default())
+}
+
 /// A vault Obsidian knows on this device.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KnownVault {
@@ -325,6 +356,19 @@ mod tests {
         assert_eq!(with("./"), PathBuf::from("/v/a"));
         assert_eq!(with("./bilder"), PathBuf::from("/v/a/bilder"));
         assert_eq!(with("Anhang"), PathBuf::from("/v/Anhang"));
+    }
+
+    #[test]
+    fn bookmarks_toggle_and_keep_the_others() {
+        let dir = std::env::temp_dir().join(format!("schrumbi-marks-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".obsidian")).unwrap();
+        std::fs::write(dir.join(".obsidian/bookmarks.json"), r#"{"items":[{"type":"group","title":"G","items":[{"type":"file","path":"a.md"}]},{"type":"search","query":"x"}]}"#).unwrap();
+        toggle_bookmark(&dir, "b.md").unwrap();
+        assert!(is_bookmarked(&dir, "b.md") && is_bookmarked(&dir, "a.md"));
+        toggle_bookmark(&dir, "a.md").unwrap();
+        assert!(!is_bookmarked(&dir, "a.md"));
+        assert!(bookmarks(&dir).iter().any(|b| b.query.is_some()));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

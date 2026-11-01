@@ -698,3 +698,41 @@ impl Render for NewNote {
             )
     }
 }
+
+/// Names the open tabs, so they can be opened together later.
+pub struct SaveLayout {
+    name: Entity<InputState>,
+    focused: bool,
+    _sub: Subscription,
+}
+
+impl EventEmitter<Dismissed> for SaveLayout {}
+
+impl SaveLayout {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let name = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Name")));
+        let sub = cx.subscribe(&name, |this, field, e: &InputEvent, cx| {
+            if matches!(e, InputEvent::PressEnter { .. }) {
+                let text = field.read(cx).value().trim().to_string();
+                this.save(text, cx);
+            }
+        });
+        Self { name, focused: false, _sub: sub }
+    }
+
+    fn save(&mut self, text: String, cx: &mut Context<Self>) {
+        if !text.is_empty() {
+            state::act(cx, |l| l.save_layout(&text));
+        }
+        cx.emit(Dismissed);
+    }
+}
+
+impl Render for SaveLayout {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !std::mem::replace(&mut self.focused, true) {
+            self.name.update(cx, |s, cx| s.focus(window, cx));
+        }
+        div().flex().flex_col().gap(px(space::S)).p(px(space::L)).child(div().font_weight(FontWeight::SEMIBOLD).child(tr("Arbeitsbereich sichern"))).child(Input::new(&self.name))
+    }
+}

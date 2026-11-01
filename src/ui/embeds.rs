@@ -37,7 +37,15 @@ fn svg_size(svg: &str) -> (f32, f32) {
         let end = svg[start..].find('"')? + start;
         svg[start..end].trim_end_matches("pt").trim_end_matches("px").parse().ok()
     };
-    (attribute("width").unwrap_or(400.), attribute("height").unwrap_or(240.))
+    if let (Some(w), Some(h)) = (attribute("width"), attribute("height")) {
+        return (w, h);
+    }
+    let start = svg.find("viewBox=\"").map(|at| at + 9);
+    let view: Vec<f32> = start.and_then(|s| svg[s..].find('"').map(|e| &svg[s..s + e])).map(|v| v.split_whitespace().filter_map(|n| n.parse().ok()).collect()).unwrap_or_default();
+    match view.as_slice() {
+        [_, _, w, h] => (*w, *h),
+        _ => (400., 240.),
+    }
 }
 
 /// The cached picture, started in the background on first sight.

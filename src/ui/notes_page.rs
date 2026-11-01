@@ -743,7 +743,7 @@ impl NotesPage {
                 .pl(px(space::M))
                 .child(icon(if query.is_some() { "search" } else { "bookmark" }, iconsize::S, t.secondary))
                 .child(div().flex_1().min_w_0().truncate().child(title.clone()))
-                .tooltip(tip(tr("Lesezeichen kommen aus Obsidian und lassen sich dort ändern.")))
+                .tooltip(tip(tr("Lesezeichen setzt du über die Befehlspalette, sie stehen auch in Obsidian.")))
                 .on_click(click(row, me))
                 .into_any_element(),
             Row::Task { path, note, line, text } => {
@@ -886,7 +886,7 @@ impl Render for NotesPage {
                 View::Search => ("search", tr("Inhalt durchsuchen"), tr("Tippe oben ein Wort oder Suchbefehle wie tag:#x.")),
                 View::Files => ("book-open", tr("Noch keine Notizen"), tr("Mit ⌘N legst du die erste an.")),
                 View::Tags => ("tag", tr("Noch keine Tags"), tr("Schreibe #tag in eine Notiz.")),
-                View::Marks => ("bookmark", tr("Keine Lesezeichen"), tr("Lesezeichen kommen aus Obsidian und lassen sich dort ändern.")),
+                View::Marks => ("bookmark", tr("Keine Lesezeichen"), tr("Lesezeichen setzt du über die Befehlspalette, sie stehen auch in Obsidian.")),
                 View::Tasks => ("circle-check", tr("Alles erledigt"), tr("In deinen Notizen ist keine Aufgabe mehr offen.")),
             };
             unavailable(name, title, detail, &t).into_any_element()

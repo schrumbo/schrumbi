@@ -400,6 +400,9 @@ fn token_of(scopes: &syntect::parsing::ScopeStack) -> TokenKind {
         let name = scope.build_string();
         let kind = match () {
             () if name.starts_with("comment") => TokenKind::Comment,
+            () if name.starts_with("markup.inserted") => TokenKind::String,
+            () if name.starts_with("markup.deleted") => TokenKind::Number,
+            () if name.starts_with("meta.diff.range") || name.starts_with("meta.diff.header") => TokenKind::Type,
             () if name.starts_with("string") => TokenKind::String,
             () if name.starts_with("constant.numeric") || name.starts_with("constant.language") => TokenKind::Number,
             () if name.starts_with("keyword") || name.starts_with("storage") => TokenKind::Keyword,

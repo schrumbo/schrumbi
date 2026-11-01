@@ -254,6 +254,8 @@ pub struct Library {
     pub needs_setup: bool,
     /// A deck the flashcards page should open and start.
     pub cards_request: Option<String>,
+    /// The dialog that names a set of tabs is wanted.
+    pub show_save_layout: bool,
     pub filing_request: Option<FilingRequest>,
     pub missing_folder_count: usize,
     action_items: Vec<Assignment>,
@@ -396,6 +398,7 @@ impl Library {
             read_only: false,
             needs_setup: false,
             cards_request: None,
+            show_save_layout: false,
             filing_request: None,
             missing_folder_count: 0,
             action_items: Vec::new(),
@@ -2186,6 +2189,31 @@ impl Library {
         let c = self.config.as_ref()?;
         let m = c.module(module_id)?;
         Naming::with_author(m, c.semester(&m.semester), BRIEF_TAG, "", CoauthorStyle::Initial).parse(file_name)
+    }
+
+    /// Remembers the open tabs under a name.
+    pub fn save_layout(&mut self, name: &str) {
+        let Some(root) = self.root.clone() else { return };
+        let tabs: Vec<String> = self.open_documents.iter().map(|p| p.to_string_lossy().to_string()).collect();
+        prefs::update(|p| {
+            p.layouts.entry(root.to_string_lossy().to_string()).or_default().insert(name.to_string(), tabs);
+        });
+        self.notify(trf("Arbeitsbereich „%@“ gesichert", &[&name]), "layout-grid", None, None);
+    }
+
+    /// The saved sets of tabs of this workspace.
+    pub fn layouts(&self) -> Vec<String> {
+        self.root.as_ref().and_then(|r| prefs::get().layouts.get(&r.to_string_lossy().to_string()).map(|m| m.keys().cloned().collect())).unwrap_or_default()
+    }
+
+    /// Opens a saved set of tabs instead of the open ones.
+    pub fn open_layout(&mut self, name: &str) {
+        let Some(root) = self.root.clone() else { return };
+        let Some(tabs) = prefs::get().layouts.get(&root.to_string_lossy().to_string()).and_then(|m| m.get(name).cloned()) else { return };
+        self.close_all_documents();
+        for tab in tabs.iter().map(PathBuf::from).filter(|p| p.exists()) {
+            self.open_file(&tab);
+        }
     }
 
     /// Makes a folder at any depth a module, or takes that away again. Its files stay where they are.

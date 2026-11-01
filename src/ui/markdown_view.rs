@@ -53,6 +53,7 @@ enum Block {
     Callout(CalloutHead, Vec<Inline>, Vec<Block>),
     Properties(Vec<frontmatter::Property>),
     Centered(Vec<Block>),
+    Right(Vec<Block>),
     Details(Vec<Inline>, Vec<Block>, bool),
     Math(String),
     /// Takes its place in the count of blocks and shows nothing, like a `^id` on its own line.
@@ -242,6 +243,9 @@ pub fn parse(src: &str) -> ParsedNote {
                 TagEnd::Item => {
                     flush_inline(&mut stack);
                     let (_, mut blocks, _) = stack.pop().unwrap();
+                    if let Some(Block::Paragraph(inl)) = blocks.iter_mut().find(|b| matches!(b, Block::Paragraph(_))) {
+                        strip_block_id(inl);
+                    }
                     let (mut task, line) = item_meta.pop().unwrap_or((None, 0));
                     if task.is_none() {
                         task = take_task_marker(&mut blocks);
@@ -437,14 +441,21 @@ fn collapse_spaces(text: &str) -> String {
 
 /// Bare web addresses in the text become links.
 fn push_with_autolinks(target: &mut Vec<Inline>, text: &str, style: Style) {
-    static URL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"https?://[^\s<>\]\)]+").unwrap());
+    static URL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"https?://[^\s<>\]\)]+|\bwww\.[a-zA-Z0-9-]+\.[^\s<>\]\)]+|\b[\w.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9.-]+").unwrap());
     let mut copied = 0;
     for hit in URL.find_iter(text) {
         let shown = hit.as_str().trim_end_matches(['.', ',', ';', ':', '!', '?', '\'', '"']);
         if hit.start() > copied {
             target.push(Inline::Text(text[copied..hit.start()].to_string(), style));
         }
-        target.push(Inline::Link(shown.to_string(), Style { link: true, ..style }, shown.to_string()));
+        let address = if shown.starts_with("http") {
+            shown.to_string()
+        } else if shown.starts_with("www.") {
+            format!("https://{shown}")
+        } else {
+            format!("mailto:{shown}")
+        };
+        target.push(Inline::Link(shown.to_string(), Style { link: true, ..style }, address));
         copied = hit.start() + shown.len();
     }
     if copied < text.len() {
@@ -531,7 +542,7 @@ fn collect_links(blocks: &[Block], top: usize, out: &mut Vec<(String, usize)>) {
     for block in blocks {
         match block {
             Block::Heading(_, inl) | Block::Paragraph(inl) => inline(inl, out),
-            Block::Quote(inner) | Block::Callout(_, _, inner) | Block::Centered(inner) | Block::Details(_, inner, _) => collect_links(inner, top, out),
+            Block::Quote(inner) | Block::Callout(_, _, inner) | Block::Centered(inner) | Block::Right(inner) | Block::Details(_, inner, _) => collect_links(inner, top, out),
             Block::List { items, .. } => {
                 for item in items {
                     collect_links(&item.blocks, top, out);
@@ -775,7 +786,7 @@ fn html_inlines(nodes: &[HtmlNode], style: Style, link: Option<&str>, lift: Opti
 }
 
 fn html_is_block(tag: &str) -> bool {
-    matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "p" | "div" | "section" | "article" | "aside" | "header" | "footer" | "main" | "nav" | "figure" | "figcaption" | "center" | "blockquote" | "ul" | "ol" | "table" | "hr" | "details" | "pre" | "dl" | "dt" | "dd")
+    matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "p" | "div" | "section" | "article" | "aside" | "header" | "footer" | "main" | "nav" | "figure" | "figcaption" | "center" | "iframe" | "audio" | "video" | "embed" | "object" | "blockquote" | "ul" | "ol" | "table" | "hr" | "details" | "pre" | "dl" | "dt" | "dd")
 }
 
 /// HTML as the reader's blocks. Script, style and comments never show.
@@ -845,12 +856,26 @@ fn html_nodes_to_blocks(nodes: &[HtmlNode]) -> Vec<Block> {
                 blocks.push(Block::Details(title, inner, attributes.to_lowercase().contains("open")));
             }
             "blockquote" => blocks.push(Block::Quote(html_nodes_to_blocks(children))),
+            "audio" | "video" => {
+                if let Some(src) = html_attribute(attributes, "src") {
+                    blocks.push(Block::Paragraph(vec![Inline::Image(src, String::new(), None)]));
+                }
+            }
+            "iframe" | "embed" | "object" => {
+                if let Some(src) = html_attribute(attributes, "src").or_else(|| html_attribute(attributes, "data")) {
+                    let shown = src.split("://").nth(1).unwrap_or(&src).trim_end_matches('/').to_string();
+                    blocks.push(Block::Paragraph(vec![Inline::Link(trf("Eingebettete Seite: %@", &[&shown]), Style { link: true, ..Style::default() }, src)]));
+                }
+            }
             _ => {
                 let align = html_attribute(attributes, "align").unwrap_or_default().to_lowercase();
                 let centered = tag == "center" || align == "center" || html_attribute(attributes, "style").is_some_and(|s| s.replace(' ', "").to_lowercase().contains("text-align:center"));
+                let right = align == "right" || html_attribute(attributes, "style").is_some_and(|s| s.replace(' ', "").to_lowercase().contains("text-align:right"));
                 let inner = html_nodes_to_blocks(children);
                 if centered {
                     blocks.push(Block::Centered(inner));
+                } else if right {
+                    blocks.push(Block::Right(inner));
                 } else {
                     blocks.extend(inner);
                 }
@@ -990,16 +1015,30 @@ fn styled_text(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
         return styled_line(inlines, cx, size);
     }
     let mut parts: Vec<AnyElement> = Vec::new();
+    let mut pictures: Vec<AnyElement> = Vec::new();
+    let flush = |pictures: &mut Vec<AnyElement>, parts: &mut Vec<AnyElement>| {
+        if !pictures.is_empty() {
+            parts.push(div().flex().flex_wrap().items_end().gap(px(space::XS)).children(std::mem::take(pictures)).into_any_element());
+        }
+    };
     let mut run: &[Inline] = inlines;
     while let Some(at) = run.iter().position(is_big) {
         if !plain_text(&run[..at]).trim().is_empty() || run[..at].iter().any(|i| matches!(i, Inline::Image(..) | Inline::Math(_))) {
+            flush(&mut pictures, &mut parts);
             parts.push(styled_line(&run[..at], cx, size));
         }
         if let Inline::Image(src, alt, target) = &run[at] {
-            parts.push(linked_image(src, alt, target.as_deref(), cx));
+            let picture = Path::new(src.trim_end_matches('\\')).extension().is_some_and(|e| IMAGE_TYPES.contains(&e.to_string_lossy().to_lowercase().as_str()));
+            if picture {
+                pictures.push(linked_image(src, alt, target.as_deref(), cx));
+            } else {
+                flush(&mut pictures, &mut parts);
+                parts.push(linked_image(src, alt, target.as_deref(), cx));
+            }
         }
         run = &run[at + 1..];
     }
+    flush(&mut pictures, &mut parts);
     if !plain_text(run).trim().is_empty() || run.iter().any(|i| matches!(i, Inline::Image(..) | Inline::Math(_))) {
         parts.push(styled_line(run, cx, size));
     }
@@ -1346,6 +1385,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
 }
 
 fn image(src: &str, alt: &str, cx: &Ctx) -> AnyElement {
+    let src = src.trim_end_matches('\\');
     if src.contains("://") {
         let (width, height) = image_size(alt);
         return img(SharedString::from(src.to_string())).max_w_full().rounded(px(radius::CONTROL)).when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).into_any_element();
@@ -1517,6 +1557,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                 let change_type = cx.focus.and_then(|f| f.edit_item.clone()).map(|edit| (edit, cx.block));
                 Callout { change_type, head: head.clone(), title: shown, content: render_blocks(inner, cx), id: ElementId::from(("md-callout", order)), tint: callout_tint(head, t), secondary: t.secondary, folds: cx.focus.map(|f| (f.folds.clone(), key)) }.into_any_element()
             }
+            Block::Right(inner) => div().w_full().flex().flex_col().items_end().gap(px(space::S)).children(render_blocks(inner, cx)).into_any_element(),
             Block::Centered(inner) => div().w_full().flex().flex_col().items_center().gap(px(space::S)).children(render_blocks(inner, cx)).into_any_element(),
             Block::Details(summary, inner, open_at_start) => {
                 let order = cx.order.get();
@@ -1638,7 +1679,15 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
             )
             .into_any_element(),
             Block::Table { head, rows, aligns } => {
-                let width_of = |inl: &Vec<Inline>| plain_text(inl).chars().count() as f32;
+                let width_of = |inl: &Vec<Inline>| {
+                    inl.iter()
+                        .map(|i| match i {
+                            Inline::Image(_, alt, _) => image_size(alt).0.map_or(24., |w| w / 7.),
+                            Inline::Math(source) => source.chars().count() as f32 * 0.8,
+                            _ => plain_text(std::slice::from_ref(i)).chars().count() as f32,
+                        })
+                        .sum::<f32>()
+                };
                 let widths: Vec<f32> = (0..head.len())
                     .map(|c| rows.iter().filter_map(|r| r.get(c)).chain(head.get(c)).map(width_of).fold(4_f32, f32::max).min(40.))
                     .collect();
@@ -1672,8 +1721,10 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                 let order = cx.order.get();
                 cx.order.set(order + 1);
                 let min_width = px(widths.iter().map(|w| w.min(14.) * 9. + space::M).sum::<f32>());
+                let natural = px(widths.iter().map(|w| w * 7.2 * super::theme::note_scale() + space::M + 4.).sum::<f32>());
                 div().id(("md-table", order)).w_full().overflow_x_scroll().child(div()
                     .min_w(min_width)
+                    .max_w(natural.max(min_width))
                     .flex()
                     .flex_col()
                     .rounded(px(radius::CONTROL))
@@ -2124,6 +2175,7 @@ mod reader_tests {
                 Block::Callout(..) => "callout",
                 Block::Properties(_) => "properties",
                 Block::Centered(_) => "centered",
+                Block::Right(_) => "right",
                 Block::Details(..) => "details",
                 Block::Math(_) => "math",
                 Block::Nothing => "nothing",

@@ -55,13 +55,28 @@ pub fn mermaid_svg(code: &str, dark: bool) -> Result<String, String> {
     theme.text_color = text.into();
     theme.background = "transparent".into();
     theme.edge_label_background = "transparent".into();
+    theme.pie_colors = if dark { ["#5B8DEF", "#E5A76B", "#7CC7A0", "#C792EA", "#EF7B7B", "#62C5D6", "#E2C65F", "#9A8CFF", "#F08FC0", "#8FA3BF", "#A5C76B", "#D49A6A"] } else { ["#2F6FDE", "#D9822B", "#2E9E6A", "#8E5BD0", "#D64545", "#1E9BB0", "#BFA01C", "#5B54D6", "#D6559A", "#5F7388", "#6F9E2B", "#A9692F"] }.map(String::from);
+    theme.pie_section_text_color = "#FFFFFF".into();
+    theme.pie_title_text_color = text.into();
+    theme.pie_legend_text_color = text.into();
+    theme.pie_stroke_color = "transparent".into();
+    theme.pie_outer_stroke_color = "transparent".into();
     let options = mermaid_rs_renderer::RenderOptions { theme, ..Default::default() };
     let caught = std::panic::catch_unwind(|| mermaid_rs_renderer::render_with_options(code, options));
     match caught {
-        Ok(Ok(svg)) => Ok(svg),
+        Ok(Ok(svg)) => Ok(if dark { darken_light_fills(svg) } else { svg }),
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => Err("Das Diagramm ließ sich nicht zeichnen.".to_string()),
     }
+}
+
+/// Quadrant charts and timelines come with fixed light colours, whatever the theme says.
+fn darken_light_fills(svg: String) -> String {
+    let mut out = svg;
+    for (light, dark) in [("#ECECFF", "#2B3442"), ("#f1f1ff", "#2B3442"), ("#f6f6ff", "#2F3847"), ("#fbfbff", "#333C4C"), ("#c7c7f1", "#82AAF5"), ("#131300", "#EDEDED")] {
+        out = out.replace(light, dark);
+    }
+    out
 }
 
 /// Node labels of a Mermaid diagram marked `internal-link`, which lead to notes.
