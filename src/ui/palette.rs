@@ -17,6 +17,8 @@ use crate::core::shortcuts::{Group, ShortcutAction as S};
 
 enum Run {
     Action(Box<dyn Action>),
+    /// Handled by the open note, which gets the keyboard back first.
+    NoteAction(Box<dyn Action>),
     Call(Rc<dyn Fn(&mut App)>),
 }
 
@@ -29,6 +31,12 @@ struct Command {
     run: Run,
 }
 
+/// A command waiting for the open note to get the keyboard back.
+#[derive(Default)]
+pub struct PendingNoteAction(pub Option<Box<dyn Action>>);
+
+impl Global for PendingNoteAction {}
+
 /// Labels of recently run commands, newest first; they lead the list while nothing is typed.
 #[derive(Default)]
 struct Recent(Vec<String>);
@@ -37,6 +45,10 @@ impl Global for Recent {}
 
 fn fixed_keys(key: &str) -> String {
     if cfg!(target_os = "macos") { format!("⌘{key}") } else { format!("Ctrl+{key}") }
+}
+
+fn fixed_shift_keys(key: &str) -> String {
+    if cfg!(target_os = "macos") { format!("⇧⌘{key}") } else { format!("Ctrl+Shift+{key}") }
 }
 
 fn keys(action: S) -> Option<String> {
@@ -48,6 +60,10 @@ fn commands(cx: &App) -> Vec<Command> {
     let mut list = Vec::new();
     let mut add = |group: &str, label: String, icon: &'static str, keys: Option<String>, run: Run| list.push(Command { label, group: group.to_string(), icon, keys, run });
     let (go, new, file, view, edit, general) = (tr("Gehe zu"), tr("Neu"), tr("Ablage"), tr("Darstellung"), tr("Bearbeiten"), tr("Schrumbi"));
+    let (git, conflicts) = (super::sync::enabled_here(cx), !super::sync::get(cx).conflicts.is_empty());
+    let in_document = state::read(cx, |l| matches!(l.route(), Route::Doc(_)));
+    let in_notes = in_document || state::read(cx, |l| matches!(l.route(), Route::Notes));
+    let active = state::read(cx, |l| l.active_document.clone().filter(|p| crate::core::markdown::is_markdown(p) && in_document));
     state::read(cx, |l| {
         if let Some(id) = l.selection().map(String::from)
             && let Some(a) = l.assignment(&id).cloned()
@@ -72,20 +88,28 @@ fn commands(cx: &App) -> Vec<Command> {
             add(&group, tr("Neu laden"), "refresh-cw", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.load_note_disk(&reload)))));
             add(&group, tr("Meine behalten"), "check", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.keep_note_mine(&keep)))));
         }
-        add(&general, S::Sync.label(), "cloud", keys(S::Sync), Run::Action(Box::new(app::SyncNow)));
-        add(&general, tr("Sync einrichten…"), "git-branch", None, Run::Action(Box::new(app::SyncSetup)));
-        add(&general, tr("Konflikte lösen…"), "git-merge", None, Run::Action(Box::new(app::ResolveConflicts)));
+        if conflicts {
+            add(&general, tr("Konflikte lösen…"), "git-merge", None, Run::Action(Box::new(app::ResolveConflicts)));
+        }
         add(&go, tr("Übersicht"), "layout-grid", Some(fixed_keys("1")), Run::Action(Box::new(app::GoToday)));
         add(&go, tr("Semester"), "table", Some(fixed_keys("2")), Run::Action(Box::new(app::GoGrid)));
         add(&go, tr("Leistungen"), "award", Some(fixed_keys("3")), Run::Action(Box::new(app::GoRecord)));
         add(&go, tr("Inbox"), "inbox", Some(fixed_keys("4")), Run::Action(Box::new(app::GoInbox)));
+        add(&go, tr("Notizen"), "book-open", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_notes()))));
         add(&go, tr("Aufräumen"), "list-checks", Some(fixed_keys("5")), Run::Action(Box::new(app::GoChecks)));
         add(&go, S::SearchFiles.label(), "search", keys(S::SearchFiles), Run::Action(Box::new(app::SearchFiles)));
         add(&go, S::GoBack.label(), "arrow-left", keys(S::GoBack), Run::Action(Box::new(app::GoBack)));
-        add(&go, tr("Vorwärts"), "arrow-right", None, Run::Action(Box::new(app::GoForward)));
-        add(&go, tr("Geschlossenen Tab wieder öffnen"), "rotate-ccw", None, Run::Action(Box::new(app::ReopenTab)));
-        add(&go, tr("Alle Tabs schließen"), "x", None, Run::Call(Rc::new(|cx| super::documents::close_all_tabs(cx))));
-        add(&go, tr("Einrichtung erneut starten"), "settings", None, Run::Call(Rc::new(|cx| act(cx, |l| l.needs_setup = true))));
+        add(&go, tr("Vorwärts"), "arrow-right", Some(if cfg!(target_os = "macos") { "⌃⇧-".to_string() } else { "Alt+→".to_string() }), Run::Action(Box::new(app::GoForward)));
+        if l.open_documents.len() > 1 {
+            add(&go, S::NextTab.label(), "arrow-right", keys(S::NextTab), Run::Action(Box::new(app::NextTab)));
+            add(&go, S::PreviousTab.label(), "arrow-left", keys(S::PreviousTab), Run::Action(Box::new(app::PreviousTab)));
+        }
+        if l.can_reopen_document() {
+            add(&go, tr("Geschlossenen Tab wieder öffnen"), "rotate-ccw", Some(fixed_shift_keys("T")), Run::Action(Box::new(app::ReopenTab)));
+        }
+        if !l.open_documents.is_empty() {
+            add(&go, tr("Alle Tabs schließen"), "x", None, Run::Call(Rc::new(|cx| super::documents::close_all_tabs(cx))));
+        }
         for m in l.semester_modules() {
             let route = Route::Module(m.id.clone());
             add(&go, m.display_name(), "book-open", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.set_route(route.clone())))));
@@ -102,18 +126,24 @@ fn commands(cx: &App) -> Vec<Command> {
     add(&view, S::ToggleInspector.label(), "panel-right", keys(S::ToggleInspector), Run::Action(Box::new(app::ToggleInspector)));
     add(&view, tr("Seitenleiste ein-/ausblenden"), "panel-left", Some(fixed_keys("B")), Run::Action(Box::new(super::main_window::ToggleSidebar)));
     add(&view, S::Refresh.label(), "refresh-cw", keys(S::Refresh), Run::Action(Box::new(app::Refresh)));
-    if state::read(cx, |l| matches!(l.route(), Route::Doc(_))) {
-        add(&view, S::TogglePreview.label(), "book-open", keys(S::TogglePreview), Run::Action(Box::new(app::TogglePreview)));
-        add(&view, S::ExportPdf.label(), "share", keys(S::ExportPdf), Run::Action(Box::new(app::ExportPdf)));
+    if active.is_some() {
+        add(&view, S::TogglePreview.label(), "book-open", keys(S::TogglePreview), Run::NoteAction(Box::new(app::TogglePreview)));
+        if crate::core::prefs::get().note_editor == crate::core::prefs::NoteEditor::Code {
+            add(&view, S::SplitPreview.label(), "columns-2", keys(S::SplitPreview), Run::NoteAction(Box::new(app::SplitPreview)));
+        }
+        add(&view, S::ExportPdf.label(), "share", keys(S::ExportPdf), Run::NoteAction(Box::new(app::ExportPdf)));
+        add(&file, tr("Sichern"), "save", Some(fixed_keys("S")), Run::NoteAction(Box::new(app::Save)));
+    }
+    if in_document {
         add(&view, S::CloseTab.label(), "x", keys(S::CloseTab), Run::Action(Box::new(app::CloseTab)));
     }
     if state::read(cx, |l| l.can_undo()) {
         add(&edit, tr("Widerrufen"), "undo-2", Some(fixed_keys("Z")), Run::Action(Box::new(app::Undo)));
     }
     if state::read(cx, |l| l.can_redo()) {
-        add(&edit, tr("Wiederholen"), "redo-2", Some(if cfg!(target_os = "macos") { "⇧⌘Z".to_string() } else { "Ctrl+Shift+Z".to_string() }), Run::Action(Box::new(app::Redo)));
+        add(&edit, tr("Wiederholen"), "redo-2", Some(fixed_shift_keys("Z")), Run::Action(Box::new(app::Redo)));
     }
-    if state::read(cx, |l| matches!(l.route(), Route::Doc(_))) && super::sync::get(cx).git.is_some() {
+    if in_document && git {
         add(&file, tr("Verlauf dieser Datei"), "history", None, Run::Call(Rc::new(|cx| {
             act(cx, |l| {
                 l.show_inspector = true;
@@ -121,21 +151,25 @@ fn commands(cx: &App) -> Vec<Command> {
             });
         })));
     }
-    if super::sync::enabled_here(cx) {
+    add(&general, S::Sync.label(), "cloud", keys(S::Sync), Run::Action(Box::new(app::SyncNow)));
+    if !git {
+        add(&general, tr("Sync einrichten…"), "git-branch", None, Run::Action(Box::new(app::SyncSetup)));
+    }
+    if git {
         add(&general, tr("Sync-Einstellungen"), "settings", None, Run::Call(Rc::new(|cx| super::settings::open_sync(cx))));
     }
     let notes = tr("Notizen");
     let obsidian = state::read(cx, |l| l.is_vault);
-    let active = state::read(cx, |l| l.active_document.clone().filter(|p| crate::core::markdown::is_markdown(p) && matches!(l.route(), Route::Doc(_))));
     add(&notes, tr("Tagesnotiz öffnen"), "calendar", keys(S::DailyNote), Run::Action(Box::new(app::DailyNote)));
     add(&notes, tr("Eindeutige Notiz anlegen"), "file-plus", None, Run::Call(Rc::new(|cx| {
         act(cx, |l| l.open_unique_note());
         state::reindex(cx);
     })));
     add(&notes, tr("Zufällige Notiz öffnen"), "shuffle", None, Run::Call(Rc::new(|cx| act(cx, |l| l.open_random_note()))));
-    add(&notes, tr("Notizen zeigen"), "book-open", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_notes()))));
-    add(&notes, tr("Dateien ein- oder ausblenden"), "panel-left", None, Run::Call(Rc::new(|cx| super::notes_page::set_hidden(!crate::core::prefs::get().notes_explorer_hidden, cx))));
-    add(&notes, tr("Graph zeigen"), "waypoints", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_graph(None)))));
+    if in_notes {
+        add(&notes, tr("Dateien ein- oder ausblenden"), "panel-left", None, Run::Call(Rc::new(|cx| super::notes_page::set_hidden(!crate::core::prefs::get().notes_explorer_hidden, cx))));
+    }
+    add(&notes, tr("Graph zeigen"), "waypoints", Some(fixed_keys("G")), Run::Call(Rc::new(|cx| act(cx, |l| l.show_graph(None)))));
     if let Some(note) = active {
         let (a, b, c, d, e) = (note.clone(), note.clone(), note.clone(), note.clone(), note);
         add(&notes, tr("Graph um diese Notiz"), "waypoints", None, Run::Call(Rc::new(move |cx| {
@@ -159,8 +193,9 @@ fn commands(cx: &App) -> Vec<Command> {
         if obsidian {
             add(&tr("Obsidian"), tr("In Obsidian öffnen"), "external-link", keys(S::OpenInObsidian), Run::Call(Rc::new(move |cx| super::vault_tools::open_in_obsidian(&e, cx))));
         }
-        add(&notes, tr("Auswahl in neue Notiz auslagern"), "scissors", None, Run::Action(Box::new(super::documents::ExtractSelection)));
+        add(&notes, tr("Auswahl in neue Notiz auslagern"), "scissors", None, Run::NoteAction(Box::new(super::documents::ExtractSelection)));
     }
+    add(&general, tr("Einrichtung erneut starten"), "settings", None, Run::Call(Rc::new(|cx| act(cx, |l| l.needs_setup = true))));
     add(&general, tr("Einstellungen…"), "settings", Some(fixed_keys(",")), Run::Action(Box::new(app::OpenSettings)));
     add(&general, tr("Tastenkürzel anzeigen"), "keyboard", Some(fixed_keys("/")), Run::Action(Box::new(app::ShowShortcuts)));
     add(&general, tr("Nach Updates suchen…"), "download", None, Run::Action(Box::new(app::CheckForUpdates)));
@@ -251,6 +286,11 @@ impl Palette {
             Run::Action(action) => {
                 let action = action.boxed_clone();
                 window.defer(cx, move |window, cx| window.dispatch_action(action, cx));
+            }
+            Run::NoteAction(action) => {
+                let action = action.boxed_clone();
+                cx.default_global::<PendingNoteAction>().0 = Some(action);
+                act(cx, |l| l.focus_document = true);
             }
             Run::Call(call) => {
                 let call = call.clone();

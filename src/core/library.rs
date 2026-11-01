@@ -2622,6 +2622,11 @@ impl Library {
         self.changed();
     }
 
+    /// Whether a closed tab is there to bring back.
+    pub fn can_reopen_document(&self) -> bool {
+        !self.closed_documents.is_empty()
+    }
+
     /// Opens the most recently closed tab whose file still exists.
     pub fn reopen_document(&mut self) {
         while let Some(path) = self.closed_documents.pop() {

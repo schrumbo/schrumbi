@@ -308,6 +308,9 @@ impl Pages {
             window.on_next_frame(move |window, cx| {
                 if let Ok(note) = target.clone().downcast::<super::documents::NoteView>() {
                     note.update(cx, |n, cx| n.activate(window, cx));
+                    if let Some(action) = cx.default_global::<super::palette::PendingNoteAction>().0.take() {
+                        window.dispatch_action(action, cx);
+                    }
                 } else if let Ok(canvas) = target.clone().downcast::<super::canvas_view::CanvasView>() {
                     canvas.update(cx, |c, cx| c.activate(window, cx));
                 } else if let Ok(base) = target.clone().downcast::<super::base_view::BaseView>() {

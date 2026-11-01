@@ -40,7 +40,7 @@ The macOS build is not notarized, so macOS blocks the first launch. Allow it und
 
 | Action | macOS |
 |---|---|
-| Command palette | `⌘K` or `⌘P` |
+| Command palette | `⌘P` (`⌘K` outside the editor) |
 | Shortcut overview | `⌘/` |
 | Search | `/` |
 | Quick open | `⌘O` |
