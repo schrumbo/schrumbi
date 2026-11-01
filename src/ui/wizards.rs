@@ -376,10 +376,8 @@ impl Render for Setup {
                     .child(
                         grouped(&t)
                             .child(form_row(tr("Studiengang"), Input::new(&name), &t))
-                            .child(divider(&t))
-                            .child(form_row(tr("Kürzel in Dateinamen"), Input::new(&author), &t))
-                            .child(divider(&t))
-                            .child(form_row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).text_color(t.secondary).child(example), &t)),
+                            .when(!state::read(cx, |l| l.is_vault), |d| d.child(divider(&t)).child(form_row(tr("Kürzel in Dateinamen"), Input::new(&author), &t)).child(divider(&t)))
+                            .when(!state::read(cx, |l| l.is_vault), |d| d.child(form_row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).text_color(t.secondary).child(example), &t)),)
                     )
             }
             1 => {

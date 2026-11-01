@@ -88,6 +88,9 @@ impl NoteView {
                     state::lib(cx).update(cx, |l, cx| {
                         if let Some(b) = l.buffers.get_mut(&path) {
                             b.edited(text);
+                            if l.preview_document.as_ref() == Some(&path) {
+                                l.preview_document = None;
+                            }
                         }
                         cx.notify();
                     });
@@ -921,6 +924,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
             .child(div().flex_none().child(actions))
             .child(Button::new("split-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Geteilte Ansicht schließen")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))));
     }
+    let preview = state::read(cx, |l| l.preview_document.clone());
     let (docs, titles, dirty) = state::read(cx, |l| {
         let docs = l.open_documents.clone();
         let titles: Vec<String> = docs.iter().map(|d| l.note_title(d)).collect();
@@ -937,6 +941,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
             menu
         })
     });
+    let show_files = (state::read(cx, |l| l.is_vault) && prefs::get().notes_explorer_hidden).then(|| Button::new("explorer-show").ghost().small().icon(menu_icon("panel-left")).tooltip(tr("Dateien einblenden")).on_click(|_, _, cx| super::notes_page::set_hidden(false, cx)));
     let mut tabs = div().flex().gap(px(space::XXS)).py(px(space::S));
     for (i, doc) in docs.iter().enumerate() {
         let active = doc.as_path() == current;
@@ -945,6 +950,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
         let is_dirty = dirty[i];
         let hover = t.ink.opacity(0.05);
         let rel = state::read(cx, |l| l.relative_path(doc));
+        let is_preview = preview.as_ref() == Some(doc);
         tabs = tabs.child(
             div()
                 .id(SharedString::from(format!("tab-{}", doc.display())))
@@ -960,7 +966,14 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
                 .when(active, |d| d.bg(t.ink.opacity(0.1)))
                 .when(!active, |d| d.soft(hover, radius::INNER))
                 .tooltip(tip(rel))
-                .on_click(move |_, _, cx| act(cx, |l| l.open_document(&open)))
+                .on_click(move |e, _, cx| {
+                    act(cx, |l| {
+                        l.open_document(&open);
+                        if e.click_count() >= 2 {
+                            l.pin_document(&open);
+                        }
+                    })
+                })
                 .on_mouse_down(MouseButton::Middle, move |_, _, cx| close_tab(&middle, cx))
                 .on_drag(DraggedTab { path: doc.clone(), title: titles[i].clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
                 .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(accent.opacity(0.15)))
@@ -969,7 +982,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
                     act(cx, |l| l.move_document(&path, &target));
                 })
                 .child(file_icon(doc, iconsize::M))
-                .child(div().max_w(px(180.)).truncate().text_size(px(font::CALLOUT)).text_color(if active { t.primary } else { t.secondary }).child(titles[i].clone()))
+                .child(div().max_w(px(180.)).truncate().when(is_preview, |d| d.italic()).text_size(px(font::CALLOUT)).text_color(if active { t.primary } else { t.secondary }).child(titles[i].clone()))
                 .child(
                     div()
                         .id(SharedString::from(format!("tab-close-{}", doc.display())))
@@ -1012,6 +1025,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
         .min_h(px(40.))
         .border_b_1()
         .border_color(t.separator)
+        .children(show_files)
         .child(tabs.id("doc-tabs").flex_1().min_w_0().overflow_x_scroll().track_scroll(&state::tab_scroll(current, docs.iter().position(|d| d == current).unwrap_or(0), cx)))
         .children(overflow)
         .child(div().flex_none().child(actions))

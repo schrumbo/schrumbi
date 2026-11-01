@@ -23,11 +23,15 @@ pub const WIDTH: f32 = 220.;
 const ROW: f32 = 44.;
 
 fn is_active(lib: &Library, route: &Route) -> bool {
-    lib.route() == route || matches!((lib.route(), route), (Route::Doc(_), Route::Doc(_)))
+    lib.route() == route || matches!((lib.route(), route), (Route::Doc(_), Route::Doc(_))) || (lib.is_vault && matches!((lib.route(), route), (Route::Doc(_), Route::Notes)))
 }
 
 fn navigate(route: Route, cx: &mut App) {
-    act(cx, |l| if let Route::Doc(_) = route { l.show_documents() } else { l.set_route(route.clone()) });
+    act(cx, |l| match route {
+        Route::Doc(_) => l.show_documents(),
+        Route::Notes => l.show_notes(),
+        _ => l.set_route(route.clone()),
+    });
 }
 
 /// Clicking the selected tab shows or hides the labels, any other tab just navigates.
@@ -57,13 +61,12 @@ fn entries(lib: &Library) -> Vec<Entry> {
         Entry { key: Some("semester"), route: Route::Grid, icon: "table", label: tr("Semester"), shortcut: Some("2"), badge: 0, urgent: false },
         Entry { key: Some("record"), route: Route::Record, icon: "award", label: tr("Leistungen"), shortcut: Some("3"), badge: 0, urgent: false },
         Entry { key: Some("inbox"), route: Route::Inbox, icon: "inbox", label: tr("Inbox"), shortcut: Some("4"), badge: lib.inbox.len(), urgent: false },
-        Entry { key: Some("search"), route: Route::Search, icon: "search", label: tr("Suche"), shortcut: None, badge: 0, urgent: false },
     ];
     if lib.is_vault {
         v.push(Entry { key: Some("notes"), route: Route::Notes, icon: "book-open", label: tr("Notizen"), shortcut: None, badge: 0, urgent: false });
     }
     let mut doc = None;
-    if let Some(doc_path) = lib.active_document.clone().or_else(|| lib.open_documents.first().cloned()) {
+    if !lib.is_vault && let Some(doc_path) = lib.active_document.clone().or_else(|| lib.open_documents.first().cloned()) {
         doc = Some(Entry { key: None, route: Route::Doc(doc_path), icon: "files", label: tr("Dokumente"), shortcut: None, badge: lib.open_documents.len(), urgent: false });
     }
     v.push(Entry { key: Some("checks"), route: Route::Checks, icon: "list-checks", label: tr("Aufräumen"), shortcut: Some("5"), badge: issues, urgent: false });

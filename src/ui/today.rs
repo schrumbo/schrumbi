@@ -49,7 +49,7 @@ fn recent_notes(lib: &Library, t: &Theme) -> Option<Div> {
         return None;
     }
     let vault = crate::core::vault::index::current();
-    let mut notes: Vec<(&std::path::PathBuf, f64)> = vault.notes.iter().filter(|(p, _)| crate::core::markdown::is_markdown(p)).map(|(p, f)| (p, f.modified)).collect();
+    let mut notes: Vec<(&std::path::PathBuf, f64)> = vault.notes.iter().filter(|(p, _)| !vault.is_template(p)).filter(|(p, _)| crate::core::markdown::is_markdown(p)).map(|(p, f)| (p, f.modified)).collect();
     notes.sort_by(|a, b| b.1.total_cmp(&a.1));
     notes.truncate(5);
     if notes.is_empty() {

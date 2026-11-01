@@ -126,7 +126,9 @@ impl Element for SelectableStyled {
             if phase.bubble() && e.button == MouseButton::Left && hitbox.is_hovered(window) && TextSelection::selected_text(window, cx).is_empty() {
                 let action = layout.index_for_position(e.position).ok().and_then(|i| links.iter().find(|(r, _)| r.contains(&i)).map(|(_, a)| a.clone()));
                 if let Some(action) = action {
+                    crate::core::library::LINK_IN_NEW_TAB.store(e.modifiers.platform || e.modifiers.control, std::sync::atomic::Ordering::Relaxed);
                     action(cx);
+                    crate::core::library::LINK_IN_NEW_TAB.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
             }
         });

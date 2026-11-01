@@ -194,10 +194,10 @@ impl ShortcutAction {
             }
         }
         match self {
-            Self::QuickOpen => s("p", true, false, false, false),
+            Self::QuickOpen => s("o", true, false, false, false),
             Self::SearchFiles => s("f", true, true, false, false),
-            Self::NewEntry => s("n", true, false, false, false),
-            Self::NewFile => s("n", true, true, false, false),
+            Self::NewEntry => s("n", true, true, false, false),
+            Self::NewFile => s("n", true, false, false, false),
             Self::GoBack => s("-", false, false, false, true),
             Self::ToggleInspector => s("i", true, false, true, false),
             Self::Refresh => s("r", true, false, false, false),
@@ -207,7 +207,7 @@ impl ShortcutAction {
             Self::CloseTab => s("w", true, false, false, false),
             Self::NextTab => s("tab", false, false, false, true),
             Self::PreviousTab => s("tab", false, true, false, true),
-            Self::TogglePreview => s("v", true, true, false, false),
+            Self::TogglePreview => s("e", true, false, false, false),
             Self::SplitPreview => s("v", true, false, true, false),
             Self::ExportPdf => s("e", true, true, false, false),
             Self::Bold => s("b", true, false, false, false),

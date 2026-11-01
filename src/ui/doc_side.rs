@@ -23,6 +23,7 @@ use crate::core::vault::links;
 #[derive(Clone, Copy, PartialEq)]
 pub enum Side {
     Links,
+    Module,
     Properties,
     Versions,
 }
@@ -281,6 +282,10 @@ impl Render for DocSide {
         if !is_note && self.side != Side::Versions {
             self.side = Side::Versions;
         }
+        let module = path.as_ref().and_then(|p| state::read(cx, |l| l.module_containing(p).map(|m| m.id.clone())));
+        if module.is_none() && self.side == Side::Module {
+            self.side = Side::Links;
+        }
         let tabs = div()
             .flex_none()
             .p(px(space::S))
@@ -289,8 +294,10 @@ impl Render for DocSide {
             .border_b_1()
             .border_color(t.separator)
             .when(is_note, |d| d.child(self.tab("side-tab-links", tr("Verknüpfungen"), Side::Links, &t, cx)).child(self.tab("side-tab-props", tr("Eigenschaften"), Side::Properties, &t, cx)))
+            .when(module.is_some(), |d| d.child(self.tab("side-tab-module", tr("Modul"), Side::Module, &t, cx)))
             .child(self.tab("side-tab-versions", tr("Verlauf"), Side::Versions, &t, cx));
         let body: AnyElement = match (self.side, path) {
+            (Side::Module, Some(_)) => module_view(module.as_deref().unwrap_or_default(), &t, cx),
             (Side::Links, Some(p)) => self.links_view(&p, &t, cx),
             (Side::Properties, Some(_)) => self.properties.clone().into_any_element(),
             _ => self.versions.clone().into_any_element(),
@@ -567,4 +574,40 @@ impl Render for PropertyEditor {
             )
             .into_any_element()
     }
+}
+
+/// What is due in the note's module, to tick off without leaving the note.
+fn module_view(module: &str, t: &Theme, cx: &App) -> AnyElement {
+    let lib = state::lib(cx);
+    let l = lib.read(cx);
+    let deadlines = l.module_deadlines(module);
+    if deadlines.is_empty() {
+        return unavailable("circle-check", tr("Alles erledigt"), tr("In diesem Modul ist nichts mehr offen."), t).into_any_element();
+    }
+    let hover = t.ink.opacity(0.05);
+    let rows = deadlines.into_iter().enumerate().map(|(i, a)| {
+        let (done, open, module) = (a.id.clone(), a.id.clone(), a.module_id.clone());
+        div()
+            .id(("module-deadline", i))
+            .flex()
+            .items_center()
+            .gap(px(space::S))
+            .px(px(space::M))
+            .py(px(space::XS))
+            .cursor_pointer()
+            .soft(hover, 0.)
+            .on_click(move |_, _, cx| {
+                act(cx, |l| {
+                    l.select(Some(open.clone()));
+                    l.set_route(crate::core::library::Route::Module(module.clone()));
+                })
+            })
+            .child(div().id(("deadline-done", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).border_1().border_color(t.secondary).cursor_pointer().key_nav().aria_label(tr("Erledigt")).tooltip(tip(tr("Erledigt"))).on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                act(cx, |l| l.toggle_done(&done));
+            }))
+            .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).child(a.title.clone()))
+            .child(due_label(l, &a, t).flex_none())
+    });
+    div().id("module-deadlines").size_full().overflow_y_scrollbar().py(px(space::S)).children(rows).into_any_element()
 }

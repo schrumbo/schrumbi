@@ -255,6 +255,12 @@ impl VaultIndex {
     }
 
     /// Every tag with its notes; `a/b` also counts for `a`.
+    /// Whether a note sits in the vault's template folder and is no real note.
+    pub fn is_template(&self, path: &Path) -> bool {
+        let folder = self.config.templates.folder.trim_matches('/');
+        !folder.is_empty() && path.starts_with(self.root.join(folder))
+    }
+
     pub fn tag_tree(&self) -> Vec<(String, usize)> {
         let mut counts: BTreeMap<String, std::collections::BTreeSet<&PathBuf>> = BTreeMap::new();
         for (tag, notes) in &self.tags {

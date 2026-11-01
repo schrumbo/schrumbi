@@ -253,6 +253,35 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         .child(info)
         .child(actions);
 
+    let notes: Vec<std::path::PathBuf> = if l.is_vault {
+        let mut found: Vec<_> = crate::core::vault::index::current().notes.keys().filter(|p| p.starts_with(&a.folder)).cloned().collect();
+        found.sort();
+        found.truncate(20);
+        found
+    } else {
+        Vec::new()
+    };
+    if !notes.is_empty() {
+        let hover = t.ink.opacity(0.05);
+        let rows = notes.into_iter().enumerate().map(|(i, path)| {
+            let open = path.clone();
+            div()
+                .id(("assignment-note", i))
+                .flex()
+                .items_center()
+                .gap(px(space::S))
+                .py(px(space::XXS))
+                .rounded(px(radius::SMALL))
+                .cursor_pointer()
+                .key_nav()
+                .soft(hover, radius::SMALL)
+                .on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
+                .child(file_icon(&path, iconsize::S))
+                .child(div().flex_1().min_w_0().truncate().child(path.file_stem().unwrap_or_default().to_string_lossy().to_string()))
+        });
+        col = col.child(div().flex().flex_col().gap(px(space::S)).child(div().font_weight(FontWeight::BOLD).child(tr("Notizen"))).child(div().flex().flex_col().children(rows)));
+    }
+
     if a.tracks_files() {
         let folder = a.folder.clone();
         let mut files = div().flex().flex_col().gap(px(space::S)).child(

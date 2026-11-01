@@ -53,8 +53,8 @@ impl Default for GitPrefs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FileGrouping {
-    #[default]
     Week,
+    #[default]
     Folder,
     Date,
 }
@@ -119,6 +119,7 @@ pub struct Prefs {
     pub split_share: f32,
     /// Width of the folder tree on the notes page.
     pub notes_column: Option<f32>,
+    pub notes_explorer_hidden: bool,
     /// Width of the deadlines column on module pages.
     pub module_column: Option<f32>,
     pub shortcuts: BTreeMap<String, Shortcut>,
@@ -171,6 +172,7 @@ impl Default for Prefs {
             split_share: 0.5,
             module_column: None,
             notes_column: None,
+            notes_explorer_hidden: false,
             shortcuts: BTreeMap::new(),
             disabled_shortcuts: BTreeSet::new(),
             git: BTreeMap::new(),
@@ -216,6 +218,7 @@ static PREFS: LazyLock<RwLock<Prefs>> = LazyLock::new(|| {
         prefs.saves_while_typing = true;
         prefs.note_save_mode = NoteSaveMode::Delay;
         prefs.note_save_delay = 2.;
+        prefs.file_grouping = FileGrouping::Folder;
     }
     RwLock::new(prefs)
 });

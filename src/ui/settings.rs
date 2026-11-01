@@ -636,7 +636,7 @@ impl Settings {
         let sidebar = section(
             Some(tr("Seitenleiste")),
             Some(tr("Ausgeblendete Einträge bleiben über Kürzel und Befehlspalette erreichbar. Rechtsklick auf einen Eintrag blendet ihn direkt aus.")),
-            [("semester", tr("Semester")), ("record", tr("Leistungen")), ("inbox", tr("Inbox")), ("search", tr("Suche")), ("checks", tr("Aufräumen"))]
+            [("semester", tr("Semester")), ("record", tr("Leistungen")), ("inbox", tr("Inbox")), ("checks", tr("Aufräumen"))]
                 .into_iter()
                 .map(|(key, label)| {
                     let shown = !hidden.iter().any(|k| k == key);

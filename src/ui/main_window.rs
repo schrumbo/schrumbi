@@ -10,6 +10,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::inspector::Inspector;
+use super::motion::Soft;
 use super::motion;
 use super::pages::Pages;
 use super::state::{self, act};
@@ -164,6 +165,95 @@ impl MainWindow {
         }
     }
 
+    /// Where the open note lives: each folder leads into the explorer, the name renames it.
+    fn crumbs(lib: &Library, path: &std::path::Path, t: &Theme) -> Div {
+        let hover = t.ink.opacity(0.06);
+        let vault = crate::core::vault::index::current();
+        let folders: Vec<String> = path.parent().and_then(|p| p.strip_prefix(&vault.root).ok()).map(|p| p.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect()).unwrap_or_default();
+        let skipped = folders.len().saturating_sub(3);
+        let mut row = div().flex_1().min_w(px(80.)).flex().items_center().gap(px(space::XS)).overflow_hidden();
+        if skipped > 0 {
+            row = row.child(div().flex_none().text_color(t.tertiary).child("…")).child(div().flex_none().text_color(t.tertiary).child("/"));
+        }
+        for (i, name) in folders.iter().enumerate().skip(skipped) {
+            let rel = folders[..=i].join("/");
+            row = row
+                .child(
+                    div()
+                        .id(("crumb", i))
+                        .flex_shrink(1.)
+                        .min_w(px(24.))
+                        .truncate()
+                        .px(px(space::XS))
+                        .rounded(px(radius::SMALL))
+                        .cursor_pointer()
+                        .text_size(px(font::CALLOUT))
+                        .text_color(t.secondary)
+                        .soft(hover, radius::SMALL)
+                        .tooltip(tip(rel.clone()))
+                        .on_click(move |_, _, cx| {
+                            crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
+                            act(cx, |l| l.reveal_folder = Some(rel.clone()));
+                        })
+                        .child(name.clone()),
+                )
+                .child(div().flex_none().text_color(t.tertiary).child("/"));
+        }
+        let rename = path.to_path_buf();
+        row = row.child(
+            div()
+                .id("crumb-name")
+                .flex_shrink(1.)
+                .min_w(px(40.))
+                .truncate()
+                .px(px(space::XS))
+                .rounded(px(radius::SMALL))
+                .cursor_pointer()
+                .text_size(px(font::TITLE3))
+                .font_weight(FontWeight::BOLD)
+                .soft(hover, radius::SMALL)
+                .tooltip(tip(tr("Umbenennen")))
+                .on_click(move |_, _, cx| {
+                    crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
+                    act(cx, |l| {
+                        l.rename_request = Some(rename.clone());
+                        l.quiet_open = true;
+                    });
+                })
+                .child(lib.note_title(path)),
+        );
+        if let Some(next) = lib.next_deadline_for(path) {
+            let (module, id) = (next.module_id.clone(), next.id.clone());
+            row = row.child(
+                div()
+                    .id("note-deadline")
+                    .flex_none()
+                    .ml(px(space::S))
+                    .px(px(space::S))
+                    .py(px(space::XXS))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::XS))
+                    .bg(t.ink.opacity(0.06))
+                    .cursor_pointer()
+                    .text_size(px(font::CAPTION))
+                    .soft(t.ink.opacity(0.1), radius::FULL)
+                    .tooltip(tip(next.title.clone()))
+                    .on_click(move |_, _, cx| {
+                        act(cx, |l| {
+                            l.select(Some(id.clone()));
+                            l.set_route(Route::Module(module.clone()));
+                        })
+                    })
+                    .child(icon("calendar-clock", iconsize::XS, t.secondary))
+                    .child(div().max_w(px(120.)).truncate().child(next.short.clone()))
+                    .child(div().text_color(t.secondary).child(crate::core::day::countdown(next.due, lib.now))),
+            );
+        }
+        row
+    }
+
     fn toolbar(&self, lib: &Library, left: f32, page_width: f32, t: &Theme) -> Div {
         let show = lib.show_inspector;
         let module = if let Route::Module(id) = lib.route() { Some(id.clone()) } else { None };
@@ -178,7 +268,11 @@ impl MainWindow {
             .pr(px(space::M))
             .child(Button::new("go-back").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-left")).disabled(!lib.can_go_back()).tooltip(format!("{}{}", tr("Zurück"), ShortcutAction::GoBack.hint())).on_click(|_, _, cx| act(cx, |l| l.go_back())))
             .child(Button::new("go-forward").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-right")).disabled(!lib.can_go_forward()).tooltip(tr("Vorwärts")).on_click(|_, _, cx| act(cx, |l| l.go_forward())))
-            .child(div().flex_1().min_w(px(80.)).truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)))
+            
+            .child(match lib.route() {
+                Route::Doc(path) if lib.is_vault => Self::crumbs(lib, path, t),
+                _ => div().flex_1().min_w(px(80.)).truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)),
+            })
             .child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().bg(t.ink.opacity(0.06)).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("plus")).tooltip(tr("Neu")).dropdown_menu(move |menu, _, _| {
                 let m = module2.clone();
                 menu.item(PopupMenuItem::new(format!("{}{}", tr("Neuer Eintrag…"), ShortcutAction::NewEntry.hint())).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)))
@@ -226,7 +320,7 @@ impl Render for MainWindow {
         let route = lib.read(cx).route().clone();
         if self.shown_route.as_ref() != Some(&route) {
             let typing = self.search.read(cx).focus_handle(cx).is_focused(window);
-            if self.shown_route.is_some() && !typing && !window.has_active_dialog(cx) {
+            if self.shown_route.is_some() && !typing && !window.has_active_dialog(cx) && !state::read(cx, |l| l.quiet_open) {
                 window.focus(&self.focus, cx);
             }
             motion::forget_rows(cx);

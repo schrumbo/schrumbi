@@ -134,7 +134,8 @@ fn commands(cx: &App) -> Vec<Command> {
             state::reindex(cx);
         })));
         add(&vault, tr("Zufällige Notiz öffnen"), "shuffle", None, Run::Call(Rc::new(|cx| act(cx, |l| l.open_random_note()))));
-        add(&vault, tr("Notizen zeigen"), "book-open", None, Run::Call(Rc::new(|cx| act(cx, |l| l.set_route(Route::Notes)))));
+        add(&vault, tr("Notizen zeigen"), "book-open", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_notes()))));
+        add(&vault, tr("Dateien ein- oder ausblenden"), "panel-left", None, Run::Call(Rc::new(|cx| super::notes_page::set_hidden(!crate::core::prefs::get().notes_explorer_hidden, cx))));
         add(&vault, tr("Graph zeigen"), "waypoints", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_graph(None)))));
         if let Some(note) = active {
             let (a, b, c, d, e) = (note.clone(), note.clone(), note.clone(), note.clone(), note);

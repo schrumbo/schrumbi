@@ -282,13 +282,26 @@ impl Pages {
             .clone()
     }
 
+    /// The notes room: the vault's files beside whatever note is shown.
+    fn with_explorer(&mut self, body: AnyElement, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let (vault, route) = state::read(cx, |l| (l.is_vault, l.route().clone()));
+        if !vault || !matches!(route, Route::Doc(_) | Route::Notes) {
+            return body;
+        }
+        let page = self.notes_page.get_or_insert_with(|| cx.new(|cx| super::notes_page::NotesPage::new(window, cx))).clone();
+        let shown = !crate::core::prefs::get().notes_explorer_hidden && width >= 620.;
+        div().size_full().flex().when(shown, |d| d.child(page)).child(div().flex_1().min_w_0().h_full().child(body)).into_any_element()
+    }
+
     fn document(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let view = self.doc_view(&path, window, cx);
         let beside = state::read(cx, |l| l.split_document.clone()).filter(|p| *p != path);
+        let (quiet, asked) = state::lib(cx).update(cx, |l, _| (std::mem::take(&mut l.quiet_open), std::mem::take(&mut l.focus_document)));
         if self.shown_doc.as_ref() != Some(&path) {
             self.shown_doc = Some(path);
-            self.doc_needs_focus = true;
+            self.doc_needs_focus = !quiet;
         }
+        self.doc_needs_focus |= asked;
         if self.doc_needs_focus && !window.has_active_dialog(cx) {
             self.doc_needs_focus = false;
             let target = view.clone();
@@ -382,14 +395,11 @@ impl Render for Pages {
                 let page = self.graph_page.get_or_insert_with(|| cx.new(|cx| super::graph_view::GraphView::new(window, cx))).clone();
                 page.into_any_element()
             }
-            Route::Notes => {
-                let page = self.notes_page.get_or_insert_with(|| cx.new(|cx| super::notes_page::NotesPage::new(window, cx))).clone();
-                page.into_any_element()
-            }
+            Route::Notes => unavailable("book-open", tr("Keine Notiz offen"), tr("Wähle links eine Notiz oder lege mit ⌘N eine neue an."), &t).into_any_element(),
             Route::Today => div().into_any_element(),
         };
         fields.prune();
         self.fields = fields;
-        body
+        self.with_explorer(body, width, window, cx)
     }
 }
