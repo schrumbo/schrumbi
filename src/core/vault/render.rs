@@ -80,6 +80,37 @@ pub fn mermaid_links(code: &str) -> Vec<String> {
     out
 }
 
+/// Where the labels of linked nodes stand in a drawn diagram, in the picture's own coordinates.
+pub fn mermaid_link_spots(svg: &str, links: &[String]) -> Vec<(String, f32, f32)> {
+    static LABEL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r#"(?s)<text\b([^>]*)>(.*?)</text>"#).unwrap());
+    static TAG: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"<[^>]+>").unwrap());
+    let attribute = |attributes: &str, name: &str| -> Option<f32> {
+        let start = attributes.find(&format!(" {name}=\""))? + name.len() + 3;
+        let end = attributes[start..].find('"')? + start;
+        attributes[start..end].parse().ok()
+    };
+    let number = |name: &str| -> Option<f32> {
+        let start = svg.find(&format!("{name}=\""))? + name.len() + 2;
+        svg[start..].split('"').next()?.trim_end_matches("pt").trim_end_matches("px").parse().ok()
+    };
+    let view: Vec<f32> = svg.find("viewBox=\"").and_then(|at| svg[at + 9..].split('"').next()).map(|v| v.split([' ', ',']).filter_map(|n| n.parse().ok()).collect()).unwrap_or_default();
+    let (left, top, x_scale, y_scale) = match (view.as_slice(), number("width"), number("height")) {
+        ([x, y, w, h], Some(width), Some(height)) if *w > 0. && *h > 0. => (*x, *y, width / w, height / h),
+        _ => (0., 0., 1., 1.),
+    };
+    let mut spots = Vec::new();
+    for c in LABEL.captures_iter(svg) {
+        let shown = TAG.replace_all(&c[2], "");
+        let shown = shown.trim().replace("&amp;", "&");
+        if let Some(link) = links.iter().find(|l| l.as_str() == shown)
+            && let (Some(x), Some(y)) = (attribute(&c[1], "x"), attribute(&c[1], "y"))
+        {
+            spots.push((link.clone(), (x - left) * x_scale, (y - top) * y_scale));
+        }
+    }
+    spots
+}
+
 /// A formula in running text as plain characters, where that is possible; text has no room for an image.
 pub fn math_inline(latex: &str) -> Option<String> {
     let mut out = latex.trim().to_string();
@@ -146,6 +177,16 @@ fn script_down(c: char) -> Option<char> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn linked_mermaid_nodes_can_be_found_in_the_picture() {
+        let code = "graph TD\n  A[Ziel] --> B[Anders]\n  class A internal-link\n";
+        let svg = super::mermaid_svg(code, true).unwrap();
+        let links = super::mermaid_links(code);
+        let spots = super::mermaid_link_spots(&svg, &links);
+        assert_eq!(spots.len(), 1, "{}", &svg[..svg.len().min(900)]);
+        assert_eq!(spots[0].0, "Ziel");
+    }
+
     use super::*;
 
     #[test]

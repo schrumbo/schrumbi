@@ -23,6 +23,9 @@ enum Painted {
     Failed(String),
 }
 
+/// Where linked nodes stand in each diagram, filled while drawing.
+static DIAGRAM_SPOTS: std::sync::LazyLock<std::sync::Mutex<HashMap<(String, bool), Vec<(String, f32, f32)>>>> = std::sync::LazyLock::new(Default::default);
+
 thread_local! {
     static PICTURES: RefCell<HashMap<(String, bool), Painted>> = RefCell::new(HashMap::new());
 }
@@ -108,20 +111,42 @@ impl RenderOnce for Diagram {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let t = Theme::get(cx);
         let (code, dark) = (self.code.clone(), t.dark);
+        let links = render::mermaid_links(&self.code);
+        let spot_links = links.clone();
+        let spot_key = (self.code.clone(), dark);
         let painted = picture(format!("mermaid:{code}"), dark, move || render::mermaid_svg(&code, dark).map(|svg| {
             let (w, h) = svg_size(&svg);
+            DIAGRAM_SPOTS.lock().unwrap().insert(spot_key, render::mermaid_link_spots(&svg, &spot_links));
             (svg, w, h)
         }), cx);
-        let links = render::mermaid_links(&self.code);
         let body: AnyElement = match painted {
             Painted::Done(image, w, h) => {
                 let scale = (680. / w).min(1.);
                 let shown = image.clone();
+                let place = Rc::new(std::cell::Cell::new(Bounds::<Pixels>::default()));
+                let measured = place.clone();
+                let spots = DIAGRAM_SPOTS.lock().unwrap().get(&(self.code.clone(), dark)).cloned().unwrap_or_default();
                 div()
                     .id(("md-diagram-open", self.id))
+                    .relative()
                     .cursor_pointer()
                     .child(img(image).w(px(w * scale)).h(px(h * scale)))
-                    .on_click(move |_, window, cx| open_large(shown.clone(), w, h, window, cx))
+                    .child(canvas(|_, _, _| (), move |b, _, _, _| measured.set(b)).absolute().top_0().left_0().size_full())
+                    .on_click(move |e, window, cx| {
+                        let origin = place.get().origin;
+                        let at = e.position();
+                        let (x, y) = (f32::from(at.x - origin.x) / scale, f32::from(at.y - origin.y) / scale);
+                        let near = spots.iter().map(|(name, sx, sy)| (name, (sx - x).powi(2) + (sy - y).powi(2))).filter(|(_, d)| *d < 70. * 70.).min_by(|a, b| a.1.total_cmp(&b.1));
+                        match near {
+                            Some((name, _)) => {
+                                let destination = name.clone();
+                                act(cx, |l| {
+                                    l.open_link(&destination, None);
+                                });
+                            }
+                            None => open_large(shown.clone(), w, h, window, cx),
+                        }
+                    })
                     .into_any_element()
             }
             Painted::Busy => div().h(px(120.)).flex().items_center().child(loading(iconsize::M, t.tertiary)).into_any_element(),

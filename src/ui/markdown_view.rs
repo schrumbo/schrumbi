@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
@@ -912,12 +913,17 @@ pub struct LinkFocus {
     pub list: Option<ListState>,
     /// Plain clicks on text in a top-level block.
     pub text_click: Option<BlockClick>,
+    /// Rewrites the source of a list item in the live view.
+    pub edit_item: Option<EditItem>,
     /// What the reader has folded, kept across sessions.
     pub folds: Folds,
 }
 
 /// Called with a top-level block, the drawn text and the byte clicked.
 pub type BlockClick = Rc<dyn Fn(usize, Option<(usize, usize)>, &str, usize, &mut Window, &mut App)>;
+
+/// Called with a list item and how to change its source text.
+pub type EditItem = Rc<dyn Fn(usize, Rc<dyn Fn(&str) -> String>, &mut App)>;
 
 /// The foldable things whose state differs from how the note starts.
 pub type Folds = Rc<RefCell<std::collections::HashSet<String>>>;
@@ -927,7 +933,7 @@ thread_local! {
 }
 
 /// Remembers that a press landed on a control inside a block, so the block does not open for it.
-fn press_control() {
+pub fn press_control() {
     CONTROL_PRESSED.with(|c| c.set(true));
 }
 
@@ -1270,7 +1276,7 @@ fn embed(src: &str, alt: &str, cx: &Ctx) -> AnyElement {
     let Some(path) = beside.or_else(|| vault.resolver.resolve(&target, from.as_deref())) else { return missing_embed(&target.path, cx) };
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     if IMAGE_TYPES.contains(&ext.as_str()) {
-        return image_at(path, alt, cx);
+        return image_at(path, alt, &decoded, cx);
     }
     if markdown::is_markdown(&path) {
         return embed_note(path, &target, cx);
@@ -1346,19 +1352,35 @@ fn image(src: &str, alt: &str, cx: &Ctx) -> AnyElement {
     let path = markdown::percent_decode(src);
     let p: PathBuf = if Path::new(&path).is_absolute() { PathBuf::from(&path) } else { cx.base.map(|b| b.join(&path)).unwrap_or_else(|| PathBuf::from(&path)) };
     if p.exists() && IMAGE_TYPES.contains(&p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default().as_str()) {
-        return image_at(p, alt, cx);
+        return image_at(p, alt, src, cx);
     }
     embed(src, alt, cx)
 }
 
-fn image_at(p: PathBuf, alt: &str, cx: &Ctx) -> AnyElement {
+fn image_at(p: PathBuf, alt: &str, source_written: &str, cx: &Ctx) -> AnyElement {
     let (width, height) = image_size(alt);
     let _ = &alt;
     {
         let order = cx.order.get();
         cx.order.set(order + 1);
         let open = p.clone();
-        div().id(("md-image", order)).cursor_pointer().capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| super::preview::show(&open, cx)).child(img(p).when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL))).into_any_element()
+        let drawn = div().id(("md-image", order)).cursor_pointer().capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| super::preview::show(&open, cx)).child(img(p).when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL)));
+        let source_name = source_written.to_string();
+        match (cx.focus.and_then(|f| f.edit_item.clone()), cx.block) {
+            (Some(edit), item) => drawn
+                .context_menu(move |mut menu, _, _| {
+                    for (label, width) in [(tr("Klein"), Some(200)), (tr("Mittel"), Some(400)), (tr("Groß"), Some(640)), (tr("Originalgröße"), None)] {
+                        let (edit, name) = (edit.clone(), source_name.clone());
+                        menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                            let name = name.clone();
+                            edit(item, Rc::new(move |text| crate::core::live_text::set_image_width(text, &name, width)), cx);
+                        }));
+                    }
+                    menu
+                })
+                .into_any_element(),
+            _ => drawn.into_any_element(),
+        }
     }
 }
 
@@ -1491,7 +1513,8 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     drawn
                 });
                 let key = format!("c{order}");
-                Callout { head: head.clone(), title: shown, content: render_blocks(inner, cx), id: ElementId::from(("md-callout", order)), tint: callout_tint(head, t), secondary: t.secondary, folds: cx.focus.map(|f| (f.folds.clone(), key)) }.into_any_element()
+                let change_type = cx.focus.and_then(|f| f.edit_item.clone()).map(|edit| (edit, cx.block));
+                Callout { change_type, head: head.clone(), title: shown, content: render_blocks(inner, cx), id: ElementId::from(("md-callout", order)), tint: callout_tint(head, t), secondary: t.secondary, folds: cx.focus.map(|f| (f.folds.clone(), key)) }.into_any_element()
             }
             Block::Centered(inner) => div().w_full().flex().flex_col().items_center().gap(px(space::S)).children(render_blocks(inner, cx)).into_any_element(),
             Block::Details(summary, inner, open_at_start) => {
@@ -1757,6 +1780,7 @@ fn callout_tint(head: &CalloutHead, t: &Theme) -> Hsla {
 
 #[derive(IntoElement)]
 struct Callout {
+    change_type: Option<(EditItem, usize)>,
     head: CalloutHead,
     title: Option<AnyElement>,
     folds: Option<(Folds, String)>,
@@ -1784,10 +1808,8 @@ impl RenderOnce for Callout {
             .items_center()
             .gap(px(space::S))
             .text_size(px(font::CALLOUT))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(tint)
             .child(super::widgets::icon(self.head.kind.icon(), iconsize::S, tint))
-            .child(div().flex_1().min_w_0().child(title))
+            .child(div().flex_1().min_w_0().font_weight(FontWeight::SEMIBOLD).text_color(tint).child(title))
             .when(foldable, |d| {
                 d.child(super::motion::chevron(chevron_id, is_open, self.secondary)).cursor_pointer().capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| {
                     cx.stop_propagation();
@@ -1797,6 +1819,21 @@ impl RenderOnce for Callout {
                     }
                 })
             });
+        let change_type = self.change_type.clone();
+        let row: AnyElement = match change_type {
+            Some((edit, item)) => row
+                .context_menu(move |mut menu, _, _| {
+                    for kind in ["note", "abstract", "info", "todo", "tip", "success", "question", "warning", "failure", "danger", "bug", "example", "quote"] {
+                        let edit = edit.clone();
+                        menu = menu.item(PopupMenuItem::new(tr(syntax::CalloutKind::parse(kind).label())).icon(super::widgets::menu_icon(syntax::CalloutKind::parse(kind).icon())).on_click(move |_, _, cx| {
+                            edit(item, Rc::new(move |text| crate::core::live_text::set_callout_type(text, kind)), cx);
+                        }));
+                    }
+                    menu
+                })
+                .into_any_element(),
+            None => row.into_any_element(),
+        };
         let body = div().w_full().pt(px(space::S)).flex().flex_col().gap(px(space::S)).children(self.content);
         super::widgets::banner(tint).w_full().px(px(space::M)).py(px(space::S)).flex().flex_col().child(row).when(has_body, |d| d.child(div().w_full().child(super::motion::reveal(reveal_id, is_open, body))))
     }

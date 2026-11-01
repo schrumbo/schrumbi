@@ -1,4 +1,10 @@
 {
+  "Quelltext bearbeiten": "Edit source",
+  "Notiz geändert": "Note changed",
+  "Klein": "Small",
+  "Mittel": "Medium",
+  "Groß": "Large",
+  "Originalgröße": "Original size",
   "Live: Text bleibt gezeichnet": "Live: text stays drawn",
   "Code-Editor: Quelltext mit Zeilennummern": "Code editor: source with line numbers",
   "Notizen schreiben": "Write notes",

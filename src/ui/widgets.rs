@@ -403,6 +403,21 @@ pub fn unavailable(icon_name: &str, title: impl Into<SharedString>, description:
 }
 
 /// The label of a plain row button with hover feedback.
+/// One line for a file, the same in every list: icon, name, then whatever the list adds.
+pub fn file_row(id: impl Into<ElementId>, path: &Path, name: impl Into<SharedString>, t: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(super::theme::control::M))
+        .flex()
+        .items_center()
+        .gap(px(space::S))
+        .cursor_pointer()
+        .key_nav()
+        .soft(t.ink.opacity(0.05), 0.)
+        .child(file_icon(path, iconsize::S))
+        .child(div().flex_1().min_w_0().truncate().child(name.into()))
+}
+
 pub fn row_button(id: impl Into<ElementId>, t: &Theme) -> Stateful<Div> {
     let hover = t.ink.opacity(0.06);
     div().id(id).w_full().cursor_pointer().key_nav().soft(hover, 0.)

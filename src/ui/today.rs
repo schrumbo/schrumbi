@@ -59,18 +59,8 @@ fn recent_notes(lib: &Library, t: &Theme) -> Option<Div> {
     let hover = t.ink.opacity(0.05);
     let rows = notes.into_iter().enumerate().map(|(i, (path, modified))| {
         let (open, menu) = (path.clone(), path.clone());
-        div()
-            .id(("recent-note", i))
-            .h(px(control::M))
+        file_row(("recent-note", i), path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t)
             .px(px(space::M))
-            .flex()
-            .items_center()
-            .gap(px(space::S))
-            .cursor_pointer()
-            .key_nav()
-            .soft(hover, 0.)
-            .child(file_icon(path, iconsize::S))
-            .child(div().flex_1().min_w_0().truncate().child(path.file_stem().unwrap_or_default().to_string_lossy().to_string()))
             .child(caption(super::notes_page::changed_ago(now - modified), t).flex_none())
             .on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
             .context_menu(move |m, _, _| file_menu(m, menu.clone()))

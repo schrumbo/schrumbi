@@ -245,7 +245,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Source, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Source, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -1226,6 +1226,22 @@ impl NoteView {
                 }
             }));
         }
+        if self.mode == Mode::Live {
+            let (shown, note) = (segments.clone(), self.path.clone());
+            focus.edit_item = Some(Rc::new(move |item, change, cx| {
+                let Some(segment) = shown.get(item).copied() else { return };
+                let note = note.clone();
+                act(cx, |l| {
+                    l.edit_note(&note, "live", tr("Notiz geändert"), |text| {
+                        let lines: Vec<&str> = text.split('\n').collect();
+                        let end = (segment.line + segment.count).min(lines.len());
+                        let part = lines[segment.line.min(end)..end].join("\n");
+                        let changed = change(&part);
+                        [&lines[..segment.line.min(end)], &changed.split('\n').collect::<Vec<_>>()[..], &lines[end..]].concat().join("\n")
+                    });
+                });
+            }));
+        }
         let live_mode = self.mode == Mode::Live;
         let live_item = self.live.as_ref().filter(|l| l.cell.is_none()).map(|l| l.index);
         let live_cell = self.live.as_ref().and_then(|l| l.cell.map(|c| (l.index, c.row, c.column)));
@@ -1326,7 +1342,40 @@ impl NoteView {
                     if live_item == Some(i - 1) {
                         div().into_any_element()
                     } else {
-                        div().pb(px(space::XS)).child(markdown_view::render_live(&parsed, block, base.as_deref(), Some(toggle.clone()), found.as_ref(), Some(&focus), markdown_view::LiveDraw { item: Some(i - 1), ..Default::default() }, &t)).into_any_element()
+                        let drawn = markdown_view::render_live(&parsed, block, base.as_deref(), Some(toggle.clone()), found.as_ref(), Some(&focus), markdown_view::LiveDraw { item: Some(i - 1), ..Default::default() }, &t);
+                        let fence = source_lines.get(line).map_or("", |l| l.trim_start().trim_start_matches('`').trim());
+                        if ["mermaid", "query", "base"].contains(&fence) && source_lines.get(line).is_some_and(|l| l.trim_start().starts_with("```")) {
+                            let group = SharedString::from(format!("live-fence-{i}"));
+                            let edit_me = me.clone();
+                            div()
+                                .relative()
+                                .pb(px(space::XS))
+                                .group(group.clone())
+                                .capture_any_mouse_down(|_, _, _| markdown_view::press_control())
+                                .child(drawn)
+                                .child(
+                                    div()
+                                        .id(("live-fence-edit", i))
+                                        .absolute()
+                                        .top(px(space::XS))
+                                        .right(px(space::XS))
+                                        .size(px(24.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(radius::SMALL))
+                                        .bg(t.secondary_bg)
+                                        .cursor_pointer()
+                                        .invisible()
+                                        .group_hover(group, |s| s.visible())
+                                        .tooltip(tip(tr("Quelltext bearbeiten")))
+                                        .on_click(move |_, window, cx| edit_me.update(cx, |n, cx| n.open_line(line, Some(0), window, cx)))
+                                        .child(icon("code-xml", iconsize::S, t.secondary)),
+                                )
+                                .into_any_element()
+                        } else {
+                            div().pb(px(space::XS)).child(drawn).into_any_element()
+                        }
                     }
                 }
                 SegmentKind::Table { block } => {

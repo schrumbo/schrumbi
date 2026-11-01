@@ -215,7 +215,7 @@ impl DocSide {
                     let destination = format!("{}{sub}", vault.link_path(Some(&from), &target));
                     let source = from.clone();
                     let icon_target = target.clone();
-                    div().id(("outgoing", i)).h(px(control::M)).px(px(space::L)).flex().items_center().gap(px(space::S)).cursor_pointer().key_nav().soft(hover, 0.).child(file_icon(&icon_target, iconsize::S)).child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).child(shown)).on_click(move |_, _, cx| {
+                    file_row(("outgoing", i), &icon_target, shown, t).px(px(space::L)).on_click(move |_, _, cx| {
                         let (d, s) = (destination.clone(), source.clone());
                         act(cx, |l| {
                             l.open_link(&d, Some(&s));

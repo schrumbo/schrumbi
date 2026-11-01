@@ -213,6 +213,24 @@ pub fn set_table_cell(line: &str, column: usize, value: &str) -> Option<(String,
     Some((out, start..end))
 }
 
+/// Sets the width written with an image, or removes it.
+pub fn set_image_width(text: &str, source: &str, width: Option<u32>) -> String {
+    let name = regex::escape(source);
+    let wiki = Regex::new(&format!(r"!\[\[{name}(\|[^\]]*)?\]\]")).unwrap();
+    let suffix = width.map_or(String::new(), |w| format!("|{w}"));
+    if wiki.is_match(text) {
+        return wiki.replace(text, |_: &regex::Captures| format!("![[{source}{suffix}]]")).to_string();
+    }
+    let plain = Regex::new(&format!(r"!\[([^\]|]*)(?:\|[^\]]*)?\]\({name}\)")).unwrap();
+    plain.replace(text, |c: &regex::Captures| format!("![{}{suffix}]({source})", &c[1])).to_string()
+}
+
+/// Changes the type of the first callout in a text, keeping fold mark and title.
+pub fn set_callout_type(text: &str, kind: &str) -> String {
+    static HEAD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[![^\]\s]+\]").unwrap());
+    HEAD.replace(text, |_: &regex::Captures| format!("[!{kind}]")).to_string()
+}
+
 /// Joins three versions of a note when both sides changed different lines; `None` when they touched the same place.
 pub fn merge(base: &str, mine: &str, theirs: &str) -> Option<String> {
     let (b, m, t): (Vec<&str>, Vec<&str>, Vec<&str>) = (base.split('\n').collect(), mine.split('\n').collect(), theirs.split('\n').collect());
@@ -358,6 +376,16 @@ mod tests {
         assert_eq!(set_table_cell("|  |  |", 1, "x").unwrap().0, "|  | x |");
         let bare = "a | b";
         assert_eq!(table_cells(bare).len(), 2);
+    }
+
+    #[test]
+    fn image_width_and_callout_type_are_rewritten() {
+        assert_eq!(set_image_width("a ![[b.png]] c", "b.png", Some(200)), "a ![[b.png|200]] c");
+        assert_eq!(set_image_width("![[b.png|200]]", "b.png", Some(400)), "![[b.png|400]]");
+        assert_eq!(set_image_width("![[b.png|200]]", "b.png", None), "![[b.png]]");
+        assert_eq!(set_image_width("![alt](x/b.png)", "x/b.png", Some(300)), "![alt|300](x/b.png)");
+        assert_eq!(set_image_width("![alt|300](x/b.png)", "x/b.png", None), "![alt](x/b.png)");
+        assert_eq!(set_callout_type("> [!tip]+ Titel\n> a", "warning"), "> [!warning]+ Titel\n> a");
     }
 
     #[test]
