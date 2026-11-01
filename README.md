@@ -15,7 +15,9 @@ Schrumbi is a desktop app built with Rust and [GPUI](https://www.gpui.rs). It re
 - **Inbox:** suggests where a file belongs and names it by your convention; press Enter to file it
 - **Search:** full-text search across file names, PDFs and notes, with a jump to each match
 - **PDF viewer:** thumbnails, outline, text search, highlights, links and a remembered position per file
-- **Notes:** Markdown editor and reader, split view and PDF export
+- **Notes:** file browser for your whole folder with tabs, tags, tasks and a graph; Markdown code editor, optional live mode, reader, split view and PDF export
+- **Sync:** optional, through Git, with conflict handling; requires Git to be installed
+- **Obsidian:** optional; open or connect an existing vault and keep using both side by side
 - **Undo:** step back through filing, renames, status changes and deadlines with `⌘Z`
 - **Keyboard:** command palette and configurable shortcuts
 - **Menu bar:** next deadline and upcoming days at a glance
@@ -38,10 +40,12 @@ The macOS build is not notarized, so macOS blocks the first launch. Allow it und
 
 | Action | macOS |
 |---|---|
-| Command palette | `⌘K` (`⇧⌘P` in the editor) |
+| Command palette | `⌘K` or `⌘P` |
 | Shortcut overview | `⌘/` |
 | Search | `/` |
-| Quick open | `⌘P` |
+| Quick open | `⌘O` |
+| New note | `⌘N` |
+| Switch reading and editing | `⇧⌘V` |
 | Undo | `⌘Z` |
 
 Most shortcuts can be changed in the settings.
