@@ -69,6 +69,8 @@ pub struct NotesPage {
     target_folder: Option<String>,
     renaming: Option<(PathBuf, Entity<InputState>, Subscription)>,
     width: f32,
+    /// A width drag is under way; it is saved when the drag ends.
+    resizing: bool,
     tree: Option<(u64, Rc<Tree>)>,
     cache: Option<Cache>,
     focus: FocusHandle,
@@ -159,6 +161,7 @@ impl NotesPage {
             target_folder: None,
             renaming: None,
             width: crate::core::prefs::get().notes_column.unwrap_or(260.),
+            resizing: false,
             tree: None,
             cache: None,
             focus: cx.focus_handle(),
@@ -852,10 +855,13 @@ impl Render for NotesPage {
         };
         let _ = active;
         let width = self.width;
-        let handle = div().id("explorer-split").w(px(space::XS)).h_full().flex_none().cursor_col_resize().border_r_1().border_color(t.separator).on_drag(ExplorerSplit, |d, _, _, cx| cx.new(|_| d.clone())).on_drag_move(cx.listener(|s, e: &DragMoveEvent<ExplorerSplit>, _, cx| {
-            s.width = f32::from(e.event.position.x - e.bounds.left()).clamp(180., 420.);
-            cx.notify();
-        }));
+        let accent = t.accent;
+        let handle = div().id("explorer-split").w(px(space::XS)).h_full().flex_none().cursor_col_resize().border_r_1().border_color(t.separator).hover(move |s| s.bg(accent.opacity(0.3))).on_drag(ExplorerSplit, |d, _, _, cx| cx.new(|_| d.clone()));
+        if self.resizing && !cx.has_active_drag() {
+            self.resizing = false;
+            let width = self.width;
+            crate::core::prefs::update(|p| p.notes_column = Some(width));
+        }
         div()
             .id("explorer")
             .track_focus(&self.focus)
@@ -865,7 +871,14 @@ impl Render for NotesPage {
             .flex()
             .on_key_down(cx.listener(Self::on_key))
             .on_action(|_: &super::app::TogglePreview, _, cx| act(cx, |l| l.toggle_mode = l.active_document.as_deref().is_some_and(markdown::is_markdown)))
-            .on_mouse_up(MouseButton::Left, cx.listener(|s, _, _, _| crate::core::prefs::update(|p| p.notes_column = Some(s.width))))
+            .on_drag_move(cx.listener(|s, e: &DragMoveEvent<ExplorerSplit>, _, cx| {
+                let width = f32::from(e.event.position.x - e.bounds.left()).round().clamp(180., 420.);
+                s.resizing = true;
+                if width != s.width {
+                    s.width = width;
+                    cx.notify();
+                }
+            }))
             .child(div().w(px(width)).h_full().flex().flex_col().bg(t.column).child(header).child(filter).child(div().flex_1().min_h_0().child(body)))
             .child(handle)
     }
