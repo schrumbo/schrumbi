@@ -134,6 +134,7 @@ pub struct Prefs {
     pub note_places: std::collections::BTreeMap<String, f32>,
     pub pdf_header: bool,
     pub pdf_page_numbers: bool,
+    pub pdf_properties: bool,
     pub editor_font_size: f32,
     pub theme: ThemeChoice,
     /// The chance of remembering a card that reviews aim for.
@@ -214,6 +215,7 @@ impl Default for Prefs {
             note_places: Default::default(),
             pdf_header: true,
             pdf_page_numbers: true,
+            pdf_properties: false,
             editor_font_size: 13.,
             theme: ThemeChoice::System,
             card_retention: 0.9,

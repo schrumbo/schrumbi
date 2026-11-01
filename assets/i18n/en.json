@@ -1438,5 +1438,6 @@
   "Sortierung: %@": "Sort: %@",
   "Die Karte wurde in der Notiz geändert. Schließen und neu öffnen.": "The card changed in the note. Close and open it again.",
   "Name bleibt: „%@“ gibt es hier schon": "Name stays: “%@” already exists here",
-  "Überschrift angepasst": "Heading updated"
+  "Überschrift angepasst": "Heading updated",
+  "Eigenschaften über dem Text": "Properties above the text"
 }

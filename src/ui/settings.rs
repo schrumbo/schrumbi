@@ -179,6 +179,7 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Akzentfarbe", Tab::Notes),
     ("Kopfzeile mit Modul, Woche, Name und Datum", Tab::Notes),
     ("Seitenzahlen", Tab::Notes),
+    ("Eigenschaften über dem Text", Tab::Notes),
 ];
 
 /// The settings window: Allgemein, Semester, Module, Notizen, Tastenkürzel.
@@ -1830,6 +1831,10 @@ impl Settings {
                 row(tr("Kopfzeile mit Modul, Woche, Name und Datum"), Switch::new("n-header").checked(p.pdf_header).on_click(|v, _, _| {
                     let v = *v;
                     prefs::update(|p| p.pdf_header = v);
+                }), t),
+                row(tr("Eigenschaften über dem Text"), Switch::new("n-properties").checked(p.pdf_properties).on_click(|v, _, _| {
+                    let v = *v;
+                    prefs::update(|p| p.pdf_properties = v);
                 }), t),
                 row(tr("Seitenzahlen"), Switch::new("n-pages").checked(p.pdf_page_numbers).on_click(|v, _, _| {
                     let v = *v;

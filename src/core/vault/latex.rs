@@ -275,7 +275,9 @@ pub fn learn_macros(note: &str) {
 
 /// The formula in the form the converter understands.
 pub fn prepare(latex: &str) -> String {
-    let text = take_definitions(latex);
+    static GAP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{c\d+::((?:[^{}]|\{[^{}]*\})*?)(?:::[^{}]*)?\}\}").unwrap());
+    let shown = GAP.replace_all(latex, "$1");
+    let text = take_definitions(&shown);
     let text = expand(&text);
     let text = absolute_values(&case_columns(&environments(&text)));
     let text = each_command(&text, "ce", |f| format!("{{{}}}", chemistry(f)));

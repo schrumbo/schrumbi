@@ -33,12 +33,14 @@ pub struct Options {
     pub header: bool,
     pub page_numbers: bool,
     pub lang: String,
+    /// The note's properties on top of the first page.
+    pub properties: bool,
 }
 
 impl Options {
     pub fn current() -> Self {
         let p = super::prefs::get();
-        Self { accent: p.note_accent.clone(), header: p.pdf_header, page_numbers: p.pdf_page_numbers, lang: if super::i18n::lang() == super::i18n::Lang::En { "en".into() } else { "de".into() } }
+        Self { accent: p.note_accent.clone(), header: p.pdf_header, page_numbers: p.pdf_page_numbers, properties: p.pdf_properties, lang: if super::i18n::lang() == super::i18n::Lang::En { "en".into() } else { "de".into() } }
     }
 }
 
@@ -148,11 +150,42 @@ pub struct Converter<'a> {
     footnote_order: Vec<String>,
     code: Option<(Option<String>, String)>,
     image: Option<(String, String)>,
+    /// What stands in the note as a placeholder until it is drawn.
+    embeds: Vec<Embed>,
+    /// Inline HTML tags still open, closed at the latest where their block ends.
+    open_html: Vec<String>,
+    /// The head of a callout was just closed; the line break after it does not count.
+    after_head: bool,
+    /// Pictures and PDFs are named instead of drawn, because one of them could not be read.
+    no_media: bool,
 }
+
+/// Something shown in a note that is not text.
+enum Embed {
+    Pdf { path: PathBuf, page: usize },
+    Canvas(PathBuf),
+    Base { source: String, this: Option<PathBuf> },
+    File { name: String, icon: &'static str },
+}
+
+const CALLOUT_OPEN: char = '\u{E000}';
+const CALLOUT_KIND_END: char = '\u{E001}';
+const CALLOUT_CLOSE: char = '\u{E002}';
+const EMBED_OPEN: char = '\u{E003}';
+const EMBED_CLOSE: char = '\u{E004}';
+const TASK_MARK: char = '\u{E005}';
+const RASTER: [&str; 6] = ["png", "jpg", "jpeg", "gif", "svg", "webp"];
+const AUDIO: [&str; 7] = ["mp3", "wav", "m4a", "ogg", "flac", "3gp", "webm"];
+const VIDEO: [&str; 4] = ["mp4", "mov", "mkv", "ogv"];
 
 impl<'a> Converter<'a> {
     pub fn new(base: &'a Path) -> Self {
-        Self { base, images: Vec::new(), stack: vec![String::new()], items: Vec::new(), lists: Vec::new(), table: None, footnotes: Vec::new(), footnote_order: Vec::new(), code: None, image: None }
+        Self { base, images: Vec::new(), stack: vec![String::new()], items: Vec::new(), lists: Vec::new(), table: None, footnotes: Vec::new(), footnote_order: Vec::new(), code: None, image: None, embeds: Vec::new(), open_html: Vec::new(), after_head: false, no_media: false }
+    }
+
+    fn without_media(mut self) -> Self {
+        self.no_media = true;
+        self
     }
 
     fn out(&mut self) -> &mut String {
@@ -167,6 +200,12 @@ impl<'a> Converter<'a> {
         self.stack.pop().unwrap_or_default()
     }
 
+    fn file_named(&mut self, p: &Path) -> String {
+        let name = format!("/img/{}.{}", self.images.len(), p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default());
+        self.images.push(p.to_path_buf());
+        name
+    }
+
     fn image_markup(&mut self, src: &str, alt: &str) -> String {
         let local = if src.contains("://") {
             None
@@ -176,38 +215,82 @@ impl<'a> Converter<'a> {
             let name = decoded.split(['|', '#']).next().unwrap_or(&decoded);
             let p = if direct.is_file() { direct } else { vault::index::current().resolve(name, Some(&self.base.join("x.md"))).unwrap_or(direct) };
             let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-            (p.is_file() && matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp")).then_some((p, ext))
+            (p.is_file() && RASTER.contains(&ext.as_str())).then_some(p)
         };
+        let size = alt.rsplit('|').next().and_then(|last| last.split('x').next()).and_then(|w| w.trim().parse::<f64>().ok());
+        let caption = if size.is_some() { alt.rsplit_once('|').map_or("", |(text, _)| text) } else { alt };
         match local {
-            Some((p, ext)) => {
-                let name = format!("/img/{}.{ext}", self.images.len());
-                self.images.push(p);
-                format!("#fitimg({})", str_arg(&name))
+            Some(p) if !self.no_media => {
+                let name = self.file_named(&p);
+                match size {
+                    Some(width) => format!("#sizedimg({}, {:.1}pt)", str_arg(&name), width * 0.75),
+                    None => format!("#fitimg({})", str_arg(&name)),
+                }
             }
-            None if alt.is_empty() => String::new(),
-            None => format!("#text(fill: muted)[{}]", lit(alt)),
+            Some(p) => format!("#filechip(\"image\")[{}]", lit(&p.file_name().unwrap_or_default().to_string_lossy())),
+            None if caption.is_empty() => String::new(),
+            None => format!("#text(fill: muted)[{}]", lit(caption)),
         }
     }
 
+    /// Writes an HTML fragment: tags that mean something as markup, the rest only as its text.
     fn html(&mut self, h: &str) {
         static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<!--.*?-->|<[^>]+>").unwrap());
-        static BR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^<br\s*/?>$").unwrap());
         let mut last = 0;
-        let mut out = String::new();
         for m in TAG.find_iter(h) {
             let text = &h[last..m.start()];
             if !text.is_empty() {
-                out.push_str(&lit(text));
-            }
-            if BR.is_match(m.as_str()) {
-                out.push_str("#linebreak()");
+                let t = lit(text);
+                self.out().push_str(&t);
             }
             last = m.end();
+            let tag = m.as_str().trim_matches(['<', '>', ' ', '/']).split_whitespace().next().unwrap_or_default().to_lowercase();
+            if tag == "br" {
+                self.out().push_str("#linebreak()");
+            } else if m.as_str().starts_with("</") {
+                if let Some(at) = self.open_html.iter().rposition(|t| *t == tag) {
+                    let closes = self.open_html.len() - at;
+                    self.open_html.truncate(at);
+                    self.out().push_str(&"]".repeat(closes));
+                }
+            } else if let Some(open) = html_markup(&tag).filter(|_| !m.as_str().ends_with("/>")) {
+                self.open_html.push(tag);
+                self.out().push_str(open);
+            }
         }
         if last < h.len() {
-            out.push_str(&lit(&h[last..]));
+            let t = lit(&h[last..]);
+            self.out().push_str(&t);
         }
-        self.out().push_str(&out);
+    }
+
+    fn close_html(&mut self) {
+        let closes = std::mem::take(&mut self.open_html).len();
+        self.out().push_str(&"]".repeat(closes));
+    }
+
+    fn embed_markup(&mut self, at: usize) -> String {
+        let Some(embed) = self.embeds.get(at) else { return String::new() };
+        match embed {
+            Embed::File { name, icon } => format!("#filechip({})[{}]", str_arg(icon), lit(name)),
+            Embed::Pdf { path, page } => {
+                let (path, page) = (path.clone(), *page);
+                let title = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if self.no_media {
+                    return format!("#filechip(\"file-text\")[{}]", lit(&title));
+                }
+                let pages = lopdf::Document::load(&path).ok().map(|d| d.get_pages().len());
+                let Some(pages) = pages.filter(|n| *n > 0) else { return format!("#filechip(\"file-text\")[{}]", lit(&title)) };
+                let page = page.clamp(1, pages);
+                let name = self.file_named(&path);
+                format!("#pdfpage({}, {page}, {})", str_arg(&name), str_arg(&format!("{title} · {page} / {pages}")))
+            }
+            Embed::Canvas(path) => {
+                let path = path.clone();
+                canvas_markup(&path)
+            }
+            Embed::Base { source, this } => base_markup(source, this.as_deref()),
+        }
     }
 
     fn end_list(&mut self) {
@@ -216,7 +299,13 @@ impl<'a> Converter<'a> {
         let bullet = ["•", "◦", "▪"][depth.min(2)];
         let mut cells = Vec::new();
         for (i, (task, body)) in items.into_iter().enumerate() {
+            let custom = body.strip_prefix(TASK_MARK).and_then(|rest| rest.split_once(TASK_MARK)).map(|(mark, rest)| (mark.to_string(), rest.to_string()));
+            let (custom_mark, body) = match custom {
+                Some((mark, rest)) => (Some(mark), rest),
+                None => (None, body),
+            };
             let marker = match (task, start) {
+                _ if custom_mark.is_some() => format!("customtask({})", str_arg(custom_mark.as_deref().unwrap_or_default())),
                 (Some(done), _) => format!("taskbox({done})"),
                 (None, Some(s)) => format!("align(right, text(fill: marker, number-type: \"lining\", number-width: \"tabular\")[{}])", lit(&format!("{}.", s + i as u64))),
                 (None, None) => format!("align(right, text(fill: marker)[{}])", lit(bullet)),
@@ -246,8 +335,9 @@ impl<'a> Converter<'a> {
 
     /// Converts Markdown to Typst markup and returns the images referenced as `/img/N.ext`.
     pub fn convert(mut self, src: &str) -> (String, Vec<PathBuf>) {
-        let expanded = expand_embeds(&vault::syntax::prepare(src), self.base, 0);
-        let src = callouts_as_quotes(&expanded);
+        let body = &src[vault::frontmatter::body_offset(src)..];
+        let expanded = expand_embeds(&vault::syntax::prepare(body), self.base, 0, &mut self.embeds);
+        let src = callouts_as_quotes(&gaps_shown(&without_block_ids(&expanded)));
         let strict = vault::index::current().config.strict_line_breaks;
         let events: Vec<Event> = Parser::new_ext(&src, markdown::options()).collect();
         for (i, event) in events.iter().enumerate() {
@@ -257,6 +347,16 @@ impl<'a> Converter<'a> {
                     Event::End(TagEnd::CodeBlock) => {
                         let (lang, buf) = self.code.take().unwrap();
                         let code = buf.strip_suffix('\n').unwrap_or(&buf).to_string();
+                        if lang.as_deref() == Some("query") {
+                            let m = query_markup(&code);
+                            self.out().push_str(&m);
+                            continue;
+                        }
+                        if lang.as_deref() == Some("base") {
+                            let m = base_markup(&code, Some(&self.base.join("x.md")));
+                            self.out().push_str(&m);
+                            continue;
+                        }
                         if lang.as_deref() == Some("mermaid")
                             && let Ok(svg) = vault::render::mermaid_svg(&code, false)
                         {
@@ -294,7 +394,13 @@ impl<'a> Converter<'a> {
                         let n = markdown::heading_number(*level);
                         self.out().push_str(&format!("#heading(level: {n})["));
                     }
-                    Tag::BlockQuote(_) => self.out().push_str("#quote(block: true)["),
+                    Tag::BlockQuote(_) => {
+                        let head = events.get(i + 2).and_then(|e| if let Event::Text(t) = e { t.strip_prefix(CALLOUT_OPEN) } else { None }).and_then(|t| t.split(CALLOUT_KIND_END).next().map(str::to_string));
+                        match head {
+                            Some(kind) => self.out().push_str(&format!("#callout({})[", str_arg(&kind))),
+                            None => self.out().push_str("#quote(block: true)["),
+                        }
+                    }
                     Tag::CodeBlock(kind) => {
                         let lang = match kind {
                             CodeBlockKind::Fenced(l) if !l.is_empty() => l.split_whitespace().next().map(String::from),
@@ -314,20 +420,26 @@ impl<'a> Converter<'a> {
                     Tag::Strong => self.out().push_str("#strong["),
                     Tag::Strikethrough => self.out().push_str("#strike["),
                     Tag::Link { dest_url, .. } => {
-                        let s = if dest_url.contains("://") { format!("#link({})[", str_arg(dest_url)) } else { "#text(fill: rgb(\"#2f6fdf\"))[".to_string() };
+                        let s = if dest_url.contains("://") { format!("#link({})[", str_arg(dest_url)) } else { "#text(fill: accent)[".to_string() };
                         self.out().push_str(&s);
                     }
                     Tag::Image { dest_url, .. } => self.image = Some((dest_url.to_string(), String::new())),
                     _ => {}
                 },
                 Event::End(end) => match end {
+                    TagEnd::Paragraph if std::mem::take(&mut self.after_head) => self.close_html(),
                     TagEnd::Paragraph => {
+                        self.close_html();
                         let inside = !self.items.is_empty() || self.stack.len() > 1;
                         self.out().push_str(if inside { "#parbreak()" } else { "\n\n" });
                     }
-                    TagEnd::Heading(_) => self.out().push_str("]\n\n"),
+                    TagEnd::Heading(_) => {
+                        self.close_html();
+                        self.out().push_str("]\n\n");
+                    }
                     TagEnd::BlockQuote(_) => self.out().push_str("]\n\n"),
                     TagEnd::Item => {
+                        self.close_html();
                         let body = self.pop();
                         let (task, _) = self.items.pop().unwrap_or_default();
                         let body = body.trim_end_matches("#parbreak()").to_string();
@@ -342,6 +454,7 @@ impl<'a> Converter<'a> {
                         self.footnotes.push((id, body.trim_end_matches("#parbreak()").to_string()));
                     }
                     TagEnd::TableCell => {
+                        self.close_html();
                         let c = self.pop();
                         if let Some(t) = self.table.as_mut() {
                             t.1.push(c);
@@ -352,13 +465,40 @@ impl<'a> Converter<'a> {
                     _ => {}
                 },
                 Event::Text(t) => {
+                    let mut rest: &str = t;
+                    static CUSTOM_TASK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[([^\s\]xX])\] ").unwrap());
+                    if self.items.last().is_some_and(|it| it.0.is_none()) && self.stack.last().is_some_and(String::is_empty)
+                        && let Some(c) = CUSTOM_TASK.captures(rest)
+                    {
+                        let mark = format!("{TASK_MARK}{}{TASK_MARK}", &c[1]);
+                        self.out().push_str(&mark);
+                        rest = &rest[c.get(0).map_or(0, |m| m.end())..];
+                    }
+                    if let Some(after) = rest.strip_prefix(CALLOUT_OPEN) {
+                        let (kind, title) = after.split_once(CALLOUT_KIND_END).unwrap_or(("note", after));
+                        self.out().push_str(&format!("#calloutitle({})[", str_arg(kind)));
+                        rest = title;
+                    }
+                    if let Some(number) = rest.strip_prefix(EMBED_OPEN).and_then(|r| r.strip_suffix(EMBED_CLOSE)) {
+                        let m = self.embed_markup(number.parse().unwrap_or(usize::MAX));
+                        self.out().push_str(&m);
+                        continue;
+                    }
+                    let (body, closed) = match rest.strip_suffix(CALLOUT_CLOSE) {
+                        Some(body) => (body, true),
+                        None => (rest, false),
+                    };
                     let mut s = String::new();
-                    for r in markdown::runs(t) {
+                    for r in markdown::runs(body) {
                         match r {
                             Run::Text(x) => s.push_str(&lit(&x)),
-                            Run::Mark(x, _) => s.push_str(&format!("#highlight[{}]", lit(&x))),
-                            Run::Tag(x) => s.push_str(&lit(&format!("#{x}"))),
+                            Run::Mark(x, color) => s.push_str(&format!("#highlight(fill: {})[{}]", mark_fill(color), lit(&x))),
+                            Run::Tag(x) => s.push_str(&format!("#notetag[{}]", lit(&format!("#{x}")))),
                         }
+                    }
+                    if closed {
+                        s.push(']');
+                        self.after_head = true;
                     }
                     self.out().push_str(&s);
                 }
@@ -374,11 +514,16 @@ impl<'a> Converter<'a> {
                     let s = vault::render::math_markup(m, true).unwrap_or_else(|_| format!("#raw({})", str_arg(m)));
                     self.out().push_str(&s);
                 }
+                Event::SoftBreak if std::mem::take(&mut self.after_head) => {}
                 Event::SoftBreak if !strict => self.out().push_str("#linebreak()"),
                 Event::SoftBreak => self.out().push(' '),
                 Event::HardBreak => self.out().push_str("#linebreak()"),
                 Event::Rule => self.out().push_str("#noterule\n\n"),
-                Event::Html(h) | Event::InlineHtml(h) => self.html(h),
+                Event::Html(h) => {
+                    self.html(h);
+                    self.close_html();
+                }
+                Event::InlineHtml(h) => self.html(h),
                 Event::TaskListMarker(done) => {
                     if let Some(it) = self.items.last_mut() {
                         it.0 = Some(*done);
@@ -441,7 +586,7 @@ fn preamble(o: &Options, meta: Option<&Meta>) -> String {
 #show link: set text(fill: accent)
 #show raw: set text(font: {MONO}, size: 9pt)
 #show raw.where(block: false): it => box(fill: code-fill, inset: (x: 3pt), outset: (y: 2pt), radius: 3pt, it)
-#show raw.where(block: true): it => block(width: 100%, fill: pre-fill, stroke: 0.75pt + rule, radius: 5pt, inset: (x: 4mm, y: 3mm), above: 3mm, below: 4mm, breakable: false, it)
+#show raw.where(block: true): it => block(width: 100%, fill: pre-fill, stroke: 0.75pt + rule, radius: 5pt, inset: (x: 4mm, y: 3mm), above: 3mm, below: 4mm, it)
 #show heading: set text(fill: headc, weight: 650)
 #show heading: set par(leading: 0.5em)
 #show heading.where(level: 1): set text(size: 21pt, tracking: -0.015em)
@@ -461,18 +606,182 @@ fn preamble(o: &Options, meta: Option<&Meta>) -> String {
 #let noterule = block(above: 7mm, below: 7mm, line(length: 100%, stroke: 0.75pt + rule))
 #let taskbox(done) = box(width: 9pt, height: 9pt, baseline: 1pt, radius: 2.5pt, stroke: if done {{ 0.9pt + accent }} else {{ 0.9pt + rgb("#a3abb4") }}, fill: if done {{ accent }} else {{ none }}, if done {{ place(dx: 1.6pt, dy: 1.4pt, curve(stroke: (paint: white, thickness: 1.3pt, cap: "round", join: "round"), curve.move((0.2pt, 3.2pt)), curve.line((2.1pt, 5.1pt)), curve.line((5.8pt, 1.2pt)))) }})
 #let notelist(..cells) = block(above: 3mm, below: 3mm, grid(columns: (5.5mm, 1fr), column-gutter: 0pt, row-gutter: 0.9em + 1.2mm, align: (right + top, left + top), ..cells.pos().enumerate().map(((i, c)) => if calc.even(i) {{ box(inset: (right: 2.2mm), c) }} else {{ c }})))
-#let notetable(columns: 1, rows: 1, align: (left,), ..cells) = block(width: 100%, above: 2mm, below: 5mm, breakable: false, {{ set text(size: 9.5pt); table(columns: (1fr,) * columns, align: align, inset: (x: 2.5mm, y: 2mm), stroke: (x, y) => if y == 0 {{ (bottom: 1.1pt + headc) }} else if y < rows - 1 {{ (bottom: 0.75pt + rule) }} else {{ none }}, table.header(..cells.pos().slice(0, columns).map(c => strong(c))), ..cells.pos().slice(columns)) }})
+#let notetable(columns: 1, rows: 1, align: (left,), ..cells) = block(width: 100%, above: 2mm, below: 5mm, {{ set text(size: 9.5pt); table(columns: (auto,) * columns, align: align, inset: (x: 2.5mm, y: 2mm), stroke: (x, y) => if y == 0 {{ (bottom: 1.1pt + headc) }} else if y < rows - 1 {{ (bottom: 0.75pt + rule) }} else {{ none }}, table.header(..cells.pos().slice(0, columns).map(c => strong(c))), ..cells.pos().slice(columns)) }})
 #let fnref(n) = super(size: 7pt, text(fill: accent, str(n)))
 #let footnotes(..cells) = block(width: 100%, above: 8mm, stroke: (top: 0.75pt + rule), inset: (top: 3mm), {{ set text(size: 8.5pt, fill: muted); grid(columns: (5mm, 1fr), row-gutter: 1.2em, ..cells) }})
 #let fitimg(path) = layout(size => {{ let img = image(path); let w = measure(img).width; if w > size.width {{ image(path, width: 100%) }} else {{ img }} }})
+#let sizedimg(path, width) = box(layout(size => image(path, width: calc.min(width.pt(), size.width.pt()) * 1pt)))
+#let calloutcolors = (note: rgb("#3b7dd8"), info: rgb("#3b7dd8"), todo: rgb("#3b7dd8"), abstract: rgb("#1e9bb0"), tip: rgb("#1e9bb0"), success: rgb("#2f9e5b"), question: rgb("#d9822b"), warning: rgb("#d9822b"), failure: rgb("#d64545"), danger: rgb("#d64545"), bug: rgb("#d64545"), example: rgb("#7c5cd6"), quote: rgb("#8a939c"), embed: rule)
+#let callout(kind, body) = {{
+  let c = calloutcolors.at(kind, default: accent)
+  let frame = if kind == "embed" {{ (stroke: 0.75pt + rule, fill: none) }} else {{ (stroke: (left: 2.5pt + c), fill: c.transparentize(91%)) }}
+  block(width: 100%, above: 4mm, below: 4mm, inset: (x: 3.5mm, y: 3mm), radius: 3pt, ..frame, {{ set par(spacing: 2mm); body }})
+}}
+#let calloutitle(kind, title) = {{
+  if kind == "embed" {{ block(below: 2.5mm, text(size: 8.5pt, fill: muted, title)) }}
+  else {{ let c = calloutcolors.at(kind, default: accent); block(below: 2mm, text(weight: 650, fill: c.darken(12%), title)) }}
+}}
+#let notetag(body) = box(fill: accent.transparentize(88%), inset: (x: 3pt), outset: (y: 1.5pt), radius: 4pt, text(fill: accent.darken(15%), size: 0.92em, body))
+#let kbd(body) = box(fill: code-fill, stroke: 0.6pt + rule, inset: (x: 3pt), outset: (y: 2pt), radius: 3pt, text(font: {MONO}, size: 9pt, body))
+#let filechip(kind, name) = block(above: 2mm, below: 2mm, inset: (x: 3mm, y: 2mm), radius: 3pt, stroke: 0.75pt + rule, text(size: 9.5pt, fill: muted, name))
+#let pdfpage(path, page, title) = block(width: 72%, above: 3mm, below: 4mm, breakable: false, {{ block(width: 100%, stroke: 0.75pt + rule, image(path, page: page, width: 100%)); v(1.5mm, weak: true); text(size: 8.5pt, fill: muted, title) }})
+#let customtask(mark) = box(width: 9pt, height: 9pt, baseline: 1pt, radius: 2.5pt, stroke: 0.9pt + accent, align(center + horizon, text(size: 6.5pt, weight: 700, fill: accent, mark)))
 {header}"##,
     )
 }
 
 /// Builds the Typst source for a note, for tests and diagnostics.
 pub fn source(markdown_text: &str, base: &Path, meta: Option<&Meta>, o: &Options) -> (String, Vec<PathBuf>) {
-    let (body, images) = Converter::new(base).convert(markdown_text);
-    (format!("{}{body}", preamble(o, meta)), images)
+    build(markdown_text, base, meta, o, false)
+}
+
+fn build(markdown_text: &str, base: &Path, meta: Option<&Meta>, o: &Options, no_media: bool) -> (String, Vec<PathBuf>) {
+    let converter = Converter::new(base);
+    let converter = if no_media { converter.without_media() } else { converter };
+    let (body, images) = converter.convert(markdown_text);
+    let properties = if o.properties { properties_markup(markdown_text) } else { String::new() };
+    (format!("{}{properties}{body}", preamble(o, meta)), images)
+}
+
+/// The note's properties as a small table on top.
+fn properties_markup(text: &str) -> String {
+    let Some(properties) = vault::frontmatter::properties(text).filter(|p| !p.is_empty()) else { return String::new() };
+    let cells: Vec<String> = properties.iter().map(|p| format!("text(fill: muted)[{}], [{}]", lit(&p.name), lit(&p.values.join(", ")))).collect();
+    format!("#block(width: 100%, below: 7mm, inset: (bottom: 3mm), stroke: (bottom: 0.75pt + rule), {{ set text(size: 9pt); grid(columns: (auto, 1fr), column-gutter: 6mm, row-gutter: 1.1em, {}) }})\n\n", cells.join(", "))
+}
+
+/// The markup that opens an inline HTML tag, for the tags the reader knows.
+fn html_markup(tag: &str) -> Option<&'static str> {
+    Some(match tag {
+        "b" | "strong" => "#strong[",
+        "i" | "em" | "cite" => "#emph[",
+        "u" | "ins" | "abbr" => "#underline[",
+        "s" | "del" | "strike" => "#strike[",
+        "mark" => "#highlight[",
+        "sup" => "#super[",
+        "sub" => "#sub[",
+        "small" => "#text(size: 0.85em)[",
+        "kbd" | "code" | "samp" | "tt" => "#kbd[",
+        _ => return None,
+    })
+}
+
+fn mark_fill(color: vault::syntax::MarkColor) -> &'static str {
+    use vault::syntax::MarkColor as M;
+    match color {
+        M::Default => "accent.transparentize(78%)",
+        M::Red => "rgb(\"#f8c9c9\")",
+        M::Orange => "rgb(\"#fbd9b5\")",
+        M::Yellow => "rgb(\"#fbeeb0\")",
+        M::Green => "rgb(\"#c8ecd2\")",
+        M::Blue => "rgb(\"#c8def8\")",
+        M::Purple => "rgb(\"#e0d3f8\")",
+    }
+}
+
+/// A card's gaps read as marked answers; inside a formula the formula's own preparation takes them.
+fn gaps_shown(text: &str) -> String {
+    static GAP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{c\d+::((?:[^{}]|\{[^{}]*\})*?)(?:::[^{}]*)?\}\}").unwrap());
+    if !text.contains("{{c") {
+        return text.to_string();
+    }
+    let code = vault::links::code_ranges(text);
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for c in GAP.captures_iter(text) {
+        let whole = c.get(0).unwrap();
+        let line = text[..whole.start()].rsplit('\n').next().unwrap_or_default();
+        if code.iter().any(|r| r.contains(&whole.start())) || line.matches('$').count() % 2 == 1 {
+            continue;
+        }
+        out.push_str(&text[last..whole.start()]);
+        out.push_str(&format!("=={}==", &c[1]));
+        last = whole.end();
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
+/// A `^id` belongs to links, not to the page.
+fn without_block_ids(text: &str) -> String {
+    static ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)(^|[ \t])\^[A-Za-z0-9-]+[ \t]*$").unwrap());
+    let code = vault::links::code_ranges(text);
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for m in ID.find_iter(text) {
+        if code.iter().any(|r| r.contains(&m.start())) || text[..m.start()].rsplit('\n').next().is_some_and(|line| line.starts_with("[^")) {
+            continue;
+        }
+        out.push_str(&text[last..m.start()]);
+        last = m.end();
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
+/// A search block with what it finds, as far as a page holds it.
+fn query_markup(source: &str) -> String {
+    let vault = vault::index::current();
+    let Ok(parsed) = vault::query::parse(source) else { return format!("#raw(block: true, {})\n\n", str_arg(source)) };
+    let found = vault::query::search(&parsed, &vault, vault::query::Sort::NameAsc);
+    let shown: Vec<String> = found.iter().take(100).map(|p| format!("[{}]", lit(&p.file_stem().unwrap_or_default().to_string_lossy()))).collect();
+    let more = found.len().saturating_sub(100);
+    format!(
+        "#callout(\"embed\")[#calloutitle(\"embed\")[{}]#grid(row-gutter: 0.8em{}){}]\n\n",
+        lit(source.trim()),
+        shown.iter().map(|s| format!(", {s}")).collect::<String>(),
+        if more > 0 { format!("#linebreak()#text(fill: muted)[+{more}]") } else { String::new() }
+    )
+}
+
+/// A base's first view as a table.
+fn base_markup(source: &str, this: Option<&Path>) -> String {
+    let vault = vault::index::current();
+    let Ok(base) = vault::bases::Base::parse(source) else { return format!("#raw(block: true, {})\n\n", str_arg(source)) };
+    let view = base.views.first().cloned().unwrap_or_default();
+    let Ok(rows) = base.rows(&view, &vault, this, chrono::Local::now()) else { return format!("#raw(block: true, {})\n\n", str_arg(source)) };
+    let columns = base.columns(&view);
+    if columns.is_empty() || rows.is_empty() {
+        return "#text(fill: muted)[–]\n\n".to_string();
+    }
+    let mut cells: Vec<String> = columns.iter().map(|c| format!("[{}]", lit(&base.column_label(c)))).collect();
+    for row in rows.iter().take(200) {
+        for column in &columns {
+            let value = row.cells.iter().find(|(name, _)| name == column).map_or(String::new(), |(_, v)| v.display());
+            cells.push(format!("[{}]", lit(&value)));
+        }
+    }
+    let align = vec!["left"; columns.len()].join(", ");
+    let total = rows.len().min(200) + 1;
+    format!("#notetable(columns: {}, rows: {total}, align: ({align},), {})\n\n", columns.len(), cells.join(", "))
+}
+
+/// A canvas drawn to scale: its cards with their text and the lines between them.
+fn canvas_markup(path: &Path) -> String {
+    let Some(doc) = std::fs::read_to_string(path).ok().and_then(|t| vault::canvas::Canvas::parse(&t)) else { return String::new() };
+    let Some((x0, y0, x1, y1)) = doc.bounds() else { return String::new() };
+    let (width, height) = ((x1 - x0).max(1.), (y1 - y0).max(1.));
+    let scale = (480. / width).min(560. / height).min(1.);
+    let mut items = String::new();
+    let center = |n: &vault::canvas::Node| ((n.x + n.width / 2. - x0) * scale, (n.y + n.height / 2. - y0) * scale);
+    for edge in &doc.edges {
+        if let (Some(a), Some(b)) = (doc.nodes.iter().find(|n| n.id == edge.from), doc.nodes.iter().find(|n| n.id == edge.to)) {
+            let ((ax, ay), (bx, by)) = (center(a), center(b));
+            items.push_str(&format!("place(line(start: ({ax:.1}pt, {ay:.1}pt), end: ({bx:.1}pt, {by:.1}pt), stroke: 0.9pt + marker))\n"));
+        }
+    }
+    for node in &doc.nodes {
+        let (x, y, w, h) = ((node.x - x0) * scale, (node.y - y0) * scale, node.width * scale, node.height * scale);
+        let (text, group) = match &node.kind {
+            vault::canvas::NodeKind::Text(t) => (crate::core::cards::plain_text(t.trim_start_matches(['#', ' '])), false),
+            vault::canvas::NodeKind::File { path, .. } => (path.rsplit('/').next().unwrap_or(path).to_string(), false),
+            vault::canvas::NodeKind::Link(url) => (url.clone(), false),
+            vault::canvas::NodeKind::Group { label, .. } => (label.clone().unwrap_or_default(), true),
+        };
+        let fill = if group { "none" } else { "white" };
+        items.push_str(&format!("place(dx: {x:.1}pt, dy: {y:.1}pt, block(width: {w:.1}pt, height: {h:.1}pt, clip: true, radius: 4pt, fill: {fill}, stroke: 0.75pt + marker, inset: 5pt, text(size: 8pt)[{}]))\n", lit(&text)));
+    }
+    format!("#block(above: 3mm, below: 4mm, breakable: false, width: {:.1}pt, height: {:.1}pt, {{\n{items}}})\n\n", width * scale, height * scale)
 }
 
 /// Compiles a small Typst document to SVG, with its size in points.
@@ -484,44 +793,99 @@ pub fn typst_svg(source: &str) -> Result<(String, f32, f32), String> {
     Ok((typst_svg::svg(page, &typst_svg::SvgOptions::default()), size.x.to_pt() as f32, size.y.to_pt() as f32))
 }
 
-/// Turns `> [!typ] Titel` into a quote with a bold first line; the export has no folding.
+/// Marks the head of each callout for the conversion, which has no folding and shows all of them open.
 fn callouts_as_quotes(text: &str) -> String {
     static HEAD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^((?:>\s*)+)\[!([^\]\s]+)\][+-]?[ \t]*(.*)$").unwrap());
     HEAD.replace_all(text, |c: &regex::Captures| {
-        let title = if c[3].trim().is_empty() { super::i18n::tr(vault::syntax::CalloutKind::parse(&c[2]).label()) } else { c[3].trim().to_string() };
-        format!("{}**{title}**\n{}", &c[1], &c[1])
+        let parsed = vault::syntax::CalloutKind::parse(&c[2]);
+        let kind = if &c[2] == "embed" { "embed".to_string() } else { format!("{parsed:?}").to_lowercase() };
+        let title = if c[3].trim().is_empty() { super::i18n::tr(parsed.label()) } else { c[3].trim().to_string() };
+        format!("{}{CALLOUT_OPEN}{kind}{CALLOUT_KIND_END}{title}{CALLOUT_CLOSE}\n{}", &c[1], &c[1])
     })
     .into_owned()
 }
 
-/// Replaces `![[note]]` lines by the note or section they show, up to three levels deep.
-fn expand_embeds(text: &str, base: &Path, depth: usize) -> String {
+/// Replaces `![[…]]` lines by what they show: notes up to three levels deep, framed with where they come from, other files by placeholders.
+fn expand_embeds(text: &str, base: &Path, depth: usize, embeds: &mut Vec<Embed>) -> String {
     static EMBED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^[ \t]*!\[\[([^\]|]+)(?:\|[^\]]*)?\]\][ \t]*$").unwrap());
     if depth >= 3 {
         return text.to_string();
     }
     let vault = vault::index::current();
     let from = base.join("x.md");
-    EMBED
-        .replace_all(text, |c: &regex::Captures| {
-            let target = vault::links::LinkTarget::parse(&c[1]);
-            let Some(path) = vault.resolver.resolve(&target, Some(&from)).filter(|p| markdown::is_markdown(p)) else {
-                let name = c[1].to_string();
-                let is_image = ["png", "jpg", "jpeg", "gif", "svg", "webp"].iter().any(|e| name.to_lowercase().ends_with(e));
-                return if is_image { c[0].to_string() } else { format!("*{name}*") };
-            };
-            let Ok(inner) = std::fs::read_to_string(&path) else { return String::new() };
+    let code = vault::links::code_ranges(text);
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for c in EMBED.captures_iter(text) {
+        let whole = c.get(0).unwrap();
+        if code.iter().any(|r| r.contains(&whole.start())) {
+            continue;
+        }
+        out.push_str(&text[last..whole.start()]);
+        last = whole.end();
+        let target = vault::links::LinkTarget::parse(&c[1]);
+        let name = c[1].to_string();
+        let lower = target.path.to_lowercase();
+        let extension = lower.rsplit('.').next().unwrap_or_default().to_string();
+        if RASTER.contains(&extension.as_str()) {
+            out.push_str(whole.as_str());
+            continue;
+        }
+        let Some(path) = vault.resolver.resolve(&target, Some(&from)) else {
+            out.push_str(&format!("*{name}*"));
+            continue;
+        };
+        let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let mut placed = |embed: Embed| {
+            embeds.push(embed);
+            format!("\n{EMBED_OPEN}{}{EMBED_CLOSE}\n", embeds.len() - 1)
+        };
+        let kind = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        if markdown::is_markdown(&path) {
+            let Ok(inner) = std::fs::read_to_string(&path) else { continue };
             let body = &inner[vault::frontmatter::body_offset(&inner)..];
-            let shown = if target.headings.is_empty() && target.block.is_none() { body.to_string() } else { vault::links::section(body, &target) };
+            let whole_note = target.headings.is_empty() && target.block.is_none();
+            let shown = if whole_note { body.to_string() } else { vault::links::section(body, &target) };
             let folder = path.parent().unwrap_or(base).to_path_buf();
-            expand_embeds(&vault::syntax::prepare(&shown), &folder, depth + 1)
-        })
-        .into_owned()
+            let inner_text = expand_embeds(&vault::syntax::prepare(&shown), &folder, depth + 1, embeds);
+            let title = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            out.push_str(&format!("> [!embed] {title}\n"));
+            for line in inner_text.lines() {
+                out.push_str("> ");
+                out.push_str(line);
+                out.push('\n');
+            }
+            continue;
+        }
+        let placeholder = match kind.as_str() {
+            "pdf" => {
+                let page = c[1].split("page=").nth(1).and_then(|p| p.split(['&', '#']).next()).and_then(|p| p.parse().ok()).unwrap_or(1);
+                placed(Embed::Pdf { path, page })
+            }
+            "canvas" => placed(Embed::Canvas(path)),
+            "base" => {
+                let source = std::fs::read_to_string(&path).unwrap_or_default();
+                placed(Embed::Base { source, this: Some(from.clone()) })
+            }
+            k if AUDIO.contains(&k) => placed(Embed::File { name: file_name, icon: "audio" }),
+            k if VIDEO.contains(&k) => placed(Embed::File { name: file_name, icon: "video" }),
+            _ => placed(Embed::File { name: file_name, icon: "file" }),
+        };
+        out.push_str(&placeholder);
+    }
+    out.push_str(&text[last..]);
+    out
 }
 
 /// Renders a note to PDF bytes.
 pub fn render(markdown_text: &str, base: &Path, meta: Option<&Meta>, o: &Options) -> Result<Vec<u8>, String> {
-    let (text, images) = source(markdown_text, base, meta, o);
+    render_with(markdown_text, base, meta, o, false).or_else(|first| if first.2 { render_with(markdown_text, base, meta, o, true).map_err(|e| e.0) } else { Err(first.0) })
+}
+
+/// A broken picture is no reason to lose the note: the error says whether trying without pictures can help.
+fn render_with(markdown_text: &str, base: &Path, meta: Option<&Meta>, o: &Options, no_media: bool) -> Result<Vec<u8>, (String, (), bool)> {
+    let (text, images) = build(markdown_text, base, meta, o, no_media);
+    let has_media = !images.is_empty();
     let main = Source::new(file_id("/main.typ"), text);
     let mut files = HashMap::new();
     files.insert(file_id("/theme.tmTheme"), Bytes::new(THEME.as_bytes().to_vec()));
@@ -532,8 +896,9 @@ pub fn render(markdown_text: &str, base: &Path, meta: Option<&Meta>, o: &Options
         }
     }
     let world = NoteWorld { main, files };
-    let doc: PagedDocument = typst::compile(&world).output.map_err(|errs| errs.iter().map(|e| e.message.to_string()).collect::<Vec<_>>().join("; "))?;
-    typst_pdf::pdf(&doc, &typst_pdf::PdfOptions::default()).map_err(|errs| errs.iter().map(|e| e.message.to_string()).collect::<Vec<_>>().join("; "))
+    let joined = |message: String| (message, (), has_media && !no_media);
+    let doc: PagedDocument = typst::compile(&world).output.map_err(|errs| joined(errs.iter().map(|e| e.message.to_string()).collect::<Vec<_>>().join("; ")))?;
+    typst_pdf::pdf(&doc, &typst_pdf::PdfOptions::default()).map_err(|errs| joined(errs.iter().map(|e| e.message.to_string()).collect::<Vec<_>>().join("; ")))
 }
 
 /// Whether a PDF came from this export. Anything else may be a submission and must not be replaced.
@@ -560,14 +925,14 @@ mod tests {
     use super::{Meta, Options, render};
 
     fn opts() -> Options {
-        Options { accent: "#0EA5E9".into(), header: true, page_numbers: true, lang: "de".into() }
+        Options { accent: "#0EA5E9".into(), header: true, page_numbers: true, lang: "de".into(), properties: false }
     }
 
     #[test]
     fn obsidian_syntax_reaches_the_pdf() {
         let (markup, _) = super::source("Sicht %%geheim%%bar\n> [!warning]- Achtung\n> Inhalt\n\n[[Ziel|Anzeige]] und $x^2$ und [web](https://a.b)\n\n```mermaid\ngraph TD; A-->B\n```\n", Path::new("/tmp"), None, &opts());
         assert!(!markup.contains("geheim"));
-        assert!(markup.contains("#strong[#\"Achtung\"]"), "{}", markup.lines().rev().take(12).collect::<Vec<_>>().join("\n"));
+        assert!(markup.contains("#callout(\"warning\")"), "{}", markup.lines().rev().take(12).collect::<Vec<_>>().join("\n"));
         assert!(markup.contains("Anzeige"));
         assert!(!markup.contains("#link(\"Ziel"), "{markup}");
         assert!(markup.contains("#link(\"https://a.b\")"));
@@ -577,6 +942,16 @@ mod tests {
     }
 
     const SAMPLE: &str = "# Titel \"mit\" #Zeichen\n\nText mit **fett**, *kursiv*, `code`, ==mark==, [Link](https://a.b) und $5 \\ Backslash.[^1]\n\n## Aufgaben\n\n- [x] fertig\n- [ ] offen\n  - verschachtelt\n\n1. eins\n2. zwei\n\n| A | B |\n|:-:|--:|\n| 1 | 2 |\n| 3 | 4 |\n\n> Zitat\n\n```rust\nfn main() {}\n```\n\n---\n\n<!-- Kommentar --><br>\n\n![fehlt](nicht-da.png)\n\n[^1]: Fußnote.\n";
+
+    #[test]
+    fn broken_pictures_do_not_cost_the_note() {
+        let dir = std::env::temp_dir().join(format!("schrumbi-export-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("kaputt.png"), b"keine bilddaten").unwrap();
+        std::fs::write(dir.join("kaputt.pdf"), b"keine pdfdaten").unwrap();
+        let pdf = render("Text\n\n![a](kaputt.png)\n\n<b>offen\n\n<kbd>K</kbd> </u> ==🔴rot== #tag ^block\n\n> [!tip]\n\n> [!bug] **Fett** $x$\n> > [!note]\n> > tief", &dir, None, &opts()).unwrap();
+        assert!(pdf.starts_with(b"%PDF"));
+    }
 
     #[test]
     fn renders_every_block_type() {
@@ -601,5 +976,28 @@ mod tests {
         assert!(render("", Path::new("/"), None, &opts()).unwrap().starts_with(b"%PDF"));
         let long = (0..400).map(|i| format!("## Abschnitt {i}\n\n- [ ] Aufgabe {i}\n\nText {i} ")).collect::<String>();
         assert!(render(&long, Path::new("/"), None, &opts()).unwrap().starts_with(b"%PDF"));
+    }
+}
+
+#[cfg(test)]
+mod demo {
+    /// Exports every note of the folder named by `SCHRUMBI_PDF_DEMO`, to look at the result.
+    #[test]
+    #[ignore]
+    fn export_folder() {
+        let dir = std::path::PathBuf::from(std::env::var("SCHRUMBI_PDF_DEMO").unwrap());
+        crate::core::vault::index::rebuild(&dir, &[]);
+        let o = super::Options { accent: "#0EA5E9".into(), header: true, page_numbers: true, lang: "de".into(), properties: true };
+        let out = std::path::PathBuf::from(std::env::var("SCHRUMBI_PDF_OUT").unwrap());
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "md") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                match super::render(&text, &dir, None, &o) {
+                    Ok(pdf) => std::fs::write(out.join(format!("{}.pdf", path.file_stem().unwrap().to_string_lossy())), pdf).unwrap(),
+                    Err(e) => eprintln!("FAILED {}: {e}", path.display()),
+                }
+            }
+        }
     }
 }
