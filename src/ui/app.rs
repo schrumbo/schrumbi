@@ -109,8 +109,7 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &ShowGraph, cx| {
         act(cx, |l| {
             if l.is_vault {
-                let around = if let Route::Doc(p) = l.route() { Some(p.clone()) } else { None };
-                l.show_graph(around);
+                l.show_graph(None);
             }
         })
     });

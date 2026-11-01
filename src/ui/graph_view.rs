@@ -104,7 +104,8 @@ impl GraphView {
         self.generation = vault.generation;
         self.built_for = Some((self.options.clone(), wanted.clone()));
         self.focus_note = wanted.clone();
-        let full = Graph::build(&vault, &self.options);
+        let wanted_options = if wanted.is_some() { Options { orphans: true, ..self.options.clone() } } else { self.options.clone() };
+        let full = Graph::build(&vault, &wanted_options);
         let graph = Arc::new(match &wanted {
             Some((path, depth)) => full.local(path, *depth),
             None => full,
@@ -460,8 +461,11 @@ impl Render for GraphView {
                         for (c, s) in sums.iter().enumerate() {
                             if s.2 >= 2 && !graph.clusters[c].is_empty() {
                                 let center = screen((s.0 / s.2 as f32, s.1 / s.2 as f32));
-                                let tint = cluster_tints.get(c).copied().unwrap_or(ink);
-                                label(window, cx, format!("{} · {}", graph.clusters[c], s.2), center, tint, true, true);
+                                let text = format!("{} · {}", graph.clusters[c], s.2);
+                                let width = px(text.chars().count() as f32 * 7.2 + 16.);
+                                window.paint_quad(fill(Bounds::new(point(center.x - width / 2., center.y - px(3.)), size(width, px(22.))), bg.opacity(0.8)).corner_radii(px(6.)));
+                                let _ = &cluster_tints;
+                                label(window, cx, text, center, ink, true, true);
                             }
                         }
                     }

@@ -35,7 +35,7 @@ pub const MITEX_PRELUDE: &str = r#"
 pub fn math_svg(latex: &str, display: bool, color: &str) -> Result<(String, f32, f32), String> {
     let body = mitex::convert_math(latex, None)?;
     let formula = if display { format!("$ {body} $") } else { format!("${body}$") };
-    let source = format!("#set page(width: auto, height: auto, margin: 1pt, fill: none)\n#set text(size: 14pt, fill: rgb(\"{color}\"))\n{MITEX_PRELUDE}\n{formula}\n");
+    let source = format!("#set page(width: auto, height: auto, margin: 1pt, fill: none)\n#set text(top-edge: \"bounds\", bottom-edge: \"bounds\")\n#set text(size: 14pt, fill: rgb(\"{color}\"))\n{MITEX_PRELUDE}\n{formula}\n");
     pdf_export::typst_svg(&source)
 }
 

@@ -586,7 +586,16 @@ fn into_callout(mut blocks: Vec<Block>) -> Block {
         }
         *inl = rest;
         let mut skipped = false;
+        let mut after_close = false;
         title.retain_mut(|piece| {
+            if after_close {
+                after_close = false;
+                if let Inline::Text(text, _) = piece {
+                    *text = text.trim_start_matches(['+', '-']).trim_start().to_string();
+                    return !text.is_empty();
+                }
+                return true;
+            }
             if skipped {
                 return true;
             }
@@ -595,6 +604,7 @@ fn into_callout(mut blocks: Vec<Block>) -> Block {
                 Some(close) => {
                     skipped = true;
                     *text = text[close + 1..].trim_start_matches(['+', '-']).trim_start().to_string();
+                    after_close = text.is_empty();
                     !text.is_empty()
                 }
                 None => false,
@@ -1970,6 +1980,13 @@ mod reader_tests {
                 Block::Nothing => "nothing",
             })
             .collect()
+    }
+
+    #[test]
+    fn a_foldable_callout_title_loses_its_mark() {
+        let parsed = parse("> [!tip]+ Titel mit **fett**\n> Inhalt\n");
+        let Block::Callout(_, title, _) = &parsed.blocks[0] else { panic!() };
+        assert_eq!(super::plain_text(title), "Titel mit fett");
     }
 
     #[test]
