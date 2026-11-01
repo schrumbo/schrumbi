@@ -313,15 +313,7 @@ pub fn rewrite_links(text: &str, source: &Path, old: &Path, new: &Path, before: 
         if link.target.path.is_empty() || before.resolve(&link.target, Some(source)).as_deref() != Some(old) {
             continue;
         }
-        let mut changed = link.clone();
-        if !link.markdown && link.alias.is_none() && !link.embed {
-            let shown = link.target.path.rsplit('/').next().unwrap_or(&link.target.path);
-            let shown = shown.strip_suffix(".md").unwrap_or(shown);
-            let new_stem = new.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-            if shown != new_stem {
-                changed.alias = Some(shown.to_string());
-            }
-        }
+        let changed = link.clone();
         let path = after.link_path(Some(source), new);
         let path = if link.markdown && markdown::is_markdown(new) && !path.ends_with(".md") { format!("{path}.md") } else { path };
         changes.push((link.range.clone(), links::render_link(&changed, &path)));
@@ -400,7 +392,7 @@ mod tests {
         let source = root.join("Q.md");
         let (text, count) = rewrite_links(&std::fs::read_to_string(&source).unwrap(), &source, &old, &new, &before.resolver, &after).unwrap();
         assert_eq!(count, 5);
-        assert_eq!(text, "[[P1_26_Neu_Muster-M|Alt]] [[P1_26_Neu_Muster-M#H|Alt]] [[P1_26_Neu_Muster-M|Mein Text]] ![[P1_26_Neu_Muster-M]] [t](P1_26_Neu_Muster-M.md#x)\n`[[Alt]]`\n---\n");
+        assert_eq!(text, "[[P1_26_Neu_Muster-M]] [[P1_26_Neu_Muster-M#H]] [[P1_26_Neu_Muster-M|Mein Text]] ![[P1_26_Neu_Muster-M]] [t](P1_26_Neu_Muster-M.md#x)\n`[[Alt]]`\n---\n");
         assert_eq!(rewrite_links("[[Anders]]", &source, &old, &new, &before.resolver, &after), None);
     }
 

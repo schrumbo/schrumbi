@@ -5,7 +5,7 @@ use std::time::Duration;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogEntrance;
-use gpui_kit::component::input::{Editor, EditorState, InputEvent};
+use gpui_kit::component::input::{Editor, EditorState, InputEvent, TextDecoration, TextDecorationCollection};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::component::scroll::ScrollableElement;
@@ -20,6 +20,7 @@ use super::motion::Soft;
 use crate::core::vault::index;
 use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
+use crate::core::live_text::{self, LiveStyle, Segment, SegmentKind};
 use crate::core::edit_ops::{self, Edit};
 use crate::core::i18n::{tr, trf};
 use crate::core::library;
@@ -44,6 +45,7 @@ pub enum Mode {
     Read,
     Live,
     Source,
+    Split,
 }
 
 /// What the field leaves free on its left, taken back so text stays where the drawn block had it.
@@ -51,13 +53,28 @@ const LIVE_GUTTER: f32 = 12.;
 /// What the field leaves free above and below its text.
 const LIVE_INSET: f32 = 9.5;
 
-/// The block being written in the live view.
+/// What is being written in the live view.
+#[derive(Clone, Copy)]
 struct LiveBlock {
-    /// Its place in the list of blocks.
+    /// Its place in the list of segments.
     index: usize,
     first_line: usize,
     line_count: usize,
+    /// A line, not something that opens as a whole.
+    single: bool,
+    cell: Option<LiveCell>,
 }
+
+/// A cell of a table being written.
+#[derive(Clone, Copy)]
+struct LiveCell {
+    row: usize,
+    column: usize,
+    line: usize,
+}
+
+/// How far a nested list line moves in.
+const LIVE_INDENT: f32 = 24.;
 
 /// A Markdown note: read, edit or both side by side. Saving follows Settings → Notizen.
 pub struct NoteView {
@@ -66,7 +83,24 @@ pub struct NoteView {
     reader_list: ListState,
     /// A block the reader should bring into view once it knows the block.
     reveal_block: Option<usize>,
-    block_sources: Vec<markdown_view::BlockSource>,
+    item_hashes: Vec<u64>,
+    split_sync: (f32, f32),
+    reparse: Option<Task<()>>,
+    /// What the live view draws, one entry per list item between start and end.
+    segments: Rc<Vec<Segment>>,
+    source_lines: Rc<Vec<String>>,
+    /// Reference and footnote definitions, which a line drawn on its own still needs.
+    definitions: Rc<String>,
+    /// Lines already parsed for drawing.
+    fragments: Rc<std::cell::RefCell<std::collections::HashMap<String, Rc<ParsedNote>>>>,
+    parsed_text: Option<String>,
+    marks: Option<TextDecorationCollection>,
+    /// A source line to bring back to the top after switching views.
+    keep_line: Option<usize>,
+    /// The source view is only open for a selection over several lines.
+    source_detour: bool,
+    /// Which editor the settings asked for when this view last looked.
+    editor_kind: prefs::NoteEditor,
     reader_width: Pixels,
     spell_task: Option<Task<()>>,
     /// Where writing last happened in this note.
@@ -151,9 +185,9 @@ impl NoteView {
             }),
             cx.observe_in(&lib, window, move |this, lib, window, cx| {
                 if lib.read(cx).active_document.as_ref() == Some(&p) && lib.update(cx, |l, _| std::mem::take(&mut l.toggle_mode)) {
-                    let next = if this.mode == Mode::Live { Mode::Read } else { Mode::Live };
-                    this.mode = next;
-                    this.finish_block(cx);
+                    let writing = if this.editor_kind == prefs::NoteEditor::Live { Mode::Live } else { Mode::Source };
+                    let next = if this.mode == Mode::Read { writing } else { Mode::Read };
+                    this.set_mode(next, window, cx);
                 }
                 if lib.read(cx).active_document.as_ref() != Some(&p) && this.place_restored {
                     this.remember_place();
@@ -202,13 +236,16 @@ impl NoteView {
                 }
             }),
         ];
-        let mode = Mode::Live;
+        let mode = match prefs::get().note_editor {
+            prefs::NoteEditor::Live => Mode::Live,
+            prefs::NoteEditor::Code => if text.trim().chars().count() < 40 { Mode::Source } else { Mode::Read },
+        };
         let revision = state::lib(cx).update(cx, |l, _| l.buffer(&path).revision);
         let reader_list = ListState::new(0, ListAlignment::Top, px(1000.));
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: false, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, reveal_block: None, block_sources: Vec::new(), reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Source, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -230,7 +267,7 @@ impl NoteView {
     pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.mode == Mode::Live && state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.text.trim().is_empty())) {
             self.open_line(0, None, window, cx);
-        } else if self.mode != Mode::Source {
+        } else if !matches!(self.mode, Mode::Source | Mode::Split) {
             window.focus(&self.focus, cx);
         } else {
             self.editor.update(cx, |s, cx| {
@@ -244,18 +281,20 @@ impl NoteView {
     }
 
     pub fn set_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+        let keep_line = self.top_line();
         self.finish_block(cx);
-        if mode == Mode::Source {
+        if matches!(mode, Mode::Source | Mode::Split) {
             let text = state::read(cx, |l| l.buffers.get(&self.path).map(|b| b.text.clone()).unwrap_or_default());
             self.syncing = true;
             self.editor.update(cx, |s, cx| s.set_value(text, window, cx));
             self.syncing = false;
         }
-        if self.mode == Mode::Source {
-            self.parsed = None;
-        }
+        self.parsed = None;
+        self.item_hashes.clear();
+        self.reader_list.reset(0);
+        self.keep_line = Some(keep_line);
         self.mode = mode;
-        if mode == Mode::Source {
+        if matches!(mode, Mode::Source | Mode::Split) {
             self.editor.update(cx, |s, cx| s.focus(window, cx));
         } else {
             window.focus(&self.focus, cx);
@@ -264,30 +303,100 @@ impl NoteView {
         cx.notify();
     }
 
-    /// Opens the block at a source line for writing, with the caret at a byte of the block or its end.
+    /// The source line at the top of the reader.
+    fn top_line(&self) -> usize {
+        let item = self.reader_list.logical_scroll_top().item_ix.saturating_sub(1);
+        if self.mode == Mode::Live {
+            return self.segments.get(item).map_or(0, |s| s.line);
+        }
+        self.parsed.as_ref().and_then(|(_, p)| p.sources().get(item).map(|s| s.line)).unwrap_or(0)
+    }
+
+    /// The list item a source line is drawn in.
+    fn item_of_line(&self, line: usize) -> usize {
+        if self.mode == Mode::Live {
+            return self.segments.iter().position(|s| line < s.line + s.count).map_or(self.segments.len(), |i| i + 1);
+        }
+        self.parsed.as_ref().and_then(|(_, p)| p.sources().iter().rposition(|s| s.line <= line)).map_or(1, |i| i + 1)
+    }
+
+    /// The text of the note right now.
+    fn current_text(&self, cx: &App) -> String {
+        state::read(cx, |l| l.buffers.get(&self.path).map(|b| b.text.clone()).unwrap_or_default())
+    }
+
+    fn put_text(&self, text: String, cx: &mut Context<Self>) {
+        let path = self.path.clone();
+        state::lib(cx).update(cx, |l, cx| {
+            if let Some(b) = l.buffers.get_mut(&path) {
+                b.edited(text);
+            }
+            if l.preview_document.as_ref() == Some(&path) {
+                l.preview_document = None;
+            }
+            cx.notify();
+        });
+    }
+
+    /// Opens what stands at a source line for writing, with the caret at a byte of it or at its end.
     fn open_line(&mut self, line: usize, caret: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
-        let text = state::read(cx, |l| l.buffers.get(&self.path).map(|b| b.text.clone()).unwrap_or_default());
-        let parsed = self.parse_now(&text);
-        let sources = parsed.sources();
-        let found = sources.iter().position(|s| line >= s.line && line < s.end_line).or_else(|| sources.iter().rposition(|s| s.line <= line));
-        let (index, first_line, line_count) = match found {
-            Some(i) => (i, sources[i].line, sources[i].end_line - sources[i].line),
-            None => (0, 0, text.split('\n').count()),
-        };
+        self.finish_block(cx);
+        let text = self.current_text(cx);
+        self.parse_now(&text);
         let lines: Vec<&str> = text.split('\n').collect();
+        let line = line.min(lines.len().saturating_sub(1));
+        let found = self.segments.iter().position(|s| line < s.line + s.count);
+        let (index, first_line, line_count, kind) = match found {
+            Some(i) => {
+                let s = self.segments[i];
+                (i, s.line, s.count, s.kind)
+            }
+            None => (0, 0, lines.len(), SegmentKind::Blank),
+        };
+        if let SegmentKind::Table { .. } = kind {
+            let row = line - first_line;
+            self.open_cell(index, if row >= 2 { row - 1 } else { 0 }, 0, caret, window, cx);
+            return;
+        }
         let source = lines.get(first_line..(first_line + line_count).min(lines.len())).unwrap_or_default().join("\n");
         let at = caret.unwrap_or(source.len()).min(source.len());
+        let single = !matches!(kind, SegmentKind::Whole { .. });
+        self.fill_field(source, at..at, window, cx);
+        self.live = Some(LiveBlock { index, first_line, line_count, single, cell: None });
+        self.after_open(index, cx);
+    }
+
+    /// Opens one cell of a table. Row 0 is the head.
+    fn open_cell(&mut self, index: usize, row: usize, column: usize, caret: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(segment) = self.segments.get(index).copied() else { return };
+        let text = self.current_text(cx);
+        let lines: Vec<&str> = text.split('\n').collect();
+        let line_no = segment.line + if row == 0 { 0 } else { row + 1 };
+        let Some(line) = lines.get(line_no) else { return };
+        let cells = live_text::table_cells(line);
+        let Some(cell) = cells.get(column).cloned() else { return };
+        let value = line[cell].to_string();
+        let at = caret.unwrap_or(value.len()).min(value.len());
+        self.fill_field(value, at..at, window, cx);
+        self.live = Some(LiveBlock { index, first_line: segment.line, line_count: segment.count, single: true, cell: Some(LiveCell { row, column, line: line_no }) });
+        self.after_open(index, cx);
+    }
+
+    fn fill_field(&mut self, value: String, selection: std::ops::Range<usize>, window: &mut Window, cx: &mut Context<Self>) {
         self.syncing = true;
         self.block.update(cx, |b, cx| {
-            b.set_value(source, window, cx);
-            b.set_selected_range(at..at, cx);
+            b.set_value(value, window, cx);
+            b.set_selected_range(selection, cx);
             b.focus(window, cx);
         });
         self.syncing = false;
-        self.live = Some(LiveBlock { index, first_line, line_count });
+    }
+
+    fn after_open(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.paint_marks(cx);
         self.schedule_spelling(cx);
         self.reader_list.remeasure();
-        if sources.is_empty() {
+        if self.segments.is_empty() {
             self.reader_list.reset(3);
         } else {
             self.reader_list.scroll_to_reveal_item(index + 1);
@@ -295,40 +404,81 @@ impl NoteView {
         cx.notify();
     }
 
+    /// Shows what the written marks mean while the line is open, and keeps the marks themselves quiet.
+    fn paint_marks(&mut self, cx: &mut Context<Self>) {
+        let t = Theme::get(cx);
+        let value = self.block.read(cx).value().to_string();
+        let decorations: Vec<TextDecoration> = live_text::styles(&value)
+            .into_iter()
+            .map(|(range, style)| {
+                let look = match style {
+                    LiveStyle::Marker => HighlightStyle { color: Some(t.tertiary), ..Default::default() },
+                    LiveStyle::Bold => HighlightStyle { font_weight: Some(FontWeight::BOLD), ..Default::default() },
+                    LiveStyle::Italic => HighlightStyle { font_style: Some(FontStyle::Italic), ..Default::default() },
+                    LiveStyle::Strike => HighlightStyle { strikethrough: Some(StrikethroughStyle { thickness: px(1.), color: Some(t.secondary) }), ..Default::default() },
+                    LiveStyle::Code => HighlightStyle { background_color: Some(t.ink.opacity(0.08)), ..Default::default() },
+                    LiveStyle::Mark => HighlightStyle { background_color: Some(t.orange.opacity(0.3)), ..Default::default() },
+                    LiveStyle::Link => HighlightStyle { color: Some(t.accent_text), ..Default::default() },
+                };
+                TextDecoration::new(range, look)
+            })
+            .collect();
+        match &self.marks {
+            Some(known) => known.set(decorations, cx),
+            None => {
+                let made = self.block.update(cx, |b, cx| b.create_decorations_collection(decorations, cx));
+                self.marks = Some(made);
+            }
+        }
+    }
+
     /// The note parsed as it is right now, with the list told what changed.
     fn parse_now(&mut self, text: &str) -> Rc<ParsedNote> {
         if let Some((rev, p)) = &self.parsed
             && *rev == self.revision
+            && self.parsed_text.as_deref() == Some(text)
         {
             return p.clone();
         }
         let p = Rc::new(markdown_view::parse(text));
-        self.adopt_blocks(p.sources().to_vec());
+        let hashes: Vec<u64> = if self.mode == Mode::Live {
+            self.segments = Rc::new(live_text::segments(text, &p.shapes()));
+            self.definitions = Rc::new(text.split('\n').filter(|l| l.starts_with('[') && l.contains("]:")).collect::<Vec<_>>().join("\n"));
+            self.segments.iter().map(|s| s.hash).collect()
+        } else {
+            p.sources().iter().map(|s| s.hash).collect()
+        };
+        self.source_lines = Rc::new(text.split('\n').map(str::to_string).collect());
+        self.adopt_items(hashes);
         self.parsed = Some((self.revision, p.clone()));
+        self.parsed_text = Some(text.to_string());
         p
     }
 
-    /// Closes the block being written; the note is drawn fresh from what is in it now.
+    /// Closes what is being written; the note is drawn fresh from what is in it now.
     fn finish_block(&mut self, cx: &mut Context<Self>) {
         if let Some(live) = self.live.take() {
             self.last_line = Some(live.first_line);
-            self.parsed = None;
             self.reader_list.remeasure();
             cx.notify();
         }
     }
 
-    /// Puts what was typed into the note. When the block has become several, the part with the caret stays open.
+    /// Puts what was typed into the note. A line that became two opens at the part with the caret.
     fn block_changed(&mut self, value: String, caret: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(live) = &self.live else { return };
-        let (first_line, line_count) = (live.first_line, live.line_count);
-        let path = self.path.clone();
-        let before = state::read(cx, |l| l.buffers.get(&path).map(|b| b.text.clone()).unwrap_or_default());
-        let mut lines: Vec<&str> = before.split('\n').collect();
-        let end = (first_line + line_count).min(lines.len());
-        lines.splice(first_line.min(end)..end, value.split('\n'));
-        let full = lines.join("\n");
+        let (first_line, line_count, single, cell) = (live.first_line, live.line_count, live.single, live.cell);
+        let before = self.current_text(cx);
+        let mut lines: Vec<String> = before.split('\n').map(str::to_string).collect();
         let caret_line = value.get(..caret).unwrap_or_default().matches('\n').count();
+        if let Some(cell) = cell {
+            let Some((changed, _)) = lines.get(cell.line).and_then(|l| live_text::set_table_cell(l, cell.column, &value)) else { return };
+            lines[cell.line] = changed;
+        } else {
+            let end = (first_line + line_count).min(lines.len());
+            lines.splice(first_line.min(end)..end, value.split('\n').map(str::to_string));
+        }
+        let full = lines.join("\n");
         if self.last_snapshot.is_none_or(|t| t.elapsed() > Duration::from_millis(800)) {
             self.history.push((before, first_line + caret_line));
             if self.history.len() > 500 {
@@ -337,62 +487,41 @@ impl NoteView {
             self.future.clear();
         }
         self.last_snapshot = Some(std::time::Instant::now());
-        state::lib(cx).update(cx, |l, cx| {
-            if let Some(b) = l.buffers.get_mut(&path) {
-                b.edited(full.clone());
-            }
-            if l.preview_document.as_ref() == Some(&path) {
-                l.preview_document = None;
-            }
-            cx.notify();
-        });
-        if let Some(live) = &mut self.live {
+        self.put_text(full, cx);
+        if cell.is_none()
+            && let Some(live) = &mut self.live
+        {
             live.line_count = value.split('\n').count();
         }
+        self.paint_marks(cx);
         self.schedule_autosave(cx);
         self.schedule_spelling(cx);
-        if caret_line > 0 && value.get(..caret).is_some_and(|before| !before.ends_with('\n')) {
-            let inner = markdown_view::parse(&value);
-            let blocks = inner.sources();
-            if blocks.len() > 1
-                && let Some(own) = blocks.iter().find(|s| caret_line >= s.line && caret_line < s.end_line)
-                && own.line > 0
-            {
-                let line_start: usize = value.split('\n').take(own.line).map(|l| l.len() + 1).sum();
-                let target = first_line + own.line;
-                let inside = caret.saturating_sub(line_start);
-                self.finish_block(cx);
-                self.open_line(target, Some(inside), window, cx);
-            }
+        if single && cell.is_none() && value.contains('\n') {
+            let line_start = value[..caret.min(value.len())].rfind('\n').map_or(0, |i| i + 1);
+            self.last_snapshot = None;
+            self.open_line(first_line + caret_line, Some(caret - line_start), window, cx);
         }
         cx.notify();
     }
 
-    /// Takes the note back to what it was before the last burst of typing, in whichever block that was.
+    /// Takes the note back to what it was before the last burst of typing, wherever that was.
     fn step_history(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some((text, line)) = (if back { self.history.pop() } else { self.future.pop() }) else { return };
-        let path = self.path.clone();
         let here = self.live.as_ref().map_or(line, |l| l.first_line);
-        let current = state::read(cx, |l| l.buffers.get(&path).map(|b| b.text.clone()).unwrap_or_default());
+        let current = self.current_text(cx);
         if back {
             self.future.push((current, here));
         } else {
             self.history.push((current, here));
         }
-        state::lib(cx).update(cx, |l, cx| {
-            if let Some(b) = l.buffers.get_mut(&path) {
-                b.edited(text);
-            }
-            cx.notify();
-        });
         self.live = None;
-        self.parsed = None;
+        self.put_text(text, cx);
         self.last_snapshot = None;
         self.open_line(line, None, window, cx);
         self.schedule_autosave(cx);
     }
 
-    /// Esc closes the open block and leaves the note ready for the keyboard; a suggestion list closes first.
+    /// Esc closes what is open and leaves the note ready for the keyboard; a suggestion list closes first.
     fn leave_block(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.live.is_none() || self.block.read(cx).completion_menu_state().open {
             return;
@@ -402,7 +531,22 @@ impl NoteView {
         window.focus(&self.focus, cx);
     }
 
-    /// Whether the caret stands on the first or last drawn line of the open block.
+    /// The text height of a line of the given kind.
+    fn field_font_size(&self, value: &str) -> f32 {
+        let hashes = value.chars().take_while(|c| *c == '#').count();
+        if !value.contains('\n') && hashes > 0 && value[hashes..].starts_with(' ') {
+            return match hashes {
+                1 => font::TITLE,
+                2 => font::TITLE2,
+                3 => font::TITLE3,
+                4 => font::BODY,
+                _ => font::CALLOUT,
+            };
+        }
+        font::BODY
+    }
+
+    /// Whether the caret stands on the first or last drawn line of what is open.
     fn at_block_edge(&self, down: bool, window: &mut Window, cx: &App) -> bool {
         if self.live.is_none() {
             return false;
@@ -421,100 +565,241 @@ impl NoteView {
         if line.is_empty() {
             return true;
         }
+        let size = self.field_font_size(&value);
         let style = window.text_style();
-        let size = self.block_font_size(&value);
         let run = TextRun { len: line.len(), font: style.font(), color: style.color, background_color: None, underline: None, strikethrough: None };
-        let Ok(shaped) = window.text_system().shape_text(line.to_string().into(), px(size), &[run], Some(self.block_width()), None) else { return true };
+        let width = self.field_width(&value, window);
+        let Ok(shaped) = window.text_system().shape_text(line.to_string().into(), px(size), &[run], Some(width), None) else { return true };
         let Some(wrapped) = shaped.first() else { return true };
         let height = px(size * 1.5);
         let row = |at: usize| wrapped.position_for_index(at, height).map_or(0., |p| f32::from(p.y));
         if down { row(range.start - line_start) >= row(line.len()) } else { row(range.start - line_start) < 1. }
     }
 
-    fn block_width(&self) -> Pixels {
-        (self.reader_width.min(px(720.)) - px(space::XXL * 2.)).max(px(120.))
-    }
-
-    /// An open heading keeps its size, so the page does not jump.
-    fn block_font_size(&self, value: &str) -> f32 {
-        let hashes = value.chars().take_while(|c| *c == '#').count();
-        if !value.contains('\n') && value[hashes..].starts_with(' ') {
-            match hashes {
-                1 => return font::TITLE,
-                2 => return font::TITLE2,
-                3 => return font::TITLE3,
-                _ => {}
-            }
+    /// The left edge of a line's text once it is drawn, measured from the column.
+    fn drawn_text_left(&self, value: &str, depth: usize) -> f32 {
+        let bare = value.trim_start();
+        let is_task = bare.len() > 2 && live_text::prefix_len(bare) >= 6 && bare[2..].starts_with('[');
+        let is_list = bare.starts_with("- ") || bare.starts_with("* ") || bare.starts_with("+ ") || bare.split_once(". ").is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+        let indent = depth as f32 * LIVE_INDENT;
+        if is_task {
+            indent + 14. + space::XXS + space::S
+        } else if is_list {
+            indent + 16. + space::S
+        } else {
+            indent
         }
-        font::BODY
     }
 
-    /// Typing with nothing open starts in the block in view, so no keystroke is lost.
+    /// How wide the marks in front of the text are; they hang to its left, so the text stays where it was drawn.
+    fn hang_width(&self, value: &str, size: f32, window: &mut Window) -> f32 {
+        let prefix = &value[..live_text::prefix_len(value)];
+        if prefix.is_empty() {
+            return 0.;
+        }
+        let style = window.text_style();
+        let run = TextRun { len: prefix.len(), font: style.font(), color: style.color, background_color: None, underline: None, strikethrough: None };
+        f32::from(window.text_system().shape_line(prefix.to_string().into(), px(size), &[run], None).width)
+    }
+
+    fn field_width(&self, value: &str, window: &mut Window) -> Pixels {
+        let column = (self.reader_width.min(px(720.)) - px(space::XXL * 2.)).max(px(120.));
+        let single = self.live.as_ref().is_some_and(|l| l.single && l.cell.is_none());
+        if !single {
+            return column;
+        }
+        let depth = live_text::depth_while_writing(value, self.live.as_ref().and_then(|l| self.segments.get(l.index)).map_or(0, |s| if let SegmentKind::Line { depth } = s.kind { depth } else { 0 }));
+        let size = self.field_font_size(value);
+        column - px(self.drawn_text_left(value, depth)) + px(self.hang_width(value, size, window))
+    }
+
+    /// Typing with nothing open starts where writing last happened, so no keystroke is lost.
     fn open_for_typing(&mut self, inserted: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
-        let top = self.reader_list.logical_scroll_top().item_ix.saturating_sub(1);
-        let line = self.parsed.as_ref().and_then(|(_, p)| p.sources().get(top).map(|s| s.line)).unwrap_or(0);
-        self.open_line(self.last_line.unwrap_or(line), None, window, cx);
+        let line = self.last_line.unwrap_or_else(|| self.top_line());
+        self.open_line(line, None, window, cx);
         if let Some(text) = inserted {
             self.block.update(cx, |b, cx| b.replace(text, window, cx));
         }
     }
 
-    /// Leaves the block at its edge for the one above or below.
+    fn at_block_edge_selecting(&self, down: bool, cx: &App) -> bool {
+        if !self.live.is_some_and(|l| l.single && l.cell.is_none()) {
+            return false;
+        }
+        let b = self.block.read(cx);
+        let range = b.selected_range();
+        if down { range.end == b.value().len() } else { range.start == 0 }
+    }
+
+    /// The byte where a source line starts in the whole note.
+    fn line_offset(text: &str, line: usize) -> usize {
+        text.split_inclusive('\n').take(line).map(str::len).sum()
+    }
+
+    /// Selecting past the open line goes on in the source view, which can hold a selection of many lines; Esc comes back.
+    fn select_beyond_line(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(live) = self.live else { return };
+        let range = self.block.read(cx).selected_range();
+        let text = self.current_text(cx);
+        let start = Self::line_offset(&text, live.first_line);
+        let selection = if down {
+            let next = Self::line_offset(&text, live.first_line + 2).min(text.len());
+            start + range.start..next
+        } else {
+            Self::line_offset(&text, live.first_line.saturating_sub(1))..start + range.end
+        };
+        self.detour_to_source(selection, window, cx);
+    }
+
+    fn select_whole_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let end = self.current_text(cx).len();
+        self.detour_to_source(0..end, window, cx);
+    }
+
+    fn detour_to_source(&mut self, selection: std::ops::Range<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_mode(Mode::Source, window, cx);
+        self.source_detour = true;
+        self.editor.update(cx, |s, cx| s.set_selected_range(selection, cx));
+    }
+
+    /// Arrow left at the start or right at the end moves on to the next line.
+    fn cross_to_edge(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(live) = self.live else { return };
+        let target = if forward { live.index + 1 } else { live.index.wrapping_sub(1) };
+        let Some(segment) = self.segments.get(target).copied() else { return };
+        let line = if forward { segment.line } else { segment.line + segment.count - 1 };
+        self.open_line(line, if forward { Some(0) } else { None }, window, cx);
+    }
+
+    /// Goes to the line above or below, as close to the same place in the line as it can.
     fn cross_block(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(live) = &self.live else { return };
         let index = live.index;
-        let text = state::read(cx, |l| l.buffers.get(&self.path).map(|b| b.text.clone()).unwrap_or_default());
-        self.finish_block(cx);
-        let parsed = self.parse_now(&text);
-        let target = if down { index + 1 } else { index.wrapping_sub(1) };
-        let (line, caret) = match parsed.sources().get(target) {
-            Some(source) => (source.line, if down { Some(0) } else { None }),
-            None => (parsed.sources().get(index).map_or(0, |s| s.line), if down { None } else { Some(0) }),
+        let column = {
+            let b = self.block.read(cx);
+            let value = b.value();
+            let at = b.selected_range().start.min(value.len());
+            let start = value[..at].rfind('\n').map_or(0, |i| i + 1);
+            value[start..at].chars().count()
         };
-        self.open_line(line, caret, window, cx);
+        let target = if down { index + 1 } else { index.wrapping_sub(1) };
+        let Some(segment) = self.segments.get(target).copied() else {
+            let end = if down { self.block.read(cx).value().len() } else { 0 };
+            self.block.update(cx, |b, cx| b.set_selected_range(end..end, cx));
+            return;
+        };
+        let line = if down { segment.line } else { segment.line + segment.count - 1 };
+        let row = self.source_lines.get(line).cloned().unwrap_or_default();
+        let caret = row.char_indices().nth(column).map_or(row.len(), |(i, _)| i);
+        match segment.kind {
+            SegmentKind::Whole { .. } => self.open_line(line, if down { Some(caret) } else { None }, window, cx),
+            SegmentKind::Table { .. } => {
+                let row = if down { 0 } else { segment.count.saturating_sub(2) };
+                self.open_cell(target, row, 0, None, window, cx);
+            }
+            _ => self.open_line(line, Some(caret), window, cx),
+        }
     }
 
-    /// Backspace at the start of a block joins it to the block above.
-    fn join_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Tab and Enter in a table walk its cells; behind the last one a new row starts.
+    fn step_cell(&mut self, by_row: bool, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(LiveBlock { index, first_line, cell: Some(cell), .. }) = self.live.as_ref().map(|l| LiveBlock { index: l.index, first_line: l.first_line, line_count: l.line_count, single: l.single, cell: l.cell }) else { return };
+        let text = self.current_text(cx);
+        let lines: Vec<&str> = text.split('\n').collect();
+        let columns = lines.get(cell.line).map_or(1, |l| live_text::table_cells(l).len());
+        let rows = self.segments.get(index).map_or(1, |s| s.count.saturating_sub(1));
+        let (mut row, mut column) = (cell.row, cell.column);
+        if by_row {
+            row += 1;
+        } else if back {
+            if column > 0 {
+                column -= 1;
+            } else if row > 0 {
+                row -= 1;
+                column = columns - 1;
+            }
+        } else if column + 1 < columns {
+            column += 1;
+        } else {
+            row += 1;
+            column = 0;
+        }
+        if row >= rows {
+            let new_line = first_line + row + 1;
+            let added = format!("|{}", "  |".repeat(columns));
+            let mut all: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+            all.insert(new_line.min(all.len()), added);
+            self.history.push((text.clone(), cell.line));
+            self.future.clear();
+            self.live = None;
+            self.put_text(all.join("\n"), cx);
+            self.schedule_autosave(cx);
+            self.parse_now(&self.current_text(cx));
+        } else {
+            self.finish_block(cx);
+            self.parse_now(&text);
+        }
+        self.open_cell(index, row, column, None, window, cx);
+    }
+
+    /// Backspace at the start of a line joins it to the line above; forward delete at its end joins the next.
+    fn join_lines(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(live) = &self.live else { return };
-        if live.index == 0 {
+        if !live.single || live.cell.is_some() {
             return;
         }
-        let (index, first_line) = (live.index, live.first_line);
-        let text = state::read(cx, |l| l.buffers.get(&self.path).map(|b| b.text.clone()).unwrap_or_default());
-        let Some(above) = self.parsed.as_ref().and_then(|(_, p)| p.sources().get(index - 1).copied()) else { return };
-        let lines: Vec<&str> = text.split('\n').collect();
-        let above_text = lines[above.line..above.end_line.min(lines.len())].join("\n");
-        let mine = self.block.read(cx).value().to_string();
-        let joined = format!("{above_text}{mine}");
-        let end = (first_line + mine.split('\n').count()).min(lines.len());
-        let full = [&lines[..above.line], &joined.split('\n').collect::<Vec<_>>()[..], &lines[end..]].concat().join("\n");
-        self.history.push((text.clone(), first_line));
+        let first_line = live.first_line;
+        let text = self.current_text(cx);
+        let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+        let (upper, lower) = if down { (first_line, first_line + 1) } else { (first_line.wrapping_sub(1), first_line) };
+        if upper >= lines.len() || lower >= lines.len() {
+            return;
+        }
+        let segment_above = self.segments.iter().find(|s| upper >= s.line && upper < s.line + s.count).copied();
+        if matches!(segment_above.map(|s| s.kind), Some(SegmentKind::Whole { .. } | SegmentKind::Table { .. })) {
+            self.open_line(upper, None, window, cx);
+            return;
+        }
+        let at = lines[upper].len();
+        let joined = format!("{}{}", lines[upper], lines[lower]);
+        lines[upper] = joined;
+        lines.remove(lower);
+        self.history.push((text, first_line));
         self.future.clear();
-        let path = self.path.clone();
-        state::lib(cx).update(cx, |l, cx| {
-            if let Some(b) = l.buffers.get_mut(&path) {
-                b.edited(full);
-            }
-            cx.notify();
-        });
         self.live = None;
-        self.parsed = None;
-        self.open_line(above.line, Some(above_text.len()), window, cx);
+        self.put_text(lines.join("\n"), cx);
+        self.open_line(upper, Some(at), window, cx);
         self.schedule_autosave(cx);
     }
 
-    /// The field of the block being written, as tall as its text.
+    /// The field of the line being written, as tall as its text, with the text exactly where it was drawn.
     fn live_field(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let width = self.block_width();
         let value = self.block.read(cx).value().to_string();
+        let cell = self.live.as_ref().is_some_and(|l| l.cell.is_some());
+        let single = self.live.as_ref().is_some_and(|l| l.single) && !cell;
+        let depth = live_text::depth_while_writing(&value, self.live.as_ref().and_then(|l| self.segments.get(l.index)).map_or(0, |s| if let SegmentKind::Line { depth } = s.kind { depth } else { 0 }));
+        let size = if cell { font::BODY } else { self.field_font_size(&value) };
+        let width = if cell { px(160.) } else { self.field_width(&value, window) };
         let style = window.text_style();
-        let size = self.block_font_size(&value);
         let run = TextRun { len: value.len(), font: style.font(), color: style.color, background_color: None, underline: None, strikethrough: None };
         let rows: usize = window.text_system().shape_text(value.clone().into(), px(size), &[run], Some(width), None).map_or(1, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum());
         let line = px(size * 1.5);
         let height = line * (rows.max(1) as f32);
-        let field = writing_menu(Editor::new(&self.block).appearance(false).font_family(Theme::font_family()).text_size(px(size)).line_height(line).when(size > font::BODY, |e| e.font_weight(FontWeight::BOLD)).w(width + px(LIVE_GUTTER)).h(height + px(LIVE_INSET * 2.)).mt(px(-LIVE_INSET)).ml(px(-LIVE_GUTTER)));
+        let left = if single { self.drawn_text_left(&value, depth) - self.hang_width(&value, size, window) } else { 0. };
+        let heading = single && value.starts_with('#') && size != font::BODY;
+        let field = writing_menu(
+            Editor::new(&self.block)
+                .appearance(false)
+                .font_family(Theme::font_family())
+                .text_size(px(size))
+                .line_height(line)
+                .when(heading, |e| e.font_weight(FontWeight::BOLD))
+                .when(!cell, |e| e.w(width + px(LIVE_GUTTER)))
+                .when(cell, |e| e.w_full())
+                .h(height + px(LIVE_INSET * 2.))
+                .mt(px(-LIVE_INSET))
+                .ml(px(left - LIVE_GUTTER)),
+        );
         div().key_context("LiveBlock").h(height).child(self.note_editor_wrapper(field.into_any_element(), cx)).into_any_element()
     }
 
@@ -565,8 +850,46 @@ impl NoteView {
         }));
     }
 
-    fn schedule_reparse(&mut self, _: &mut Context<Self>) {
-        self.parsed = None;
+    fn schedule_reparse(&mut self, cx: &mut Context<Self>) {
+        if self.mode != Mode::Split {
+            self.parsed = None;
+            return;
+        }
+        self.reparse = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(200)).await;
+            let _ = this.update(cx, |n, cx| {
+                n.parsed = None;
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Keeps editor and reader at the same relative position; whichever moved last leads.
+    fn sync_split(&mut self, text: &str, cx: &mut Context<Self>) {
+        let (editor_y, line) = {
+            let e = self.editor.read(cx);
+            (-f32::from(e.scroll_offset().y), e.line_height().map_or(0., f32::from))
+        };
+        let reader_y = -f32::from(self.reader_list.scroll_px_offset_for_scrollbar().y);
+        let reader_max = f32::from(self.reader_list.max_offset_for_scrollbar().y);
+        let (last_editor, last_reader) = self.split_sync;
+        let (editor_moved, reader_moved) = ((editor_y - last_editor).abs() > 1., (reader_y - last_reader).abs() > 1.);
+        if line <= 0. || reader_max <= 0. || !(editor_moved || reader_moved) {
+            return;
+        }
+        let view = self.reader_list.viewport_bounds().size;
+        let per_row = ((f32::from(view.width) - 56.) / (prefs::get().editor_font_size * 0.6)).max(20.);
+        let rows: f32 = text.lines().map(|l| (l.chars().count() as f32 / per_row).ceil().max(1.)).sum();
+        let editor_max = (rows * line - f32::from(view.height)).max(1.);
+        if editor_moved {
+            let y = (editor_y / editor_max).clamp(0., 1.) * reader_max;
+            self.reader_list.set_offset_from_scrollbar(point(px(0.), px(-y)));
+            self.split_sync = (editor_y, y);
+        } else {
+            let y = (reader_y / reader_max).clamp(0., 1.) * editor_max;
+            self.editor.update(cx, |e, cx| e.set_scroll_offset(point(px(0.), px(-y)), cx));
+            self.split_sync = (y, reader_y);
+        }
     }
 
     fn focus_lost(&mut self, cx: &mut Context<Self>) {
@@ -639,7 +962,7 @@ impl NoteView {
     fn step_link(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
         let links: Vec<(String, usize)> = self.parsed.as_ref().map(|(_, p)| p.links().to_vec()).unwrap_or_default();
         let count = links.len();
-        if self.mode == Mode::Source || self.live.is_some() || count == 0 {
+        if matches!(self.mode, Mode::Source) || self.live.is_some() || count == 0 {
             return;
         }
         let next = match (self.link_focus.index, back) {
@@ -651,13 +974,14 @@ impl NoteView {
         self.link_focus.index = Some(next);
         super::link_card::hide(cx);
         let _ = window;
-        self.reader_list.scroll_to_reveal_item(links[next].1 + 1);
+        let line = self.parsed.as_ref().and_then(|(_, p)| p.sources().get(links[next].1).map(|s| s.line)).unwrap_or(0);
+        self.reader_list.scroll_to_reveal_item(self.item_of_line(line));
         cx.notify();
     }
 
     /// Enter follows the focused link, Space shows the preview, Escape ends.
     fn link_keys(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.mode == Mode::Source || self.live.is_some() || window.has_active_dialog(cx) {
+        if matches!(self.mode, Mode::Source) || self.live.is_some() || window.has_active_dialog(cx) {
             return;
         }
         let k = &e.keystroke;
@@ -746,7 +1070,7 @@ impl NoteView {
         let me = cx.entity();
         let mut modes = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS));
         let help = ShortcutAction::TogglePreview.shortcut().map_or_else(|| tr("Lesen oder Bearbeiten"), |s| trf("Lesen oder Bearbeiten (%@ wechselt)", &[&s.display()]));
-        for (m, label, icon_name) in [(Mode::Read, tr("Lesen"), "eye"), (Mode::Live, tr("Bearbeiten"), "pencil")] {
+        for (m, label, icon_name) in [(Mode::Read, tr("Lesen"), "eye"), (if self.editor_kind == prefs::NoteEditor::Live { Mode::Live } else { Mode::Source }, tr("Bearbeiten"), "pencil"), (Mode::Split, tr("Geteilt"), "columns-2")].into_iter().filter(|(m, ..)| *m != Mode::Split || self.editor_kind == prefs::NoteEditor::Code) {
             let active = m == self.mode;
             let e = me.clone();
             modes = modes.child(
@@ -769,11 +1093,12 @@ impl NoteView {
         }
         let (e1, path, p2, p3) = (me.clone(), self.path.clone(), self.path.clone(), self.path.clone());
         let current_mode = self.mode;
+        let live_editor = self.editor_kind == prefs::NoteEditor::Live;
         let source_me = me.clone();
         let embedded = self.embedded;
         let in_vault = super::vault_tools::in_vault(&self.path, cx);
-        let headings = self.parsed.as_ref().filter(|_| self.mode != Mode::Source).map(|(_, p)| p.headings()).unwrap_or_default();
-        let anchors = self.parsed.as_ref().map(|(_, p)| p.heading_blocks()).unwrap_or_default();
+        let headings = self.parsed.as_ref().filter(|_| !matches!(self.mode, Mode::Source)).map(|(_, p)| p.headings()).unwrap_or_default();
+        let anchors: Vec<usize> = self.parsed.as_ref().map(|(_, p)| p.heading_blocks().into_iter().filter_map(|b| p.sources().get(b).map(|s| self.item_of_line(s.line))).collect()).unwrap_or_default();
         let toc_list = self.reader_list.clone();
         let toc = (headings.len() >= 2 && anchors.len() == headings.len()).then(|| {
             Button::new("note-toc").ghost().small().icon(menu_icon("list")).tooltip(tr("Inhalt")).dropdown_menu(move |mut menu, _, _| {
@@ -781,7 +1106,7 @@ impl NoteView {
                 for ((level, text), block) in headings.iter().zip(&anchors) {
                     let (block, list) = (*block, toc_list.clone());
                     let indent = "    ".repeat((level - top) as usize);
-                    menu = menu.item(PopupMenuItem::new(format!("{indent}{text}")).on_click(move |_, _, _| list.scroll_to(ListOffset { item_ix: block + 1, offset_in_item: px(0.) })));
+                    menu = menu.item(PopupMenuItem::new(format!("{indent}{text}")).on_click(move |_, _, _| list.scroll_to(ListOffset { item_ix: block, offset_in_item: px(0.) })));
                 }
                 menu
             })
@@ -807,7 +1132,7 @@ impl NoteView {
                     .item(PopupMenuItem::new(tr("Mit Standard-App öffnen")).icon(menu_icon("square-arrow-out-up-right")).on_click(move |_, _, _| library::open_path(&c)));
                 let source_view = source_me.clone();
                 let is_source = current_mode == Mode::Source;
-                menu = menu.item(PopupMenuItem::new(tr("Quelltext")).icon(menu_icon("code")).checked(is_source).on_click(move |_, window, cx| source_view.update(cx, |n, cx| n.set_mode(if is_source { Mode::Live } else { Mode::Source }, window, cx))));
+                menu = menu.when(live_editor, |menu| menu.item(PopupMenuItem::new(tr("Quelltext")).icon(menu_icon("code")).checked(is_source).on_click(move |_, window, cx| source_view.update(cx, |n, cx| n.set_mode(if is_source { Mode::Live } else { Mode::Source }, window, cx)))));
                 if in_vault {
                     let (o, h, g) = (d.clone(), d.clone(), d.clone());
                     menu = menu
@@ -835,7 +1160,7 @@ impl NoteView {
 
     fn reader(&mut self, lib_text: &str, t: &Theme, window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
         let me = _cx.entity();
-        if lib_text.trim().is_empty() && self.live.is_none() {
+        if lib_text.trim().is_empty() && self.live.is_none() && self.mode != Mode::Live {
             let empty_me = me.clone();
             return div()
                 .id("empty-note")
@@ -851,6 +1176,9 @@ impl NoteView {
             (Some((_, p)), Some(_)) => p.clone(),
             _ => self.parse_now(lib_text),
         };
+        if let Some(line) = self.keep_line.take() {
+            self.reader_list.scroll_to(ListOffset { item_ix: self.item_of_line(line), offset_in_item: px(0.) });
+        }
         if !std::mem::replace(&mut self.place_restored, true)
             && let Some(offset) = prefs::get().note_places.get(&self.path.to_string_lossy().to_string()).copied()
         {
@@ -858,7 +1186,8 @@ impl NoteView {
             self.reader_list.scroll_to(ListOffset { item_ix, offset_in_item: px(offset.fract() * 4096.) });
         }
         if let Some(block) = self.reveal_block.take() {
-            self.reader_list.scroll_to_reveal_item(block + 1);
+            let line = parsed.sources().get(block).map_or(0, |s| s.line);
+            self.reader_list.scroll_to_reveal_item(self.item_of_line(line));
         }
         let path = self.path.clone();
         let toggle: markdown_view::OnToggle = Rc::new(move |line, cx: &mut App| {
@@ -871,27 +1200,69 @@ impl NoteView {
         let plugin = super::embeds::note_plugin(&self.path, lib_text).map(|name| (name.to_string(), self.path.clone()));
         let found = self.found.clone();
         let mut focus = self.link_focus.clone();
+        let segments = self.segments.clone();
+        let source_lines = self.source_lines.clone();
         if self.mode == Mode::Live {
-            let (click_me, lines, blocks) = (me.clone(), Rc::new(lib_text.split('\n').map(str::to_string).collect::<Vec<_>>()), parsed.sources().to_vec());
-            focus.text_click = Some(Rc::new(move |block, drawn, at, window, cx| {
-                let Some(source) = blocks.get(block) else { return };
-                let text = lines.get(source.line..source.end_line.min(lines.len())).unwrap_or_default().join("\n");
-                let caret = markdown_view::source_offset(&text, drawn, at);
-                let line = source.line;
-                click_me.update(cx, |n, cx| n.open_line(line, Some(caret), window, cx));
+            let (click_me, lines, shown) = (me.clone(), source_lines.clone(), segments.clone());
+            focus.text_click = Some(Rc::new(move |item, cell, drawn, at, window, cx| {
+                let Some(segment) = shown.get(item).copied() else { return };
+                let text = lines.get(segment.line..(segment.line + segment.count).min(lines.len())).unwrap_or_default().join("\n");
+                match cell {
+                    Some((row, column)) => {
+                        let row_line = segment.line + if row == 0 { 0 } else { row + 1 };
+                        let raw = lines.get(row_line).map_or(String::new(), |l| live_text::table_cells(l).get(column).map_or(String::new(), |c| l[c.clone()].to_string()));
+                        let caret = markdown_view::source_offset(&raw, drawn, at);
+                        click_me.update(cx, |n, cx| n.open_cell(item, row, column, Some(caret), window, cx));
+                    }
+                    None => {
+                        let caret = markdown_view::source_offset(&text, drawn, at);
+                        let (in_block, line) = match segment.kind {
+                            SegmentKind::Whole { .. } => (caret, segment.line),
+                            _ => (caret, segment.line),
+                        };
+                        click_me.update(cx, |n, cx| n.open_line(line, Some(in_block), window, cx));
+                    }
+                }
             }));
         }
-        let items = (parsed.len() + 2).max(if self.live.is_some() { 3 } else { 2 });
+        let live_mode = self.mode == Mode::Live;
+        let live_item = self.live.as_ref().filter(|l| l.cell.is_none()).map(|l| l.index);
+        let live_cell = self.live.as_ref().and_then(|l| l.cell.map(|c| (l.index, c.row, c.column)));
+        let hidden = parsed.hidden_blocks(&self.link_focus.folds);
+        let hidden_lines: Rc<Vec<bool>> = Rc::new({
+            let mut lines = vec![false; source_lines.len()];
+            for (source, is_hidden) in parsed.sources().iter().zip(&hidden) {
+                if *is_hidden {
+                    for slot in lines.iter_mut().take(source.end_line).skip(source.line) {
+                        *slot = true;
+                    }
+                }
+            }
+            for i in 1..lines.len() {
+                if source_lines[i].trim().is_empty() && lines[i - 1] {
+                    lines[i] = true;
+                }
+            }
+            lines
+        });
+        let items = if live_mode { (segments.len() + 2).max(if self.live.is_some() { 3 } else { 2 }) } else { parsed.len() + 2 };
         let measured = self.reader_list.viewport_bounds().size.width;
         if measured > px(0.) {
             self.reader_width = measured;
         }
-        let live_index = self.live.as_ref().map(|l| l.index);
-        let live_mode = self.mode == Mode::Live;
-        let block_lines: Vec<(usize, usize)> = parsed.sources().iter().map(|s| (s.line, s.end_line)).collect();
-        let hidden = parsed.hidden_blocks(&self.link_focus.folds);
         let footnote_list = self.reader_list.clone();
         let content = move |inner: AnyElement| div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).child(inner)).into_any_element();
+        let (fragments, definitions) = (self.fragments.clone(), self.definitions.clone());
+        let open_me = me.clone();
+        let opener = move |line: usize| {
+            let me = open_me.clone();
+            move |_: &MouseUpEvent, window: &mut Window, cx: &mut App| {
+                if markdown_view::take_control_press() || !gpui_kit::base::TextSelection::selected_text(window, cx).is_empty() {
+                    return;
+                }
+                me.update(cx, |n, cx| n.open_line(line, None, window, cx));
+            }
+        };
         let row = list(self.reader_list.clone(), move |i, window, cx| {
             let t = Theme::get(cx);
             if i == 0 {
@@ -899,52 +1270,91 @@ impl NoteView {
                 return content(div().pt(px(space::XL)).children(notice_row).into_any_element());
             }
             if i + 1 == items {
-                let end_me = me.clone();
-                let last_line = block_lines.last().map_or(0, |b| b.0);
-                let footer = div().id("note-end").min_h(px(160.)).pb(px(space::XXL)).children(markdown_view::render_footnotes(&parsed, Some(footnote_list.clone()), &t)).when(live_mode, |d| d.cursor_text().on_mouse_up(MouseButton::Left, move |_, window, cx| end_me.update(cx, |n, cx| n.open_line(last_line, None, window, cx))));
+                let last_line = source_lines.len().saturating_sub(1);
+                let footer = div().id("note-end").min_h(px(160.)).pb(px(space::XXL)).children(markdown_view::render_footnotes(&parsed, Some(footnote_list.clone()), &t)).when(live_mode, |d| d.cursor_text().on_mouse_up(MouseButton::Left, opener(last_line)));
                 return content(footer.into_any_element());
             }
-            if hidden.get(i - 1).copied().unwrap_or(false) {
+            if !live_mode {
+                if hidden.get(i - 1).copied().unwrap_or(false) {
+                    return div().into_any_element();
+                }
+                return content(div().id(("read-item", i)).pb(px(space::M)).child(markdown_view::render_block(&parsed, i - 1, base.as_deref(), Some(toggle.clone()), found.as_ref(), Some(&focus), &t)).into_any_element());
+            }
+            let Some(segment) = segments.get(i - 1).copied() else {
+                let field = me.update(cx, |n, cx| n.live_field(window, cx));
+                return content(field);
+            };
+            if hidden_lines.get(segment.line).copied().unwrap_or(false) {
                 return div().into_any_element();
             }
-            if live_index == Some(i - 1) {
+            if live_item == Some(i - 1) {
                 let field = me.update(cx, |n, cx| n.live_field(window, cx));
-                return content(div().pb(px(space::M)).child(field).into_any_element());
+                let text = source_lines.get(segment.line).map_or("", |s| s.as_str());
+                let bare = text.trim_start();
+                let top = if bare.starts_with("# ") || bare.starts_with("## ") { space::S } else if bare.starts_with('#') { space::XS } else { 0. };
+                let gap = if live_text::prefix_len(text) > 0 && !bare.starts_with('#') { space::XS } else { 0. };
+                return content(div().pt(px(top)).pb(px(gap)).child(field).into_any_element());
             }
-            let drawn = div().id(("live-item", i)).pb(px(space::M)).child(markdown_view::render_block(&parsed, i - 1, base.as_deref(), Some(toggle.clone()), found.as_ref(), Some(&focus), &t));
-            if !live_mode {
-                return content(drawn.into_any_element());
-            }
-            let click_me = me.clone();
-            let (line, _) = block_lines[i - 1];
-            content(drawn.cursor_text().on_mouse_up(MouseButton::Left, move |_, window, cx| {
-                if markdown_view::take_control_press() {
-                    return;
+            let line = segment.line;
+            let body: AnyElement = match segment.kind {
+                SegmentKind::Blank => div().h(px(font::BODY * 1.5)).into_any_element(),
+                SegmentKind::Raw => div().text_size(px(font::CALLOUT)).line_height(relative(1.5)).text_color(t.tertiary).child(source_lines.get(line).cloned().unwrap_or_default()).into_any_element(),
+                SegmentKind::Line { depth } => {
+                    let written = source_lines.get(line).map_or("", |s| s.as_str());
+                    let fragment = {
+                        let mut known = fragments.borrow_mut();
+                        if known.len() > 20_000 {
+                            known.clear();
+                        }
+                        known.entry(written.to_string()).or_insert_with(|| Rc::new(markdown_view::parse(&format!("{}\n\n{definitions}", written.trim_start())))).clone()
+                    };
+                    if fragment.len() == 0 {
+                        div().text_size(px(font::CALLOUT)).line_height(relative(1.5)).text_color(t.tertiary).child(written.to_string()).into_any_element()
+                    } else {
+                        let offset_toggle: markdown_view::OnToggle = {
+                            let inner = toggle.clone();
+                            Rc::new(move |_, cx: &mut App| inner(line, cx))
+                        };
+                        let draw = markdown_view::LiveDraw { item: Some(i - 1), line, footnotes: Some(parsed.footnote_order()), open_cell: None };
+                        let drawn = markdown_view::render_live(&fragment, 0, base.as_deref(), Some(offset_toggle), None, Some(&focus), draw, &t);
+                        let is_list = live_text::prefix_len(written) > 0 && !written.trim_start().starts_with('#');
+                        div().pl(px(depth as f32 * LIVE_INDENT)).when(is_list, |d| d.pb(px(space::XS))).child(drawn).into_any_element()
+                    }
                 }
-                if !gpui_kit::base::TextSelection::selected_text(window, cx).is_empty() {
-                    return;
+                SegmentKind::Whole { block } => {
+                    if live_item == Some(i - 1) {
+                        div().into_any_element()
+                    } else {
+                        div().pb(px(space::XS)).child(markdown_view::render_live(&parsed, block, base.as_deref(), Some(toggle.clone()), found.as_ref(), Some(&focus), markdown_view::LiveDraw { item: Some(i - 1), ..Default::default() }, &t)).into_any_element()
+                    }
                 }
-                click_me.update(cx, |n, cx| n.open_line(line, None, window, cx));
-            }).into_any_element())
+                SegmentKind::Table { block } => {
+                    let open_cell = live_cell.filter(|(item, ..)| *item == i - 1).map(|(_, row, column)| {
+                        let field = me.update(cx, |n, cx| n.live_field(window, cx));
+                        (row, column, std::cell::RefCell::new(Some(field)))
+                    });
+                    div().pb(px(space::XS)).child(markdown_view::render_live(&parsed, block, base.as_deref(), Some(toggle.clone()), None, Some(&focus), markdown_view::LiveDraw { item: Some(i - 1), open_cell, ..Default::default() }, &t)).into_any_element()
+                }
+            };
+            content(div().id(("live-item", i)).cursor_text().on_mouse_up(MouseButton::Left, opener(line)).child(body).into_any_element())
         });
         div().relative().size_full().bg(t.content).child(row.size_full()).vertical_scrollbar(&self.reader_list).into_any_element()
     }
 
-    /// Tells the list which blocks changed, so everything else keeps its measured height.
-    fn adopt_blocks(&mut self, new: Vec<markdown_view::BlockSource>) {
-        let hash = |b: &markdown_view::BlockSource| b.hash;
-        let old = std::mem::take(&mut self.block_sources);
+    /// Tells the list which items changed, so everything else keeps its measured height.
+    fn adopt_items(&mut self, new: Vec<u64>) {
+        let old = std::mem::take(&mut self.item_hashes);
         let target = new.len() + 2;
         if self.reader_list.item_count() != old.len() + 2 {
             self.reader_list.reset(target);
         } else {
-            let prefix = old.iter().map(hash).zip(new.iter().map(hash)).take_while(|(a, b)| a == b).count();
-            let suffix = old.iter().rev().map(hash).zip(new.iter().rev().map(hash)).take_while(|(a, b)| a == b).count().min(old.len().min(new.len()) - prefix);
+            let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+            let suffix = old.iter().rev().zip(new.iter().rev()).take_while(|(a, b)| a == b).count().min(old.len().min(new.len()) - prefix);
             if prefix + suffix != old.len() || old.len() != new.len() {
                 self.reader_list.splice(prefix + 1..old.len() - suffix + 1, new.len() - prefix - suffix);
             }
         }
-        self.block_sources = new;
+        self.item_hashes = new;
     }
 
     /// Pasting an image puts it into the attachment folder, an address over a selection makes a link.
@@ -1104,6 +1514,9 @@ impl NoteView {
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|n, _: &PlainNewline, w, cx| {
+                if n.live.is_some_and(|l| l.cell.is_some()) {
+                    return;
+                }
                 let (_, r) = n.with_text(cx);
                 let end = r.start + 1;
                 n.apply(Edit { range: r, text: "\n".into(), select: end..end }, w, cx);
@@ -1146,6 +1559,14 @@ impl NoteView {
             }))
             .capture_action(cx.listener(|n, _: &gpui_kit::component::input::Paste, w, cx| n.paste(w, cx)))
             .on_action(cx.listener(|n, _: &ListNewline, w, cx| {
+                if n.live.is_some_and(|l| l.cell.is_some()) {
+                    if n.target().read(cx).completion_menu_state().open {
+                        cx.propagate();
+                    } else {
+                        n.step_cell(true, false, w, cx);
+                    }
+                    return;
+                }
                 if n.target().read(cx).completion_menu_state().open {
                     cx.propagate();
                     return;
@@ -1157,6 +1578,10 @@ impl NoteView {
                 }
             }))
             .on_action(cx.listener(|n, _: &ListTab, w, cx| {
+                if n.live.is_some_and(|l| l.cell.is_some()) {
+                    n.step_cell(false, false, w, cx);
+                    return;
+                }
                 if n.target().read(cx).completion_menu_state().open {
                     cx.propagate();
                     return;
@@ -1177,6 +1602,10 @@ impl NoteView {
                 }
             }))
             .on_action(cx.listener(|n, _: &ListBacktab, w, cx| {
+                if n.live.is_some_and(|l| l.cell.is_some()) {
+                    n.step_cell(false, true, w, cx);
+                    return;
+                }
                 let (s, r) = n.with_text(cx);
                 if let Some(next) = edit_ops::table_cell(&s, r.start, true) {
                     n.target().update(cx, |t, cx| t.set_selected_range(next.clone(), cx));
@@ -1216,13 +1645,71 @@ impl NoteView {
                     n.cross_block(true, w, cx);
                 }
             }))
-            .capture_action(cx.listener(|n, _: &super::main_window::Dismiss, w, cx| n.leave_block(w, cx)))
+            .capture_action(cx.listener(|n, _: &super::main_window::Dismiss, w, cx| {
+                if std::mem::take(&mut n.source_detour) {
+                    cx.stop_propagation();
+                    n.set_mode(Mode::Live, w, cx);
+                } else {
+                    n.leave_block(w, cx);
+                }
+            }))
             .capture_action(cx.listener(|n, _: &gpui_kit::component::input::Escape, w, cx| n.leave_block(w, cx)))
+            .capture_action(cx.listener(|n, _: &gpui_kit::base::actions::SelectUp, w, cx| {
+                if n.at_block_edge_selecting(false, cx) {
+                    cx.stop_propagation();
+                    n.select_beyond_line(false, w, cx);
+                }
+            }))
+            .capture_action(cx.listener(|n, _: &gpui_kit::base::actions::SelectDown, w, cx| {
+                if n.at_block_edge_selecting(true, cx) {
+                    cx.stop_propagation();
+                    n.select_beyond_line(true, w, cx);
+                }
+            }))
+            .capture_action(cx.listener(|n, _: &gpui_kit::component::input::SelectAll, w, cx| {
+                if n.live.is_some() {
+                    let b = n.block.read(cx);
+                    if b.selected_range() == (0..b.value().len()) {
+                        cx.stop_propagation();
+                        n.select_whole_note(w, cx);
+                    }
+                }
+            }))
+            .capture_action(cx.listener(|n, _: &gpui_kit::component::input::MoveLeft, w, cx| {
+                if n.live.is_some_and(|l| l.cell.is_none()) && n.block.read(cx).selected_range() == (0..0) {
+                    cx.stop_propagation();
+                    n.cross_to_edge(false, w, cx);
+                }
+            }))
+            .capture_action(cx.listener(|n, _: &gpui_kit::component::input::MoveRight, w, cx| {
+                if n.live.is_some_and(|l| l.cell.is_none()) {
+                    let b = n.block.read(cx);
+                    let end = b.value().len();
+                    if b.selected_range() == (end..end) {
+                        cx.stop_propagation();
+                        n.cross_to_edge(true, w, cx);
+                    }
+                }
+            }))
             .capture_key_down(cx.listener(|n, e: &KeyDownEvent, w, cx| {
                 let m = &e.keystroke.modifiers;
-                if n.live.is_some() && e.keystroke.key == "backspace" && !m.platform && !m.control && !m.shift && !m.alt && n.block.read(cx).selected_range() == (0..0) {
-                    cx.stop_propagation();
-                    n.join_up(w, cx);
+                if n.live.is_none() || m.platform || m.control || m.shift || m.alt {
+                    return;
+                }
+                let (range, end) = {
+                    let b = n.block.read(cx);
+                    (b.selected_range(), b.value().len())
+                };
+                match e.keystroke.key.as_str() {
+                    "backspace" if range == (0..0) => {
+                        cx.stop_propagation();
+                        n.join_lines(false, w, cx);
+                    }
+                    "delete" if range == (end..end) => {
+                        cx.stop_propagation();
+                        n.join_lines(true, w, cx);
+                    }
+                    _ => {}
                 }
             }))
             .child(field)
@@ -1251,6 +1738,16 @@ impl Render for NoteView {
         if std::mem::take(&mut self.needs_focus) {
             self.activate(window, cx);
         }
+        let wanted = prefs::get().note_editor;
+        if wanted != self.editor_kind {
+            self.editor_kind = wanted;
+            let next = match (self.mode, wanted) {
+                (Mode::Read, _) => Mode::Read,
+                (_, prefs::NoteEditor::Live) => Mode::Live,
+                (_, prefs::NoteEditor::Code) => Mode::Source,
+            };
+            self.set_mode(next, window, cx);
+        }
         if !std::mem::replace(&mut self.took_over, true) && state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.dirty)) {
             self.schedule_autosave(cx);
         }
@@ -1277,6 +1774,9 @@ impl Render for NoteView {
             }
         }
         let header = self.header(exporting, &t, cx);
+        if self.mode == Mode::Split && !missing {
+            self.sync_split(&text, cx);
+        }
         let undecodable = state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.undecodable));
         let content: AnyElement = if undecodable {
             unavailable("file-warning", tr("Kodierung wird nicht unterstützt"), tr("Die Datei ist nicht in UTF-8 gespeichert. Sie bleibt unverändert, öffne sie in einer anderen App."), &t).into_any_element()
@@ -1286,6 +1786,7 @@ impl Render for NoteView {
         } else {
             match self.mode {
                 Mode::Read | Mode::Live => self.reader(&text, &t, window, cx),
+                Mode::Split => div().size_full().flex().child(div().flex_1().min_w_0().h_full().flex().flex_col().border_r_1().border_color(t.separator).child(div().flex_1().min_h_0().child(self.editor_view(cx))).child(word_count(&text, &t))).child(div().flex_1().min_w_0().h_full().child(self.reader(&text, &t, window, cx))).into_any_element(),
                 Mode::Source => div().size_full().flex().flex_col().child(div().flex_1().min_h_0().child(self.editor_view(cx))).child(word_count(&text, &t)).into_any_element(),
             }
         };
@@ -1302,14 +1803,33 @@ impl Render for NoteView {
             .children(hover_card)
             .track_focus(&self.focus)
             .key_context("NoteView")
+            .capture_action(cx.listener(|n, _: &super::app::Undo, w, cx| {
+                if n.mode == Mode::Live && !n.history.is_empty() {
+                    cx.stop_propagation();
+                    n.step_history(true, w, cx);
+                }
+            }))
+            .capture_action(cx.listener(|n, _: &super::app::Redo, w, cx| {
+                if n.mode == Mode::Live && !n.future.is_empty() {
+                    cx.stop_propagation();
+                    n.step_history(false, w, cx);
+                }
+            }))
             .on_action(cx.listener(|n, _: &super::app::TogglePreview, w, cx| {
-                let m = if n.mode == Mode::Live { Mode::Read } else { Mode::Live };
+                let writing = if n.editor_kind == prefs::NoteEditor::Live { Mode::Live } else { Mode::Source };
+                let m = if n.mode == Mode::Read { writing } else { Mode::Read };
                 n.set_mode(m, w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &super::app::SplitPreview, w, cx| {
+                if n.editor_kind == prefs::NoteEditor::Code {
+                    let m = if n.mode == Mode::Split { Mode::Source } else { Mode::Split };
+                    n.set_mode(m, w, cx)
+                }
             }))
             .on_action(cx.listener(|n, _: &super::app::ExportPdf, _, cx| n.export(cx)))
             .on_action(cx.listener(|n, _: &super::app::Save, _, cx| n.save(cx)))
             .on_key_down(cx.listener(|n, e: &KeyDownEvent, window, cx| n.link_keys(e, window, cx)))
-            .when(self.mode != Mode::Source && self.live.is_none(), |d| d.key_context("WalkItems"))
+            .when(!matches!(self.mode, Mode::Source) && self.live.is_none(), |d| d.key_context("WalkItems"))
             .on_action(cx.listener(|n, _: &super::canvas_view::NextItem, window, cx| n.step_link(false, window, cx)))
             .on_action(cx.listener(|n, _: &super::canvas_view::PreviousItem, window, cx| n.step_link(true, window, cx)))
             .when(!self.embedded, |d| {

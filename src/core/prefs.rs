@@ -59,6 +59,17 @@ pub enum FileGrouping {
     Date,
 }
 
+/// How notes are written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NoteEditor {
+    /// The note stays drawn; only the line with the caret shows its marks.
+    #[default]
+    Live,
+    /// The whole note as source text with line numbers.
+    Code,
+}
+
 /// A key plus modifiers, as stored for custom shortcuts.
 /// A reading position in a PDF.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -121,6 +132,8 @@ pub struct Prefs {
     pub notes_column: Option<f32>,
     pub notes_explorer_hidden: bool,
     pub spell_check: bool,
+    /// How notes are written.
+    pub note_editor: NoteEditor,
     /// What was folded in each note's reading view.
     pub note_folds: HashMap<String, Vec<String>>,
     /// Width of the deadlines column on module pages.
@@ -177,6 +190,7 @@ impl Default for Prefs {
             notes_column: None,
             notes_explorer_hidden: false,
             spell_check: true,
+            note_editor: NoteEditor::default(),
             note_folds: HashMap::new(),
             shortcuts: BTreeMap::new(),
             disabled_shortcuts: BTreeSet::new(),

@@ -107,6 +107,14 @@ impl NoteBuffer {
             self.conflict = None;
             return true;
         }
+        if let Some(merged) = super::live_text::merge(&self.last_saved, &self.text, &disk) {
+            self.dirty = merged != disk;
+            self.text = merged;
+            self.last_saved = disk;
+            self.conflict = None;
+            self.revision += 1;
+            return true;
+        }
         let changed = self.conflict.as_deref() != Some(disk.as_str());
         self.conflict = Some(disk);
         changed

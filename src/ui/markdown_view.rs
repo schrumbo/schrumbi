@@ -917,7 +917,7 @@ pub struct LinkFocus {
 }
 
 /// Called with a top-level block, the drawn text and the byte clicked.
-pub type BlockClick = Rc<dyn Fn(usize, &str, usize, &mut Window, &mut App)>;
+pub type BlockClick = Rc<dyn Fn(usize, Option<(usize, usize)>, &str, usize, &mut Window, &mut App)>;
 
 /// The foldable things whose state differs from how the note starts.
 pub type Folds = Rc<RefCell<std::collections::HashSet<String>>>;
@@ -958,6 +958,10 @@ struct Ctx<'a> {
     block: usize,
     /// Drawing the head of a foldable block, where a click folds instead of opening.
     head_text: Cell<bool>,
+    /// The table cell being drawn, with row and column.
+    cell: Cell<Option<(usize, usize)>>,
+    /// The field for the cell being written.
+    open_cell: Option<(usize, usize, RefCell<Option<AnyElement>>)>,
 }
 
 /// Whether an image is small enough to stand in a line of text.
@@ -1010,8 +1014,8 @@ fn text_click_of(cx: &Ctx) -> Option<super::selectable::TextClick> {
     if cx.head_text.get() {
         return None;
     }
-    let (click, block) = (cx.focus.and_then(|f| f.text_click.clone())?, cx.block);
-    Some(Rc::new(move |text, at, window, app| click(block, text, at, window, app)))
+    let (click, block, cell) = (cx.focus.and_then(|f| f.text_click.clone())?, cx.block, cx.cell.get());
+    Some(Rc::new(move |text, at, window, app| click(block, cell, text, at, window, app)))
 }
 
 fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
@@ -1305,7 +1309,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
     let note = embedded_note(&path, target);
     let mut chain = cx.chain.clone();
     chain.push(path.clone());
-    let inner = Ctx { t, base: path.parent(), on_toggle: None, footnote_order: &note.footnote_order, order: cx.order, chain, focus: None, links_seen: cx.links_seen, block: cx.block, head_text: Cell::new(false) };
+    let inner = Ctx { t, base: path.parent(), on_toggle: None, footnote_order: &note.footnote_order, order: cx.order, chain, focus: None, links_seen: cx.links_seen, block: cx.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None };
     let blocks = render_blocks(&note.blocks, &inner);
     div()
         .flex()
@@ -1381,6 +1385,7 @@ fn coloured(lang: Option<&str>, code: &str) -> Rc<Vec<(String, TokenKind)>> {
 
 fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
     let t = cx.t;
+    let colors = super::theme::syntax_palette(t.dark);
     let mut text = String::new();
     let mut highlights = Vec::new();
     for (s, kind) in coloured(lang, code).iter() {
@@ -1388,12 +1393,12 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
         text.push_str(s);
         let color = match kind {
             TokenKind::Plain => None,
-            TokenKind::Keyword => Some(t.palette("pink")),
-            TokenKind::String => Some(t.palette("orange")),
-            TokenKind::Comment => Some(t.secondary),
-            TokenKind::Number => Some(t.palette("purple")),
-            TokenKind::Type => Some(t.palette("teal")),
-            TokenKind::Attribute => Some(t.palette("brown")),
+            TokenKind::Keyword => Some(rgb(colors.keyword).into()),
+            TokenKind::String => Some(rgb(colors.string).into()),
+            TokenKind::Comment => Some(rgb(colors.comment).into()),
+            TokenKind::Number => Some(rgb(colors.number).into()),
+            TokenKind::Type => Some(rgb(colors.kind).into()),
+            TokenKind::Attribute => Some(rgb(colors.function).into()),
         };
         if let Some(c) = color {
             highlights.push((start..text.len(), HighlightStyle { color: Some(c), ..Default::default() }));
@@ -1614,15 +1619,31 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     .map(|c| rows.iter().filter_map(|r| r.get(c)).chain(head.get(c)).map(width_of).fold(4_f32, f32::max).min(40.))
                     .collect();
                 let total: f32 = widths.iter().sum::<f32>().max(1.);
-                let cell = |inl: &Vec<Inline>, i: usize, bold: bool| {
+                let cell = |inl: &Vec<Inline>, row: usize, i: usize, bold: bool| {
                     let share = widths.get(i).copied().unwrap_or(4.) / total;
-                    let d = div().flex_none().w(relative(share)).px(px(space::S)).py(px(space::XS)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD));
+                    let order = cx.order.get();
+                    cx.order.set(order + 1);
+                    cx.cell.set(Some((row, i)));
+                    let click = text_click_of(cx);
+                    let d = div().id(("md-cell", order)).flex_none().w(relative(share)).px(px(space::S)).py(px(space::XS)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD));
                     let d = match aligns.get(i) {
                         Some(pulldown_cmark::Alignment::Center) => d.flex().justify_center(),
                         Some(pulldown_cmark::Alignment::Right) => d.flex().justify_end(),
                         _ => d,
                     };
-                    d.child(styled_text(inl, cx, font::BODY))
+                    let open = cx.open_cell.as_ref().filter(|(r, c, _)| *r == row && *c == i).and_then(|(_, _, field)| field.borrow_mut().take());
+                    let drawn = match open {
+                        Some(field) => d.child(field),
+                        None => {
+                            let body = styled_text(inl, cx, font::BODY);
+                            d.when_some(click, |d, click| {
+                                d.capture_any_mouse_down(|_, _, _| press_control()).on_mouse_up(MouseButton::Left, move |_, window, cx| click("", 0, window, cx))
+                            })
+                            .child(body)
+                        }
+                    };
+                    cx.cell.set(None);
+                    drawn
                 };
                 let order = cx.order.get();
                 cx.order.set(order + 1);
@@ -1635,8 +1656,8 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     .border_1()
                     .border_color(t.separator)
                     .overflow_hidden()
-                    .child(div().flex().bg(t.secondary_bg).children(head.iter().enumerate().map(|(i, c)| cell(c, i, true))))
-                    .children(rows.iter().map(|r| div().flex().border_t_1().border_color(t.separator).children(r.iter().enumerate().map(|(i, c)| cell(c, i, false))))))
+                    .child(div().flex().bg(t.secondary_bg).children(head.iter().enumerate().map(|(i, c)| cell(c, 0, i, true))))
+                    .children(rows.iter().enumerate().map(|(row, r)| div().flex().border_t_1().border_color(t.separator).children(r.iter().enumerate().map(|(i, c)| cell(c, row + 1, i, false)).collect::<Vec<_>>()))))
                     .into_any_element()
             }
         })
@@ -1648,6 +1669,39 @@ impl ParsedNote {
     /// The number of top-level blocks.
     pub fn len(&self) -> usize {
         self.blocks.len()
+    }
+
+    /// First line, line after the end and how the live view writes each top-level block.
+    pub fn shapes(&self) -> Vec<(usize, usize, crate::core::live_text::Shape)> {
+        use crate::core::live_text::Shape;
+        fn plain_list(blocks: &[Block]) -> bool {
+            blocks.iter().all(|b| match b {
+                Block::Paragraph(_) | Block::Nothing => true,
+                Block::List { items, .. } => items.iter().all(|i| plain_list(&i.blocks)),
+                _ => false,
+            })
+        }
+        self.blocks
+            .iter()
+            .zip(&self.sources)
+            .map(|(block, source)| {
+                let many = source.end_line > source.line + 1;
+                let shape = match block {
+                    Block::Table { .. } => Shape::Table,
+                    Block::Paragraph(inl) if inl.iter().any(|i| matches!(i, Inline::Math(_))) && many => Shape::Whole,
+                    Block::Paragraph(_) | Block::Rule | Block::Nothing => Shape::Lines,
+                    Block::Heading(..) if !many => Shape::Lines,
+                    Block::List { items, .. } if items.iter().all(|i| plain_list(&i.blocks)) => Shape::Lines,
+                    _ => Shape::Whole,
+                };
+                (source.line, source.end_line, shape)
+            })
+            .collect()
+    }
+
+    /// The note's footnotes in the order they are numbered.
+    pub fn footnote_order(&self) -> &[String] {
+        &self.footnote_order
     }
 
     /// Where each top-level block came from.
@@ -1845,7 +1899,7 @@ pub struct Found {
 /// Renders a parsed note; task boxes call `on_toggle` with their source line.
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
     let (order, links_seen) = (Cell::new(0), Cell::new(0));
-    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false) };
+    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None };
     div().flex().flex_col().gap(px(space::M)).children(render_blocks(&note.blocks, &cx)).children(render_footnotes(note, None, t))
 }
 
@@ -1876,16 +1930,36 @@ impl ParsedNote {
     }
 }
 
+/// What the live view adds when it draws a block.
+#[derive(Default)]
+pub struct LiveDraw<'a> {
+    /// The list item being drawn, for reading order and clicks.
+    pub item: Option<usize>,
+    /// The source line of the first line of this text.
+    pub line: usize,
+    /// Footnote numbers of the whole note, when only a line of it is drawn.
+    pub footnotes: Option<&'a [String]>,
+    /// The field of the table cell being written, with its row and column.
+    pub open_cell: Option<(usize, usize, std::cell::RefCell<Option<AnyElement>>)>,
+}
+
 /// Renders one top-level block on its own, so long notes only build what is on screen.
 pub fn render_block(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: Option<OnToggle>, found: Option<&Found>, focus: Option<&LinkFocus>, t: &Theme) -> AnyElement {
+    render_live(note, i, base, on_toggle, found, focus, LiveDraw::default(), t)
+}
+
+/// Renders one top-level block for the reader or the live view.
+#[allow(clippy::too_many_arguments)]
+pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: Option<OnToggle>, found: Option<&Found>, focus: Option<&LinkFocus>, live: LiveDraw, t: &Theme) -> AnyElement {
     let Some(block) = note.blocks.get(i) else { return div().into_any_element() };
-    let order = Cell::new((i as u64 + 1) * 100_000);
+    let item = live.item.unwrap_or(i);
+    let order = Cell::new((item as u64 + 1) * 100_000);
     let links_seen = Cell::new(note.links.iter().take_while(|(_, top)| *top < i).count());
-    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: i, head_text: Cell::new(false) };
+    let cx = Ctx { t, base, on_toggle, footnote_order: live.footnotes.unwrap_or(&note.footnote_order), order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: item, head_text: Cell::new(false), cell: Cell::new(None), open_cell: live.open_cell };
     let element = render_blocks(std::slice::from_ref(block), &cx).into_iter().next().unwrap_or_else(|| div().into_any_element());
     let element = match (block, focus) {
         (Block::Heading(..), Some(focus)) => {
-            let key = format!("h{}", note.sources.get(i).map_or(0, |s| s.line));
+            let key = format!("h{}", note.sources.get(i).map_or(0, |s| s.line) + live.line);
             let is_open = !focus.folds.borrow().contains(&key);
             let folds = focus.folds.clone();
             let group = SharedString::from(format!("md-fold-{i}"));
@@ -1936,7 +2010,7 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<ListState>, t: &Theme) -
         return None;
     }
     let (order, links_seen) = (Cell::new(u64::MAX / 2), Cell::new(0));
-    let cx = Ctx { t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false) };
+    let cx = Ctx { t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None };
     let rows = used.iter().enumerate().map(|(i, (id, blocks))| {
         let home = note.footnote_homes.get(id).copied().unwrap_or(0);
         let list = list.clone();

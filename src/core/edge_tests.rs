@@ -557,8 +557,8 @@ fn renaming_keeps_links_alive_and_undo_takes_all_of_it_back() {
     lib.buffer(&root.join("Offen.md"));
     lib.rename(&root.join("Alt.md"), "Neu.md");
     let read = |n: &str| std::fs::read_to_string(root.join(n)).unwrap();
-    assert_eq!(read("Quelle.md"), "Siehe [[Neu#H|Alt]] und [x](Neu.md)\n");
-    assert_eq!(read("Offen.md"), "[[Neu|Alt]]");
+    assert_eq!(read("Quelle.md"), "Siehe [[Neu#H]] und [x](Neu.md)\n");
+    assert_eq!(read("Offen.md"), "[[Neu]]");
     assert!(read("Board.canvas").contains("Neu.md"));
     lib.undo();
     assert!(root.join("Alt.md").exists());
@@ -566,7 +566,7 @@ fn renaming_keeps_links_alive_and_undo_takes_all_of_it_back() {
     assert_eq!(read("Offen.md"), "[[Alt]]");
     assert!(read("Board.canvas").contains("Alt.md"));
     lib.redo();
-    assert_eq!(read("Offen.md"), "[[Neu|Alt]]");
+    assert_eq!(read("Offen.md"), "[[Neu]]");
 }
 
 static VAULT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());

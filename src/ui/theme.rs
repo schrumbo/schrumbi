@@ -197,6 +197,7 @@ pub fn apply(dark: bool, window: Option<&mut Window>, cx: &mut App) {
     let mut highlight = (*ct.highlight_theme).clone();
     highlight.style.editor_background = Some(t.content);
     highlight.style.editor_active_line = Some(t.ink.opacity(0.05));
+    apply_syntax_colors(&mut highlight, dark);
     ct.highlight_theme = std::sync::Arc::new(highlight);
     ct.motion.duration_slow = super::motion::SLOW;
     ct.scrollbar_mode = gpui_kit::base::ScrollbarMode::Hover;
@@ -293,4 +294,63 @@ mod tests {
             }
         }
     }
+}
+
+/// The colours of written code, in light and dark. Each stays readable on the note's background.
+pub struct SyntaxPalette {
+    pub keyword: u32,
+    pub string: u32,
+    pub comment: u32,
+    pub number: u32,
+    pub kind: u32,
+    pub function: u32,
+}
+
+pub fn syntax_palette(dark: bool) -> SyntaxPalette {
+    if dark {
+        SyntaxPalette { keyword: 0xB7A8F8, string: 0x8FCB9B, comment: 0x8E939B, number: 0xE5A76B, kind: 0x7CC7D6, function: 0x82AAF5 }
+    } else {
+        SyntaxPalette { keyword: 0x6A4BC4, string: 0x2B7A4B, comment: 0x68707C, number: 0xA3560F, kind: 0x0B7285, function: 0x1F5FCC }
+    }
+}
+
+fn apply_syntax_colors(theme: &mut gpui_kit::component::highlighter::HighlightTheme, dark: bool) {
+    use gpui_kit::component::highlighter::ThemeStyle;
+    let p = syntax_palette(dark);
+    let paint = |color: u32| serde_json::from_value::<ThemeStyle>(serde_json::json!({ "color": format!("#{color:06x}") })).ok();
+    let s = &mut theme.style.syntax;
+    s.keyword = paint(p.keyword);
+    s.preproc = paint(p.keyword);
+    s.string = paint(p.string);
+    s.string_escape = paint(p.number);
+    s.string_regex = paint(p.string);
+    s.string_special = paint(p.string);
+    s.string_special_symbol = paint(p.string);
+    s.comment = paint(p.comment);
+    s.comment_doc = paint(p.comment);
+    s.number = paint(p.number);
+    s.boolean = paint(p.number);
+    s.constant = paint(p.number);
+    s.function = paint(p.function);
+    s.constructor = paint(p.kind);
+    s.enum_ = paint(p.kind);
+    s.tag = paint(p.keyword);
+    s.attribute = paint(p.function);
+    s.property = paint(p.function);
+    s.link_text = paint(p.function);
+    s.link_uri = paint(p.comment);
+    s.text_code_span = paint(p.string);
+    s.punctuation = paint(p.comment);
+    s.punctuation_list_marker = paint(p.comment);
+    s.punctuation_special = paint(p.comment);
+    s.punctuation_delimiter = paint(p.comment);
+    s.title = paint(p.function);
+    s.text_literal = paint(p.string);
+    s.type_ = paint(p.kind);
+    s.variant = paint(p.kind);
+    s.label = paint(p.number);
+    s.operator = paint(p.comment);
+    s.emphasis = None;
+    s.emphasis_strong = None;
+    s.primary = None;
 }

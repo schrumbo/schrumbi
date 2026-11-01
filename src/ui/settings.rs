@@ -1527,7 +1527,21 @@ impl Settings {
             )],
             t,
         );
+        let editor_kind = prefs::get().note_editor;
+        let editor_label = |k: prefs::NoteEditor| if k == prefs::NoteEditor::Live { tr("Live: Text bleibt gezeichnet") } else { tr("Code-Editor: Quelltext mit Zeilennummern") };
         let mut save_rows = vec![row(
+            tr("Notizen schreiben"),
+            picker("n-editor", editor_label(editor_kind), move |mut menu| {
+                for k in [prefs::NoteEditor::Live, prefs::NoteEditor::Code] {
+                    menu = menu.item(PopupMenuItem::new(editor_label(k)).checked(k == editor_kind).on_click(move |_, _, cx| {
+                        prefs::update(|p| p.note_editor = k);
+                        cx.refresh_windows();
+                    }));
+                }
+                menu
+            }),
+            t,
+        ), row(
             tr("Sichern"),
             picker("n-mode", mode_label(mode), move |mut menu| {
                 for m in [NoteSaveMode::Focus, NoteSaveMode::Delay] {

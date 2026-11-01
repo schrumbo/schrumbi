@@ -8,6 +8,7 @@ pub mod i18n;
 pub mod ics;
 pub mod json;
 pub mod library;
+pub mod live_text;
 pub mod markdown;
 pub mod model;
 pub mod natural_date;
