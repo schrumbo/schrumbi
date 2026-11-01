@@ -1092,6 +1092,10 @@ impl Library {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        if path.exists() {
+            self.open_document(&path);
+            return;
+        }
         match std::fs::write(&path, "") {
             Ok(()) => {
                 self.refresh();

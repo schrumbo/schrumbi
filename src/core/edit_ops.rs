@@ -30,6 +30,30 @@ pub fn selected_lines(s: &str, sel: &Range<usize>) -> Range<usize> {
 /// `**sel**`, `*sel*` or `` `sel` ``; with no selection the caret lands between the tokens.
 pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
     let inner = &s[sel.clone()];
+    if !sel.is_empty() {
+        let around = sel.start >= token.len() && s[..sel.start].ends_with(token) && s[sel.end..].starts_with(token);
+        if around {
+            let range = sel.start - token.len()..sel.end + token.len();
+            let start = range.start;
+            return Edit { range, text: inner.to_string(), select: start..start + inner.len() };
+        }
+        if inner.len() >= token.len() * 2 && inner.starts_with(token) && inner.ends_with(token) && !inner.contains('\n') {
+            let bare = &inner[token.len()..inner.len() - token.len()];
+            return Edit { range: sel.clone(), text: bare.to_string(), select: sel.start..sel.start + bare.len() };
+        }
+        if inner.contains('\n') {
+            let text = inner
+                .split('\n')
+                .map(|line| {
+                    let marks = super::live_text::prefix_len(line);
+                    if line[marks..].trim().is_empty() { line.to_string() } else { format!("{}{token}{}{token}", &line[..marks], &line[marks..]) }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let select = sel.start..sel.start + text.len();
+            return Edit { range: sel, text, select };
+        }
+    }
     let text = format!("{token}{inner}{token}");
     let start = sel.start + token.len();
     let select = if sel.is_empty() { start..start } else { sel.start..sel.start + text.len() };
@@ -328,6 +352,61 @@ pub fn newline(s: &str, caret: usize) -> Option<Edit> {
     Some(Edit { range: caret..caret, text, select: end..end })
 }
 
+/// What closes a code fence or formula just opened on this line, when nothing below closes it yet.
+pub fn closing_mark(note: &str, line: usize) -> Option<String> {
+    let lines: Vec<&str> = note.split('\n').collect();
+    let here = lines.get(line)?.trim_end();
+    let bare = here.trim_start();
+    let indent = &here[..here.len() - bare.len()];
+    let mark = if bare == "$$" {
+        "$$"
+    } else if bare.starts_with("```") && !bare[3..].contains('`') {
+        "```"
+    } else if bare.starts_with("~~~") {
+        "~~~"
+    } else {
+        return None;
+    };
+    let is_mark = |l: &&&str| l.trim_start().starts_with(mark);
+    let above = lines[..line].iter().filter(is_mark).count();
+    let below = lines[line + 1..].iter().filter(is_mark).count();
+    (above % 2 == 0 && below % 2 == 0).then(|| format!("{indent}{mark}"))
+}
+
+/// Typing an opening bracket adds its partner; a closing one steps over the partner that is already there.
+pub fn typed_pair(s: &str, caret: usize, typed: &str) -> Option<Edit> {
+    let next = s[caret..].chars().next();
+    let closes = |t: &str| match t {
+        "(" => Some(")"),
+        "{" => Some("}"),
+        "$" => Some("$"),
+        _ => None,
+    };
+    if matches!(typed, ")" | "}" | "$") && next.is_some_and(|c| c.to_string() == typed) {
+        let after = caret + typed.len();
+        return Some(Edit { range: caret..after, text: typed.to_string(), select: after..after });
+    }
+    let close = closes(typed)?;
+    if next.is_some_and(|c| !c.is_whitespace()) {
+        return None;
+    }
+    if typed == "$" && s[..caret].chars().next_back().is_some_and(|c| c.is_alphanumeric()) {
+        return None;
+    }
+    let after = caret + typed.len();
+    Some(Edit { range: caret..caret, text: format!("{typed}{close}"), select: after..after })
+}
+
+/// Backspace between an empty pair of brackets takes both.
+pub fn empty_pair(s: &str, caret: usize) -> Option<Edit> {
+    let before = s[..caret].chars().next_back()?;
+    let after = s[caret..].chars().next()?;
+    matches!((before, after), ('(', ')') | ('{', '}') | ('$', '$')).then(|| {
+        let start = caret - before.len_utf8();
+        Edit { range: start..caret + after.len_utf8(), text: String::new(), select: start..start }
+    })
+}
+
 /// Applies an edit to a string, for tests and for buffers without an editor.
 pub fn apply(s: &str, e: &Edit) -> String {
     format!("{}{}{}", &s[..e.range.start], e.text, &s[e.range.end..])
@@ -531,5 +610,31 @@ mod tests {
         let s = "Übung 🐌\nzwei";
         let e = move_lines(s, s.len() - 1..s.len() - 1, true).unwrap();
         assert_eq!(apply(s, &e), "zwei\nÜbung 🐌");
+    }
+
+    #[test]
+    fn wrapping_toggles_and_keeps_lines_apart() {
+        assert_eq!(apply("ab", &wrap("ab", 0..2, "**")), "**ab**");
+        assert_eq!(apply("**ab**", &wrap("**ab**", 2..4, "**")), "ab");
+        assert_eq!(apply("**ab**", &wrap("**ab**", 0..6, "**")), "ab");
+        assert_eq!(apply("a\n\n- b", &wrap("a\n\n- b", 0..6, "**")), "**a**\n\n- **b**");
+    }
+
+    #[test]
+    fn fences_and_formulas_close_themselves_once() {
+        assert_eq!(closing_mark("```js", 0).as_deref(), Some("```"));
+        assert_eq!(closing_mark("$$", 0).as_deref(), Some("$$"));
+        assert_eq!(closing_mark("```\nx\n```", 2), None);
+        assert_eq!(closing_mark("```\n\n```", 0), None);
+        assert_eq!(closing_mark("text", 0), None);
+    }
+
+    #[test]
+    fn brackets_come_in_pairs() {
+        assert_eq!(apply("", &typed_pair("", 0, "(").unwrap()), "()");
+        assert_eq!(typed_pair("ab", 0, "("), None);
+        assert_eq!(apply("()", &typed_pair("()", 1, ")").unwrap()), "()");
+        assert_eq!(apply("()", &empty_pair("()", 1).unwrap()), "");
+        assert_eq!(typed_pair("5", 1, "$"), None);
     }
 }

@@ -63,6 +63,8 @@ struct LiveBlock {
     /// A line, not something that opens as a whole.
     single: bool,
     cell: Option<LiveCell>,
+    /// Several lines opened together to hold a selection; a plain caret closes them again.
+    selecting: bool,
 }
 
 /// A cell of a table being written.
@@ -437,10 +439,12 @@ impl NoteView {
             return;
         }
         let source = lines.get(first_line..(first_line + line_count).min(lines.len())).unwrap_or_default().join("\n");
-        let at = caret.unwrap_or(source.len()).min(source.len());
+        let before: usize = lines.get(first_line..line).unwrap_or_default().iter().map(|l| l.len() + 1).sum();
+        let at = caret.map_or(source.len(), |c| before + c).min(source.len());
+        let at = (0..=at).rev().find(|i| source.is_char_boundary(*i)).unwrap_or(0);
         let single = !matches!(kind, SegmentKind::Whole { .. });
         self.fill_field(source, at..at, window, cx);
-        self.live = Some(LiveBlock { index, first_line, line_count, single, cell: None });
+        self.live = Some(LiveBlock { index, first_line, line_count, single, cell: None, selecting: false });
         self.after_open(index, cx);
     }
 
@@ -456,7 +460,7 @@ impl NoteView {
         let value = line[cell].to_string();
         let at = caret.unwrap_or(value.len()).min(value.len());
         self.fill_field(value, at..at, window, cx);
-        self.live = Some(LiveBlock { index, first_line: segment.line, line_count: segment.count, single: true, cell: Some(LiveCell { row, column, line: line_no }) });
+        self.live = Some(LiveBlock { index, first_line: segment.line, line_count: segment.count, single: true, cell: Some(LiveCell { row, column, line: line_no }), selecting: false });
         self.after_open(index, cx);
     }
 
@@ -702,8 +706,9 @@ impl NoteView {
     }
 
     fn at_block_edge_selecting(&self, down: bool, cx: &App) -> bool {
-        if !self.live.is_some_and(|l| l.single && l.cell.is_none()) {
-            return false;
+        let Some(live) = self.live.filter(|l| (l.single || l.selecting) && l.cell.is_none()) else { return false };
+        if live.single {
+            return true;
         }
         let b = self.block.read(cx);
         let range = b.selected_range();
@@ -715,24 +720,54 @@ impl NoteView {
         text.split_inclusive('\n').take(line).map(str::len).sum()
     }
 
-    /// Selecting past the open line goes on in the source view, which can hold a selection of many lines; Esc comes back.
+    /// Selecting past the open lines opens the next one too: the text stays in its place, only these lines show as written.
     fn select_beyond_line(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(live) = self.live else { return };
         let range = self.block.read(cx).selected_range();
         let text = self.current_text(cx);
-        let start = Self::line_offset(&text, live.first_line);
-        let selection = if down {
-            let next = Self::line_offset(&text, live.first_line + 2).min(text.len());
-            start + range.start..next
+        let total = text.split('\n').count();
+        let lines: Vec<&str> = text.split('\n').collect();
+        let (first, count) = if down {
+            (live.first_line, (live.line_count + 1).min(total - live.first_line))
         } else {
-            Self::line_offset(&text, live.first_line.saturating_sub(1))..start + range.end
+            (live.first_line.saturating_sub(1), live.line_count + usize::from(live.first_line > 0))
         };
-        self.detour_to_source(selection, window, cx);
+        if first == live.first_line && count == live.line_count {
+            return;
+        }
+        let value = lines[first..first + count].join("\n");
+        let added_before = if down { 0 } else { lines[first].len() + 1 };
+        let selection = if down { range.start..value.len() } else { 0..range.end + added_before };
+        self.open_selecting(first, count, value, selection, live.index, window, cx);
     }
 
     fn select_whole_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let end = self.current_text(cx).len();
-        self.detour_to_source(0..end, window, cx);
+        let text = self.current_text(cx);
+        let count = text.split('\n').count();
+        let end = text.len();
+        self.open_selecting(0, count, text, 0..end, 0, window, cx);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open_selecting(&mut self, first: usize, count: usize, value: String, selection: std::ops::Range<usize>, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let at = self.segments.iter().position(|s| first < s.line + s.count).unwrap_or(index);
+        self.fill_field(value, selection, window, cx);
+        self.live = Some(LiveBlock { index: at, first_line: first, line_count: count, single: false, cell: None, selecting: true });
+        self.after_open(at, cx);
+    }
+
+    /// When a many-line selection became a plain caret, only the line with the caret stays open.
+    fn settle_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(live) = self.live.filter(|l| l.selecting) else { return };
+        let b = self.block.read(cx);
+        if !b.selected_range().is_empty() {
+            return;
+        }
+        let at = b.cursor();
+        let value = b.value().to_string();
+        let row = value[..at.min(value.len())].matches('\n').count();
+        let start = value[..at.min(value.len())].rfind('\n').map_or(0, |i| i + 1);
+        self.open_line(live.first_line + row, Some(at - start), window, cx);
     }
 
     fn detour_to_source(&mut self, selection: std::ops::Range<usize>, window: &mut Window, cx: &mut Context<Self>) {
@@ -752,14 +787,26 @@ impl NoteView {
 
     /// Goes to the line above or below, as close to the same place in the line as it can.
     fn cross_block(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(live) = &self.live else { return };
+        let Some(live) = self.live else { return };
         let index = live.index;
+        if let Some(cell) = live.cell {
+            let rows = self.segments.get(index).map_or(1, |s| s.count.saturating_sub(1));
+            let row = if down { cell.row + 1 } else { cell.row.wrapping_sub(1) };
+            if row < rows {
+                self.finish_block(cx);
+                self.open_cell(index, row, cell.column, None, window, cx);
+                return;
+            }
+        }
         let column = {
             let b = self.block.read(cx);
             let value = b.value();
             let at = b.selected_range().start.min(value.len());
             let start = value[..at].rfind('\n').map_or(0, |i| i + 1);
-            value[start..at].chars().count()
+            let line = &value[start..];
+            let line = &line[..line.find('\n').unwrap_or(line.len())];
+            let marks = live_text::prefix_len(line).min(at - start);
+            value[start + marks..at].chars().count()
         };
         let target = if down { index + 1 } else { index.wrapping_sub(1) };
         let Some(segment) = self.segments.get(target).copied() else {
@@ -769,7 +816,8 @@ impl NoteView {
         };
         let line = if down { segment.line } else { segment.line + segment.count - 1 };
         let row = self.source_lines.get(line).cloned().unwrap_or_default();
-        let caret = row.char_indices().nth(column).map_or(row.len(), |(i, _)| i);
+        let marks = live_text::prefix_len(&row);
+        let caret = row[marks..].char_indices().nth(column).map_or(row.len(), |(i, _)| marks + i);
         match segment.kind {
             SegmentKind::Whole { .. } => self.open_line(line, if down { Some(caret) } else { None }, window, cx),
             SegmentKind::Table { .. } => {
@@ -782,7 +830,7 @@ impl NoteView {
 
     /// Tab and Enter in a table walk its cells; behind the last one a new row starts.
     fn step_cell(&mut self, by_row: bool, back: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(LiveBlock { index, first_line, cell: Some(cell), .. }) = self.live.as_ref().map(|l| LiveBlock { index: l.index, first_line: l.first_line, line_count: l.line_count, single: l.single, cell: l.cell }) else { return };
+        let Some(LiveBlock { index, first_line, cell: Some(cell), .. }) = self.live.as_ref().map(|l| LiveBlock { selecting: false, index: l.index, first_line: l.first_line, line_count: l.line_count, single: l.single, cell: l.cell }) else { return };
         let text = self.current_text(cx);
         let lines: Vec<&str> = text.split('\n').collect();
         let columns = lines.get(cell.line).map_or(1, |l| live_text::table_cells(l).len());
@@ -879,6 +927,10 @@ impl NoteView {
                 .mt(px(-LIVE_INSET))
                 .ml(px(left - LIVE_GUTTER)),
         );
+        if self.live.is_some_and(|l| l.selecting) && self.block.read(cx).selected_range().is_empty() {
+            let me = cx.entity();
+            window.on_next_frame(move |window, cx| me.update(cx, |n, cx| n.settle_selection(window, cx)));
+        }
         let t = Theme::get(cx);
         let selection = self.block.read(cx).selected_range();
         let caret = self.block.read(cx).cursor();
@@ -899,7 +951,13 @@ impl NoteView {
         let source = if whole {
             value.to_string()
         } else if single {
-            format!("$${}$$", live_text::formula_at(value, caret)?)
+            match live_text::formula_at(value, caret) {
+                Some(formula) => format!("$${formula}$$"),
+                None => {
+                    let line = self.live?.first_line;
+                    live_text::open_formula(&self.source_lines, line)?
+                }
+            }
         } else {
             return None;
         };
@@ -946,10 +1004,12 @@ impl NoteView {
                 }))
                 .child(icon(name, iconsize::S, Theme::get(cx).primary))
         };
+        let below = self.live.is_some_and(|l| l.first_line == 0);
         deferred(
             div()
                 .absolute()
-                .top(px(-(control::M + space::M)))
+                .when(!below, |d| d.top(px(-(control::M + space::M))))
+                .when(below, |d| d.top(px(control::M)))
                 .left_0()
                 .flex()
                 .items_center()
@@ -1524,6 +1584,7 @@ impl NoteView {
         }
         let live_mode = self.mode == Mode::Live;
         let live_item = self.live.as_ref().filter(|l| l.cell.is_none()).map(|l| l.index);
+        let covered = self.live.as_ref().filter(|l| l.selecting).map(|l| (l.first_line, l.line_count));
         let live_cell = self.live.as_ref().and_then(|l| l.cell.map(|c| (l.index, c.row, c.column)));
         let hidden = parsed.hidden_blocks(&self.link_focus.folds);
         let hidden_lines: Rc<Vec<bool>> = Rc::new({
@@ -1586,6 +1647,13 @@ impl NoteView {
             if hidden_lines.get(segment.line).copied().unwrap_or(false) {
                 return div().into_any_element();
             }
+            if let Some((first, count)) = covered
+                && live_item != Some(i - 1)
+                && segment.line >= first
+                && segment.line < first + count
+            {
+                return div().into_any_element();
+            }
             if live_item == Some(i - 1) {
                 let field = me.update(cx, |n, cx| n.live_field(window, cx));
                 let text = source_lines.get(segment.line).map_or("", |s| s.as_str());
@@ -1616,7 +1684,7 @@ impl NoteView {
                         };
                         let draw = markdown_view::LiveDraw { item: Some(i - 1), line, footnotes: Some(parsed.footnote_order()), open_cell: None };
                         let drawn = markdown_view::render_live(&fragment, 0, base.as_deref(), Some(offset_toggle), None, Some(&focus), draw, &t);
-                        let is_list = live_text::prefix_len(written) > 0 && !written.trim_start().starts_with('#');
+                        let is_list = live_text::prefix_len(written) > 0 && !written.trim_start().starts_with('#') && !written.trim_start().starts_with('>');
                         div().pl(px(depth as f32 * LIVE_INDENT)).when(is_list, |d| d.pb(px(space::XS))).child(drawn).into_any_element()
                     }
                 }
@@ -1879,6 +1947,17 @@ impl NoteView {
                 if k.modifiers.platform || k.modifiers.control || !n.target().read(cx).focus_handle(cx).is_focused(w) {
                     return;
                 }
+                if n.live.is_some() && !n.target().read(cx).completion_menu_state().open {
+                    let (s, r) = n.with_text(cx);
+                    if r.is_empty() {
+                        let edit = if k.key == "backspace" { edit_ops::empty_pair(&s, r.start) } else { k.key_char.as_deref().and_then(|typed| edit_ops::typed_pair(&s, r.start, typed)) };
+                        if let Some(edit) = edit {
+                            n.apply(edit, w, cx);
+                            cx.stop_propagation();
+                            return;
+                        }
+                    }
+                }
                 let Some((open, close)) = k.key_char.as_deref().and_then(edit_ops::surround_pair) else { return };
                 let (s, r) = n.with_text(cx);
                 if r.is_empty() {
@@ -1946,6 +2025,17 @@ impl NoteView {
                     return;
                 }
                 let (s, r) = n.with_text(cx);
+                if r.is_empty() {
+                    let (full, line) = match n.live {
+                        Some(live) => (n.current_text(cx), live.first_line + s[..r.start].matches('\n').count()),
+                        None => (s.clone(), s[..r.start].matches('\n').count()),
+                    };
+                    if let Some(mark) = edit_ops::closing_mark(&full, line).filter(|_| s[r.start..].split('\n').next().is_some_and(|rest| rest.trim().is_empty())) {
+                        let inside = r.start + 1;
+                        n.apply(Edit { range: r.clone(), text: format!("\n\n{mark}"), select: inside..inside }, w, cx);
+                        return;
+                    }
+                }
                 match (r.is_empty(), edit_ops::newline(&s, r.start)) {
                     (true, Some(e)) => n.apply(e, w, cx),
                     _ => n.apply(Edit { range: r.clone(), text: "\n".into(), select: r.start + 1..r.start + 1 }, w, cx),
@@ -2005,6 +2095,19 @@ impl NoteView {
                 if n.live.is_some() {
                     cx.stop_propagation();
                     n.step_history(false, w, cx);
+                }
+            }))
+            .capture_action(cx.listener(|n, _: &gpui_kit::component::input::MoveToStart, w, cx| {
+                if n.live.is_some_and(|l| !l.selecting) {
+                    cx.stop_propagation();
+                    n.open_line(0, Some(0), w, cx);
+                }
+            }))
+            .capture_action(cx.listener(|n, _: &gpui_kit::component::input::MoveToEnd, w, cx| {
+                if n.live.is_some_and(|l| !l.selecting) {
+                    cx.stop_propagation();
+                    let total = n.current_text(cx).split('\n').count();
+                    n.open_line(total.saturating_sub(1), None, w, cx);
                 }
             }))
             .capture_action(cx.listener(|n, _: &gpui_kit::component::input::MoveUp, w, cx| {

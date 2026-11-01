@@ -1766,6 +1766,7 @@ impl ParsedNote {
                     Block::Paragraph(inl) if inl.iter().any(|i| matches!(i, Inline::Math(_))) && many => Shape::Whole,
                     Block::Paragraph(_) | Block::Rule | Block::Nothing => Shape::Lines,
                     Block::Heading(..) if !many => Shape::Lines,
+                    Block::Quote(inner) if inner.iter().all(|b| matches!(b, Block::Paragraph(_) | Block::Nothing)) => Shape::Lines,
                     Block::List { items, .. } if items.iter().all(|i| plain_list(&i.blocks)) => Shape::Lines,
                     _ => Shape::Whole,
                 };

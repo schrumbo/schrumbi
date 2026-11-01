@@ -390,6 +390,18 @@ pub fn table_with_column(lines: &[&str]) -> Vec<String> {
         .collect()
 }
 
+/// The whole `$$` block a line stands in, while it is being written line by line.
+pub fn open_formula(lines: &[String], line: usize) -> Option<String> {
+    let is_mark = |l: &String| l.trim() == "$$";
+    let above = lines.iter().take(line).filter(|l| is_mark(l)).count();
+    if above % 2 == 0 || lines.get(line).is_some_and(is_mark) {
+        return None;
+    }
+    let first = (0..line).rev().find(|i| is_mark(&lines[*i]))?;
+    let last = (line + 1..lines.len()).find(|i| is_mark(&lines[*i])).unwrap_or(lines.len());
+    Some(format!("$$\n{}\n$$", lines[first + 1..last].join("\n")))
+}
+
 /// The formula around a position in a line, without its dollar signs.
 pub fn formula_at(line: &str, caret: usize) -> Option<&str> {
     let mut start = None;
