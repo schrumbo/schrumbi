@@ -18,7 +18,7 @@ use super::preview::FilePreview;
 use super::state::{self, act};
 use super::motion::Soft;
 use crate::core::vault::index;
-use super::theme::{Theme, font, radius, space, iconsize};
+use super::theme::{Theme, control, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::live_text::{self, LiveStyle, Segment, SegmentKind};
 use crate::core::edit_ops::{self, Edit};
@@ -1843,7 +1843,7 @@ impl Render for NoteView {
         let top = if self.embedded {
             document_bar(&self.path, header, &t, cx)
         } else {
-            div().h(px(44.)).flex_none().flex().items_center().justify_center().border_b_1().border_color(t.separator).child(header)
+            div().h(px(control::SUBBAR)).flex_none().flex().items_center().justify_center().border_b_1().border_color(t.separator).child(header)
         };
         let hover_card = (!self.embedded).then(|| super::link_card::overlay(cx)).flatten();
         let view = div()
@@ -2038,7 +2038,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
             .items_center()
             .gap(px(space::S))
             .px(px(space::M))
-            .min_h(px(40.))
+            .flex_none().h(px(control::SUBBAR))
             .border_b_1()
             .border_color(t.separator)
             .child(file_icon(current, iconsize::M))
@@ -2144,7 +2144,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, cx: &App) ->
         .gap(px(space::S))
         .pl(px(space::S))
         .pr(px(space::M))
-        .min_h(px(40.))
+        .flex_none().h(px(control::SUBBAR))
         .border_b_1()
         .border_color(t.separator)
         .children(show_files)

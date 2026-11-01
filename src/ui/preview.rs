@@ -8,7 +8,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
-use super::theme::{Theme, font, space, iconsize};
+use super::theme::{Theme, control, font, space, iconsize};
 use super::widgets::*;
 use crate::core::i18n::tr;
 use crate::core::library;
@@ -140,7 +140,8 @@ impl Render for FilePreview {
                         .items_center()
                         .gap(px(space::S))
                         .px(px(space::L))
-                        .py(px(space::S))
+                        .flex_none()
+                        .h(px(control::PANE_HEAD))
                         .border_b_1()
                         .border_color(t.separator)
                         .child(file_icon(&path, iconsize::L))

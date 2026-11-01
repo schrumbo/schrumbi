@@ -542,7 +542,9 @@ impl FilingForm {
                 .flex()
                 .items_center()
                 .gap(px(space::S))
-                .p(px(space::L))
+                .flex_none()
+                .h(px(super::theme::control::FOOTBAR))
+                .px(px(space::L))
                 .border_t_1()
                 .border_color(t.separator)
                 .when(multi, |d| {

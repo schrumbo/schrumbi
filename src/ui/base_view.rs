@@ -466,7 +466,7 @@ impl Render for BaseView {
         let bar = div()
             .flex_none()
             .px(px(space::M))
-            .h(px(control::BAR - space::S))
+            .h(px(control::SUBBAR))
             .flex()
             .items_center()
             .gap(px(space::S))

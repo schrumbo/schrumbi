@@ -308,8 +308,10 @@ impl Render for DocSide {
         }
         let tabs = div()
             .flex_none()
-            .p(px(space::S))
+            .h(px(control::SUBBAR))
+            .px(px(space::S))
             .flex()
+            .items_center()
             .gap(px(space::XS))
             .border_b_1()
             .border_color(t.separator)

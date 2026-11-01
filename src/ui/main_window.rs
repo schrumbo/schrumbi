@@ -263,6 +263,8 @@ impl MainWindow {
             .flex_none()
             .flex()
             .items_center()
+            .border_b_1()
+            .border_color(t.separator)
             .gap(px(space::S))
             .pl(px(if super::chrome::CUSTOM { space::M } else { (92. - left).max(space::M) }))
             .pr(px(space::M))
@@ -462,7 +464,7 @@ impl Render for MainWindow {
                     .child(div().flex_1().min_h_0().mr(px(inspector_w)).child(page).with_animation(("page", page_key), Animation::new(page_motion).with_easing(ease_out_quint()), |d, p| d.opacity(0.4 + 0.6 * p))),
             )
             .when(l.show_inspector, |d| {
-                d.child(div().absolute().top(px(control::BAR)).bottom_0().right_0().w(px(inspector_w)).border_l_1().border_t_1().border_color(t.separator).bg(t.content).child(self.inspector.clone()))
+                d.child(div().absolute().top(px(control::BAR)).bottom_0().right_0().w(px(inspector_w)).border_l_1().border_color(t.separator).bg(t.content).child(self.inspector.clone()))
             })
             .children(super::link_card::overlay(cx))
             .children(slides)

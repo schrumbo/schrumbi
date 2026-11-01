@@ -14,7 +14,7 @@ use gpui_kit::*;
 use crate::core::vault::query as vault_query;
 use super::state::{self, act};
 use super::motion::{self, Soft};
-use super::theme::{Theme, font, radius, space, iconsize};
+use super::theme::{Theme, control, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::catalog::{self, CatalogFile, FileKind, Query};
 use crate::core::i18n::{tr, trf};
@@ -876,7 +876,7 @@ impl FileBrowser {
                     })
                 })
         }));
-        let mut bar = div().flex().flex_wrap().items_center().gap(px(space::S)).px(px(space::L)).py(px(space::S)).border_b_1().border_color(t.separator).child(kinds);
+        let mut bar = div().flex().flex_wrap().items_center().gap(px(space::S)).px(px(space::L)).py(px(space::S)).min_h(px(control::PANE_HEAD)).border_b_1().border_color(t.separator).child(kinds);
         if self.scope_module.is_none() {
             let typed = self.results.query.module_id.clone();
             let active = typed.clone().or(self.module_filter.clone());

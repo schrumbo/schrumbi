@@ -300,7 +300,9 @@ impl Render for GraphView {
         missing_names.truncate(30);
         let bar = div()
             .flex_none()
-            .p(px(space::M))
+            .px(px(space::M))
+            .py(px(space::XS))
+            .min_h(px(super::theme::control::SUBBAR))
             .flex()
             .items_center()
             .flex_wrap()

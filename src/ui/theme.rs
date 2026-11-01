@@ -31,6 +31,12 @@ pub mod control {
     pub const M: f32 = 28.;
     /// The toolbar band.
     pub const BAR: f32 = 52.;
+    /// The band under the toolbar. Every pane uses it, so the lines below them meet.
+    pub const SUBBAR: f32 = 40.;
+    /// The head of a pane that shows a file beside a list.
+    pub const PANE_HEAD: f32 = 67.;
+    /// The band with a pane's main actions at its bottom.
+    pub const FOOTBAR: f32 = 60.;
 }
 
 /// Corner radii used across the app.

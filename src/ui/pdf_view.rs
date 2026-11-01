@@ -1125,7 +1125,7 @@ impl PdfView {
                 .into_any_element(),
         };
         div()
-            .h(px(control::BAR - space::S - space::XXS))
+            .h(px(control::SUBBAR))
             .flex_none()
             .flex()
             .items_center()

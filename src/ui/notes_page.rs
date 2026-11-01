@@ -775,7 +775,7 @@ impl Render for NotesPage {
         let me = cx.entity();
         let header = div()
             .flex_none()
-            .h(px(control::BAR - space::S))
+            .h(px(control::SUBBAR))
             .px(px(space::S))
             .flex()
             .items_center()
