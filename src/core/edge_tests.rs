@@ -731,3 +731,15 @@ fn ticking_a_task_from_the_overview_finds_it_after_the_note_moved_on() {
     assert_eq!(read(), "Neue Zeile aus Obsidian\n- [ ] Eins\n- [ ] Zwei\n- [x] Zwei\n");
     assert!(!lib.finish_task(&note, 1, "Gibt es nicht"));
 }
+
+#[test]
+fn a_note_made_here_takes_the_name_of_its_heading() {
+    use crate::core::markdown::{first_heading, with_first_heading};
+    assert_eq!(first_heading("---\na: 1\n---\n\n```\n# nein\n```\n\n## klein\n\n# Die **echte** `H1` [[a|b]]\n# zweite").as_deref(), Some("Die echte H1 b"));
+    assert_eq!(first_heading("Titel\n===\n").as_deref(), Some("Titel"));
+    assert_eq!(first_heading("nur Text\n"), None);
+    assert_eq!(with_first_heading("---\na: 1\n---\n# Alt\n\nText", "Neu"), "---\na: 1\n---\n# Neu\n\nText");
+    assert_eq!(with_first_heading("Alt\n===\n\nText", "Neu"), "# Neu\n\nText");
+    assert_eq!(with_first_heading("Text", "Neu"), "# Neu\n\nText");
+    assert_eq!(crate::core::text::safe_file_stem(" a/b: c? . "), "a b c");
+}

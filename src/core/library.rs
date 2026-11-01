@@ -239,6 +239,10 @@ pub struct Library {
     pub split_document: Option<PathBuf>,
     /// Where the last rename ended up, for the list that started it.
     pub last_renamed: Option<PathBuf>,
+    /// Notes just made here, which open for writing whatever was shown last.
+    fresh_notes: std::collections::HashSet<PathBuf>,
+    /// A heading whose name is taken was reported once.
+    heading_clash: Option<(PathBuf, String)>,
     back_routes: Vec<Route>,
     forward_routes: Vec<Route>,
     pub toast_hovered: bool,
@@ -375,6 +379,8 @@ impl Library {
             closed_documents: Vec::new(),
             split_document: None,
             last_renamed: None,
+            fresh_notes: Default::default(),
+            heading_clash: None,
             preview_document: None,
             graph_selection: None,
             tab_trails: HashMap::new(),
@@ -788,6 +794,7 @@ impl Library {
             self.last_error = Some(trf("Notiz konnte nicht angelegt werden: %@", &[&explain(&e.into())]));
             return None;
         }
+        self.mark_made_here(&target);
         self.refresh();
         self.commit(trf("Angelegt: %@", &[&name_of(&target)]), "square-pen", vec![Change::Trash(target.clone())]);
         self.open_document(&target);
@@ -1098,6 +1105,7 @@ impl Library {
         }
         match std::fs::write(&path, "") {
             Ok(()) => {
+                self.mark_made_here(&path);
                 self.refresh();
                 self.commit(trf("Angelegt: %@", &[&name_of(&path)]), "square-pen", vec![Change::Trash(path.clone())]);
                 self.open_document(&path);
@@ -1323,6 +1331,9 @@ impl Library {
 
     pub fn set_route(&mut self, r: Route) {
         if self.route != r {
+            if let Route::Doc(left) = self.route.clone() {
+                self.follow_heading(&left);
+            }
             self.back_routes.push(std::mem::replace(&mut self.route, r));
             if self.back_routes.len() > ROUTE_HISTORY {
                 self.back_routes.remove(0);
@@ -1782,6 +1793,9 @@ impl Library {
         })();
         match result {
             Ok(path) => {
+                if ext == "md" {
+                    self.mark_made_here(&path);
+                }
                 self.refresh();
                 self.commit(trf("Angelegt: %@", &[&name_of(&path)]), "square-pen", vec![Change::Trash(path.clone())]);
                 Some(path)
@@ -1791,6 +1805,51 @@ impl Library {
                 None
             }
         }
+    }
+
+    fn mark_made_here(&mut self, path: &Path) {
+        let settled = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let key = settled.to_string_lossy().to_string();
+        super::prefs::update(|p| {
+            p.heading_titled.insert(key);
+        });
+        self.fresh_notes.insert(settled);
+    }
+
+    /// Whether this note was just made here; asks only once.
+    pub fn take_fresh_note(&mut self, path: &Path) -> bool {
+        self.fresh_notes.remove(path)
+    }
+
+    /// Gives a note made here the name of its first heading.
+    pub fn follow_heading(&mut self, path: &Path) {
+        if !heading_titled(path) {
+            return;
+        }
+        let text = match self.buffers.get_mut(path) {
+            Some(buffer) => {
+                if buffer.conflict.is_some() || (buffer.dirty && buffer.save().is_err()) {
+                    return;
+                }
+                buffer.text.clone()
+            }
+            None => std::fs::read_to_string(path).unwrap_or_default(),
+        };
+        let Some(title) = super::markdown::first_heading(&text) else { return };
+        let name = format!("{}.md", super::text::safe_file_stem(&title));
+        if name == name_of(path) || name == ".md" {
+            return;
+        }
+        let wanted = path.with_file_name(&name);
+        if wanted.exists() && rename_target(path, &name) != wanted {
+            let clash = (path.to_path_buf(), name.clone());
+            if self.heading_clash.as_ref() != Some(&clash) {
+                self.notify(trf("Name bleibt: „%@“ gibt es hier schon", &[&name]), "triangle-alert", None, None);
+                self.heading_clash = Some(clash);
+            }
+            return;
+        }
+        self.rename_file(path, &name);
     }
 
     /// What a new note starts with: the vault's `Mitschrift` template if there is one, otherwise its title.
@@ -2262,6 +2321,14 @@ impl Library {
     }
 
     pub fn rename(&mut self, file: &Path, name: &str) {
+        let titled = heading_titled(file);
+        self.rename_file(file, name);
+        let Some(target) = self.last_renamed.clone().filter(|t| titled && t.file_name().is_some_and(|n| n.to_string_lossy() == name)) else { return };
+        let title = Path::new(name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        self.edit_note(&target, "title", tr("Überschrift angepasst"), |text| super::markdown::with_first_heading(text, &title));
+    }
+
+    fn rename_file(&mut self, file: &Path, name: &str) {
         if name == name_of(file) {
             return;
         }
@@ -2355,6 +2422,13 @@ impl Library {
         self.closed_documents.iter_mut().for_each(swap);
         self.active_document.iter_mut().for_each(swap);
         self.split_document.iter_mut().for_each(swap);
+        let (old_key, new_key) = (from.to_string_lossy().to_string(), to.to_string_lossy().to_string());
+        if super::prefs::get().heading_titled.contains(&old_key) {
+            super::prefs::update(|p| {
+                p.heading_titled.remove(&old_key);
+                p.heading_titled.insert(new_key);
+            });
+        }
         if self.note_windows.remove(&from) {
             self.note_windows.insert(to.clone());
         }
@@ -2697,6 +2771,10 @@ impl Library {
 
     /// Removes a document tab; the caller saves or asks about unsaved changes first.
     pub fn close_document(&mut self, path: &Path) {
+        self.follow_heading(path);
+        let settled = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let renamed = self.last_renamed.clone().filter(|_| !self.open_documents.iter().any(|d| d == path));
+        let path = renamed.as_deref().unwrap_or(&settled);
         let Some(i) = self.open_documents.iter().position(|d| d == path) else { return };
         if !self.note_windows.contains(path) {
             self.buffers.remove(path);
@@ -2921,6 +2999,11 @@ fn trash_with_copy(path: &Path) -> Result<Change> {
         return Err(e);
     }
     Ok(Change::Restore { path: path.to_path_buf(), backup })
+}
+
+fn heading_titled(path: &Path) -> bool {
+    let settled = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    super::prefs::get().heading_titled.contains(settled.to_string_lossy().as_ref())
 }
 
 /// Where a rename goes; changing only the case of a name on a case-insensitive disk is not a collision.

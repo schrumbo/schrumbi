@@ -3,6 +3,71 @@ use std::sync::{LazyLock, Mutex};
 
 use regex::Regex;
 
+/// Typst draws `cases` columns without a gap and right-aligns the first; LaTeX has a gap and aligns both left.
+fn case_columns(text: &str) -> String {
+    static CASES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)\\begin\{(d?cases|rcases)\}(.*?)\\end\{(?:d?cases|rcases)\}").unwrap());
+    CASES
+        .replace_all(text, |c: &regex::Captures| {
+            let rows: Vec<String> = c[2]
+                .split("\\\\")
+                .map(|row| match row.split_once('&') {
+                    Some((value, condition)) => format!("& {} & \\quad & {}", value.trim(), condition.trim()),
+                    None => format!("& {}", row.trim()),
+                })
+                .collect();
+            let name = if &c[1] == "dcases" { "cases" } else { &c[1] };
+            format!("\\begin{{{name}}}{}\\end{{{name}}}", rows.join(" \\\\ "))
+        })
+        .into_owned()
+}
+
+/// Pairs plain bars into fences, so `|x|` reads as an absolute value and not as two relations. A single bar stays.
+fn absolute_values(text: &str) -> String {
+    const SIZED: [&str; 17] = ["left", "right", "middle", "big", "Big", "bigg", "Bigg", "bigl", "bigr", "Bigl", "Bigr", "biggl", "biggr", "Biggl", "Biggr", "bigm", "Bigm"];
+    if text.contains("{array}") {
+        return text.to_string();
+    }
+    let mut levels: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut pairs: Vec<usize> = Vec::new();
+    let mut escaped = false;
+    for (at, c) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '{' => levels.push(Vec::new()),
+            '}' => {
+                let bars = levels.pop().unwrap_or_default();
+                if bars.len() % 2 == 0 {
+                    pairs.extend(bars);
+                }
+                if levels.is_empty() {
+                    levels.push(Vec::new());
+                }
+            }
+            '|' if !SIZED.iter().any(|w| text[..at].ends_with(&format!("\\{w}"))) => levels.last_mut().unwrap().push(at),
+            _ => {}
+        }
+    }
+    for bars in levels {
+        if bars.len() % 2 == 0 {
+            pairs.extend(bars);
+        }
+    }
+    pairs.sort_unstable();
+    let mut out = String::with_capacity(text.len() + pairs.len() * 6);
+    let mut last = 0;
+    for (n, at) in pairs.iter().enumerate() {
+        out.push_str(&text[last..*at]);
+        out.push_str(if n % 2 == 0 { "\\lvert " } else { "\\rvert " });
+        last = at + 1;
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
 /// Macro definitions seen so far; MathJax, and so Obsidian, keeps them for later formulas on the page.
 static MACROS: LazyLock<Mutex<Vec<(String, String)>>> = LazyLock::new(Default::default);
 
@@ -212,7 +277,7 @@ pub fn learn_macros(note: &str) {
 pub fn prepare(latex: &str) -> String {
     let text = take_definitions(latex);
     let text = expand(&text);
-    let text = environments(&text);
+    let text = absolute_values(&case_columns(&environments(&text)));
     let text = each_command(&text, "ce", |f| format!("{{{}}}", chemistry(f)));
     let text = each_command(&text, "pu", |f| format!("{{\\mathrm{{{f}}}}}"));
     let text = text.replace("\\mathscr", "\\mathcal");
@@ -244,6 +309,20 @@ mod tests {
         assert_eq!(prepare(r"\def\VV{V}\VV_1"), r"{V}_1");
         assert_eq!(prepare(r"\DeclareMathOperator{\Sp}{Sp}\Sp A"), r"{\operatorname{Sp}} A");
         assert_eq!(prepare(r"\newcommand{\twice}[1]{#1 #1}\twice{a}"), r"{a a}");
+    }
+
+    #[test]
+    fn bars_pair_up_only_when_they_can() {
+        assert_eq!(absolute_values("|x| + |y|"), r"\lvert x\rvert  + \lvert y\rvert ");
+        assert_eq!(absolute_values("P(A|B)"), "P(A|B)");
+        assert_eq!(absolute_values(r"\left|x\right| \| y \|"), r"\left|x\right| \| y \|");
+        assert_eq!(absolute_values(r"\frac{|a|}{b}|c"), r"\frac{\lvert a\rvert }{b}|c");
+        assert_eq!(absolute_values(r"\begin{array}{c|c|c}a\end{array}"), r"\begin{array}{c|c|c}a\end{array}");
+    }
+
+    #[test]
+    fn case_columns_keep_their_gap() {
+        assert_eq!(case_columns(r"\begin{cases} x & x>0 \\ -x \end{cases}"), r"\begin{cases}& x & \quad & x>0 \\ & -x\end{cases}");
     }
 
     #[test]

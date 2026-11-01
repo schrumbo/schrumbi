@@ -18,6 +18,16 @@ pub enum NoteSaveMode {
     Delay,
 }
 
+/// How a note was shown last; the next one opens the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NoteMode {
+    Read,
+    #[default]
+    Write,
+    Split,
+}
+
 /// When a synced workspace saves its state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,6 +171,10 @@ pub struct Prefs {
     /// How notes are written. Stored under a new name, so everyone starts on the code editor once.
     #[serde(rename = "noteEditorMode")]
     pub note_editor: NoteEditor,
+    /// How the last note was shown.
+    pub note_mode: NoteMode,
+    /// Notes made in the app: their file name follows their first heading.
+    pub heading_titled: BTreeSet<String>,
     /// What was folded in each note's reading view.
     pub note_folds: HashMap<String, Vec<String>>,
     /// Width of the deadlines column on module pages.
@@ -206,6 +220,8 @@ impl Default for Prefs {
             card_new_per_day: 20,
             card_reviews_per_day: 200,
             card_target: None,
+            note_mode: NoteMode::default(),
+            heading_titled: BTreeSet::new(),
             card_deck: String::new(),
             card_open: Vec::new(),
             layouts: BTreeMap::new(),

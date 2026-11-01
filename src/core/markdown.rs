@@ -610,3 +610,36 @@ mod tests {
         assert!(t.iter().any(|(s, k)| s == "// c" && *k == TokenKind::Comment));
     }
 }
+
+/// The text of a note's first top-level heading, without its markup.
+pub fn first_heading(text: &str) -> Option<String> {
+    let body = &text[super::vault::frontmatter::body_offset(text)..];
+    let mut inside = false;
+    let mut title = String::new();
+    for event in Parser::new_ext(body, options()) {
+        match event {
+            Event::Start(Tag::Heading { level: pulldown_cmark::HeadingLevel::H1, .. }) => inside = true,
+            Event::End(TagEnd::Heading(pulldown_cmark::HeadingLevel::H1)) => break,
+            Event::Text(t) | Event::Code(t) | Event::InlineMath(t) | Event::DisplayMath(t) if inside => title.push_str(&t),
+            _ => {}
+        }
+    }
+    static LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\[(?:[^\]|]*\|)?([^\]]*)\]\]").unwrap());
+    let title = LINK.replace_all(&title, "$1").replace("==", "");
+    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!title.is_empty()).then_some(title)
+}
+
+/// Sets the note's first top-level heading, or puts one on top when it has none.
+pub fn with_first_heading(text: &str, title: &str) -> String {
+    let offset = super::vault::frontmatter::body_offset(text);
+    let body = &text[offset..];
+    let found = Parser::new_ext(body, options()).into_offset_iter().find_map(|(event, range)| matches!(event, Event::Start(Tag::Heading { level: pulldown_cmark::HeadingLevel::H1, .. })).then_some(range));
+    match found {
+        Some(range) => {
+            let end = range.start + body[range.clone()].trim_end().len();
+            format!("{}# {title}{}", &text[..offset + range.start], &body[end..])
+        }
+        None => format!("{}# {title}\n\n{body}", &text[..offset]),
+    }
+}

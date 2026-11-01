@@ -316,9 +316,20 @@ impl NoteView {
                 }
             }),
         ];
-        let mode = match prefs::get().note_editor {
+        let writing = match prefs::get().note_editor {
             prefs::NoteEditor::Live => Mode::Live,
             prefs::NoteEditor::Code => Mode::Source,
+        };
+        let just_made = state::lib(cx).update(cx, |l, _| l.take_fresh_note(&path));
+        let mode = if just_made {
+            prefs::update(|p| p.note_mode = prefs::NoteMode::Write);
+            writing
+        } else {
+            match prefs::get().note_mode {
+                prefs::NoteMode::Read => Mode::Read,
+                prefs::NoteMode::Split if prefs::get().note_editor == prefs::NoteEditor::Code => Mode::Split,
+                _ => writing,
+            }
         };
         let revision = state::lib(cx).update(cx, |l, _| l.buffer(&path).revision);
         let reader_list = ListState::new(0, ListAlignment::Top, px(1000.));
@@ -345,6 +356,15 @@ impl NoteView {
 
     /// Focuses the editor when editing, otherwise the note itself so its shortcuts work.
     pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let wanted = match prefs::get().note_mode {
+            prefs::NoteMode::Read => Mode::Read,
+            prefs::NoteMode::Split if self.editor_kind == prefs::NoteEditor::Code => Mode::Split,
+            _ if self.editor_kind == prefs::NoteEditor::Live => Mode::Live,
+            _ => Mode::Source,
+        };
+        if self.mode != wanted && !self.source_detour {
+            self.set_mode(wanted, window, cx);
+        }
         if self.mode == Mode::Live && state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.text.trim().is_empty())) {
             self.open_line(0, None, window, cx);
         } else if !matches!(self.mode, Mode::Source | Mode::Split) {
@@ -361,6 +381,22 @@ impl NoteView {
     }
 
     pub fn set_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+        let remembered = match mode {
+            Mode::Read => prefs::NoteMode::Read,
+            Mode::Split => prefs::NoteMode::Split,
+            Mode::Live | Mode::Source => prefs::NoteMode::Write,
+        };
+        if prefs::get().note_mode != remembered {
+            prefs::update(|p| p.note_mode = remembered);
+        }
+        if mode == Mode::Read {
+            self.finish_block(cx);
+            let path = self.path.clone();
+            act(cx, |l| l.follow_heading(&path));
+            if !self.path.exists() {
+                return;
+            }
+        }
         let keep_line = self.top_line();
         self.finish_block(cx);
         if matches!(mode, Mode::Source | Mode::Split) {
@@ -2672,6 +2708,11 @@ impl Render for FileViewer {
 /// Saves or asks about every open note, then quits.
 pub fn prepare_to_quit(cx: &mut App) {
     state::flush_pending(cx);
+    act(cx, |l| {
+        if let Some(path) = l.active_document.clone() {
+            l.follow_heading(&path);
+        }
+    });
     let all = state::read(cx, |l| l.buffers.keys().cloned().collect());
     resolve_unsaved(all, cx, |cx| super::sync::quit_after(|cx| cx.quit(), cx));
 }

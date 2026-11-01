@@ -1436,5 +1436,7 @@
   "Vorschau · %@ Karten": "Preview · %@ cards",
   "Der Zielordner muss im Studienordner liegen.": "The target folder must be inside the study folder.",
   "Sortierung: %@": "Sort: %@",
-  "Die Karte wurde in der Notiz geändert. Schließen und neu öffnen.": "The card changed in the note. Close and open it again."
+  "Die Karte wurde in der Notiz geändert. Schließen und neu öffnen.": "The card changed in the note. Close and open it again.",
+  "Name bleibt: „%@“ gibt es hier schon": "Name stays: “%@” already exists here",
+  "Überschrift angepasst": "Heading updated"
 }

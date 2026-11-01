@@ -78,3 +78,10 @@ mod tests {
         assert_eq!(v, ["w1", "W2", "W10"]);
     }
 }
+
+/// A heading as a file name: nothing a disk or a link would trip over, and not endless.
+pub fn safe_file_stem(title: &str) -> String {
+    let clean: String = title.chars().map(|c| if "\\/:*?\"<>|#^[]".contains(c) { ' ' } else { c }).collect();
+    let joined = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    joined.chars().take(120).collect::<String>().trim_matches(['.', ' ']).to_string()
+}
