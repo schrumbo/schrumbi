@@ -98,7 +98,7 @@ impl NoteView {
         let text = state::lib(cx).update(cx, |l, _| l.buffer(&path).text.clone());
         let editor = cx.new(|cx| EditorState::new(window, cx).language("markdown").soft_wrap(true).line_number(true).default_value(text.clone()));
         editor.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(path.clone())));
-        let block = cx.new(|cx| EditorState::new(window, cx).language("markdown").soft_wrap(true).line_number(false).smart_indent(false).scroll_beyond_last_line(Some(0)));
+        let block = cx.new(|cx| EditorState::new(window, cx).language("markdown").soft_wrap(true).line_number(false).folding(false).smart_indent(false).scroll_beyond_last_line(Some(0)));
         block.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(path.clone())));
         let lib = state::lib(cx);
         let p = path.clone();
@@ -635,7 +635,7 @@ impl NoteView {
     fn header(&self, exporting: bool, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let me = cx.entity();
         let mut modes = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS));
-        let help = ShortcutAction::TogglePreview.shortcut().map_or_else(|| tr("Lesen, Bearbeiten oder beides"), |s| trf("Lesen, Bearbeiten oder beides (%@ wechselt)", &[&s.display()]));
+        let help = ShortcutAction::TogglePreview.shortcut().map_or_else(|| tr("Lesen oder Bearbeiten"), |s| trf("Lesen oder Bearbeiten (%@ wechselt)", &[&s.display()]));
         for (m, label, icon_name) in [(Mode::Read, tr("Lesen"), "eye"), (Mode::Live, tr("Bearbeiten"), "pencil")] {
             let active = m == self.mode;
             let e = me.clone();
