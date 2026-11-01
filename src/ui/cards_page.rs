@@ -1305,7 +1305,11 @@ impl Render for CardComposer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
         if !std::mem::replace(&mut self.focused, true) {
-            self.front.update(cx, |s, cx| s.focus(window, cx));
+            self.front.update(cx, |s, cx| {
+                let end = s.value().len();
+                s.set_selected_range(end..end, cx);
+                s.focus(window, cx);
+            });
         }
         let kind = self.kind;
         let kinds = [(ComposeKind::Basic, tr("Einfach"), "file-question"), (ComposeKind::Both, tr("Beide Richtungen"), "repeat-2"), (ComposeKind::Cloze, tr("Lückentext"), "scan")];
