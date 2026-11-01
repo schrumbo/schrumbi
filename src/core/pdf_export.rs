@@ -65,6 +65,9 @@ fn file_id(path: &str) -> FileId {
     RootedPath::new(VirtualRoot::Project, VirtualPath::new(path).expect("valid path")).intern()
 }
 
+/// What LaTeX commands mean in Typst, as a file formulas can import; kept parsed, so a formula takes no longer than it must.
+static MITEX: LazyLock<Source> = LazyLock::new(|| Source::new(file_id("/mitex.typ"), include_str!("../../assets/typst/mitex.typ").to_string()));
+
 struct NoteWorld {
     main: Source,
     files: HashMap<FileId, Bytes>,
@@ -84,7 +87,13 @@ impl World for NoteWorld {
     }
 
     fn source(&self, id: FileId) -> FileResult<Source> {
-        if id == self.main.id() { Ok(self.main.clone()) } else { Err(FileError::NotFound(PathBuf::from(id.vpath().get_with_slash()))) }
+        if id == self.main.id() {
+            Ok(self.main.clone())
+        } else if id == MITEX.id() {
+            Ok(MITEX.clone())
+        } else {
+            Err(FileError::NotFound(PathBuf::from(id.vpath().get_with_slash())))
+        }
     }
 
     fn file(&self, id: FileId) -> FileResult<Bytes> {

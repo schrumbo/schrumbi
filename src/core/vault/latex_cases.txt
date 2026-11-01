@@ -1,0 +1,108 @@
+\frac{a}{b}
+\dfrac{a}{b}
+\tfrac{a}{b}
+\binom{n}{k}
+\sqrt[3]{x}
+\sum_{i=1}^{n} i
+\iiint f
+\oint_C f
+\limsup_{n} a_n
+\liminf_{n} a_n
+\sin\cos\tan\cot\sec\csc
+\arcsin\arccos\arctan
+\sinh\cosh\tanh
+\gcd(a,b)
+\Pr(A)
+\deg f
+\arg z
+a \bmod b
+a \pmod{b}
+\alpha\beta\gamma\delta\epsilon\varepsilon\zeta\eta\theta\vartheta\iota\kappa\lambda\mu\nu\xi\pi\varpi\rho\varrho\sigma\varsigma\tau\upsilon\phi\varphi\chi\psi\omega
+\Gamma\Delta\Theta\Lambda\Xi\Pi\Sigma\Upsilon\Phi\Psi\Omega
+\mathbb{R}\mathcal{L}\mathscr{F}\mathfrak{g}\mathbf{x}\mathrm{d}\mathit{x}\mathsf{x}\mathtt{x}
+\boldsymbol{\alpha}
+\bm{x}
+\text{Text mit Umlaut äöü}
+\textbf{fett}
+\textit{kursiv}
+\operatorname{rank}(A)
+\operatorname*{argmax}_x f
+\hat{x}\tilde{x}\bar{x}\vec{x}\dot{x}\ddot{x}\acute{x}\grave{x}\breve{x}\check{x}
+\widehat{abc}\widetilde{abc}
+\overline{abc}\underline{abc}
+\overrightarrow{AB}\overleftarrow{AB}
+\overbrace{a+b}^{2}\underbrace{a+b}_{2}
+\stackrel{?}{=}
+\overset{a}{b}\underset{a}{b}
+\xrightarrow{f}\xleftarrow{g}
+\to\rightarrow\leftarrow\leftrightarrow\Rightarrow\Leftarrow\Leftrightarrow\mapsto\hookrightarrow\longrightarrow\implies\iff
+\forall\exists\nexists\neg\land\lor\in\notin\ni\subset\subseteq\supset\supseteq\cup\cap\setminus\emptyset\varnothing
+\le\ge\leq\geq\ne\neq\approx\sim\simeq\cong\propto\ll\gg\pm\mp\times\div\cdot\circ\ast\star\oplus\otimes\odot\perp\parallel\angle\triangle\nabla\partial\infty\hbar\ell\Re\Im\aleph
+\ldots\cdots\vdots\ddots\dots
+\left(\frac{a}{b}\right)\left[a\right]\left\{a\right\}\left|a\right|\left\langle a\right\rangle\left\lfloor a\right\rfloor\left\lceil a\right\rceil
+\big(\Big(\bigg(\Bigg(
+\quad\qquad\,\;\:\!\ \enspace
+\begin{matrix}a&b\\c&d\end{matrix}
+\begin{pmatrix}a&b\\c&d\end{pmatrix}
+\begin{bmatrix}a&b\\c&d\end{bmatrix}
+\begin{vmatrix}a&b\\c&d\end{vmatrix}
+\begin{Vmatrix}a&b\\c&d\end{Vmatrix}
+\begin{Bmatrix}a&b\\c&d\end{Bmatrix}
+\begin{smallmatrix}a&b\\c&d\end{smallmatrix}
+\begin{cases}x&y\\z&w\end{cases}
+\begin{aligned}a&=b\\c&=d\end{aligned}
+\begin{align}a&=b\\c&=d\end{align}
+\begin{align*}a&=b\\c&=d\end{align*}
+\begin{equation}a=b\end{equation}
+\begin{equation*}a=b\end{equation*}
+\begin{gather}a\\b\end{gather}
+\begin{gathered}a\\b\end{gathered}
+\begin{split}a&=b\\&=c\end{split}
+\begin{array}{cc|c}a&b&c\\\hline d&e&f\end{array}
+\begin{alignat}{2}a&=b&c&=d\end{alignat}
+\begin{multline}a\\b\end{multline}
+\substack{a\\b}
+\sum_{\substack{i<n\\j<m}} a
+\boxed{x=1}
+x=1\tag{1}
+\color{red}{x}
+\textcolor{blue}{x}
+\colorbox{yellow}{x}
+\cancel{x}\bcancel{x}\xcancel{x}\cancelto{0}{x}
+\phantom{x}\vphantom{x}\hphantom{x}
+\displaystyle\sum_i\textstyle\sum_i\scriptstyle x\scriptscriptstyle x
+\tiny x\small x\normalsize x\large x\Large x\LARGE x\huge x\Huge x
+\newcommand{\R}{\mathbb{R}}\R
+\def\foo{x}\foo
+\DeclareMathOperator{\Tr}{Tr}\Tr
+\mathop{x}\mathbin{x}\mathrel{x}\mathord{x}\mathopen{x}\mathclose{x}\mathpunct{x}\mathinner{x}
+\ce{H2O}
+\pu{1 kg}
+\%\$\#\&\_\{\}
+\langle a\rangle\lVert a\rVert\lvert a\rvert
+\lfloor a\rfloor\lceil a\rceil
+\dagger\ddagger\prime\backslash\wedge\vee\bigcup\bigcap\bigoplus\bigotimes\bigwedge\bigvee\coprod
+\triangleq\doteq\models\vdash\dashv\top\bot
+\square\blacksquare\Box\checkmark\therefore\because
+\mathring{a}
+\not\in
+\sideset{}{'}\sum
+\dbinom{n}{k}\tbinom{n}{k}
+\cfrac{1}{1+x}
+\genfrac{}{}{}{}{a}{b}
+{a \over b}
+{n \choose k}
+\rule{1em}{1em}
+x^{y^z}_{i_j}
+\vec{v}\cdot\vec{w}=\|v\|\,\|w\|\cos\theta
+\mathbb{1}
+\ket{x}\bra{x}\braket{a|b}
+\unicode{x2603}
+\href{https://x}{y}
+\llbracket a \rrbracket
+\circledast\circleddash\circledcirc\dashleftarrow\dashrightarrow\mho\gtrapprox
+\argmax_x f\argmin_x f
+\smash{x}
+\begin{alignedat}{2}a&=b\end{alignedat}
+\ce{SO4^2- + 2H2 <=> X}
+\oplus\otimes\odot\partial\hbar\langle\rangle\cap\bigcap\bigoplus

@@ -4,6 +4,7 @@ pub mod config;
 pub mod frontmatter;
 pub mod graph;
 pub mod index;
+pub mod latex;
 pub mod links;
 pub mod moment;
 pub mod query;

@@ -1,49 +1,47 @@
 use crate::core::pdf_export;
 
 /// The helpers MiTeX's output calls; the rest maps onto Typst's own math.
-pub const MITEX_PRELUDE: &str = r#"
-#let mitexsqrt(..args) = {
-  let a = args.pos()
-  if a.len() == 1 { $sqrt(#a.at(0))$ } else { $root(#a.at(0), #a.at(1))$ }
-}
-#let mitexcolor(c, ..x) = text(fill: rgb(c), ..x)
-#let textbf(it) = text(weight: "bold", it)
-#let textit(it) = text(style: "italic", it)
-#let textmath(it) = it
-#let textmd(it) = it
-#let textrm(it) = it
-#let textsf(it) = it
-#let texttt(it) = raw(it.text)
-#let mitexmathbf(it) = math.bold(it)
-#let mitexarray(arg-spec: "", ..args) = math.mat(delim: none, ..args)
-#let pmatrix(..args) = math.mat(delim: "(", ..args)
-#let bmatrix(..args) = math.mat(delim: "[", ..args)
-#let Bmatrix(..args) = math.mat(delim: "{", ..args)
-#let vmatrix(..args) = math.mat(delim: "|", ..args)
-#let Vmatrix(..args) = math.mat(delim: "||", ..args)
-#let matrix(..args) = math.mat(delim: none, ..args)
-#let smallmatrix(..args) = math.mat(delim: none, ..args)
-#let cases(..args) = math.cases(..args)
-#let rcases(..args) = math.cases(reverse: true, ..args)
-#let aligned(it) = it
-#let align(it) = it
-#let gathered(it) = it
-#let split(it) = it
-"#;
-
 /// A formula as SVG in the given color, with its size in points.
 pub fn math_svg(latex: &str, display: bool, color: &str) -> Result<(String, f32, f32), String> {
-    let body = mitex::convert_math(latex, None)?;
-    let formula = if display { format!("$ {body} $") } else { format!("${body}$") };
-    let source = format!("#set page(width: auto, height: auto, margin: 1pt, fill: none)\n#set text(top-edge: \"bounds\", bottom-edge: \"bounds\")\n#set text(size: 14pt, fill: rgb(\"{color}\"))\n{MITEX_PRELUDE}\n{formula}\n");
+    let (owned, color) = (latex.to_string(), color.to_string());
+    std::panic::catch_unwind(move || draw_math(&owned, display, &color)).unwrap_or_else(|_| Err("Diese Formel lässt sich nicht zeichnen.".to_string()))
+}
+
+fn draw_math(latex: &str, display: bool, color: &str) -> Result<(String, f32, f32), String> {
+    let formula = typst_formula(latex, display)?;
+    let source = format!("#set page(width: auto, height: auto, margin: 1pt, fill: none)\n#set text(top-edge: \"bounds\", bottom-edge: \"bounds\")\n#set text(size: 14pt, fill: rgb(\"{color}\"))\n#{formula}\n");
     pdf_export::typst_svg(&source)
 }
 
 /// A formula as Typst markup, for the PDF export.
 pub fn math_markup(latex: &str, display: bool) -> Result<String, String> {
-    let body = mitex::convert_math(latex, None)?;
-    let formula = if display { format!("$ {body} $") } else { format!("${body}$") };
-    Ok(format!("#[{MITEX_PRELUDE}{formula}]"))
+    let owned = latex.to_string();
+    std::panic::catch_unwind(move || typst_formula(&owned, display).map(|f| format!("#{f}"))).unwrap_or_else(|_| Err("Diese Formel lässt sich nicht zeichnen.".to_string()))
+}
+
+/// The converter writes some symbols under names Typst has since changed.
+fn current_typst_names(body: &str) -> String {
+    static OLD: std::sync::LazyLock<Vec<(regex::Regex, &str)>> = std::sync::LazyLock::new(|| {
+        [(r"\bsect\b", "inter"), (r"\bdiff\b", "partial"), (r"\bplus\.circle\b", "plus.o"), (r"\btimes\.circle\b", "times.o"), (r"\bdot\.circle\b", "dot.o"), (r"\bminus\.circle\b", "minus.o"), (r"\bplanck\.reduce\b", "planck"), (r"\bangle\.l\b", "chevron.l"), (r"\bangle\.r\b", "chevron.r")]
+            .into_iter()
+            .map(|(old, new)| (regex::Regex::new(old).unwrap(), new))
+            .collect()
+    });
+    let mut out = body.to_string();
+    for (old, new) in OLD.iter() {
+        if old.is_match(&out) {
+            out = old.replace_all(&out, *new).into_owned();
+        }
+    }
+    out
+}
+
+/// A Typst code block that draws the formula with every LaTeX command the converter knows.
+fn typst_formula(latex: &str, display: bool) -> Result<String, String> {
+    let prepared = super::latex::prepare(latex);
+    let body = current_typst_names(&mitex::convert_math(&prepared, None)?);
+    let quoted = format!("${body}$").replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "");
+    Ok(format!("{{ import \"/mitex.typ\": mitex-scope; math.equation(block: {display}, eval(\"{quoted}\", scope: mitex-scope)) }}"))
 }
 
 /// A Mermaid diagram as SVG.
@@ -230,4 +228,19 @@ pub fn svg_to_png(svg: &[u8], scale: f32) -> Option<Vec<u8>> {
     let mut pixmap = resvg::tiny_skia::Pixmap::new((size.width() * scale).ceil() as u32, (size.height() * scale).ceil() as u32)?;
     resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
     pixmap.encode_png().ok()
+}
+
+#[cfg(test)]
+mod math_tests {
+    #[test]
+    fn every_common_latex_command_draws() {
+        let failed: Vec<String> = include_str!("latex_cases.txt").lines().filter(|l| !l.is_empty()).filter_map(|line| super::math_svg(line, true, "#000000").err().map(|e| format!("{line}: {e}"))).collect();
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
+
+    #[test]
+    fn a_broken_formula_is_an_error_not_a_crash() {
+        assert!(super::math_svg(r"\frac{", true, "#000000").is_err());
+        assert!(super::math_svg(r"\begin{tabular}a\end{tabular}", true, "#000000").is_err());
+    }
 }

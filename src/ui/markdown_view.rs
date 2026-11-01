@@ -93,6 +93,7 @@ fn line_of(src: &str, offset: usize) -> usize {
 
 /// Parses Markdown into blocks with source lines for task items.
 pub fn parse(src: &str) -> ParsedNote {
+    crate::core::vault::latex::learn_macros(src);
     let prepared = syntax::prepare(src);
     let src = prepared.as_str();
     let strict = index::current().config.strict_line_breaks;
