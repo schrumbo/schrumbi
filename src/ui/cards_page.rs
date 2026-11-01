@@ -18,7 +18,10 @@ use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::cards::fsrs::{self, Rating};
 use crate::core::cards::{self, Card, CardKind, Counts, Phase};
+use crate::core::cards::parse;
 use crate::core::i18n::{tr, trf};
+use crate::core::library::Library;
+use crate::core::prefs;
 use crate::core::text::fold;
 use crate::core::vault::index;
 
@@ -51,7 +54,7 @@ impl Filter {
             Filter::All => true,
             Filter::New => card.phase() == Phase::New,
             Filter::Learning => matches!(card.phase(), Phase::Learning | Phase::Relearning),
-            Filter::Due => !card.suspended() && card.phase() != Phase::New && card.state.as_ref().is_some_and(|s| s.due < cards::next_day_start(now)),
+            Filter::Due => !card.suspended() && !card.buried(now) && card.state.as_ref().is_some_and(|s| s.phase != Phase::New && (s.due <= now || (s.phase == Phase::Review && s.due < cards::next_day_start(now)))),
             Filter::Hard => card.is_leech(),
             Filter::Suspended => card.suspended(),
         }
@@ -84,12 +87,38 @@ struct Session {
     front: Arc<ParsedNote>,
     back: Arc<ParsedNote>,
     shown: bool,
-    answered: Vec<cards::Answered>,
+    /// What can be taken back, with the answer it counted as.
+    answered: Vec<(cards::Answered, Option<usize>)>,
     ratings: [usize; 4],
     started: i64,
     left: Counts,
     /// Everything once, before an exam: nothing about the schedule changes.
     cram: Option<Vec<Card>>,
+    /// The cards already gone through in that run, and whether they went back to the end.
+    crammed: Vec<(Card, bool)>,
+    /// A reveal does not count as an answer when a key bounces.
+    shown_at: std::time::Instant,
+}
+
+impl Session {
+    fn new(deck: String, cram: Option<Vec<Card>>) -> Self {
+        Self { deck, current: None, front: parsed(""), back: parsed(""), shown: false, answered: Vec::new(), ratings: [0; 4], started: cards::now(), left: Counts::default(), cram, crammed: Vec::new(), shown_at: std::time::Instant::now() }
+    }
+
+    fn show(&mut self, card: Card, answered: bool) {
+        self.front = parsed(&card.raw.front);
+        self.back = parsed(&card.raw.back);
+        self.current = Some(card);
+        self.shown = answered;
+        self.shown_at = std::time::Instant::now();
+    }
+}
+
+/// Where the arrow keys act.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Zone {
+    Decks,
+    Cards,
 }
 
 /// The flashcards room: decks on the left, a deck's state and cards on the right, or a learning session.
@@ -101,10 +130,18 @@ pub struct CardsPage {
     filter: Filter,
     order: Order,
     selected: Option<String>,
+    /// Where the selected card is written, to stay on it when editing changes its identity.
+    selected_place: Option<(Arc<PathBuf>, usize, CardKind)>,
+    /// Several cards chosen for one action; the selected one stays what the panel shows.
+    marked: BTreeSet<String>,
+    zone: Zone,
     preview: Option<(String, Arc<ParsedNote>, Arc<ParsedNote>)>,
     focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
-    cached: Option<((u64, i64, String, Filter, Order, String), Rc<Vec<usize>>)>,
+    deck_scroll: UniformListScrollHandle,
+    review_scroll: ScrollHandle,
+    cached: Option<((u64, u64, i64, String, Filter, Order, String), Rc<Vec<usize>>, [usize; 6])>,
+    decks: Option<((u64, Vec<String>, String), Rc<Vec<DeckRow>>)>,
     all: Arc<Vec<Card>>,
     _subs: Vec<Subscription>,
 }
@@ -166,6 +203,59 @@ fn counts_pills(counts: Counts, t: &Theme) -> Div {
     div().flex_none().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).children(piece(counts.new, t.blue)).children(piece(counts.learning, t.orange)).children(piece(counts.review, t.green))
 }
 
+thread_local! {
+    /// How many cards are marked, for the wording of the row menu.
+    static MARKED_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A wait as it reads after "in": 7 Tagen, not 7 Tage.
+fn in_time(now: i64, at: i64) -> String {
+    let label = cards::wait_label(now, at);
+    if label.ends_with(" Tage") { format!("{label}n") } else { label }
+}
+
+/// The note and the headings a card stands under.
+fn card_path(card: &Card) -> String {
+    let name = Path::new(card.note_rel.as_str()).file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let mut parts = vec![name];
+    parts.extend(card.raw.context.iter().filter(|h| **h != parts[0]).cloned().collect::<Vec<_>>());
+    parts.join(" › ")
+}
+
+/// Says in words what a deck's coloured numbers mean.
+fn deck_help(total: usize, waiting: Counts) -> String {
+    let all = if total == 1 { tr("1 Karte") } else { trf("%@ Karten", &[&total.to_string()]) };
+    if waiting.total() == 0 {
+        return all;
+    }
+    format!("{all}: {}", waiting_words(waiting))
+}
+
+fn waiting_words(counts: Counts) -> String {
+    let mut parts = Vec::new();
+    if counts.new > 0 {
+        parts.push(trf("%@ neu", &[&counts.new.to_string()]));
+    }
+    if counts.learning > 0 {
+        parts.push(trf("%@ im Lernen", &[&counts.learning.to_string()]));
+    }
+    if counts.review > 0 {
+        parts.push(trf("%@ fällig", &[&counts.review.to_string()]));
+    }
+    parts.join(" · ")
+}
+
+fn deck_pause_all(deck: &str, pause: bool, cx: &mut App) {
+    let chosen: Vec<Card> = cards::all_cards().iter().filter(|c| c.in_deck(deck) && c.suspended() != pause).cloned().collect();
+    if chosen.is_empty() {
+        return;
+    }
+    let saved = cards::snapshot(&chosen.iter().map(|c| c.id().to_string()).collect::<Vec<_>>());
+    cards::set_many_suspended(&chosen, pause);
+    let message = if pause { trf("%@ Karten pausiert", &[&chosen.len().to_string()]) } else { trf("%@ Karten fortgesetzt", &[&chosen.len().to_string()]) };
+    act(cx, |l| l.notify(message, "pause", None, Some(Box::new(move |_: &mut Library| cards::restore(saved)))));
+}
+
 fn state_sidebar_open(_: &App) -> bool {
     crate::core::prefs::get().sidebar_open
 }
@@ -219,7 +309,8 @@ impl CardsPage {
             }),
             cx.observe(&state::lib(cx), |_, _, cx| cx.notify()),
         ];
-        Self { deck: String::new(), open: BTreeSet::new(), session: None, query, filter: Filter::All, order: Order::Note, selected: None, preview: None, focus: cx.focus_handle(), list_scroll: UniformListScrollHandle::new(), cached: None, all: Arc::new(Vec::new()), _subs: subs }
+        let saved = prefs::get();
+        Self { deck: saved.card_deck, open: saved.card_open.into_iter().collect(), session: None, query, filter: Filter::All, order: Order::Note, selected: None, selected_place: None, marked: BTreeSet::new(), zone: Zone::Cards, preview: None, focus: cx.focus_handle(), list_scroll: UniformListScrollHandle::new(), deck_scroll: UniformListScrollHandle::new(), review_scroll: ScrollHandle::new(), cached: None, decks: None, all: Arc::new(Vec::new()), _subs: subs }
     }
 
     /// Takes the keyboard, so the keys of the page work right away.
@@ -228,15 +319,54 @@ impl CardsPage {
     }
 
     fn select_deck(&mut self, deck: String, cx: &mut Context<Self>) {
+        if self.deck != deck {
+            self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        }
         self.deck = deck;
-        self.selected = None;
-        self.preview = None;
+        self.clear_selection();
+        self.remember_decks();
         cx.notify();
     }
 
+    fn clear_selection(&mut self) {
+        self.selected = None;
+        self.preview = None;
+        self.marked.clear();
+    }
+
+    fn remember_decks(&self) {
+        let (deck, open) = (self.deck.clone(), self.open.iter().cloned().collect::<Vec<_>>());
+        prefs::update(|p| {
+            p.card_deck = deck;
+            p.card_open = open;
+        });
+    }
+
+    fn toggle_fold(&mut self, deck: &str, cx: &mut Context<Self>) {
+        if !self.open.remove(deck) {
+            self.open.insert(deck.to_string());
+        }
+        self.remember_decks();
+        cx.notify();
+    }
+
+    fn deck_list(&mut self, cx: &App) -> Rc<Vec<DeckRow>> {
+        let modules = state::read(cx, |l| l.config.as_ref().map_or(String::new(), |c| c.modules.iter().map(|m| format!("{}|{}|{}|{}", m.folder, m.name, m.code, m.color)).collect::<Vec<_>>().join("\n")));
+        let key = (index::current().generation, self.open.iter().cloned().collect::<Vec<_>>(), modules);
+        if let Some((known, rows)) = &self.decks
+            && *known == key
+        {
+            return rows.clone();
+        }
+        let rows = Rc::new(deck_rows(&self.all, &self.open, cx));
+        self.decks = Some((key, rows.clone()));
+        rows
+    }
+
     fn start(&mut self, deck: String, window: &mut Window, cx: &mut Context<Self>) {
-        let mut session = Session { deck, current: None, front: parsed(""), back: parsed(""), shown: false, answered: Vec::new(), ratings: [0; 4], started: cards::now(), left: Counts::default(), cram: None };
+        let mut session = Session::new(deck, None);
         Self::advance(&mut session, None);
+        self.review_scroll.set_offset(point(px(0.), px(0.)));
         self.session = Some(session);
         window.focus(&self.focus, cx);
         cx.notify();
@@ -247,8 +377,9 @@ impl CardsPage {
         let now = cards::now();
         let mut all: Vec<Card> = cards::all_cards().iter().filter(|c| c.in_deck(&deck) && !c.suspended()).cloned().collect();
         all.sort_by_key(|c| c.id().bytes().fold(now as u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64)));
-        let mut session = Session { deck, current: None, front: parsed(""), back: parsed(""), shown: false, answered: Vec::new(), ratings: [0; 4], started: now, left: Counts::default(), cram: Some(all) };
+        let mut session = Session::new(deck, Some(all));
         Self::advance(&mut session, None);
+        self.review_scroll.set_offset(point(px(0.), px(0.)));
         self.session = Some(session);
         window.focus(&self.focus, cx);
         cx.notify();
@@ -259,12 +390,10 @@ impl CardsPage {
         if let Some(rest) = &mut session.cram {
             let next = (!rest.is_empty()).then(|| rest.remove(0));
             session.left = Counts { new: 0, learning: 0, review: rest.len() };
-            session.shown = false;
-            if let Some(card) = &next {
-                session.front = parsed(&card.raw.front);
-                session.back = parsed(&card.raw.back);
+            match next {
+                Some(card) => session.show(card, false),
+                None => session.current = None,
             }
-            session.current = next;
             return;
         }
         let now = cards::now();
@@ -272,17 +401,16 @@ impl CardsPage {
         session.left = cards::counts(&session.deck, now);
         let due_now = queue.iter().find(|c| Some(c.id()) != last && c.state.as_ref().is_none_or(|s| s.due <= now || c.phase() == Phase::Review));
         let next = due_now.or_else(|| queue.iter().find(|c| Some(c.id()) != last)).or_else(|| queue.first()).cloned();
-        session.shown = false;
-        if let Some(card) = &next {
-            session.front = parsed(&card.raw.front);
-            session.back = parsed(&card.raw.back);
+        match next {
+            Some(card) => session.show(card, false),
+            None => session.current = None,
         }
-        session.current = next;
     }
 
     fn reveal(&mut self, cx: &mut Context<Self>) {
         if let Some(s) = &mut self.session {
             s.shown = true;
+            s.shown_at = std::time::Instant::now();
             cx.notify();
         }
     }
@@ -290,29 +418,59 @@ impl CardsPage {
     fn rate(&mut self, rating: Rating, cx: &mut Context<Self>) {
         let Some(s) = &mut self.session else { return };
         let Some(card) = s.current.clone().filter(|_| s.shown) else { return };
-        if s.cram.is_none() {
+        if s.shown_at.elapsed() < std::time::Duration::from_millis(120) {
+            return;
+        }
+        if let Some(rest) = &mut s.cram {
+            let again = rating == Rating::Again;
+            if again {
+                rest.push(card.clone());
+            }
+            s.crammed.push((card.clone(), again));
+        } else {
             let done = cards::answer(&card, rating, cards::now());
-            s.answered.push(done);
+            s.answered.push((done, Some(rating as usize - 1)));
         }
         s.ratings[rating as usize - 1] += 1;
         Self::advance(s, Some(card.id()));
+        self.review_scroll.set_offset(point(px(0.), px(0.)));
         state::lib(cx).update(cx, |_, cx| cx.notify());
         cx.notify();
     }
 
+    fn can_undo(&self) -> bool {
+        self.session.as_ref().is_some_and(|s| !s.answered.is_empty() || !s.crammed.is_empty())
+    }
+
     fn undo(&mut self, cx: &mut Context<Self>) {
         let Some(s) = &mut self.session else { return };
-        let Some(done) = s.answered.pop() else { return };
+        if let Some(rest) = &mut s.cram {
+            let Some((card, again)) = s.crammed.pop() else { return };
+            if again {
+                rest.pop();
+            }
+            let rating = if again { 0 } else { 2 };
+            s.ratings[rating] = s.ratings[rating].saturating_sub(1);
+            if let Some(current) = s.current.take() {
+                rest.insert(0, current);
+            }
+            s.left = Counts { new: 0, learning: 0, review: rest.len() };
+            s.show(card, true);
+            cx.notify();
+            return;
+        }
+        let Some((done, rating)) = s.answered.pop() else { return };
+        if let Some(rating) = rating {
+            s.ratings[rating] = s.ratings[rating].saturating_sub(1);
+        }
         let id = done.id.clone();
         cards::undo(done);
         let card = cards::all_cards().iter().find(|c| c.id() == id).cloned();
         if let Some(card) = card {
-            s.front = parsed(&card.raw.front);
-            s.back = parsed(&card.raw.back);
-            s.current = Some(card);
-            s.shown = true;
+            s.show(card, rating.is_some());
         }
         s.left = cards::counts(&s.deck, cards::now());
+        self.review_scroll.set_offset(point(px(0.), px(0.)));
         state::lib(cx).update(cx, |_, cx| cx.notify());
         cx.notify();
     }
@@ -320,19 +478,130 @@ impl CardsPage {
     fn set_aside(&mut self, suspend: bool, cx: &mut Context<Self>) {
         let Some(s) = &mut self.session else { return };
         let Some(card) = s.current.clone() else { return };
-        s.answered.push(cards::before_change(&card));
+        if s.cram.is_some() {
+            return;
+        }
+        s.answered.push((cards::before_change(&card), None));
         if suspend {
             cards::set_suspended(&card, true);
         } else {
             cards::bury(&card, cards::now());
         }
         Self::advance(s, Some(card.id()));
+        self.review_scroll.set_offset(point(px(0.), px(0.)));
         state::lib(cx).update(cx, |_, cx| cx.notify());
         cx.notify();
     }
 
+    /// The cards an action is meant for: all marked ones, or just the selected one.
+    fn chosen_cards(&self) -> Vec<Card> {
+        if self.marked.len() > 1 {
+            return self.all.iter().filter(|c| self.marked.contains(c.id())).cloned().collect();
+        }
+        self.selected.as_ref().and_then(|id| self.all.iter().find(|c| c.id() == id)).cloned().into_iter().collect()
+    }
+
+    /// Pauses what is chosen, or resumes it when all of it is paused. The toast takes it back.
+    fn toggle_pause(&mut self, cx: &mut Context<Self>) {
+        let chosen = self.chosen_cards();
+        if chosen.is_empty() {
+            return;
+        }
+        let pause = chosen.iter().any(|c| !c.suspended());
+        let saved = cards::snapshot(&chosen.iter().map(|c| c.id().to_string()).collect::<Vec<_>>());
+        cards::set_many_suspended(&chosen, pause);
+        let message = match (pause, chosen.len()) {
+            (true, 1) => tr("Karte pausiert"),
+            (true, n) => trf("%@ Karten pausiert", &[&n.to_string()]),
+            (false, 1) => tr("Karte fortgesetzt"),
+            (false, n) => trf("%@ Karten fortgesetzt", &[&n.to_string()]),
+        };
+        act(cx, |l| l.notify(message, "pause", None, Some(Box::new(move |_: &mut Library| cards::restore(saved)))));
+        cx.notify();
+    }
+
+    fn reset_chosen(&mut self, cx: &mut Context<Self>) {
+        let chosen = self.chosen_cards();
+        if chosen.is_empty() {
+            return;
+        }
+        let saved = cards::snapshot(&chosen.iter().map(|c| c.id().to_string()).collect::<Vec<_>>());
+        cards::reset_many(&chosen);
+        let message = if chosen.len() == 1 { tr("Fortschritt zurückgesetzt") } else { trf("Fortschritt von %@ Karten zurückgesetzt", &[&chosen.len().to_string()]) };
+        act(cx, |l| l.notify(message, "rotate-ccw", None, Some(Box::new(move |_: &mut Library| cards::restore(saved)))));
+        cx.notify();
+    }
+
+    /// Deletes what is chosen from its notes and moves on to the next card in the list.
+    fn delete_chosen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let chosen = self.chosen_cards();
+        if chosen.is_empty() {
+            return;
+        }
+        if chosen.len() == 1 {
+            self.delete_now(chosen, cx);
+            return;
+        }
+        use gpui_kit::component::WindowExt;
+        let (me, count) = (cx.entity(), chosen.len());
+        let chosen = Rc::new(chosen);
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let (me, chosen) = (me.clone(), chosen.clone());
+            alert.title(trf("%@ Karten löschen?", &[&count.to_string()])).description(tr("Die Zeilen verschwinden aus den Notizen. ⌘Z bringt sie Notiz für Notiz zurück.")).show_cancel(true).ok_text(tr("Löschen")).cancel_text(tr("Abbrechen")).on_ok(move |_, _, cx| {
+                let cards = chosen.as_ref().clone();
+                me.update(cx, |p, cx| p.delete_now(cards, cx));
+                true
+            })
+        });
+    }
+
+    fn delete_now(&mut self, chosen: Vec<Card>, cx: &mut Context<Self>) {
+        let now = cards::now();
+        let rows = self.visible(now, cx);
+        let gone: BTreeSet<&str> = chosen.iter().map(|c| c.id()).collect();
+        let at = rows.iter().position(|i| gone.contains(self.all[*i].id()));
+        let next = at.and_then(|at| rows[at..].iter().find(|i| !gone.contains(self.all[**i].id())).or_else(|| rows[..at].iter().rev().find(|i| !gone.contains(self.all[**i].id())))).map(|i| self.all[*i].id().to_string());
+        delete_cards(&chosen, cx);
+        self.clear_selection();
+        if let Some(id) = next {
+            self.select_card(id, cx);
+        }
+        cx.notify();
+    }
+
+    /// Selects a row: a plain click takes it alone, ⌘ adds or removes it, ⇧ takes everything up to it.
+    fn click_row(&mut self, id: String, position: usize, modifiers: Modifiers, cx: &mut Context<Self>) {
+        self.zone = Zone::Cards;
+        if modifiers.shift {
+            let rows = self.visible(cards::now(), cx);
+            let from = self.selected.as_ref().and_then(|s| rows.iter().position(|i| self.all[*i].id() == s)).unwrap_or(position);
+            let (a, b) = (from.min(position), from.max(position));
+            self.marked = rows[a..=b].iter().map(|i| self.all[*i].id().to_string()).collect();
+            cx.notify();
+            return;
+        }
+        if modifiers.platform || modifiers.control {
+            if self.marked.is_empty() {
+                self.marked.extend(self.selected.clone());
+            }
+            if !self.marked.remove(&id) {
+                self.marked.insert(id.clone());
+            }
+            self.select_card(id, cx);
+            return;
+        }
+        self.marked.clear();
+        if self.selected.as_deref() == Some(id.as_str()) {
+            self.selected = None;
+            self.preview = None;
+            cx.notify();
+            return;
+        }
+        self.select_card(id, cx);
+    }
+
     fn open_source(card: &Card, cx: &mut App) {
-        super::doc_side::open_at(&card.note, card.raw.lines.0, cx);
+        super::doc_side::open_at(card.note.as_path(), card.raw.lines.0, cx);
     }
 
     fn compose(&mut self, editing: Option<Card>, window: &mut Window, cx: &mut Context<Self>) {
@@ -350,20 +619,33 @@ impl CardsPage {
 
     fn visible(&mut self, now: i64, cx: &App) -> Rc<Vec<usize>> {
         let query = fold(self.query.read(cx).value().trim());
-        let key = (index::current().generation, now / 60, self.deck.clone(), self.filter, self.order, query.clone());
-        if let Some((k, rows)) = &self.cached
+        let key = (index::current().generation, cards::revision(), now / 60, self.deck.clone(), self.filter, self.order, query.clone());
+        if let Some((k, rows, _)) = &self.cached
             && *k == key
-            && !self.all.is_empty()
         {
             return rows.clone();
         }
         let vault = index::current();
         let tag = query.strip_prefix('#').map(str::to_string);
         let fits = |c: &Card| match &tag {
-            Some(tag) => vault.notes.get(&c.note).is_some_and(|f| f.tags.iter().any(|t| fold(t).starts_with(tag.as_str()))),
+            Some(tag) => vault.notes.get(c.note.as_path()).is_some_and(|f| f.tags.iter().any(|t| fold(t).starts_with(tag.as_str()))),
             None => query.is_empty() || fold(&c.raw.front).contains(&query) || fold(&c.raw.back).contains(&query),
         };
-        let mut rows: Vec<usize> = self.all.iter().enumerate().filter(|(_, c)| c.in_deck(&self.deck) && self.filter.keeps(c, now) && fits(c)).map(|(i, _)| i).collect();
+        let mut amounts = [0usize; 6];
+        let mut rows: Vec<usize> = Vec::new();
+        for (i, card) in self.all.iter().enumerate() {
+            if !card.in_deck(&self.deck) || !fits(card) {
+                continue;
+            }
+            for (slot, filter) in Filter::ALL.iter().enumerate() {
+                if filter.keeps(card, now) {
+                    amounts[slot] += 1;
+                }
+            }
+            if self.filter.keeps(card, now) {
+                rows.push(i);
+            }
+        }
         match self.order {
             Order::Note => {}
             Order::Due => rows.sort_by_key(|i| self.all[*i].state.as_ref().filter(|s| s.phase != Phase::New).map_or(i64::MAX, |s| s.due)),
@@ -373,7 +655,7 @@ impl CardsPage {
             }),
         }
         let rows = Rc::new(rows);
-        self.cached = Some((key, rows.clone()));
+        self.cached = Some((key, rows.clone(), amounts));
         rows
     }
 
@@ -383,101 +665,204 @@ impl CardsPage {
         }
         let key = e.keystroke.key.as_str();
         let m = &e.keystroke.modifiers;
-        if m.platform || m.control || m.alt || (e.is_held && self.session.is_some()) {
+        if self.session.is_some() {
+            if m.platform || m.control || m.alt || e.is_held && !matches!(key, "up" | "down" | "pageup" | "pagedown") {
+                return;
+            }
+            self.session_key(key, window, cx);
             return;
         }
-        if self.session.is_some() {
-            let shown = self.session.as_ref().is_some_and(|s| s.shown);
-            let has_card = self.session.as_ref().is_some_and(|s| s.current.is_some());
-            match key {
-                "space" | "enter" if has_card && !shown => self.reveal(cx),
-                "space" | "enter" if has_card => self.rate(Rating::Good, cx),
-                "1" if shown => self.rate(Rating::Again, cx),
-                "2" if shown => self.rate(Rating::Hard, cx),
-                "3" if shown => self.rate(Rating::Good, cx),
-                "4" if shown => self.rate(Rating::Easy, cx),
-                "escape" | "enter" | "space" => {
-                    self.session = None;
-                    self.cached = None;
-                    cx.notify();
+        if (m.platform || m.control) && key == "a" {
+            let rows = self.visible(cards::now(), cx);
+            self.marked = rows.iter().map(|i| self.all[*i].id().to_string()).collect();
+            self.zone = Zone::Cards;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if m.platform || m.control || m.alt {
+            return;
+        }
+        match (self.zone, key) {
+            (_, "n") => self.compose(None, window, cx),
+            (_, "i") => choose_import(window, cx),
+            (_, "/") => self.query.update(cx, |q, cx| q.focus(window, cx)),
+            (Zone::Decks, _) => {
+                if !self.decks_key(key, window, cx) {
+                    return;
                 }
-                "e" => {
-                    if let Some(card) = self.session.as_ref().and_then(|s| s.current.clone()) {
+            }
+            (Zone::Cards, _) => {
+                if !self.cards_key(key, m.shift, window, cx) {
+                    return;
+                }
+            }
+        }
+        cx.stop_propagation();
+    }
+
+    fn session_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = self.session.as_ref().is_some_and(|s| s.shown);
+        let has_card = self.session.as_ref().is_some_and(|s| s.current.is_some());
+        let cramming = self.session.as_ref().is_some_and(|s| s.cram.is_some());
+        match key {
+            "space" | "enter" if has_card && !shown => self.reveal(cx),
+            "space" | "enter" if has_card => self.rate(Rating::Good, cx),
+            "1" if shown => self.rate(Rating::Again, cx),
+            "2" if shown && !cramming => self.rate(Rating::Hard, cx),
+            "3" if shown => self.rate(Rating::Good, cx),
+            "4" if shown && !cramming => self.rate(Rating::Easy, cx),
+            "enter" | "space" => self.end_session(cx),
+            "up" | "down" | "pageup" | "pagedown" => {
+                let step = match key {
+                    "up" => 48.,
+                    "down" => -48.,
+                    "pageup" => 320.,
+                    _ => -320.,
+                };
+                let now = self.review_scroll.offset();
+                let lowest = -self.review_scroll.max_offset().y;
+                self.review_scroll.set_offset(point(now.x, (now.y + px(step)).clamp(lowest, px(0.))));
+                cx.notify();
+            }
+            "e" | "o" => {
+                if let Some(card) = self.session.as_ref().and_then(|s| s.current.clone()) {
+                    if key == "e" {
                         self.compose(Some(card), window, cx);
-                    }
-                }
-                "s" if has_card => self.set_aside(true, cx),
-                "b" if has_card => self.set_aside(false, cx),
-                "o" => {
-                    if let Some(card) = self.session.as_ref().and_then(|s| s.current.clone()) {
+                    } else {
                         Self::open_source(&card, cx);
                     }
                 }
-                _ => return,
             }
-            cx.stop_propagation();
-            return;
-        }
-        let now = cards::now();
-        match key {
-            "enter" | "space" if self.selected.is_none() => {
-                if cards::counts(&self.deck, now).total() > 0 {
-                    let deck = self.deck.clone();
-                    self.start(deck, window, cx);
-                }
-            }
-            "enter" => {
-                let card = self.selected.as_ref().and_then(|id| self.all.iter().find(|c| c.id() == id)).cloned();
-                self.compose(card, window, cx);
-            }
-            "n" => self.compose(None, window, cx),
-            "i" => choose_import(window, cx),
-            "e" | "s" | "backspace" if self.selected.is_some() => {
-                let Some(card) = self.selected.as_ref().and_then(|id| self.all.iter().find(|c| c.id() == id)).cloned() else { return };
-                match key {
-                    "e" => self.compose(Some(card), window, cx),
-                    "s" => {
-                        cards::set_suspended(&card, !card.suspended());
-                        state::lib(cx).update(cx, |_, cx| cx.notify());
-                    }
-                    _ => {
-                        delete_card(&card, cx);
-                        self.selected = None;
-                        self.preview = None;
-                    }
-                }
-                cx.notify();
-            }
-            "/" => self.query.update(cx, |q, cx| q.focus(window, cx)),
-            "escape" if self.selected.is_some() => {
-                self.selected = None;
-                self.preview = None;
-                cx.notify();
-            }
-            "down" | "up" => {
-                let rows = self.visible(now, cx);
-                if rows.is_empty() {
-                    return;
-                }
-                let at = self.selected.as_ref().and_then(|id| rows.iter().position(|i| self.all[*i].id() == id));
-                let next = match (at, key) {
-                    (Some(i), "down") => (i + 1).min(rows.len() - 1),
-                    (Some(i), _) => i.saturating_sub(1),
-                    (None, _) => 0,
-                };
-                let id = self.all[rows[next]].id().to_string();
-                self.list_scroll.scroll_to_item(next, ScrollStrategy::Center);
-                self.select_card(id, cx);
-            }
+            "s" if has_card => self.set_aside(true, cx),
+            "b" if has_card => self.set_aside(false, cx),
             _ => return,
         }
         cx.stop_propagation();
     }
 
+    fn end_session(&mut self, cx: &mut Context<Self>) {
+        self.session = None;
+        self.cached = None;
+        cx.notify();
+    }
+
+    /// Arrow keys in the deck tree: up and down walk it, right opens or moves on to the cards, left closes or goes up.
+    fn decks_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let rows = self.deck_list(cx);
+        let at = rows.iter().position(|r| r.deck == self.deck);
+        let current = at.map(|i| rows[i].clone());
+        match key {
+            "down" => {
+                let next = at.map_or(0, |i| (i + 1).min(rows.len().saturating_sub(1)));
+                if let Some(row) = rows.get(next) {
+                    self.deck_scroll.scroll_to_item(next, ScrollStrategy::Center);
+                    self.select_deck(row.deck.clone(), cx);
+                }
+            }
+            "up" => match at {
+                Some(0) | None => self.select_deck(String::new(), cx),
+                Some(i) => {
+                    self.deck_scroll.scroll_to_item(i - 1, ScrollStrategy::Center);
+                    self.select_deck(rows[i - 1].deck.clone(), cx);
+                }
+            },
+            "right" => match current.filter(|r| r.has_children && !r.open) {
+                Some(row) => self.toggle_fold(&row.deck, cx),
+                None => {
+                    self.zone = Zone::Cards;
+                    cx.notify();
+                }
+            },
+            "left" => {
+                if let Some(row) = current {
+                    if row.open {
+                        self.toggle_fold(&row.deck, cx);
+                    } else {
+                        let up = row.deck.rsplit_once('/').map_or(String::new(), |(up, _)| up.to_string());
+                        self.select_deck(up, cx);
+                    }
+                }
+            }
+            "enter" | "space" => {
+                let deck = self.deck.clone();
+                if cards::counts(&deck, cards::now()).total() > 0 {
+                    self.start(deck, window, cx);
+                }
+            }
+            "escape" => {
+                self.zone = Zone::Cards;
+                cx.notify();
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Keys of the card list.
+    fn cards_key(&mut self, key: &str, shift: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let now = cards::now();
+        match key {
+            "space" => {
+                let deck = self.deck.clone();
+                if cards::counts(&deck, now).total() > 0 {
+                    self.start(deck, window, cx);
+                }
+            }
+            "enter" | "e" => match self.selected.as_ref().and_then(|id| self.all.iter().find(|c| c.id() == id)).cloned() {
+                Some(card) => self.compose(Some(card), window, cx),
+                None if key == "enter" => {
+                    let deck = self.deck.clone();
+                    if cards::counts(&deck, now).total() > 0 {
+                        self.start(deck, window, cx);
+                    }
+                }
+                None => return false,
+            },
+            "s" => self.toggle_pause(cx),
+            "backspace" | "delete" => self.delete_chosen(window, cx),
+            "left" => {
+                self.zone = Zone::Decks;
+                cx.notify();
+            }
+            "down" | "up" | "home" | "end" | "pagedown" | "pageup" => {
+                let rows = self.visible(now, cx);
+                if rows.is_empty() {
+                    return false;
+                }
+                let last = rows.len() - 1;
+                let at = self.selected.as_ref().and_then(|id| rows.iter().position(|i| self.all[*i].id() == id));
+                let next = match (at, key) {
+                    (_, "home") => 0,
+                    (_, "end") => last,
+                    (Some(i), "down") => (i + 1).min(last),
+                    (Some(i), "up") => i.saturating_sub(1),
+                    (Some(i), "pagedown") => (i + 15).min(last),
+                    (Some(i), "pageup") => i.saturating_sub(15),
+                    (None, _) => 0,
+                    (Some(i), _) => i,
+                };
+                let id = self.all[rows[next]].id().to_string();
+                self.list_scroll.scroll_to_item(next, ScrollStrategy::Center);
+                if shift {
+                    self.marked.extend(self.selected.clone());
+                    self.marked.insert(id.clone());
+                } else {
+                    self.marked.clear();
+                }
+                self.select_card(id, cx);
+            }
+            _ => return false,
+        }
+        true
+    }
+
     fn deck_column(&mut self, now: i64, t: &Theme, cx: &mut Context<Self>) -> Div {
-        let rows = deck_rows(&self.all, &self.open, cx);
+        let list = self.deck_list(cx);
         let me = cx.entity();
         let current = self.deck.clone();
+        let deck_zone = self.zone == Zone::Decks;
+        let ring = t.accent;
         let all_counts = cards::counts("", now);
         let hover = t.ink.opacity(0.05);
         let total = self.all.len();
@@ -493,13 +878,16 @@ impl CardsPage {
             .text_size(px(font::CALLOUT))
             .font_weight(FontWeight::MEDIUM)
             .when(current.is_empty(), |d| d.bg(t.ink.opacity(0.08)))
+            .when(current.is_empty() && deck_zone, |d| d.border_l_2().border_color(ring))
             .when(!current.is_empty(), |d| d.soft(hover, 0.))
             .child(icon("layers", iconsize::S, t.secondary))
             .child(div().flex_1().min_w_0().truncate().child(tr("Alle Karten")))
             .child(counts_pills(all_counts, t))
-            .tooltip(tip(trf("%@ Karten", &[&total.to_string()])))
-            .on_click(cx.listener(|p, _, _, cx| p.select_deck(String::new(), cx)));
-        let list = Rc::new(rows);
+            .tooltip(tip(deck_help(total, all_counts)))
+            .on_click(cx.listener(|p, _, _, cx| {
+                p.zone = Zone::Decks;
+                p.select_deck(String::new(), cx)
+            }));
         let count = list.len();
         let lines = list.clone();
         let tree = uniform_list("deck-tree", count, move |range, _, cx| {
@@ -510,6 +898,9 @@ impl CardsPage {
                 .map(|i| {
                     let row = &lines[i];
                     let active = me.read(cx).deck == row.deck;
+                    let in_zone = active && me.read(cx).zone == Zone::Decks;
+                    let waiting = cards::counts(&row.deck, now);
+                    let (right_me, right_deck) = (me.clone(), row.deck.clone());
                     let (a, b, deck_a, deck_b, deck_c, deck_d, m_c, m_d) = (me.clone(), me.clone(), row.deck.clone(), row.deck.clone(), row.deck.clone(), row.deck.clone(), me.clone(), me.clone());
                     let chip: AnyElement = match &row.module {
                         Some((badge, color)) => {
@@ -530,7 +921,9 @@ impl CardsPage {
                         .cursor_pointer()
                         .text_size(px(font::CALLOUT))
                         .when(active, |d| d.bg(t.ink.opacity(0.08)))
+                        .when(in_zone, |d| d.border_l_2().border_color(t.accent))
                         .when(!active, |d| d.soft(hover, 0.))
+                        .on_mouse_down(MouseButton::Right, move |_, _, cx| right_me.update(cx, |p, cx| p.select_deck(right_deck.clone(), cx)))
                         .child(if row.has_children {
                             div()
                                 .id(("deck-fold", i))
@@ -542,12 +935,7 @@ impl CardsPage {
                                 .child(chevron(("deck-chevron", i), row.open, t.secondary))
                                 .on_click(move |_, _, cx| {
                                     cx.stop_propagation();
-                                    a.update(cx, |p, cx| {
-                                        if !p.open.remove(&deck_a) {
-                                            p.open.insert(deck_a.clone());
-                                        }
-                                        cx.notify();
-                                    });
+                                    a.update(cx, |p, cx| p.toggle_fold(&deck_a, cx));
                                 })
                                 .into_any_element()
                         } else {
@@ -555,9 +943,14 @@ impl CardsPage {
                         })
                         .child(chip)
                         .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
-                        .child(counts_pills(cards::counts(&row.deck, now), &t))
-                        .tooltip(tip(if row.total == 1 { tr("1 Karte") } else { trf("%@ Karten", &[&row.total.to_string()]) }))
-                        .on_click(move |_, _, cx| b.update(cx, |p, cx| p.select_deck(deck_b.clone(), cx)))
+                        .child(counts_pills(waiting, &t))
+                        .tooltip(tip(deck_help(row.total, waiting)))
+                        .on_click(move |_, _, cx| {
+                            b.update(cx, |p, cx| {
+                                p.zone = Zone::Decks;
+                                p.select_deck(deck_b.clone(), cx)
+                            })
+                        })
                         .context_menu(move |menu, _, _| {
                             let (start, new, deck_start, deck_new) = (m_c.clone(), m_d.clone(), deck_c.clone(), deck_d.clone());
                             let (cram, deck_cram, pause, deck_pause, resume, deck_resume) = (m_c.clone(), deck_c.clone(), m_c.clone(), deck_c.clone(), m_c.clone(), deck_c.clone());
@@ -570,14 +963,12 @@ impl CardsPage {
                                 cram.update(cx, |p, cx| p.start_cram(deck, window, cx));
                             }))
                             .item(PopupMenuItem::new(tr("Alle pausieren")).icon(menu_icon("pause")).on_click(move |_, _, cx| {
-                                cards::set_deck_suspended(&deck_pause, true);
+                                deck_pause_all(&deck_pause, true, cx);
                                 pause.update(cx, |_, cx| cx.notify());
-                                state::lib(cx).update(cx, |_, cx| cx.notify());
                             }))
                             .item(PopupMenuItem::new(tr("Alle fortsetzen")).icon(menu_icon("rotate-ccw")).on_click(move |_, _, cx| {
-                                cards::set_deck_suspended(&deck_resume, false);
+                                deck_pause_all(&deck_resume, false, cx);
                                 resume.update(cx, |_, cx| cx.notify());
-                                state::lib(cx).update(cx, |_, cx| cx.notify());
                             }))
                             .item(PopupMenuItem::new(tr("Neue Karte…")).icon(menu_icon("plus")).on_click(move |_, window, cx| {
                                 let deck = deck_new.clone();
@@ -591,6 +982,7 @@ impl CardsPage {
                 })
                 .collect::<Vec<_>>()
         })
+        .track_scroll(&self.deck_scroll)
         .size_full();
         div().w(px(260.)).flex_none().h_full().flex().flex_col().bg(t.column).border_r_1().border_color(t.separator).child(div().flex_none().h(px(control::SUBBAR)).px(px(space::M)).flex().items_center().border_b_1().border_color(t.separator).font_weight(FontWeight::SEMIBOLD).child(div().flex_1().child(tr("Stapel"))).child(Button::new("cards-new-side").ghost().small().icon(menu_icon("plus")).tooltip(tr("Neue Karte (N)")).on_click(cx.listener(|p, _, window, cx| p.compose(None, window, cx))))).child(head).child(div().flex_1().min_h_0().child(tree))
     }
@@ -606,8 +998,8 @@ impl CardsPage {
             .rounded(px(radius::CARD))
             .border_1()
             .border_color(t.separator)
-            .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).child(label))
-            .child(div().text_size(px(font::TITLE)).font_weight(FontWeight::SEMIBOLD).font_features(tabular()).child(value))
+            .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).truncate().child(label))
+            .child(div().text_size(px(font::TITLE)).font_weight(FontWeight::SEMIBOLD).font_features(tabular()).truncate().child(value))
             .children(detail.map(|d| div().text_size(px(font::CAPTION)).text_color(t.tertiary).truncate().child(d)))
     }
 
@@ -675,23 +1067,28 @@ impl CardsPage {
             .into_any_element()
     }
 
-    fn card_row(card: &Card, i: usize, selected: bool, now: i64, me: Entity<Self>, t: &Theme) -> AnyElement {
+    #[allow(clippy::too_many_arguments)]
+    fn card_row(card: &Card, i: usize, selected: bool, marked: bool, now: i64, me: Entity<Self>, t: &Theme) -> AnyElement {
         let hover = t.ink.opacity(0.05);
         let id = card.id().to_string();
         let status: (String, Hsla) = if card.suspended() {
             (tr("Pausiert"), t.tertiary)
+        } else if card.buried(now) {
+            (tr("Morgen"), t.tertiary)
         } else if card.is_leech() {
             (tr("Schwierig"), t.orange)
         } else {
             match card.state.as_ref().filter(|s| s.phase != Phase::New) {
                 None => (tr("Neu"), t.blue),
-                Some(s) if s.due <= now => (tr("Fällig"), t.green),
+                Some(s) if s.due <= now || (s.phase == Phase::Review && s.due < cards::next_day_start(now)) => (tr("Fällig"), t.green),
                 Some(s) => (cards::wait_label(now, s.due), t.secondary),
             }
         };
         let menu_card = card.clone();
-        let (m1, m2) = (me.clone(), me.clone());
-        let name = Path::new(&card.note_rel).file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let (m1, m2, m3) = (me.clone(), me.clone(), me.clone());
+        let right_id = id.clone();
+        let name = Path::new(card.note_rel.as_str()).file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let quiet = card.suspended() || card.buried(now);
         div()
             .id(("card-row", i))
             .h(px(control::M + space::XS))
@@ -702,21 +1099,38 @@ impl CardsPage {
             .gap(px(space::S))
             .cursor_pointer()
             .text_size(px(font::CALLOUT))
-            .when(selected, |d| d.bg(t.ink.opacity(0.08)))
-            .when(!selected, |d| d.soft(hover, 0.))
+            .when(marked, |d| d.bg(t.accent.opacity(0.18)))
+            .when(selected && !marked, |d| d.bg(t.ink.opacity(0.08)))
+            .when(!selected && !marked, |d| d.soft(hover, 0.))
             .child(icon(cards::kind_icon(card.raw.kind), iconsize::S, t.tertiary))
-            .child(div().flex_1().min_w_0().truncate().when(card.suspended(), |d| d.text_color(t.tertiary)).child(cards::plain_text(&card.raw.front)))
+            .child(div().flex_1().min_w_0().truncate().when(quiet, |d| d.text_color(t.tertiary)).child(cards::plain_text(&card.raw.front)))
             .child(caption(name, t).flex_none().max_w(px(140.)).truncate())
             .child(div().flex_none().w(px(64.)).text_right().text_size(px(font::CAPTION)).text_color(status.1).child(status.0))
+            .on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                let id = right_id.clone();
+                m3.update(cx, |p, cx| {
+                    p.zone = Zone::Cards;
+                    if !p.marked.contains(&id) {
+                        p.marked.clear();
+                        if p.selected.as_deref() != Some(id.as_str()) {
+                            p.select_card(id, cx);
+                        }
+                    }
+                })
+            })
             .on_click(move |e, window, cx| {
                 let id = id.clone();
                 let double = e.click_count() >= 2;
+                let modifiers = e.modifiers();
                 m1.update(cx, |p, cx| {
                     window.focus(&p.focus, cx);
-                    p.select_card(id.clone(), cx);
                     if double {
+                        p.zone = Zone::Cards;
+                        p.select_card(id.clone(), cx);
                         let card = p.all.iter().find(|c| c.id() == id).cloned();
                         p.compose(card, window, cx);
+                    } else {
+                        p.click_row(id, i, modifiers, cx);
                     }
                 });
             })
@@ -725,34 +1139,57 @@ impl CardsPage {
     }
 
     fn card_menu(menu: gpui_kit::component::menu::PopupMenu, card: Card, me: Entity<Self>) -> gpui_kit::component::menu::PopupMenu {
+        let many = MARKED_COUNT.with(std::cell::Cell::get);
         let suspended = card.suspended();
-        let (c1, c2, c3, c4, c5) = (card.clone(), card.clone(), card.clone(), card.clone(), card);
+        let buried = card.buried(cards::now());
+        let (c1, c2, c6) = (card.clone(), card.clone(), card);
         let (m1, m2, m3, m4) = (me.clone(), me.clone(), me.clone(), me);
-        menu.item(PopupMenuItem::new(tr("Bearbeiten")).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
-            let card = c1.clone();
-            m1.update(cx, |p, cx| p.compose(Some(card), window, cx));
-        }))
-        .item(PopupMenuItem::new(tr("In der Notiz zeigen")).icon(menu_icon("file-text")).on_click(move |_, _, cx| Self::open_source(&c2, cx)))
-        .separator()
-        .item(PopupMenuItem::new(if suspended { tr("Fortsetzen") } else { tr("Pausieren") }).icon(menu_icon("pause")).on_click(move |_, _, cx| {
-            cards::set_suspended(&c3, !suspended);
-            m2.update(cx, |_, cx| cx.notify());
-            state::lib(cx).update(cx, |_, cx| cx.notify());
-        }))
-        .item(PopupMenuItem::new(tr("Fortschritt zurücksetzen")).icon(menu_icon("rotate-ccw")).on_click(move |_, _, cx| {
-            cards::reset(&c4);
-            m3.update(cx, |_, cx| cx.notify());
-            state::lib(cx).update(cx, |_, cx| cx.notify());
-        }))
-        .separator()
-        .item(PopupMenuItem::new(tr("Aus der Notiz löschen")).icon(menu_icon("trash-2")).on_click(move |_, _, cx| {
-            delete_card(&c5, cx);
-            m4.update(cx, |p, cx| {
-                p.selected = None;
-                p.preview = None;
+        let mut menu = menu;
+        if many <= 1 {
+            menu = menu
+                .item(PopupMenuItem::new(tr("Bearbeiten")).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
+                    let card = c1.clone();
+                    m1.update(cx, |p, cx| p.compose(Some(card), window, cx));
+                }))
+                .item(PopupMenuItem::new(tr("In der Notiz zeigen")).icon(menu_icon("file-text")).on_click(move |_, _, cx| Self::open_source(&c2, cx)))
+                .separator();
+            if buried {
+                menu = menu.item(PopupMenuItem::new(tr("Heute wieder lernen")).icon(menu_icon("eye")).on_click(move |_, _, cx| {
+                    cards::unbury(&c6);
+                    state::lib(cx).update(cx, |_, cx| cx.notify());
+                }));
+            }
+        }
+        let label = |one: String, more: &str| if many > 1 { trf(more, &[&many.to_string()]) } else { one };
+        menu.item(PopupMenuItem::new(if suspended { label(tr("Fortsetzen"), "%@ Karten fortsetzen") } else { label(tr("Pausieren"), "%@ Karten pausieren") }).icon(menu_icon("pause")).on_click(move |_, _, cx| m2.update(cx, |p, cx| p.toggle_pause(cx))))
+            .item(PopupMenuItem::new(label(tr("Fortschritt zurücksetzen"), "Fortschritt von %@ Karten zurücksetzen")).icon(menu_icon("rotate-ccw")).on_click(move |_, _, cx| m3.update(cx, |p, cx| p.reset_chosen(cx))))
+            .separator()
+            .item(PopupMenuItem::new(label(tr("Aus der Notiz löschen"), "%@ Karten löschen")).icon(menu_icon("trash-2")).on_click(move |_, window, cx| m4.update(cx, |p, cx| p.delete_chosen(window, cx))))
+    }
+
+    /// Several marked cards: what can be done to all of them.
+    fn many_panel(&self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let count = self.marked.len();
+        div()
+            .id("cards-many")
+            .w(px(320.))
+            .flex_none()
+            .h_full()
+            .flex()
+            .flex_col()
+            .gap(px(space::M))
+            .p(px(space::L))
+            .border_l_1()
+            .border_color(t.separator)
+            .child(div().flex().items_center().child(div().flex_1().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).child(trf("%@ Karten ausgewählt", &[&count.to_string()]))).child(Button::new("many-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Auswahl aufheben (Esc)")).on_click(cx.listener(|p, _, _, cx| {
+                p.clear_selection();
                 cx.notify();
-            });
-        }))
+            }))))
+            .child(Button::new("many-pause").icon(menu_icon("pause")).label(tr("Pausieren oder fortsetzen")).tooltip(tr("S")).on_click(cx.listener(|p, _, _, cx| p.toggle_pause(cx))))
+            .child(Button::new("many-reset").icon(menu_icon("rotate-ccw")).label(tr("Fortschritt zurücksetzen")).on_click(cx.listener(|p, _, _, cx| p.reset_chosen(cx))))
+            .child(Button::new("many-delete").icon(menu_icon("trash-2")).label(tr("Löschen")).tooltip(tr("⌫")).on_click(cx.listener(|p, _, window, cx| p.delete_chosen(window, cx))))
+            .child(caption(tr("⌘-Klick nimmt einzelne Karten dazu, ⇧-Klick einen Bereich, ⌘A alle in der Liste."), t))
+            .into_any_element()
     }
 
     fn detail_panel(&self, card: &Card, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -762,11 +1199,11 @@ impl CardsPage {
         let mut facts = div().flex().flex_col().gap(px(space::XS));
         match card.state.as_ref().filter(|s| s.phase != Phase::New) {
             Some(s) => {
-                let days = s.last_review.map_or(0., |l| (now - l) as f64 / 86400.);
+                let days = s.last_review.map_or(0., |l| ((now - l) as f64 / 86400.).max(0.));
                 facts = facts
                     .child(fact(tr("Fällig"), if s.due <= now { tr("Jetzt") } else { cards::wait_label(now, s.due) }))
                     .child(fact(tr("Erinnerung jetzt"), format!("{:.0} %", fsrs::retrievability(s.stability, days) * 100.)))
-                    .child(fact(tr("Stabilität"), trf("%@ T.", &[&format!("{:.1}", s.stability)])))
+                    .child(fact(tr("Stabilität"), trf("%@ Tage", &[&format!("{:.0}", s.stability.max(1.))])))
                     .child(fact(tr("Schwierigkeit"), format!("{:.1} / 10", s.difficulty)))
                     .child(fact(tr("Wiederholungen"), s.reps.to_string()))
                     .child(fact(tr("Vergessen"), s.lapses.to_string()));
@@ -788,7 +1225,11 @@ impl CardsPage {
             .flex_col()
             .border_l_1()
             .border_color(t.separator)
-            .child(div().id("card-detail-body").flex_1().min_h_0().overflow_y_scrollbar().p(px(space::L)).flex().flex_col().gap(px(space::L)).children(body).child(div().h(px(1.)).flex_none().bg(t.separator)).child(facts).when(!card.raw.context.is_empty(), |d| d.child(caption(card.raw.context.join(" › "), t))))
+            .child(div().flex_none().h(px(control::SUBBAR)).px(px(space::M)).flex().items_center().border_b_1().border_color(t.separator).child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(card_path(card))).child(Button::new("card-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Schließen (Esc)")).on_click(cx.listener(|p, _, _, cx| {
+                p.clear_selection();
+                cx.notify();
+            }))))
+            .child(div().id("card-detail-body").flex_1().min_h_0().overflow_y_scrollbar().p(px(space::L)).flex().flex_col().gap(px(space::L)).children(body).child(div().h(px(1.)).flex_none().bg(t.separator)).child(facts))
             .child(
                 div()
                     .flex_none()
@@ -805,27 +1246,24 @@ impl CardsPage {
     }
 
     fn overview(&mut self, now: i64, room: f32, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let room = room - if self.selected.is_some() { 320. } else { 0. };
+        let room = room - if self.selected.is_some() || self.marked.len() > 1 { 320. } else { 0. };
         let deck = self.deck.clone();
         let counts = cards::counts(&deck, now);
         let stats = cards::stats(&deck, now);
         let total = counts.total();
         let title = deck_title(&deck, cx);
         let next = cards::next_due(&deck, now);
-        let status = if total > 0 {
-            let mut parts = Vec::new();
-            if counts.new > 0 {
-                parts.push(trf("%@ neu", &[&counts.new.to_string()]));
-            }
-            if counts.learning > 0 {
-                parts.push(trf("%@ im Lernen", &[&counts.learning.to_string()]));
-            }
-            if counts.review > 0 {
-                parts.push(trf("%@ fällig", &[&counts.review.to_string()]));
-            }
-            parts.join(" · ")
+        let held_back = if total == 0 { cards::new_waiting(&deck, now) } else { 0 };
+        let status = if stats.total == 0 {
+            tr("Keine Karten")
+        } else if total > 0 {
+            waiting_words(counts)
+        } else if stats.suspended == stats.total {
+            tr("Alle Karten sind pausiert.")
+        } else if held_back > 0 {
+            trf("Tageslimit erreicht. %@ neue warten.", &[&held_back.to_string()])
         } else if let Some(at) = next {
-            trf("Alles gelernt. Nächste Karte in %@.", &[&cards::wait_label(now, at)])
+            trf("Nächste Karte in %@", &[&in_time(now, at)])
         } else {
             tr("Alles gelernt.")
         };
@@ -834,7 +1272,7 @@ impl CardsPage {
             l.semester_assignments().iter().filter(|a| a.module_id == module && a.kind == crate::core::model::Kind::Exam && a.due.timestamp() > now).map(|a| a.due.timestamp()).min()
         });
         let status = match exam {
-            Some(at) => format!("{status} · {}", trf("Prüfung in %@", &[&cards::wait_label(now, at)])),
+            Some(at) => format!("{status} · {}", trf("Prüfung in %@", &[&in_time(now, at)])),
             None => status,
         };
         let (start_deck, cram_deck) = (deck.clone(), deck.clone());
@@ -843,7 +1281,7 @@ impl CardsPage {
             .flex()
             .items_center()
             .gap(px(space::M))
-            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).truncate().child(title)).child(div().text_color(t.secondary).truncate().child(status)))
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).truncate().child(title)).child(div().text_color(t.secondary).truncate().child(if stats.total == 0 { status } else { format!("{} · {status}", if stats.total == 1 { tr("1 Karte") } else { trf("%@ Karten", &[&stats.total.to_string()]) }) })))
             .child(Button::new("cards-more").ghost().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu({
                 let me = cx.entity();
                 move |menu, _, _| {
@@ -856,6 +1294,13 @@ impl CardsPage {
                     .item(PopupMenuItem::new(tr("Aus Anki importieren…")).icon(menu_icon("download")).on_click(|_, window, cx| choose_import(window, cx)))
                 }
             }))
+            .when(held_back > 0, |d| {
+                let deck = deck.clone();
+                d.child(Button::new("cards-limit").icon(menu_icon("plus")).label(trf("%@ neue mehr", &[&held_back.min(10).to_string()])).tooltip(tr("Heute mehr neue Karten als das Tageslimit")).on_click(cx.listener(move |p, _, window, cx| {
+                    cards::allow_more_new(held_back.min(10), cards::now());
+                    p.start(deck.clone(), window, cx);
+                })))
+            })
             .child(Button::new("cards-new").icon(menu_icon("plus")).label(tr("Neue Karte")).tooltip(tr("Neue Karte (N)")).on_click(cx.listener(|p, _, window, cx| p.compose(None, window, cx))))
             .child(Button::new("cards-learn").primary().icon(menu_icon("graduation-cap")).label(if total > 0 { trf("Lernen (%@)", &[&total.to_string()]) } else { tr("Lernen") }).tooltip(tr("Lernen (Leertaste)")).disabled(total == 0).on_click(cx.listener(move |p, _, window, cx| p.start(start_deck.clone(), window, cx))));
         let retention = stats.true_retention.map_or_else(|| "–".to_string(), |r| format!("{:.0} %", r * 100.));
@@ -864,13 +1309,16 @@ impl CardsPage {
             .flex()
             .gap(px(space::M))
             .child(Self::stat_tile(tr("Heute gelernt"), stats.reviewed_today.to_string(), None, t))
-            .child(Self::stat_tile(tr("Erinnert"), retention, Some(tr("letzte 30 Tage")), t))
+            .child(Self::stat_tile(tr("Trefferquote"), retention, Some(tr("letzte 30 Tage")), t))
             .child(Self::stat_tile(tr("Serie"), if stats.streak == 1 { tr("1 Tag") } else { trf("%@ Tage", &[&stats.streak.to_string()]) }, None, t))
-            .child(Self::stat_tile(tr("Gefestigt"), format!("{} / {}", stats.mature, stats.total), Some(tr("Abstand ab 3 Wochen")), t));
+            .child(Self::stat_tile(tr("Gefestigt"), format!("{} / {}", stats.mature, stats.total), Some(tr("ab 3 Wochen")), t));
         let forecast = Self::forecast(&stats, t);
         let rows = self.visible(now, cx);
         let me = cx.entity();
         let selected = self.selected.clone();
+        let marked = Rc::new(self.marked.clone());
+        MARKED_COUNT.with(|c| c.set(self.marked.len()));
+        let amounts = self.cached.as_ref().map_or([0; 6], |c| c.2);
         let all = self.all.clone();
         let list: AnyElement = if rows.is_empty() {
             unavailable("search", tr("Keine Karten"), tr("Ändere den Filter oder die Suche."), t).into_any_element()
@@ -879,7 +1327,7 @@ impl CardsPage {
             let listed = all.clone();
             uniform_list("cards-list", count, move |range, _, cx| {
                 let t = Theme::get(cx);
-                range.map(|i| { let card = &listed[shown[i]]; Self::card_row(card, i, selected.as_deref() == Some(card.id()), now, me.clone(), &t) }).collect::<Vec<_>>()
+                range.map(|i| { let card = &listed[shown[i]]; Self::card_row(card, i, selected.as_deref() == Some(card.id()), marked.contains(card.id()), now, me.clone(), &t) }).collect::<Vec<_>>()
             })
             .track_scroll(&self.list_scroll)
             .size_full()
@@ -887,14 +1335,17 @@ impl CardsPage {
         };
         let current_filter = self.filter;
         let current_order = self.order;
-        let filters = div().flex().flex_wrap().gap(px(space::XXS)).children(Filter::ALL.iter().map(|f| {
+        let filters = div().flex().flex_wrap().gap(px(space::XXS)).children(Filter::ALL.iter().enumerate().filter(|(slot, f)| **f == Filter::All || **f == current_filter || amounts[*slot] > 0).map(|(slot, f)| {
             let (f, on) = (*f, *f == current_filter);
-            div().id(SharedString::from(format!("filter-{f:?}"))).px(px(space::S)).h(px(control::S)).flex().items_center().rounded(px(radius::INNER)).cursor_pointer().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.1))).when(!on, |d| d.text_color(t.secondary).soft(t.ink.opacity(0.05), radius::INNER)).child(f.label()).on_click(cx.listener(move |p, _, _, cx| {
+            div().id(SharedString::from(format!("filter-{f:?}"))).px(px(space::S)).h(px(control::S)).flex().items_center().rounded(px(radius::INNER)).cursor_pointer().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.1))).when(!on, |d| d.text_color(t.secondary).soft(t.ink.opacity(0.05), radius::INNER)).child(f.label()).when(f != Filter::All, |d| d.child(div().ml(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.tertiary).font_features(tabular()).child(amounts[slot].to_string()))).on_click(cx.listener(move |p, _, window, cx| {
                 p.filter = f;
+                p.clear_selection();
+                window.focus(&p.focus, cx);
                 cx.notify();
             }))
         }));
-        let browser = div().flex_1().min_h_0().flex().flex_col().child(div().flex_none().px(px(space::L)).py(px(space::S)).flex().flex_wrap().items_center().gap(px(space::S)).border_t_1().border_b_1().border_color(t.separator).child(div().w(px(220.)).child(Input::new(&self.query).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary)))).child(filters).child(div().flex_1()).child(Button::new("cards-order").ghost().small().label(order_label(current_order)).dropdown_caret(true).tooltip(tr("Sortierung")).dropdown_menu({
+        let narrow = room < 640.;
+        let browser = div().flex_1().min_h_0().flex().flex_col().child(div().flex_none().px(px(space::L)).py(px(space::S)).flex().flex_wrap().items_center().gap(px(space::S)).border_t_1().border_b_1().border_color(t.separator).child(div().w(px(if narrow { 150. } else { 220. })).child(Input::new(&self.query).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary)))).child(filters).child(div().flex_1()).child(Button::new("cards-order").ghost().small().when(narrow, |b| b.icon(menu_icon("arrow-up-down"))).when(!narrow, |b| b.label(order_label(current_order)).dropdown_caret(true)).tooltip(trf("Sortierung: %@", &[&order_label(current_order)])).dropdown_menu({
                     let me = cx.entity();
                     move |mut menu, _, _| {
                         for choice in [Order::Note, Order::Due, Order::Hardest] {
@@ -906,8 +1357,9 @@ impl CardsPage {
                         }
                         menu
                     }
-                })).child(caption(if rows.len() == 1 { tr("1 Karte") } else { trf("%@ Karten", &[&rows.len().to_string()]) }, t))).child(div().flex_1().min_h_0().child(list));
-        let chosen = self.selected.as_ref().and_then(|id| self.all.iter().find(|c| c.id() == id)).cloned();
+                }))).child(div().flex_1().min_h_0().child(list));
+        let chosen = self.selected.as_ref().filter(|_| self.marked.len() <= 1).and_then(|id| self.all.iter().find(|c| c.id() == id)).cloned();
+        let many = (self.marked.len() > 1).then(|| self.many_panel(t, cx));
         let summary: Option<AnyElement> = if room >= 900. {
             Some(div().flex().gap(px(space::XL)).child(div().flex_1().min_w_0().child(tiles)).child(div().w(px(340.)).flex_none().child(forecast)).into_any_element())
         } else if room >= 560. {
@@ -916,7 +1368,7 @@ impl CardsPage {
             None
         };
         let main = div().flex_1().min_w_0().h_full().flex().flex_col().child(div().flex_none().p(px(space::XL)).pb(px(space::L)).flex().flex_col().gap(px(space::L)).child(head).children(summary)).child(browser);
-        div().size_full().flex().child(main).when_some(chosen, |d, card| d.child(self.detail_panel(&card, t, cx))).into_any_element()
+        div().size_full().flex().child(main).when_some(chosen, |d, card| d.child(self.detail_panel(&card, t, cx))).children(many).into_any_element()
     }
 
     fn done_screen(&mut self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -929,9 +1381,11 @@ impl CardsPage {
         let total = reviewed.max(1) as f32;
         let colors = [t.red, t.orange, t.green, t.blue];
         let bar = div().w(px(360.)).h(px(space::S)).rounded_full().overflow_hidden().flex().children(s.ratings.iter().enumerate().filter(|(_, n)| **n > 0).map(|(i, n)| div().h_full().w(relative(*n as f32 / total)).bg(colors[i])));
-        let legend = div().flex().gap(px(space::L)).children(Rating::ALL.iter().enumerate().map(|(i, rating)| div().flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).child(div().size(px(space::S)).rounded_full().bg(colors[i])).child(rating_name(*rating)).child(div().text_color(t.secondary).font_features(tabular()).child(s.ratings[i].to_string()))));
-        let can_undo = !s.answered.is_empty();
-        let more = if s.cram.is_none() { cards::new_waiting(&deck, now) } else { 0 };
+        let legend = div().flex().flex_wrap().justify_center().gap(px(space::L)).children(Rating::ALL.iter().enumerate().map(|(i, rating)| div().flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).child(div().size(px(space::S)).rounded_full().bg(colors[i])).child(rating_name(*rating)).child(div().text_color(t.secondary).font_features(tabular()).child(s.ratings[i].to_string()))));
+        let can_undo = !s.answered.is_empty() || !s.crammed.is_empty();
+        let cramming = s.cram.is_some();
+        let more = if cramming { 0 } else { cards::new_waiting(&deck, now) };
+        let next = next.filter(|_| !cramming);
         let more_deck = deck.clone();
         div()
             .size_full()
@@ -943,8 +1397,8 @@ impl CardsPage {
             .child(icon("circle-check", iconsize::HERO, t.green))
             .child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Geschafft")))
             .child(div().text_color(t.secondary).child(if reviewed == 0 { tr("Für jetzt ist nichts mehr dran.") } else { trf("%@ Karten in %@ Min.", &[&reviewed.to_string(), &minutes.to_string()]) }))
-            .when(reviewed > 0, |d| d.child(bar).child(legend))
-            .children(next.map(|at| caption(trf("Nächste Karte in %@", &[&cards::wait_label(now, at)]), t)))
+            .when(reviewed > 0, |d| d.child(bar).when(!cramming, |d| d.child(legend)))
+            .children(next.map(|at| caption(trf("Nächste Karte in %@", &[&in_time(now, at)]), t)))
             .child(
                 div()
                     .flex()
@@ -957,11 +1411,7 @@ impl CardsPage {
                             p.start(deck, window, cx);
                         })))
                     })
-                    .child(Button::new("cards-done").primary().label(tr("Fertig")).on_click(cx.listener(|p, _, _, cx| {
-                        p.session = None;
-                        p.cached = None;
-                        cx.notify();
-                    }))),
+                    .child(Button::new("cards-done").primary().label(tr("Fertig")).on_click(cx.listener(|p, _, _, cx| p.end_session(cx)))),
             )
             .into_any_element()
     }
@@ -977,7 +1427,8 @@ impl CardsPage {
         let front = super::theme::with_note_scale(1.3, || markdown_view::render(&s.front, base.as_deref(), None, t));
         let back = s.shown.then(|| super::theme::with_note_scale(1.3, || markdown_view::render(&s.back, base.as_deref(), None, t)));
         let shown = s.shown;
-        let can_undo = !s.answered.is_empty();
+        let can_undo = !s.answered.is_empty() || !s.crammed.is_empty();
+        let cramming = s.cram.is_some();
         let count_piece = |n: usize, color: Hsla, on: bool, label: String| div().px(px(space::S)).h(px(control::S)).flex().items_center().rounded(px(radius::INNER)).when(on, |d| d.bg(color.opacity(0.16))).text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).font_features(tabular()).text_color(color).child(format!("{n} {label}"));
         let (menu_card, menu_me) = (card.clone(), cx.entity());
         let bar = div()
@@ -987,15 +1438,14 @@ impl CardsPage {
             .flex()
             .items_center()
             .gap(px(space::S))
-            .child(Button::new("review-end").ghost().small().icon(menu_icon("x")).tooltip(tr("Beenden (Esc)")).on_click(cx.listener(|p, _, _, cx| {
-                p.session = None;
-                p.cached = None;
-                cx.notify();
-            })))
+            .child(Button::new("review-end").ghost().small().icon(menu_icon("x")).tooltip(tr("Beenden (Esc)")).on_click(cx.listener(|p, _, _, cx| p.end_session(cx))))
             .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(if s.cram.is_some() { format!("{} · {}", deck_title(&s.deck, cx), tr("Prüfungsmodus")) } else { deck_title(&s.deck, cx) }))
-            .child(count_piece(s.left.new, t.blue, phase == Phase::New, tr("neu")))
-            .child(count_piece(s.left.learning, t.orange, matches!(phase, Phase::Learning | Phase::Relearning), tr("lernen")))
-            .child(count_piece(s.left.review, t.green, phase == Phase::Review, tr("fällig")))
+            .when(cramming, |d| d.child(count_piece(s.left.review + 1, t.accent_text, true, tr("übrig"))))
+            .when(!cramming, |d| {
+                d.child(count_piece(s.left.new, t.blue, phase == Phase::New, tr("neu")))
+                    .child(count_piece(s.left.learning, t.orange, matches!(phase, Phase::Learning | Phase::Relearning), tr("lernen")))
+                    .child(count_piece(s.left.review, t.green, phase == Phase::Review, tr("fällig")))
+            })
             .child(div().flex_1())
             .child(Button::new("review-undo").ghost().small().icon(menu_icon("undo-2")).tooltip(tr("Letzte Antwort zurück (⌘Z)")).disabled(!can_undo).on_click(cx.listener(|p, _, _, cx| p.undo(cx))))
             .child(Button::new("review-edit").ghost().small().icon(menu_icon("pencil")).tooltip(tr("Karte bearbeiten (E)")).on_click({
@@ -1005,20 +1455,23 @@ impl CardsPage {
             .child(Button::new("review-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, _, _| {
                 let (a, b, c) = (menu_me.clone(), menu_me.clone(), menu_card.clone());
                 menu.item(PopupMenuItem::new(tr("In der Notiz zeigen (O)")).icon(menu_icon("file-text")).on_click(move |_, _, cx| Self::open_source(&c, cx)))
-                    .item(PopupMenuItem::new(tr("Für heute zurückstellen (B)")).icon(menu_icon("eye-off")).on_click(move |_, _, cx| a.update(cx, |p, cx| p.set_aside(false, cx))))
-                    .item(PopupMenuItem::new(tr("Pausieren (S)")).icon(menu_icon("pause")).on_click(move |_, _, cx| b.update(cx, |p, cx| p.set_aside(true, cx))))
+                    .when(!cramming, |menu| {
+                        menu.item(PopupMenuItem::new(tr("Für heute zurückstellen (B)")).icon(menu_icon("eye-off")).on_click(move |_, _, cx| a.update(cx, |p, cx| p.set_aside(false, cx))))
+                            .item(PopupMenuItem::new(tr("Pausieren (S)")).icon(menu_icon("pause")).on_click(move |_, _, cx| b.update(cx, |p, cx| p.set_aside(true, cx))))
+                    })
             }));
         let track = div().flex_none().h(px(space::XXS)).w_full().bg(t.separator).child(div().h_full().w(relative(progress)).bg(t.accent));
         let leech = card.is_leech().then(|| {
             let edit = card.clone();
             banner(t.orange).flex().items_center().gap(px(space::S)).py(px(space::S)).child(icon("triangle-alert", iconsize::S, t.orange)).child(div().flex_1().text_size(px(font::CALLOUT)).child(tr("Diese Karte vergisst du oft. Umformulieren oder aufteilen hilft meist mehr als Wiederholen."))).child(Button::new("leech-edit").small().label(tr("Bearbeiten")).on_click(cx.listener(move |p, _, window, cx| p.compose(Some(edit.clone()), window, cx))))
         });
-        let crumbs = (!card.raw.context.is_empty()).then(|| caption(card.raw.context.join(" › "), t));
+        let crumbs = caption(card_path(&card), t).truncate();
         let body = div()
             .id("review-body")
             .flex_1()
             .min_h_0()
-            .overflow_y_scrollbar()
+            .overflow_y_scroll()
+            .track_scroll(&self.review_scroll)
             .child(
                 div().w_full().flex().flex_col().items_center().px(px(space::XL)).pt(px(space::XXL * 2.)).pb(px(space::XL)).child(
                     div()
@@ -1028,7 +1481,7 @@ impl CardsPage {
                         .flex_col()
                         .gap(px(space::L))
                         .children(leech)
-                        .children(crumbs)
+                        .child(crumbs)
                         .child(front)
                         .when_some(back, |d, back| d.child(div().h(px(1.)).bg(t.separator)).child(back)),
                 ),
@@ -1045,13 +1498,13 @@ impl CardsPage {
                 .flex()
                 .justify_center()
                 .gap(px(space::S))
-                .children(Rating::ALL.iter().enumerate().map(|(i, rating)| {
+                .children(Rating::ALL.iter().enumerate().filter(|(_, r)| !cramming || matches!(r, Rating::Again | Rating::Good)).map(|(i, rating)| {
                     let rating = *rating;
                     let color = colors[i];
                     let hover = color.opacity(0.16);
                     div()
                         .id(("rate", i))
-                        .w(px(132.))
+                        .w(px(if cramming { 200. } else { 132. }))
                         .h(px(control::FOOTBAR))
                         .flex()
                         .flex_col()
@@ -1066,9 +1519,13 @@ impl CardsPage {
                         .key_nav()
                         .hover(move |d| d.bg(hover))
                         .active(move |d| d.bg(color.opacity(0.26)))
-                        .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child(if cramming { String::new() } else { cards::wait_label(now, choices[i].due) }))
-                        .child(div().flex().items_baseline().gap(px(space::XS)).child(div().font_weight(FontWeight::SEMIBOLD).text_color(t.readable(color)).child(rating_name(rating))).child(div().text_size(px(font::CAPTION2)).text_color(t.tertiary).child(if rating == Rating::Good { format!("{} · {}", i + 1, tr("Leertaste")) } else { (i + 1).to_string() })))
-                        .on_click(cx.listener(move |p, _, _, cx| p.rate(rating, cx)))
+                        .when(!cramming, |d| d.child(div().text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child({ cards::wait_label(now, choices[i].due) })))
+                        .child(div().flex().items_baseline().gap(px(space::XS)).child(div().font_weight(FontWeight::SEMIBOLD).text_color(t.readable(color)).child(if cramming && rating == Rating::Good { tr("Gewusst") } else { rating_name(rating) })).child(div().text_size(px(font::CAPTION2)).text_color(t.tertiary).child(if rating == Rating::Good { format!("{} · {}", i + 1, tr("Leertaste")) } else { (i + 1).to_string() })))
+                        .on_click(cx.listener(move |p, e: &ClickEvent, _, cx| {
+                            if e.click_count() <= 1 {
+                                p.rate(rating, cx);
+                            }
+                        }))
                 }))
                 .into_any_element()
         } else {
@@ -1103,7 +1560,8 @@ impl CardsPage {
                 )
                 .into_any_element()
         };
-        div().size_full().flex().flex_col().child(bar).child(track).child(body).child(footer).into_any_element()
+        let scrollable = div().relative().flex_1().min_h_0().flex().flex_col().child(body).vertical_scrollbar(&self.review_scroll);
+        div().size_full().flex().flex_col().child(bar).child(track).child(scrollable).child(footer).into_any_element()
     }
 }
 
@@ -1112,30 +1570,78 @@ pub fn card_from_selection(text: String, note: PathBuf, window: &mut Window, cx:
     super::sheets::show_sheet(760., window, cx, move |window, cx| CardComposer::new(String::new(), None, Some((text, note)), window, cx));
 }
 
-/// Removes a card's lines from its note; the note's undo brings them back.
-pub fn delete_card(card: &Card, cx: &mut App) {
-    let (first, last) = card.raw.lines;
-    let done = act(cx, |l| {
-        l.edit_note(&card.note, "card", tr("Karte gelöscht"), |text| {
-            let lines: Vec<&str> = text.split('\n').collect();
-            let kept: Vec<&str> = lines.iter().enumerate().filter(|(i, _)| *i < first || *i > last).map(|(_, l)| *l).collect();
-            kept.join("\n")
-        })
-    });
-    if done {
+/// Removes cards' lines from their notes, going by what the notes say now; each note's undo brings them back.
+pub fn delete_cards(chosen: &[Card], cx: &mut App) {
+    let mut by_note: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
+    for card in chosen {
+        by_note.entry(card.note.as_ref().clone()).or_default().push(card.id().to_string());
+    }
+    let mut changed = false;
+    let label = if chosen.len() == 1 { tr("Karte gelöscht") } else { trf("%@ Karten gelöscht", &[&chosen.len().to_string()]) };
+    for (note, ids) in by_note {
+        changed |= act(cx, |l| {
+            l.edit_note(&note, "card", label.clone(), |text| {
+                let mut ranges: Vec<(usize, usize)> = parse::cards_in(text).into_iter().filter(|c| ids.contains(&c.id)).map(|c| c.lines).collect();
+                ranges.sort();
+                ranges.dedup();
+                let mut lines: Vec<&str> = text.split('\n').collect();
+                for (first, last) in ranges.into_iter().rev() {
+                    let end = (last + 1).min(lines.len());
+                    if first >= end {
+                        continue;
+                    }
+                    lines.drain(first..end);
+                    if first > 0 && lines.get(first).is_some_and(|l| l.trim().is_empty()) && lines[first - 1].trim().is_empty() {
+                        lines.remove(first);
+                    }
+                }
+                lines.join("\n")
+            })
+        });
+    }
+    if changed {
         state::reindex(cx);
     }
+}
+
+/// Starts a new card from wherever, in the deck last used.
+pub fn new_card(window: &mut Window, cx: &mut App) {
+    let deck = prefs::get().card_deck;
+    super::sheets::show_sheet(760., window, cx, move |window, cx| CardComposer::new(deck, None, None, window, cx));
 }
 
 impl Render for CardsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
         self.all = cards::all_cards();
+        match self.selected.as_ref().and_then(|id| self.all.iter().find(|c| c.id() == id)) {
+            Some(card) => self.selected_place = Some((card.note.clone(), card.raw.lines.0, card.raw.kind)),
+            None if self.selected.is_some() => {
+                let again = self.selected_place.as_ref().and_then(|(note, line, kind)| self.all.iter().find(|c| c.note == *note && c.raw.lines.0 == *line && c.raw.kind == *kind)).map(|c| c.id().to_string());
+                self.selected = None;
+                self.preview = None;
+                if let Some(id) = again {
+                    self.select_card(id, cx);
+                }
+            }
+            None => {}
+        }
+        if !self.marked.is_empty() {
+            let known: std::collections::HashSet<&str> = self.all.iter().map(|c| c.id()).collect();
+            self.marked.retain(|id| known.contains(id.as_str()));
+        }
         if let Some(request) = state::lib(cx).update(cx, |l, _| l.cards_request.take()) {
             self.select_deck(request.clone(), cx);
             if cards::counts(&request, cards::now()).total() > 0 {
                 self.start(request, window, cx);
             }
+        }
+        if let Some(s) = &mut self.session
+            && s.cram.is_none()
+            && s.current.is_none()
+            && cards::counts(&s.deck, cards::now()).total() > 0
+        {
+            Self::advance(s, None);
         }
         if let Some(s) = &mut self.session
             && s.cram.is_none()
@@ -1148,10 +1654,17 @@ impl Render for CardsPage {
                     s.current = Some(found.clone());
                 }
                 Some(_) => {}
-                None => Self::advance(s, None),
+                None => match self.all.iter().find(|c| c.note == current.note && c.raw.lines.0 == current.raw.lines.0 && c.raw.kind == current.raw.kind) {
+                    Some(found) => {
+                        s.front = parsed(&found.raw.front);
+                        s.back = parsed(&found.raw.back);
+                        s.current = Some(found.clone());
+                    }
+                    None => Self::advance(s, None),
+                },
             }
         }
-        if self.session.as_ref().is_none() && !self.deck.is_empty() && !self.all.iter().any(|c| c.in_deck(&self.deck)) {
+        if self.session.is_none() && !self.deck.is_empty() && !self.all.is_empty() && !self.all.iter().any(|c| c.in_deck(&self.deck)) {
             self.deck.clear();
         }
         let now = cards::now();
@@ -1181,23 +1694,43 @@ impl Render for CardsPage {
                     open_import(path.clone(), window, cx);
                 }
             }))
-            .capture_action(cx.listener(|p, _: &super::main_window::Dismiss, _, cx| {
-                if p.session.is_some() {
-                    p.session = None;
-                    p.cached = None;
+            .capture_action(cx.listener(|p, _: &super::main_window::Dismiss, window, cx| {
+                if p.query.read(cx).focus_handle(cx).is_focused(window) {
+                    p.query.update(cx, |q, cx| q.set_value("", window, cx));
+                    window.focus(&p.focus, cx);
+                    cx.stop_propagation();
+                } else if p.session.is_some() {
+                    p.end_session(cx);
+                    cx.stop_propagation();
+                } else if p.selected.is_some() || !p.marked.is_empty() {
+                    p.clear_selection();
                     cx.stop_propagation();
                     cx.notify();
-                } else if p.selected.is_some() {
-                    p.selected = None;
-                    p.preview = None;
+                } else if p.zone == Zone::Decks {
+                    p.zone = Zone::Cards;
                     cx.stop_propagation();
                     cx.notify();
+                } else if p.focus.is_focused(window) {
+                    cx.stop_propagation();
                 }
             }))
             .capture_action(cx.listener(|p, _: &super::app::Undo, _, cx| {
-                if p.session.as_ref().is_some_and(|s| !s.answered.is_empty()) {
+                if p.session.is_some() {
                     cx.stop_propagation();
-                    p.undo(cx);
+                    if p.can_undo() {
+                        p.undo(cx);
+                    }
+                } else if state::read(cx, |l| l.toast.as_ref().is_some_and(|t| matches!(t.icon, "pause" | "rotate-ccw") && t.undo.is_some())) {
+                    cx.stop_propagation();
+                    act(cx, |l| l.perform_toast_action());
+                }
+            }))
+            .capture_key_down(cx.listener(|p, e: &KeyDownEvent, window, cx| {
+                if e.keystroke.key == "down" && p.query.read(cx).focus_handle(cx).is_focused(window) {
+                    window.focus(&p.focus, cx);
+                    p.zone = Zone::Cards;
+                    p.cards_key("home", false, window, cx);
+                    cx.stop_propagation();
                 }
             }))
             .on_mouse_down(MouseButton::Left, cx.listener(|p, _, window, cx| {
@@ -1229,6 +1762,7 @@ pub struct CardComposer {
     target: PathBuf,
     editing: Option<Card>,
     added: usize,
+    error: Option<String>,
     focused: bool,
     front_preview: Arc<ParsedNote>,
     back_preview: Arc<ParsedNote>,
@@ -1258,10 +1792,10 @@ impl CardComposer {
         let mut kind = ComposeKind::Basic;
         let mut target = default_target(&deck);
         if let Some(card) = &editing {
-            target = card.note.clone();
-            let source = std::fs::read_to_string(&card.note).unwrap_or_default();
+            target = card.note.as_ref().clone();
+            let source = state::lib(cx).update(cx, |l, _| l.buffer(card.note.as_path()).text.clone());
             let lines: Vec<&str> = source.split('\n').collect();
-            let written = lines.get(card.raw.lines.0..=card.raw.lines.1).map(|l| l.join("\n")).unwrap_or_default();
+            let written = lines.get(card.raw.lines.0..=card.raw.lines.1).map(|l| l.iter().map(|x| &x[parse::line_marks(x).len()..]).collect::<Vec<_>>().join("\n")).unwrap_or_default();
             let (f, b) = match card.raw.kind {
                 CardKind::Cloze => {
                     kind = ComposeKind::Cloze;
@@ -1303,7 +1837,7 @@ impl CardComposer {
                 }
             }),
         ];
-        let mut this = Self { kind, front, back, target, editing, added: 0, focused: false, front_preview: parsed(""), back_preview: parsed(""), _subs: subs };
+        let mut this = Self { kind, front, back, target, editing, added: 0, error: None, focused: false, front_preview: parsed(""), back_preview: parsed(""), _subs: subs };
         this.refresh_preview(cx);
         this
     }
@@ -1325,7 +1859,7 @@ impl CardComposer {
         }
         let written = self.written(cx);
         let found = crate::core::cards::parse::cards_in(&written);
-        let (front, back) = found.first().map_or((String::new(), String::new()), |c| (c.front.clone(), c.back.clone()));
+        let (front, back) = found.first().map_or_else(|| (self.front.read(cx).value().to_string(), self.back.read(cx).value().to_string()), |c| (c.front.clone(), c.back.clone()));
         self.front_preview = parsed(&front);
         self.back_preview = parsed(&back);
         cx.notify();
@@ -1333,6 +1867,23 @@ impl CardComposer {
 
     fn is_valid(&self, cx: &App) -> bool {
         !crate::core::cards::parse::cards_in(&self.written(cx)).is_empty()
+    }
+
+    /// An image on the clipboard goes into the note's attachment folder, a link to it at the caret.
+    fn paste_image(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(item) = cx.read_from_clipboard() else { return false };
+        let Some(image) = item.entries().iter().find_map(|e| if let ClipboardEntry::Image(image) = e { Some(image.clone()) } else { None }) else { return false };
+        let vault = index::current();
+        let folder = vault.config.attachment_folder(&vault.root, &self.target);
+        let name = format!("{} {}.png", tr("Eingefügtes Bild"), chrono::Local::now().format("%Y%m%d%H%M%S"));
+        if std::fs::create_dir_all(&folder).is_err() || std::fs::write(folder.join(&name), &image.bytes).is_err() {
+            return false;
+        }
+        let field = if self.back.read(cx).focus_handle(cx).is_focused(window) { self.back.clone() } else { self.front.clone() };
+        field.update(cx, |s, cx| s.replace(format!("![[{name}]]"), window, cx));
+        self.refresh_preview(cx);
+        state::reindex(cx);
+        true
     }
 
     /// Turns the selection in the question into a new gap.
@@ -1362,19 +1913,30 @@ impl CardComposer {
         let written = self.written(cx);
         let target = self.target.clone();
         if let Some(card) = self.editing.clone() {
-            let (first, last) = card.raw.lines;
-            let moved = target != card.note;
+            let moved = target != *card.note;
             let replacement = written.clone();
+            let id = card.id().to_string();
+            let mut found = false;
             let saved = act(cx, |l| {
-                l.edit_note(&card.note, "card", if moved { tr("Karte verschoben") } else { tr("Karte geändert") }, |text| {
+                l.edit_note(card.note.as_path(), "card", if moved { tr("Karte verschoben") } else { tr("Karte geändert") }, |text| {
+                    let Some(place) = parse::cards_in(text).into_iter().find(|c| c.id == id).map(|c| c.lines) else { return text.to_string() };
+                    found = true;
                     let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-                    let end = (last + 1).min(lines.len());
-                    if first < end {
-                        lines.splice(first..end, if moved { Vec::new() } else { replacement.split('\n').map(str::to_string).collect() });
+                    let end = (place.1 + 1).min(lines.len());
+                    if place.0 < end {
+                        let marks = parse::line_marks(&lines[place.0]).to_string();
+                        let quoted: String = marks.chars().take_while(|c| *c == '>' || *c == ' ').collect();
+                        let new: Vec<String> = replacement.split('\n').enumerate().map(|(i, line)| if i == 0 { format!("{marks}{line}") } else { format!("{quoted}{line}") }).collect();
+                        lines.splice(place.0..end, if moved { Vec::new() } else { new });
                     }
                     lines.join("\n")
                 })
             });
+            if !found {
+                self.error = Some(tr("Die Karte wurde in der Notiz geändert. Schließen und neu öffnen."));
+                cx.notify();
+                return;
+            }
             if moved && saved {
                 if !target.exists() {
                     let _ = target.parent().map(std::fs::create_dir_all);
@@ -1389,10 +1951,9 @@ impl CardComposer {
                 });
             }
             if saved {
-                let new = crate::core::cards::parse::cards_in(&written);
-                let same_kind = new.iter().find(|c| c.kind == card.raw.kind).or(new.first());
-                if let Some(next) = same_kind {
-                    cards::rename(card.id(), &next.id);
+                let old: Vec<String> = cards::all_cards().iter().filter(|c| c.note == card.note && c.raw.lines == card.raw.lines).map(|c| c.id().to_string()).collect();
+                for (before, after) in old.iter().zip(parse::cards_in(&written)) {
+                    cards::rename(before, &after.id);
                 }
                 state::reindex(cx);
             }
@@ -1436,6 +1997,9 @@ impl CardComposer {
 
     /// Why the card cannot be saved yet, or what to know before saving it.
     fn notice(&self, cx: &App) -> Option<String> {
+        if let Some(error) = &self.error {
+            return Some(error.clone());
+        }
         let written = self.written(cx);
         if self.front.read(cx).value().trim().is_empty() {
             return None;
@@ -1475,7 +2039,7 @@ impl Render for CardComposer {
         }));
         let root = index::current().root.clone();
         let target_name = self.target.strip_prefix(&root).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
-        let mut notes: Vec<PathBuf> = cards::all_cards().iter().map(|c| c.note.clone()).collect();
+        let mut notes: Vec<PathBuf> = cards::all_cards().iter().map(|c| c.note.as_ref().clone()).collect();
         notes.dedup();
         let in_modules: Vec<PathBuf> = state::read(cx, |l| l.config.as_ref().map(|c| c.modules.iter().map(|m| root.join(&m.folder).join(format!("{}.md", tr("Karteikarten")))).collect()).unwrap_or_default());
         for note in in_modules {
@@ -1516,7 +2080,7 @@ impl Render for CardComposer {
             .child(Textarea::new(&self.front))
             .when(!cloze, |d| d.child(field_label(tr("Rückseite"))).child(Textarea::new(&self.back)))
             .child(match self.notice(cx) {
-                Some(text) => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange).child(icon("triangle-alert", iconsize::XS, t.orange)).child(text),
+                Some(text) => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange).child(icon("triangle-alert", iconsize::XS, t.orange)).child(div().flex_1().min_w_0().child(text)),
                 None => caption(tr("Markdown, Formeln mit $…$ und Bilder gehen überall."), &t),
             });
         let preview = div()
@@ -1531,15 +2095,22 @@ impl Render for CardComposer {
             .flex()
             .flex_col()
             .gap(px(space::M))
-            .child(field_label(tr("Vorschau")))
+            .child(field_label(match crate::core::cards::parse::cards_in(&self.written(cx)).len() {
+                0 | 1 => tr("Vorschau"),
+                n => trf("Vorschau · %@ Karten", &[&n.to_string()]),
+            }))
             .child(markdown_view::render(&self.front_preview, base.as_deref(), None, &t))
-            .child(div().h(px(1.)).flex_none().bg(t.separator))
-            .child(markdown_view::render(&self.back_preview, base.as_deref(), None, &t));
+            .when(!self.back.read(cx).value().trim().is_empty(), |d| d.child(div().h(px(1.)).flex_none().bg(t.separator)).child(markdown_view::render(&self.back_preview, base.as_deref(), None, &t)));
         div()
             .w_full()
             .flex()
             .flex_col()
             .key_context("CardComposer")
+            .capture_action(cx.listener(|c, _: &gpui_kit::component::input::Paste, window, cx| {
+                if c.paste_image(window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .capture_action(cx.listener(|c, a: &gpui_kit::component::input::Enter, window, cx| {
                 if a.secondary {
                     c.save(window, cx);
@@ -1554,11 +2125,14 @@ impl Render for CardComposer {
                 } else if e.keystroke.key == "escape" {
                     c.close(cx);
                     cx.stop_propagation();
-                } else if e.keystroke.key == "tab" && !m.shift && c.front.read(cx).focus_handle(cx).is_focused(window) && c.kind != ComposeKind::Cloze {
-                    c.back.update(cx, |s, cx| s.focus(window, cx));
+                } else if e.keystroke.key == "tab" && c.kind != ComposeKind::Cloze {
+                    if c.front.read(cx).focus_handle(cx).is_focused(window) {
+                        c.back.update(cx, |s, cx| s.focus(window, cx));
+                    } else {
+                        c.front.update(cx, |s, cx| s.focus(window, cx));
+                    }
                     cx.stop_propagation();
-                } else if e.keystroke.key == "tab" && m.shift && c.back.read(cx).focus_handle(cx).is_focused(window) {
-                    c.front.update(cx, |s, cx| s.focus(window, cx));
+                } else if e.keystroke.key == "tab" {
                     cx.stop_propagation();
                 }
             }))
@@ -1576,7 +2150,7 @@ impl Render for CardComposer {
                     .child(div().flex_1())
                     .when(self.added > 0, |d| d.child(caption(if self.added == 1 { tr("1 Karte angelegt") } else { trf("%@ Karten angelegt", &[&self.added.to_string()]) }, &t)))
                     .child(Button::new("card-close").label(if self.added > 0 { tr("Fertig") } else { tr("Abbrechen") }).on_click(cx.listener(|c, _, _, cx| c.close(cx))))
-                    .child(caption("⌘↩", &t))
+                    .child(caption(if self.kind == ComposeKind::Cloze { "⌘⇧C · ⌘↩".to_string() } else { "⇥ · ⌘↩".to_string() }, &t))
                     .child(Button::new("card-save").primary().label(if editing { tr("Sichern") } else { tr("Anlegen") }).disabled(!valid).on_click(cx.listener(|c, _, window, cx| c.save(window, cx)))),
             )
     }
@@ -1613,12 +2187,17 @@ pub struct CardImport {
 impl EventEmitter<super::quick::Dismissed> for CardImport {}
 
 impl CardImport {
+    fn folder_outside(&self, cx: &App) -> bool {
+        self.folder.read(cx).value().trim().split('/').any(|part| part == "..")
+    }
+
     fn new(path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let folder = cx.new(|cx| InputState::new(window, cx).default_value("Anki"));
         let enter = cx.subscribe(&folder, |this: &mut Self, _, e: &InputEvent, cx| {
             if matches!(e, InputEvent::PressEnter { .. }) && !this.working {
                 this.start(cx);
             }
+            cx.notify();
         });
         folder.update(cx, |f, cx| f.focus(window, cx));
         let source = path.clone();
@@ -1640,10 +2219,12 @@ impl CardImport {
         let Some(package) = self.package.take() else { return };
         let root = index::current().root.clone();
         let name = self.folder.read(cx).value().trim().to_string();
-        if root.as_os_str().is_empty() || name.contains("..") {
+        if root.as_os_str().is_empty() || name.split('/').any(|part| part == "..") {
             self.package = Some(package);
+            cx.notify();
             return;
         }
+        let name = name.trim_matches('/').to_string();
         let target = root.join(if name.is_empty() { "Anki" } else { &name });
         let (keep, known) = (self.keep_progress, cards::known_ids());
         self.working = true;
@@ -1652,16 +2233,22 @@ impl CardImport {
         let task = cx.background_spawn(async move { cards::anki::write(package, &target, keep, &known, |p| p.strip_prefix(&rel_root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default()) });
         self._load = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
-            let _ = this.update(cx, |s, cx| {
-                s.working = false;
-                match result {
-                    Ok(done) => {
-                        cards::adopt_import(done.states, done.log);
+            let failed = match result {
+                Ok(done) => {
+                    cards::adopt_import(done.states, done.log);
+                    cx.update(|cx| {
                         act(cx, |l| l.cards_imported(done.created, done.added, done.duplicates));
                         state::reindex(cx);
-                        cx.emit(super::quick::Dismissed);
-                    }
-                    Err(e) => s.error = Some(e.to_string()),
+                    });
+                    None
+                }
+                Err(e) => Some(e.to_string()),
+            };
+            let _ = this.update(cx, |s, cx| {
+                s.working = false;
+                match failed {
+                    Some(e) => s.error = Some(e),
+                    None => cx.emit(super::quick::Dismissed),
                 }
                 cx.notify();
             });
@@ -1696,6 +2283,7 @@ impl Render for CardImport {
                 .child(div().font_weight(FontWeight::MEDIUM).child(summary))
                 .child(div().id("import-decks").max_h(px(180.)).overflow_y_scrollbar().rounded(px(radius::CONTROL)).border_1().border_color(t.separator).child(list))
                 .child(div().flex().items_center().gap(px(space::M)).child(div().flex_1().child(tr("Zielordner"))).child(div().w(px(200.)).child(Input::new(&self.folder).small())))
+                .when(self.folder_outside(cx), |d| d.child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red).child(icon("triangle-alert", iconsize::XS, t.red)).child(tr("Der Zielordner muss im Studienordner liegen."))))
                 .when(with_progress > 0, |d| {
                     d.child(
                         div()
@@ -1733,7 +2321,7 @@ impl Render for CardImport {
                     .border_t_1()
                     .border_color(t.separator)
                     .child(Button::new("import-cancel").label(tr("Abbrechen")).on_click(cx.listener(|_, _, _, cx| cx.emit(super::quick::Dismissed))))
-                    .child(Button::new("import-start").primary().label(if self.working { tr("Importiere …") } else { tr("Importieren") }).disabled(!ready).on_click(cx.listener(|s, _, _, cx| s.start(cx)))),
+                    .child(Button::new("import-start").primary().label(if self.working { tr("Importiere …") } else { tr("Importieren") }).disabled(!ready || self.folder_outside(cx)).on_click(cx.listener(|s, _, _, cx| s.start(cx)))),
             )
     }
 }

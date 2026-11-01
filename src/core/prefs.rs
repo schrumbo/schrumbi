@@ -132,6 +132,10 @@ pub struct Prefs {
     pub card_reviews_per_day: u32,
     /// The note new cards went to last, relative to the vault.
     pub card_target: Option<String>,
+    /// The deck last open on the cards page.
+    pub card_deck: String,
+    /// The folders open in its deck tree.
+    pub card_open: Vec<String>,
     /// Saved sets of open tabs, by workspace, by name.
     pub layouts: BTreeMap<String, BTreeMap<String, Vec<String>>>,
     /// Notes save while typing since this was the default; older settings move over once.
@@ -202,6 +206,8 @@ impl Default for Prefs {
             card_new_per_day: 20,
             card_reviews_per_day: 200,
             card_target: None,
+            card_deck: String::new(),
+            card_open: Vec::new(),
             layouts: BTreeMap::new(),
             saves_while_typing: false,
             note_save_mode: NoteSaveMode::Delay,

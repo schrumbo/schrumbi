@@ -16,6 +16,7 @@ Schrumbi is a desktop app built with Rust and [GPUI](https://www.gpui.rs). It re
 - **Search:** full-text search across file names, PDFs and notes, with a jump to each match
 - **PDF viewer:** thumbnails, outline, text search, highlights, links and a remembered position per file
 - **Notes:** file browser for your whole folder with tabs, tags, tasks and a graph; Markdown code editor, optional live mode, reader, split view and PDF export
+- **Flashcards:** cards as plain text in your notes, scheduled with FSRS-6; imports Anki packages
 - **Sync:** optional, through Git, with conflict handling; requires Git to be installed
 - **Obsidian:** optional; open or connect an existing vault and keep using both side by side
 - **Undo:** step back through filing, renames, status changes and deadlines with `⌘Z`

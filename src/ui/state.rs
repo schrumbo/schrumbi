@@ -379,6 +379,7 @@ pub fn tab_scroll(current: &std::path::Path, index: usize, cx: &App) -> ScrollHa
 
 /// Writes what is still waiting for its delay, before quitting or leaving a workspace.
 pub fn flush_pending(cx: &mut App) {
+    crate::core::cards::flush();
     if cx.global_mut::<Store>().pending_notes.take().is_some() {
         lib(cx).update(cx, |l, _| l.save_notes());
     }

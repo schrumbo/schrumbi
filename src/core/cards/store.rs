@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 use chrono::{Duration, Local, NaiveDate, TimeZone};
@@ -74,9 +73,9 @@ pub struct ReviewLog {
 /// One card with everything needed to show it.
 #[derive(Debug, Clone)]
 pub struct Card {
-    pub raw: RawCard,
-    pub note: PathBuf,
-    pub note_rel: String,
+    pub raw: Arc<RawCard>,
+    pub note: Arc<PathBuf>,
+    pub note_rel: Arc<String>,
     pub state: Option<CardState>,
 }
 
@@ -103,7 +102,7 @@ impl Card {
 
     /// The folder and note the card belongs to, to sort it into decks.
     pub fn in_deck(&self, deck: &str) -> bool {
-        deck.is_empty() || self.note_rel == deck || self.note_rel.starts_with(&format!("{deck}/"))
+        deck.is_empty() || self.note_rel.strip_prefix(deck).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
     }
 }
 
@@ -128,11 +127,17 @@ struct Store {
     log: Vec<ReviewLog>,
     revision: u64,
     cache: Option<(u64, u64, Arc<Vec<Card>>)>,
+    /// The cards as the notes say, for one state of the vault.
+    written: Option<(u64, Arc<Vec<(Arc<RawCard>, Arc<PathBuf>, Arc<String>)>>)>,
     counts: HashMap<(String, i64, u64, u64), Counts>,
+    stats: HashMap<(String, i64, u64, u64), Stats>,
+    /// Size and time of the file as last read or written; anything else came from outside, like a sync.
+    stamps: [Option<(u64, std::time::SystemTime)>; 2],
+    /// A new state of the cards still has to reach the disk.
+    dirty: bool,
 }
 
 static STORE: LazyLock<RwLock<Store>> = LazyLock::new(Default::default);
-static SAVED: AtomicU64 = AtomicU64::new(0);
 /// New cards allowed on top of the daily limit today, with the day it counts for.
 static EXTRA_NEW: Mutex<(Option<NaiveDate>, usize)> = Mutex::new((None, 0));
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
@@ -156,58 +161,116 @@ pub fn next_day_start(at: i64) -> i64 {
     next.and_hms_opt(DAY_STARTS_AT as u32, 0, 0).and_then(|d| Local.from_local_datetime(&d).earliest()).map_or(at + 86400, |d| d.timestamp())
 }
 
+fn stamp_of(path: &Path) -> Option<(u64, std::time::SystemTime)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
 /// Reads what is known about the cards of a vault, off the main thread.
+/// When the files changed behind the app's back, like after a sync, both states are joined: the later review wins.
 pub fn open(root: &Path) {
-    {
+    let (store_path, log_path) = (root.join(STORE_NAME), root.join(LOG_NAME));
+    let (store_stamp, log_stamp) = (stamp_of(&store_path), stamp_of(&log_path));
+    let same_root = {
         let store = STORE.read().unwrap();
-        if store.root.as_deref() == Some(root) {
+        let same = store.root.as_deref() == Some(root);
+        if same && store.stamps == [store_stamp, log_stamp] {
             return;
         }
-    }
-    let file: StoreFile = std::fs::read(root.join(STORE_NAME)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-    let log = read_log(&root.join(LOG_NAME));
+        if same && store.dirty {
+            return;
+        }
+        same
+    };
+    let file: StoreFile = std::fs::read(&store_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let log = read_log(&log_path);
     let mut store = STORE.write().unwrap();
-    *store = Store { root: Some(root.to_path_buf()), file, log, revision: store.revision + 1, cache: None, counts: HashMap::new() };
+    if same_root {
+        for (id, state) in file.cards {
+            if store.file.cards.get(&id).is_none_or(|mine| state.last_review > mine.last_review || (state.last_review == mine.last_review && state != *mine)) {
+                store.file.cards.insert(id, state);
+            }
+        }
+        if log.len() != store.log.len() {
+            store.log = log;
+        }
+        store.stamps = [store_stamp, log_stamp];
+        store.revision += 1;
+        store.cache = None;
+        store.counts.clear();
+        store.stats.clear();
+    } else {
+        *store = Store { root: Some(root.to_path_buf()), file, log, revision: store.revision + 1, stamps: [store_stamp, log_stamp], ..Default::default() };
+    }
 }
 
 fn read_log(path: &Path) -> Vec<ReviewLog> {
     std::fs::read_to_string(path).map(|text| text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()).unwrap_or_default()
 }
 
-/// Forgets the open vault's cards.
+/// Forgets the open vault's cards, after writing down what is still waiting.
 pub fn close() {
+    flush();
     let mut store = STORE.write().unwrap();
     *store = Store { revision: store.revision + 1, ..Default::default() };
 }
 
+/// Writes the cards' state now, if anything is waiting. Called on quitting.
+pub fn flush() {
+    let _guard = SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, json) = {
+        let mut store = STORE.write().unwrap();
+        if !store.dirty {
+            return;
+        }
+        store.dirty = false;
+        let Some(root) = store.root.clone() else { return };
+        let Ok(json) = serde_json::to_vec_pretty(&store.file) else { return };
+        (root, json)
+    };
+    let path = root.join(STORE_NAME);
+    crate::core::workspace::backup(&path);
+    let tmp = root.join(format!("{STORE_NAME}.tmp"));
+    if std::fs::write(&tmp, json).is_ok() && std::fs::rename(tmp, &path).is_ok() {
+        let stamp = stamp_of(&path);
+        STORE.write().unwrap().stamps[0] = stamp;
+    }
+}
+
+/// Marks the state as changed; it reaches the disk a moment later, off the main thread, however fast answers come.
 fn save() {
-    let (root, json, version) = {
+    let start = {
         let mut store = STORE.write().unwrap();
         store.revision += 1;
         store.cache = None;
         store.counts.clear();
-        let Some(root) = store.root.clone() else { return };
-        let Ok(json) = serde_json::to_vec_pretty(&store.file) else { return };
-        (root, json, store.revision)
+        store.stats.clear();
+        !std::mem::replace(&mut store.dirty, true)
     };
-    std::thread::spawn(move || {
-        let _guard = SAVE_LOCK.lock().unwrap();
-        if SAVED.load(Ordering::Relaxed) > version {
-            return;
-        }
-        SAVED.store(version, Ordering::Relaxed);
-        let path = root.join(STORE_NAME);
-        crate::core::workspace::backup(&path);
-        let tmp = root.join(format!("{STORE_NAME}.tmp"));
-        if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(tmp, path);
-        }
-    });
+    if start && !cfg!(test) {
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            flush();
+        });
+    }
+}
+
+fn rewrite_log(store: &mut Store) {
+    let Some(root) = store.root.clone() else { return };
+    let rest: String = store.log.iter().filter_map(|l| serde_json::to_string(l).ok()).map(|l| l + "\n").collect();
+    let (tmp, path) = (root.join(format!("{LOG_NAME}.tmp")), root.join(LOG_NAME));
+    if std::fs::write(&tmp, rest).is_ok() && std::fs::rename(tmp, &path).is_ok() {
+        store.stamps[1] = stamp_of(&path);
+    }
 }
 
 fn append_log(root: &Path, entry: &ReviewLog) {
     if let (Ok(mut file), Ok(line)) = (std::fs::OpenOptions::new().create(true).append(true).open(root.join(LOG_NAME)), serde_json::to_string(entry)) {
         let _ = writeln!(file, "{line}");
+    }
+    let stamp = stamp_of(&root.join(LOG_NAME));
+    if let Ok(mut store) = STORE.try_write() {
+        store.stamps[1] = stamp;
     }
 }
 
@@ -224,13 +287,13 @@ pub fn all_cards() -> Arc<Vec<Card>> {
         }
     }
     let mut store = STORE.write().unwrap();
-    let cards = Arc::new(collect(&vault, &store.file));
+    let cards = Arc::new(collect(&vault, &mut store));
     let revision = store.revision;
     store.cache = Some((vault.generation, revision, cards.clone()));
     cards
 }
 
-fn collect(vault: &VaultIndex, file: &StoreFile) -> Vec<Card> {
+fn written_cards(vault: &VaultIndex) -> Vec<(Arc<RawCard>, Arc<PathBuf>, Arc<String>)> {
     let mut notes: Vec<(&PathBuf, &index::NoteFacts)> = vault.notes.iter().filter(|(p, f)| !f.cards.is_empty() && !vault.is_template(p) && markdown::is_markdown(p)).collect();
     notes.sort_by(|a, b| a.0.cmp(b.0));
     let mut seen = HashSet::new();
@@ -240,13 +303,26 @@ fn collect(vault: &VaultIndex, file: &StoreFile) -> Vec<Card> {
         if vault.config.is_ignored(&rel) {
             continue;
         }
+        let (path, rel) = (Arc::new(path.clone()), Arc::new(rel));
         for raw in &facts.cards {
             if seen.insert(raw.id.clone()) {
-                cards.push(Card { state: file.cards.get(&raw.id).cloned(), raw: raw.clone(), note: path.clone(), note_rel: rel.clone() });
+                cards.push((Arc::new(raw.clone()), path.clone(), rel.clone()));
             }
         }
     }
     cards
+}
+
+fn collect(vault: &VaultIndex, store: &mut Store) -> Vec<Card> {
+    let written = match &store.written {
+        Some((generation, list)) if *generation == vault.generation => list.clone(),
+        _ => {
+            let list = Arc::new(written_cards(vault));
+            store.written = Some((vault.generation, list.clone()));
+            list
+        }
+    };
+    written.iter().map(|(raw, note, rel)| Card { state: store.file.cards.get(&raw.id).cloned(), raw: raw.clone(), note: note.clone(), note_rel: rel.clone() }).collect()
 }
 
 /// Keeps progress when a question was reworded: a card without state takes over the most similar lost one of its note.
@@ -256,7 +332,7 @@ pub fn reconcile() {
     if store.root.is_none() || store.file.cards.is_empty() {
         return;
     }
-    let cards = collect(&vault, &store.file);
+    let cards = collect(&vault, &mut store);
     let known: HashSet<&str> = cards.iter().map(|c| c.raw.id.as_str()).collect();
     let mut lost: HashMap<String, Vec<String>> = HashMap::new();
     for (id, state) in &store.file.cards {
@@ -268,10 +344,10 @@ pub fn reconcile() {
     let mut seen_here: Vec<(String, String)> = Vec::new();
     for card in &cards {
         match &card.state {
-            Some(state) if state.note != card.note_rel || state.question != card.raw.front => seen_here.push((card.raw.id.clone(), card.note_rel.clone())),
+            Some(state) if state.note != *card.note_rel || state.question != card.raw.front => seen_here.push((card.raw.id.clone(), card.note_rel.to_string())),
             Some(_) => {}
             None => {
-                let Some(candidates) = lost.get_mut(&card.note_rel) else { continue };
+                let Some(candidates) = lost.get_mut(card.note_rel.as_str()) else { continue };
                 let best = candidates
                     .iter()
                     .enumerate()
@@ -287,11 +363,19 @@ pub fn reconcile() {
         return;
     }
     let fronts: HashMap<&str, &str> = cards.iter().map(|c| (c.raw.id.as_str(), c.raw.front.as_str())).collect();
+    let mut logged = false;
     for (old, new) in moved {
         if let Some(mut state) = store.file.cards.remove(&old) {
             state.question = fronts.get(new.as_str()).unwrap_or(&"").to_string();
+            for entry in store.log.iter_mut().filter(|l| l.card == old) {
+                entry.card = new.clone();
+                logged = true;
+            }
             store.file.cards.insert(new, state);
         }
+    }
+    if logged {
+        rewrite_log(&mut store);
     }
     for (id, note) in seen_here {
         let front = fronts.get(id.as_str()).unwrap_or(&"").to_string();
@@ -312,6 +396,14 @@ pub fn rename(old: &str, new: &str) {
     let mut store = STORE.write().unwrap();
     if let Some(state) = store.file.cards.remove(old) {
         store.file.cards.insert(new.to_string(), state);
+        let mut logged = false;
+        for entry in store.log.iter_mut().filter(|l| l.card == old) {
+            entry.card = new.to_string();
+            logged = true;
+        }
+        if logged {
+            rewrite_log(&mut store);
+        }
         drop(store);
         save();
     }
@@ -410,21 +502,27 @@ pub fn options(id: &str, state: Option<&CardState>, note: &str, question: &str, 
     [result[0].clone(), result[1].clone(), result[2].clone(), result[3].clone()]
 }
 
-/// Short words for how long until a card comes back.
+/// Short words for how long until a card comes back. Days count as study days, so tomorrow is one day at any hour.
 pub fn wait_label(from: i64, due: i64) -> String {
-    use crate::core::i18n::trf;
+    use crate::core::i18n::{Lang, lang, tr, trf};
     let minutes = (due - from) / 60;
     if minutes < 60 {
         return trf("%@ Min.", &[&minutes.max(1).to_string()]);
     }
-    if minutes < 60 * 20 {
+    let days = days_between(from, due);
+    if minutes < 120 || days == 0 {
         return trf("%@ Std.", &[&(minutes / 60).to_string()]);
     }
-    let days = ((due - from) as f64 / 86400.).round().max(1.) as i64;
+    let number = |value: f64| {
+        let text = format!("{value:.1}");
+        let text = text.strip_suffix(".0").unwrap_or(&text).to_string();
+        if lang() == Lang::En { text } else { text.replace('.', ",") }
+    };
     match days {
-        d if d < 31 => trf("%@ T.", &[&d.to_string()]),
-        d if d < 365 => trf("%@ Mon.", &[&format!("{:.1}", d as f64 / 30.4).replace(".0", "")]),
-        d => trf("%@ J.", &[&format!("{:.1}", d as f64 / 365.).replace(".0", "")]),
+        1 => tr("1 Tag"),
+        d if d < 31 => trf("%@ Tage", &[&d.to_string()]),
+        d if d < 365 => trf("%@ Mon.", &[&number(d as f64 / 30.4)]),
+        d => trf("%@ J.", &[&number(d as f64 / 365.)]),
     }
 }
 
@@ -444,7 +542,7 @@ pub fn before_change(card: &Card) -> Answered {
 
 /// Saves an answer and puts the other cards of the same place aside until tomorrow.
 pub fn answer(card: &Card, rating: Rating, at: i64) -> Answered {
-    let chosen = options(&card.raw.id, card.state.as_ref(), &card.note_rel, &card.raw.front, at)[rating as usize - 1].clone();
+    let chosen = options(&card.raw.id, card.state.as_ref(), card.note_rel.as_str(), &card.raw.front, at)[rating as usize - 1].clone();
     let days = card.state.as_ref().and_then(|s| s.last_review).map_or(0, |last| days_between(last, at)) as f64;
     let log = ReviewLog { card: card.raw.id.clone(), at, rating, phase: card.phase(), days };
     let cards = all_cards();
@@ -455,7 +553,7 @@ pub fn answer(card: &Card, rating: Rating, at: i64) -> Answered {
     for sibling in siblings {
         if !matches!(sibling.phase(), Phase::Learning | Phase::Relearning) && !sibling.suspended() {
             let previous = store.file.cards.get(&sibling.raw.id).cloned();
-            let entry = store.file.cards.entry(sibling.raw.id.clone()).or_insert_with(|| CardState { note: sibling.note_rel.clone(), question: sibling.raw.front.clone(), ..Default::default() });
+            let entry = store.file.cards.entry(sibling.raw.id.clone()).or_insert_with(|| CardState { note: sibling.note_rel.to_string(), question: sibling.raw.front.clone(), ..Default::default() });
             entry.buried_until = Some(next_day_start(at));
             buried.push((sibling.raw.id.clone(), previous));
         }
@@ -495,13 +593,7 @@ pub fn undo(answered: Answered) {
         if let Some(at) = store.log.iter().rposition(|l| l.card == answered.id) {
             store.log.remove(at);
         }
-        let rest: String = store.log.iter().filter_map(|l| serde_json::to_string(l).ok()).map(|l| l + "\n").collect();
-        if let Some(root) = store.root.clone() {
-            let (tmp, path) = (root.join(format!("{LOG_NAME}.tmp")), root.join(LOG_NAME));
-            if std::fs::write(&tmp, rest).is_ok() {
-                let _ = std::fs::rename(tmp, path);
-            }
-        }
+        rewrite_log(&mut store);
     }
     drop(store);
     save();
@@ -509,7 +601,7 @@ pub fn undo(answered: Answered) {
 
 fn edit_state(card: &Card, change: impl FnOnce(&mut CardState)) {
     let mut store = STORE.write().unwrap();
-    let state = store.file.cards.entry(card.raw.id.clone()).or_insert_with(|| CardState { note: card.note_rel.clone(), question: card.raw.front.clone(), ..Default::default() });
+    let state = store.file.cards.entry(card.raw.id.clone()).or_insert_with(|| CardState { note: card.note_rel.to_string(), question: card.raw.front.clone(), ..Default::default() });
     change(state);
     drop(store);
     save();
@@ -519,12 +611,60 @@ pub fn set_suspended(card: &Card, suspended: bool) {
     edit_state(card, |s| s.suspended = suspended);
 }
 
+/// How some cards stand now, to bring them back after a change that hits many.
+pub fn snapshot(ids: &[String]) -> Vec<(String, Option<CardState>)> {
+    let store = STORE.read().unwrap();
+    ids.iter().map(|id| (id.clone(), store.file.cards.get(id).cloned())).collect()
+}
+
+/// Brings cards back to how a snapshot found them.
+pub fn restore(saved: Vec<(String, Option<CardState>)>) {
+    let mut store = STORE.write().unwrap();
+    for (id, state) in saved {
+        match state {
+            Some(state) => {
+                store.file.cards.insert(id, state);
+            }
+            None => {
+                store.file.cards.remove(&id);
+            }
+        }
+    }
+    drop(store);
+    save();
+}
+
+/// Pauses or resumes many cards in one step.
+pub fn set_many_suspended(cards: &[Card], suspended: bool) {
+    let mut store = STORE.write().unwrap();
+    for card in cards {
+        store.file.cards.entry(card.raw.id.clone()).or_insert_with(|| CardState { note: card.note_rel.to_string(), question: card.raw.front.clone(), ..Default::default() }).suspended = suspended;
+    }
+    drop(store);
+    save();
+}
+
+/// Starts many cards over.
+pub fn reset_many(cards: &[Card]) {
+    let mut store = STORE.write().unwrap();
+    for card in cards {
+        store.file.cards.remove(&card.raw.id);
+    }
+    drop(store);
+    save();
+}
+
+/// Brings a card put aside until tomorrow back today.
+pub fn unbury(card: &Card) {
+    edit_state(card, |s| s.buried_until = None);
+}
+
 /// Pauses or resumes all cards of a deck in one step.
 pub fn set_deck_suspended(deck: &str, suspended: bool) {
     let cards = all_cards();
     let mut store = STORE.write().unwrap();
     for card in cards.iter().filter(|c| c.in_deck(deck)) {
-        store.file.cards.entry(card.raw.id.clone()).or_insert_with(|| CardState { note: card.note_rel.clone(), question: card.raw.front.clone(), ..Default::default() }).suspended = suspended;
+        store.file.cards.entry(card.raw.id.clone()).or_insert_with(|| CardState { note: card.note_rel.to_string(), question: card.raw.front.clone(), ..Default::default() }).suspended = suspended;
     }
     drop(store);
     save();
@@ -679,6 +819,20 @@ pub struct Stats {
 }
 
 pub fn stats(deck: &str, at: i64) -> Stats {
+    let key = (deck.to_string(), at / 300, index::current().generation, STORE.read().unwrap().revision);
+    if let Some(found) = STORE.read().unwrap().stats.get(&key) {
+        return found.clone();
+    }
+    let result = work_out_stats(deck, at);
+    let mut store = STORE.write().unwrap();
+    if store.stats.len() > 500 {
+        store.stats.clear();
+    }
+    store.stats.insert(key, result.clone());
+    result
+}
+
+fn work_out_stats(deck: &str, at: i64) -> Stats {
     let cards = all_cards();
     let in_deck: Vec<&Card> = cards.iter().filter(|c| c.in_deck(deck)).collect();
     let ids: HashSet<&str> = in_deck.iter().map(|c| c.raw.id.as_str()).collect();
@@ -769,6 +923,11 @@ pub fn known_ids() -> HashSet<String> {
     all_cards().iter().map(|c| c.raw.id.clone()).collect()
 }
 
+/// Changes whenever the state of any card changed.
+pub fn revision() -> u64 {
+    STORE.read().unwrap().revision
+}
+
 /// When the next card of a deck comes up after today.
 pub fn next_due(deck: &str, at: i64) -> Option<i64> {
     all_cards().iter().filter(|c| c.in_deck(deck) && !c.suspended()).filter_map(|c| c.state.as_ref()).filter(|s| s.phase != Phase::New && s.due > at).map(|s| s.due).min()
@@ -797,7 +956,9 @@ pub fn merge_log(ours: &str, theirs: &str) -> String {
 /// A plain sentence for lists: formulas, links and marks are written out briefly.
 pub fn plain_text(markdown_text: &str) -> String {
     static NOISE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"[*_`$]|\[\[|\]\]|==|(?:^|\s)#[\p{L}\p{N}/_-]+").unwrap());
-    NOISE.replace_all(markdown_text, "").split_whitespace().collect::<Vec<_>>().join(" ")
+    static HIDDEN: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\\boxed\{\\text\{\?\}\}").unwrap());
+    let text = HIDDEN.replace_all(markdown_text, "[...]");
+    NOISE.replace_all(&text, "").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The kind as a short word for lists.
@@ -866,6 +1027,8 @@ mod tests {
     fn labels_read_like_a_person_says_them() {
         let now = at(0, 0);
         assert!(wait_label(now, now + 600).contains("10"));
+        let noon = at(0, 12);
+        assert_eq!(wait_label(noon, next_day_start(noon)), "1 Tag");
         assert!(wait_label(now, now + 10 * 86400).contains("10"));
     }
 
@@ -880,5 +1043,49 @@ mod tests {
         let line = |t: i64| format!("{{\"card\":\"c\",\"at\":{t},\"rating\":\"good\",\"phase\":\"review\",\"days\":1.0}}\n");
         let log = merge_log(&(line(1) + &line(3)), &(line(2) + &line(3)));
         assert_eq!(log.lines().count(), 3);
+    }
+}
+
+#[cfg(test)]
+mod speed {
+    use super::*;
+
+    /// Run with `cargo test --release speed -- --ignored --nocapture`: prints how long the page's work takes.
+    #[test]
+    #[ignore]
+    fn with_many_cards() {
+        for total in [1_000usize, 10_000, 100_000] {
+            let dir = std::env::temp_dir().join(format!("schrumbi-cards-speed-{total}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            for note in 0..(total / 100) {
+                let folder = dir.join(format!("Modul{}", note % 20));
+                std::fs::create_dir_all(&folder).unwrap();
+                let text: String = (0..100).map(|i| format!("Frage {note}-{i}? :: Antwort {i} mit $x^2$\n\n")).collect();
+                std::fs::write(folder.join(format!("Notiz{note}.md")), text).unwrap();
+            }
+            let clock = std::time::Instant::now();
+            index::rebuild(&dir, &[]);
+            open(&dir);
+            let rebuild = clock.elapsed();
+            assert_eq!(all_cards().len(), total);
+            let at = now();
+            let took = |label: &str, f: &mut dyn FnMut()| {
+                let clock = std::time::Instant::now();
+                f();
+                eprintln!("{total:>7} {label:<22} {:>9.2} ms", clock.elapsed().as_secs_f64() * 1000.);
+            };
+            eprintln!("{total:>7} {:<22} {:>9.2} ms", "index", rebuild.as_secs_f64() * 1000.);
+            took("all_cards", &mut || drop(all_cards()));
+            took("queue", &mut || drop(queue("", at)));
+            took("counts", &mut || drop(counts("", at)));
+            took("counts one deck", &mut || drop(counts("Modul3", at)));
+            took("stats", &mut || drop(stats("", at)));
+            let card = queue("", at).remove(0);
+            took("answer", &mut || drop(answer(&card, Rating::Good, at)));
+            took("all_cards after answer", &mut || drop(all_cards()));
+            took("queue after answer", &mut || drop(queue("", at)));
+            close();
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

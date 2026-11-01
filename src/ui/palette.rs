@@ -16,6 +16,7 @@ use crate::core::model::Status;
 use crate::core::shortcuts::{Group, ShortcutAction as S};
 
 enum Run {
+    InWindow(fn(&mut Window, &mut App)),
     Action(Box<dyn Action>),
     /// Handled by the open note, which gets the keyboard back first.
     NoteAction(Box<dyn Action>),
@@ -96,11 +97,14 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&go, tr("Leistungen"), "award", Some(fixed_keys("3")), Run::Action(Box::new(app::GoRecord)));
         add(&go, tr("Inbox"), "inbox", Some(fixed_keys("4")), Run::Action(Box::new(app::GoInbox)));
         add(&go, tr("Karten"), "layers", Some(fixed_keys("6")), Run::Action(Box::new(app::GoCards)));
-        add(&go, tr("Aus Anki importieren…"), "download", None, Run::Call(Rc::new(|cx| {
-            if let Some(window) = cx.active_window() {
-                let _ = window.update(cx, |_, window, cx| super::cards_page::choose_import(window, cx));
-            }
+        add(&go, tr("Neue Karte…"), "plus", None, Run::InWindow(super::cards_page::new_card));
+        add(&go, tr("Karten lernen"), "graduation-cap", None, Run::Call(Rc::new(|cx| {
+            act(cx, |l| {
+                l.cards_request = Some(crate::core::prefs::get().card_deck);
+                l.set_route(Route::Cards);
+            })
         })));
+        add(&go, tr("Aus Anki importieren…"), "download", None, Run::InWindow(super::cards_page::choose_import));
         add(&go, tr("Notizen"), "book-open", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_notes()))));
         add(&go, tr("Aufräumen"), "list-checks", Some(fixed_keys("5")), Run::Action(Box::new(app::GoChecks)));
         add(&go, S::SearchFiles.label(), "search", keys(S::SearchFiles), Run::Action(Box::new(app::SearchFiles)));
@@ -315,6 +319,7 @@ impl Palette {
                 cx.default_global::<PendingNoteAction>().0 = Some(action);
                 act(cx, |l| l.focus_document = true);
             }
+            Run::InWindow(call) => window.defer(cx, *call),
             Run::Call(call) => {
                 let call = call.clone();
                 window.defer(cx, move |_, cx| call(cx));

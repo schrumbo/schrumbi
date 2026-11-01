@@ -1109,7 +1109,7 @@ fn confirm(window: &mut Window, cx: &mut App, title: String, message: String, ok
     let ok = std::rc::Rc::new(ok);
     window.open_alert_dialog(cx, move |alert, _, _| {
         let ok = ok.clone();
-        alert.title(title.clone()).description(message.clone()).show_cancel(true).on_ok(move |_, _, cx| {
+        alert.title(title.clone()).description(message.clone()).show_cancel(true).cancel_text(tr("Abbrechen")).on_ok(move |_, _, cx| {
             ok(cx);
             true
         })

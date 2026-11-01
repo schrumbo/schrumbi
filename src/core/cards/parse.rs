@@ -90,7 +90,6 @@ fn split_at(line: &str, separator: &str) -> Option<(String, String)> {
     None
 }
 
-static CLOZE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{(?:c(\d+)::)?(.+?)(?:::(.+?))?\}\}").unwrap());
 static MARKED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"==([^=\n]+?)==").unwrap());
 
 struct Gap {
@@ -98,23 +97,95 @@ struct Gap {
     number: Option<u32>,
     text: String,
     hint: Option<String>,
+    in_formula: bool,
+}
+
+/// Finds `{{c1::text::hint}}` and `{{text}}`. Braces inside count, so `{{c1::\\frac{a}{b}}}` holds all of its formula.
+fn scan_gaps(text: &str) -> Vec<(std::ops::Range<usize>, Option<u32>, String, Option<String>)> {
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(open) = text[from..].find("{{").map(|at| from + at) {
+        let inner_start = open + 2;
+        let mut depth = 0i32;
+        let mut end = None;
+        let bytes = text.as_bytes();
+        let mut i = inner_start;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => i += 1,
+                b'{' => depth += 1,
+                b'}' if depth > 0 => depth -= 1,
+                b'}' if bytes.get(i + 1) == Some(&b'}') => {
+                    end = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        let Some(end) = end else { break };
+        let body = &text[inner_start..end];
+        let (number, rest) = match body.strip_prefix('c').and_then(|r| r.split_once("::")) {
+            Some((n, rest)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => (n.parse().ok(), rest),
+            _ => (None, body),
+        };
+        let mut depth = 0i32;
+        let mut split = None;
+        let rb = rest.as_bytes();
+        for at in 0..rb.len() {
+            match rb[at] {
+                b'{' => depth += 1,
+                b'}' => depth -= 1,
+                b':' if depth == 0 && rb.get(at + 1) == Some(&b':') => {
+                    split = Some(at);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let (shown, hint) = match split {
+            Some(at) => (&rest[..at], Some(rest[at + 2..].to_string())),
+            None => (rest, None),
+        };
+        if !shown.trim().is_empty() {
+            found.push((open..end + 2, number, shown.to_string(), hint));
+        }
+        from = end + 2;
+    }
+    found
+}
+
+fn code_spans(line: &str) -> Vec<std::ops::Range<usize>> {
+    let mut spans = Vec::new();
+    let mut from = 0;
+    while let Some(open) = line[from..].find('`').map(|at| from + at) {
+        let Some(close) = line[open + 1..].find('`').map(|at| open + 1 + at) else { break };
+        spans.push(open..close + 1);
+        from = close + 1;
+    }
+    spans
+}
+
+fn formula_spans(line: &str) -> Vec<std::ops::Range<usize>> {
+    quoted_spans(line).into_iter().filter(|s| line.as_bytes()[s.start] == b'$').collect()
 }
 
 fn gaps_in(text: &str, tagged: bool) -> Vec<Gap> {
-    let spans = quoted_spans(text);
-    let mut gaps: Vec<Gap> = CLOZE
-        .captures_iter(text)
-        .filter_map(|c| {
-            let whole = c.get(0)?;
-            let number = c.get(1).and_then(|n| n.as_str().parse().ok());
-            (number.is_some() || tagged).then(|| Gap { range: whole.range(), number, text: c[2].to_string(), hint: c.get(3).map(|h| h.as_str().to_string()) })
+    let code = code_spans(text);
+    let formulas = formula_spans(text);
+    let mut gaps: Vec<Gap> = scan_gaps(text)
+        .into_iter()
+        .filter(|(range, number, ..)| (number.is_some() || tagged) && !code.iter().any(|s| s.contains(&range.start)))
+        .map(|(range, number, shown, hint)| {
+            let in_formula = formulas.iter().any(|s| s.contains(&range.start));
+            Gap { range, number, text: shown, hint, in_formula }
         })
-        .filter(|g| !spans.iter().any(|s| s.contains(&g.range.start)))
         .collect();
     if tagged {
+        let spans = quoted_spans(text);
         gaps.extend(MARKED.captures_iter(text).filter_map(|c| {
             let whole = c.get(0)?;
-            (!spans.iter().any(|s| s.contains(&whole.start()))).then(|| Gap { range: whole.range(), number: None, text: c[1].to_string(), hint: None })
+            (!spans.iter().any(|s| s.contains(&whole.start()))).then(|| Gap { range: whole.range(), number: None, text: c[1].to_string(), hint: None, in_formula: false })
         }));
         gaps.sort_by_key(|g| g.range.start);
     }
@@ -151,6 +222,8 @@ fn cloze_cards(text: &str, lines: (usize, usize), context: &[String], tagged: bo
                 result.push_str(&text[at..gap.range.start]);
                 if *n != number {
                     result.push_str(&gap.text);
+                } else if gap.in_formula {
+                    result.push_str(&if hidden { format!("\\boxed{{\\text{{{}}}}}", gap.hint.as_deref().unwrap_or("?")) } else { format!("\\boxed{{{}}}", gap.text) });
                 } else if hidden {
                     result.push_str(&format!("**[{}]**", gap.hint.as_deref().unwrap_or("…")));
                 } else {
@@ -182,8 +255,15 @@ fn frontmatter_end(lines: &[&str]) -> usize {
 }
 
 fn is_plain_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with('|') && !trimmed.starts_with("```") && !trimmed.starts_with("~~~") && !trimmed.starts_with("$$") && !trimmed.starts_with("[!")
+    let body = strip_marks(line).trim();
+    let table = body.starts_with('|') && body.ends_with('|') && !body.contains(" :: ");
+    let table = table || (body.starts_with('|') && body.ends_with('|') && body.matches('|').count() > 2);
+    !body.is_empty() && !table && !body.starts_with("```") && !body.starts_with("~~~") && body != "$$" && !body.starts_with("[!")
+}
+
+/// What stands before the text of a line that holds a card: list marks, quote marks, indent.
+pub fn line_marks(line: &str) -> &str {
+    &line[..line.len() - strip_marks(line).len()]
 }
 
 /// Finds every card of a note.
@@ -208,6 +288,7 @@ pub fn cards_in(text: &str) -> Vec<RawCard> {
     let mut fence: Option<&str> = None;
     let mut in_math = false;
     let mut in_comment = false;
+    let mut in_list = false;
     let mut i = start;
     while i < lines.len() {
         let line = lines[i];
@@ -246,7 +327,13 @@ pub fn cards_in(text: &str) -> Vec<RawCard> {
             i += 1;
             continue;
         }
-        if !is_plain_line(line) {
+        let indented_code = (line.starts_with("    ") || line.starts_with('\t')) && strip_marks(line).len() == trimmed.len() && lines.get(i.wrapping_sub(1)).is_none_or(|l| l.trim().is_empty()) && !in_list;
+        in_list = !trimmed.is_empty() && (strip_marks(line).len() != trimmed.len() || (in_list && line.starts_with(' ')));
+        if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+        if !is_plain_line(line) || indented_code {
             i += 1;
             continue;
         }
@@ -255,7 +342,7 @@ pub fn cards_in(text: &str) -> Vec<RawCard> {
         if matches!(next_mark, Some("?") | Some("??")) {
             let both = next_mark == Some("??");
             let mut end = i + 2;
-            while end < lines.len() && !lines[end].trim().is_empty() && !lines[end].trim_start().starts_with('#') {
+            while end < lines.len() && !lines[end].trim().is_empty() && !is_heading(lines[end]) {
                 end += 1;
             }
             let back = lines[i + 2..end].iter().map(|l| strip_quote(l)).collect::<Vec<_>>().join("\n");
@@ -285,6 +372,12 @@ pub fn cards_in(text: &str) -> Vec<RawCard> {
     out
 }
 
+fn is_heading(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+    (1..=6).contains(&hashes) && (trimmed[hashes..].starts_with(' ') || trimmed.len() == hashes)
+}
+
 fn strip_quote(line: &str) -> &str {
     let mut rest = line;
     while let Some(r) = rest.trim_start().strip_prefix('>') {
@@ -299,6 +392,13 @@ pub fn write_card(front: &str, back: &str, both: bool) -> String {
     if back.is_empty() {
         return front.to_string();
     }
+    let escaped;
+    let front = if is_heading(front) {
+        escaped = format!("\\{front}");
+        escaped.as_str()
+    } else {
+        front
+    };
     let needs_lines = |t: &str| t.contains(" :: ") || t.contains(" ::: ") || t.contains('\n');
     if needs_lines(front) || needs_lines(back) {
         let front = front.split('\n').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
@@ -383,6 +483,36 @@ mod tests {
     fn answers_with_separators_stay_whole() {
         let written = write_card("F", "a :: b", false);
         assert_eq!(cards_in(&written)[0].back, "a :: b");
+    }
+
+    #[test]
+    fn formulas_can_stand_in_cards() {
+        assert_eq!(cards_in("$$x^2$$ :: Quadrat").len(), 1);
+        assert_eq!(cards_in("$$x^2$$\n?\nQuadrat").len(), 1);
+        assert_eq!(cards_in("|x| :: Betrag").len(), 1);
+        let gap = cards_in("Der Bruch {{c1::\\frac{a}{b}}} gilt");
+        assert_eq!(gap[0].back, "Der Bruch ==\\frac{a}{b}== gilt");
+        let inner = cards_in("Es gilt $x = {{c1::2}}$ hier");
+        assert_eq!(inner[0].front, "Es gilt $x = \\boxed{\\text{?}}$ hier");
+        assert_eq!(inner[0].back, "Es gilt $x = \\boxed{2}$ hier");
+        assert_eq!(cards_in("`{{c1::code}}`").len(), 0);
+    }
+
+    #[test]
+    fn long_answers_keep_tags_and_stop_at_headings() {
+        assert_eq!(cards_in("F\n?\nA\n#tag dahinter\n# Neu")[0].back, "A\n#tag dahinter");
+    }
+
+    #[test]
+    fn indented_code_is_no_card_but_nested_lists_are() {
+        assert!(cards_in("Text\n\n    q :: a").is_empty());
+        assert_eq!(cards_in("- oben\n    - q :: a").len(), 1);
+        assert!(cards_in("> [!note] a :: b").is_empty());
+    }
+
+    #[test]
+    fn a_question_like_a_heading_survives_writing() {
+        assert_eq!(cards_in(&write_card("# Titel?", "A", false)).len(), 1);
     }
 
     #[test]
