@@ -120,6 +120,7 @@ pub struct Prefs {
     /// Width of the folder tree on the notes page.
     pub notes_column: Option<f32>,
     pub notes_explorer_hidden: bool,
+    pub spell_check: bool,
     /// What was folded in each note's reading view.
     pub note_folds: HashMap<String, Vec<String>>,
     /// Width of the deadlines column on module pages.
@@ -175,6 +176,7 @@ impl Default for Prefs {
             module_column: None,
             notes_column: None,
             notes_explorer_hidden: false,
+            spell_check: true,
             note_folds: HashMap::new(),
             shortcuts: BTreeMap::new(),
             disabled_shortcuts: BTreeSet::new(),

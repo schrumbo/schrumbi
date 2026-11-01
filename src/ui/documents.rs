@@ -66,6 +66,7 @@ pub struct NoteView {
     reveal_block: Option<usize>,
     block_sources: Vec<markdown_view::BlockSource>,
     reader_width: Pixels,
+    spell_task: Option<Task<()>>,
     /// What is being written in the live view, in a field of its own.
     block: Entity<EditorState>,
     live: Option<LiveBlock>,
@@ -116,6 +117,7 @@ impl NoteView {
                         cx.notify();
                     });
                     this.schedule_autosave(cx);
+                    this.schedule_spelling(cx);
                     this.schedule_reparse(cx);
                 }
                 InputEvent::Blur => this.focus_lost(cx),
@@ -185,7 +187,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: false, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, reveal_block: None, block_sources: Vec::new(), reader_width: px(720.), found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: false, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, reveal_block: None, block_sources: Vec::new(), reader_width: px(720.), spell_task: None, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -262,6 +264,7 @@ impl NoteView {
         });
         self.syncing = false;
         self.live = Some(LiveBlock { index, first_line, line_count });
+        self.schedule_spelling(cx);
         self.reader_list.remeasure();
         if sources.is_empty() {
             self.reader_list.reset(3);
@@ -325,6 +328,7 @@ impl NoteView {
             live.line_count = value.split('\n').count();
         }
         self.schedule_autosave(cx);
+        self.schedule_spelling(cx);
         if caret_line > 0 && value.get(..caret).is_some_and(|before| !before.ends_with('\n')) {
             let inner = markdown_view::parse(&value);
             let blocks = inner.sources();
@@ -423,6 +427,41 @@ impl NoteView {
         let height = line * (rows.max(1) as f32 + 0.5);
         let field = writing_menu(Editor::new(&self.block).appearance(false).font_family(Theme::font_family()).text_size(font_size).h(height).ml(px(-LIVE_GUTTER)));
         div().key_context("LiveBlock").h(height).child(self.note_editor_wrapper(field.into_any_element(), cx)).into_any_element()
+    }
+
+    /// Marks unknown words a moment after typing stops.
+    fn schedule_spelling(&mut self, cx: &mut Context<Self>) {
+        if !prefs::get().spell_check {
+            return;
+        }
+        let field = self.target();
+        self.spell_task = Some(cx.spawn(async move |_, cx| {
+            cx.background_executor().timer(Duration::from_millis(500)).await;
+            cx.update(|cx| {
+                field.update(cx, |s, cx| {
+                    let text = s.value().to_string();
+                    let position = |byte: usize| {
+                        let before = &text[..byte];
+                        let start = before.rfind('\n').map_or(0, |i| i + 1);
+                        lsp_types::Position { line: before.matches('\n').count() as u32, character: before[start..].encode_utf16().count() as u32 }
+                    };
+                    let found: Vec<lsp_types::Diagnostic> = super::spelling::misspelled(&text)
+                        .into_iter()
+                        .map(|r| lsp_types::Diagnostic {
+                            range: lsp_types::Range { start: position(r.start), end: position(r.end) },
+                            severity: Some(lsp_types::DiagnosticSeverity::HINT),
+                            message: tr("Unbekanntes Wort"),
+                            ..Default::default()
+                        })
+                        .collect();
+                    if let Some(set) = s.diagnostics_mut() {
+                        set.clear();
+                        set.extend(found);
+                    }
+                    cx.notify();
+                })
+            });
+        }));
     }
 
     fn schedule_autosave(&mut self, cx: &mut Context<Self>) {
@@ -1010,6 +1049,14 @@ impl NoteView {
                     return;
                 }
                 let (s, r) = n.with_text(cx);
+                if let Some(next) = edit_ops::table_cell(&s, r.start, false) {
+                    n.target().update(cx, |t, cx| t.set_selected_range(next.clone(), cx));
+                    return;
+                }
+                if let Some(edit) = edit_ops::new_table_row(&s, r.start) {
+                    n.apply(edit, w, cx);
+                    return;
+                }
                 if edit_ops::tab_indents(&s, &r) {
                     n.apply(edit_ops::shift_lines(&s, r, 1), w, cx)
                 } else {
@@ -1018,6 +1065,10 @@ impl NoteView {
             }))
             .on_action(cx.listener(|n, _: &ListBacktab, w, cx| {
                 let (s, r) = n.with_text(cx);
+                if let Some(next) = edit_ops::table_cell(&s, r.start, true) {
+                    n.target().update(cx, |t, cx| t.set_selected_range(next.clone(), cx));
+                    return;
+                }
                 n.apply(edit_ops::shift_lines(&s, r, -1), w, cx)
             }))
             .on_action(|_: &ZoomIn, _, cx| NoteView::zoom(1., cx))

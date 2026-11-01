@@ -5,6 +5,7 @@ pub mod onboarding;
 pub mod pages;
 pub mod platform;
 pub mod selectable;
+pub mod spelling;
 pub mod sheets;
 pub mod sidebar;
 pub mod audio;

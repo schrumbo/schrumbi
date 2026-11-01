@@ -202,6 +202,46 @@ pub fn surround(s: &str, sel: Range<usize>, open: &str, close: &str) -> Edit {
     Edit { text: format!("{open}{inner}{close}"), range: sel, select }
 }
 
+/// In a table row, Tab selects the text of the next cell and Shift+Tab the one before, across rows.
+pub fn table_cell(s: &str, caret: usize, back: bool) -> Option<Range<usize>> {
+    let start = line_start(s, caret);
+    if !s[start..line_end(s, caret)].trim_start().starts_with('|') {
+        return None;
+    }
+    let mut cells: Vec<Range<usize>> = Vec::new();
+    let mut at = 0;
+    for line in s.split_inclusive('\n') {
+        let bare = line.trim_end_matches('\n');
+        let rule = bare.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '));
+        if bare.trim_start().starts_with('|') && !rule {
+            let bars: Vec<usize> = bare.char_indices().filter(|(i, c)| *c == '|' && (*i == 0 || bare.as_bytes()[i - 1] != b'\\')).map(|(i, _)| i).collect();
+            for pair in bars.windows(2) {
+                let cell = &bare[pair[0] + 1..pair[1]];
+                let lead = cell.len() - cell.trim_start().len();
+                let inner = at + pair[0] + 1 + lead;
+                cells.push(inner..inner + cell.trim().len());
+            }
+        }
+        at += line.len();
+    }
+    let here = cells.iter().position(|c| caret >= c.start && caret <= c.end).or_else(|| cells.iter().rposition(|c| c.end <= caret))?;
+    let next = if back { here.checked_sub(1)? } else { here + 1 };
+    cells.get(next).cloned()
+}
+
+/// Tab behind the last cell of a table starts a new row with as many cells.
+pub fn new_table_row(s: &str, caret: usize) -> Option<Edit> {
+    let end = line_end(s, caret);
+    let line = &s[line_start(s, caret)..end];
+    if !line.trim_start().starts_with('|') {
+        return None;
+    }
+    let cells = line.trim().matches('|').count().saturating_sub(1).max(1);
+    let row = format!("\n|{}", "  |".repeat(cells));
+    let at = end + 3;
+    Some(Edit { range: end..end, text: row, select: at..at })
+}
+
 /// Whether Tab should indent: a selection, or a caret on a list line.
 pub fn tab_indents(s: &str, sel: &Range<usize>) -> bool {
     !sel.is_empty() || LIST_PREFIX.is_match(&s[line_start(s, sel.start)..line_end(s, sel.start)])
@@ -321,6 +361,28 @@ pub fn shift_offset(offset: usize, changed: &Range<usize>, inserted: usize) -> u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_at_the_end_of_a_table_adds_a_row() {
+        let s = "| 1 | 2 |";
+        let e = new_table_row(s, s.len()).unwrap();
+        assert_eq!(applied(s, &e), "| 1 | 2 |\n|  |  |");
+        assert_eq!(e.select.start, s.len() + 3);
+        assert!(new_table_row("text", 0).is_none());
+    }
+
+    #[test]
+    fn tab_walks_table_cells() {
+        let s = "| A | B |\n|---|---|\n| 1 | 2 |";
+        let a = s.find('A').unwrap();
+        assert_eq!(&s[table_cell(s, a, false).unwrap()], "B");
+        let b = s.find('B').unwrap();
+        assert_eq!(&s[table_cell(s, b, false).unwrap()], "1");
+        let one = s.find('1').unwrap();
+        assert_eq!(&s[table_cell(s, one, true).unwrap()], "B");
+        assert!(table_cell(s, s.find('2').unwrap(), false).is_none());
+        assert!(table_cell("kein tisch", 0, false).is_none());
+    }
 
     #[test]
     fn quotes_and_callouts_continue() {
