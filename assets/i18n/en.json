@@ -1518,5 +1518,6 @@
   "Hake links einen Ordner an. Geht auch später: Rechtsklick auf einen Ordner in den Notizen.": "Tick a folder on the left. Also possible later: right-click a folder in Notes.",
   "Ziehe Dateien ins Fenster. Die App schlägt Modul und Abgabe vor, Enter legt ab.": "Drag files into the window. The app suggests module and deadline, Enter files them.",
   "Uploads sind bestätigt, nichts ist überfällig.": "Uploads are confirmed, nothing is overdue.",
-  "Der Ordner dieser Abgabe fehlt. Wähle einen Ordner.": "This deadline's folder does not exist. Choose a folder."
+  "Der Ordner dieser Abgabe fehlt. Wähle einen Ordner.": "This deadline's folder does not exist. Choose a folder.",
+  "Dateien behalten ihren Namen": "Files keep their names"
 }

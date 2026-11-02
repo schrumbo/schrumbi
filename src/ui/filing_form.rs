@@ -57,6 +57,7 @@ pub struct FilingForm {
     date: Entity<DatePickerState>,
     date_value: NaiveDate,
     rename: bool,
+    renames_by_default: bool,
     grab_focus: bool,
     details: bool,
     /// Width of the form, measured while painting.
@@ -109,6 +110,7 @@ impl FilingForm {
                 }
             }),
         ];
+        let renames = renames_by_default(cx);
         let mut form = Self {
             paths,
             preset,
@@ -127,7 +129,8 @@ impl FilingForm {
             draft,
             date,
             date_value: Local::now().date_naive(),
-            rename: renames_by_default(cx),
+            rename: renames,
+            renames_by_default: renames,
             grab_focus,
             details: false,
             width: 560.,
@@ -316,6 +319,21 @@ impl FilingForm {
     fn renames_for_role(&self, cx: &App) -> bool {
         let author = state::read(cx, |l| l.config.as_ref().map(|c| c.author.clone()).unwrap_or_default());
         renames_by_default(cx) || (self.role == FileRole::Brief && self.path().is_some_and(|p| !FileRole::is_brief(&name_of(p), &author)))
+    }
+
+    fn follow_rename_setting(&mut self, cx: &App) {
+        let now = renames_by_default(cx);
+        if now == self.renames_by_default {
+            return;
+        }
+        self.renames_by_default = now;
+        self.rename = match &self.target {
+            Some(Target::Folder(f)) => now && state::read(cx, |l| l.module_containing(f).is_some()),
+            _ => self.renames_for_role(cx),
+        };
+        if self.rename && self.facts.is_some() && self.title.read(cx).value().trim().is_empty() {
+            self.details = true;
+        }
     }
 
     fn select_default(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -681,6 +699,7 @@ fn renames_by_default(cx: &App) -> bool {
 
 impl Render for FilingForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.follow_rename_setting(cx);
         let t = Theme::get(cx);
         let Some(path) = self.path().cloned() else {
             return unavailable("circle-check", tr("Fertig"), tr("Alle Dateien wurden abgelegt."), &t).into_any_element();
