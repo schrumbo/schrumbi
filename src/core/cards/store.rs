@@ -142,6 +142,8 @@ struct Store {
     first_open: bool,
     /// Cards taken as known that nobody was told about yet.
     notice: Option<Adopted>,
+    /// Remembered cards exist but could not be read yet, like a file still in the cloud: nothing is written on its own.
+    unread: bool,
 }
 
 static STORE: LazyLock<RwLock<Store>> = LazyLock::new(Default::default);
@@ -189,13 +191,15 @@ pub fn open(root: &Path) {
         }
         same
     };
-    let file: StoreFile = std::fs::read(&store_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let read: Option<StoreFile> = std::fs::read(&store_path).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    let unread = read.is_none() && (store_stamp.is_some() || !never_used(root));
+    let file = read.unwrap_or_default();
     let log = read_log(&log_path);
     let mut store = STORE.write().unwrap();
     if same_root {
         let theirs = file.baseline;
         for (id, state) in file.cards {
-            if store.file.cards.get(&id).is_none_or(|mine| state.last_review > mine.last_review || (state.last_review == mine.last_review && state != *mine)) {
+            if store.file.cards.get(&id).is_none_or(|mine| weight(&state) > weight(mine) || (weight(&state) == weight(mine) && state != *mine)) {
                 store.file.cards.insert(id, state);
             }
         }
@@ -206,17 +210,17 @@ pub fn open(root: &Path) {
             store.file.baseline = theirs;
         }
         store.stamps = [store_stamp, log_stamp];
+        store.unread = unread && store.file.cards.is_empty();
         store.revision += 1;
         store.cache = None;
         store.counts.clear();
         store.stats.clear();
     } else {
         let first_open = never_used(root);
-        *store = Store { root: Some(root.to_path_buf()), file, log, revision: store.revision + 1, stamps: [store_stamp, log_stamp], first_open, ..Default::default() };
+        *store = Store { root: Some(root.to_path_buf()), file, log, revision: store.revision + 1, stamps: [store_stamp, log_stamp], first_open, unread, ..Default::default() };
     }
 }
 
-/// No trace of remembered cards at all, not even a sync copy or a file still in the cloud.
 fn never_used(root: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(root) else { return false };
     !entries.flatten().any(|e| e.file_name().to_string_lossy().contains("schrumbi-cards"))
@@ -251,7 +255,9 @@ pub fn flush() {
     let tmp = root.join(format!("{STORE_NAME}.tmp"));
     if std::fs::write(&tmp, json).is_ok() && std::fs::rename(tmp, &path).is_ok() {
         let stamp = stamp_of(&path);
-        STORE.write().unwrap().stamps[0] = stamp;
+        let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        store.stamps[0] = stamp;
+        store.unread = false;
     }
 }
 
@@ -424,8 +430,10 @@ pub struct Adopted {
     pub spread: usize,
     /// The last of those days, counted from today.
     pub days: i64,
-    /// How the spread cards stood before.
-    pub before: Vec<(String, Option<CardState>)>,
+    /// How the spread cards stood before, and how they stand now.
+    pub changes: Vec<(String, Option<CardState>, CardState)>,
+    /// The vault this happened in.
+    pub root: Option<PathBuf>,
 }
 
 impl Adopted {
@@ -439,20 +447,42 @@ impl Adopted {
         }
     }
 
-    /// One calm sentence for a toast.
+    /// One calm sentence for a toast, about the cards that can be taken back.
     pub fn message(&self) -> String {
         use crate::core::i18n::{tr, trf};
-        let head = if self.count == 1 { tr("1 Karte übernommen") } else { trf("%@ Karten übernommen", &[&self.count.to_string()]) };
+        let shown = if self.spread == 0 { self.count } else { self.spread };
+        let head = if shown == 1 { tr("1 Karte übernommen") } else { trf("%@ Karten übernommen", &[&shown.to_string()]) };
         if self.spread == 0 { head } else { format!("{head}, {}", self.spread_words()) }
+    }
+
+    /// Takes the spread cards back to how they stood, leaving any that changed since or belong to another vault.
+    pub fn take_back(self) {
+        let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if store.root != self.root {
+            return;
+        }
+        for (id, before, after) in self.changes {
+            if store.file.cards.get(&id) != Some(&after) {
+                continue;
+            }
+            match before {
+                Some(state) => store.file.cards.insert(id, state),
+                None => store.file.cards.remove(&id),
+            };
+        }
+        drop(store);
+        save();
     }
 }
 
-/// The moment a study day begins.
+fn weight(state: &CardState) -> (bool, Option<i64>) {
+    (state.reps > 0, state.last_review)
+}
+
 fn day_start(day: NaiveDate) -> i64 {
     day.and_hms_opt(DAY_STARTS_AT as u32, 0, 0).and_then(|d| Local.from_local_datetime(&d).earliest()).map_or_else(|| day.and_hms_opt(12, 0, 0).map_or(0, |d| d.and_utc().timestamp()), |d| d.timestamp())
 }
 
-/// The progress the Obsidian Spaced Repetition plugin noted: its interval stands in for stability, its ease for difficulty.
 fn sr_state(sr: &SrProgress, note: &str, question: &str) -> CardState {
     let due = day_start(sr.due);
     let interval = sr.interval.max(1) as f64;
@@ -469,7 +499,6 @@ fn sr_state(sr: &SrProgress, note: &str, question: &str) -> CardState {
     }
 }
 
-/// Known cards as reviews over the coming two to four weeks, in a fixed order, never more on one day than the daily limit allows.
 fn spread(items: &[(String, String, String)], states: &BTreeMap<String, CardState>, at: i64, per_day: usize, retention: f64) -> (Vec<(String, CardState)>, i64) {
     let mut order: Vec<&(String, String, String)> = items.iter().collect();
     order.sort_by(|a, b| a.0.cmp(&b.0));
@@ -498,7 +527,6 @@ fn spread(items: &[(String, String, String)], states: &BTreeMap<String, CardStat
     (out, last)
 }
 
-/// Gives stateless cards what is already known about them: the plugin's progress, and on a first open, that they are known.
 fn settle_file(file: &mut StoreFile, cards: &[Card], first_open: bool, at: i64, per_day: usize, retention: f64) -> Option<Adopted> {
     let mut adopted = Adopted::default();
     for card in cards.iter().filter(|c| c.state.is_none()) {
@@ -514,7 +542,7 @@ fn settle_file(file: &mut StoreFile, cards: &[Card], first_open: bool, at: i64, 
         adopted.count += states.len();
         adopted.days = days;
         for (id, state) in states {
-            adopted.before.push((id.clone(), None));
+            adopted.changes.push((id.clone(), None, state.clone()));
             file.cards.insert(id, state);
         }
         file.baseline = Some(at);
@@ -528,14 +556,15 @@ pub fn settle(at: i64) {
     let vault = index::current();
     let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(root) = store.root.clone() else { return };
-    if vault.root != root {
+    if vault.root != root || store.unread {
         return;
     }
     let first_open = std::mem::take(&mut store.first_open);
     let cards = collect(&vault, &mut store);
     let p = prefs::get();
-    let Some(adopted) = settle_file(&mut store.file, &cards, first_open, at, p.card_reviews_per_day as usize, p.card_retention.clamp(0.7, 0.99)) else { return };
-    if first_open && adopted.count > 0 {
+    let Some(mut adopted) = settle_file(&mut store.file, &cards, first_open, at, p.card_reviews_per_day as usize, p.card_retention.clamp(0.7, 0.99)) else { return };
+    if adopted.spread > 0 {
+        adopted.root = Some(root);
         store.notice = Some(adopted);
     }
     drop(store);
@@ -561,11 +590,15 @@ pub fn adopt_new_as_known(deck: &str, at: i64) -> Option<Adopted> {
     }
     let p = prefs::get();
     let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let fresh: Vec<(String, String, String)> = fresh.into_iter().filter(|(id, ..)| store.file.cards.get(id).is_none_or(|s| s.phase == Phase::New && !s.suspended)).collect();
+    if fresh.is_empty() {
+        return None;
+    }
     let (states, days) = spread(&fresh, &store.file.cards, at, p.card_reviews_per_day as usize, p.card_retention.clamp(0.7, 0.99));
-    let mut adopted = Adopted { count: states.len(), spread: states.len(), days, before: Vec::new() };
+    let mut adopted = Adopted { count: states.len(), spread: states.len(), days, changes: Vec::new(), root: store.root.clone() };
     for (id, state) in states {
-        let before = store.file.cards.insert(id.clone(), state);
-        adopted.before.push((id, before));
+        let before = store.file.cards.insert(id.clone(), state.clone());
+        adopted.changes.push((id, before, state));
     }
     drop(store);
     save();
@@ -859,7 +892,6 @@ pub fn bury(card: &Card, at: i64) {
     edit_state(card, |s| s.buried_until = Some(next_day_start(at)));
 }
 
-/// A card as if it had never been seen, kept so the plugin's progress beside it is not taken over again.
 fn started_over(card: &Card) -> CardState {
     CardState { note: card.note_rel.to_string(), question: card.raw.front.clone(), ..Default::default() }
 }
@@ -1098,7 +1130,7 @@ pub fn adopt_import(states: Vec<(String, CardState)>, log: Vec<ReviewLog>, fresh
     }
     let fresh: Vec<(String, String, String)> = fresh.into_iter().filter(|(id, ..)| !store.file.cards.contains_key(id)).collect();
     let (spread_states, days) = spread(&fresh, &store.file.cards, at, p.card_reviews_per_day as usize, p.card_retention.clamp(0.7, 0.99));
-    let adopted = (!spread_states.is_empty()).then(|| Adopted { count: spread_states.len(), spread: spread_states.len(), days, before: spread_states.iter().map(|(id, _)| (id.clone(), None)).collect() });
+    let adopted = (!spread_states.is_empty()).then(|| Adopted { count: spread_states.len(), spread: spread_states.len(), days, changes: spread_states.iter().map(|(id, state)| (id.clone(), None, state.clone())).collect(), root: store.root.clone() });
     for (id, state) in spread_states {
         store.file.cards.insert(id, state);
     }
@@ -1135,7 +1167,7 @@ pub fn merge_store(ours: &str, theirs: &str) -> Option<String> {
     let (mut a, b): (StoreFile, StoreFile) = (serde_json::from_str(ours).ok()?, serde_json::from_str(theirs).ok()?);
     a.baseline = a.baseline.or(b.baseline);
     for (id, state) in b.cards {
-        let newer = a.cards.get(&id).is_none_or(|mine| state.last_review > mine.last_review);
+        let newer = a.cards.get(&id).is_none_or(|mine| weight(&state) > weight(mine));
         if newer {
             a.cards.insert(id, state);
         }
@@ -1281,6 +1313,57 @@ mod first_open {
 
     fn lock() -> std::sync::MutexGuard<'static, ()> {
         crate::core::edge_tests::VAULT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[test]
+    fn a_store_that_cannot_be_read_is_never_written_on_its_own() {
+        let _guard = lock();
+        let root = vault("unread", &[("A.md", "Plugin? :: ja <!--SR:!2030-01-15,40,290-->\nNeu? :: x\n")]);
+        std::fs::write(root.join(STORE_NAME), "{ halb").unwrap();
+        reopen(&root);
+        flush();
+        assert_eq!(state_of("Plugin?"), None);
+        assert!(take_notice().is_none());
+        assert_eq!(std::fs::read_to_string(root.join(STORE_NAME)).unwrap(), "{ halb");
+        let cloud = vault("cloud", &[("A.md", "Plugin? :: ja <!--SR:!2030-01-15,40,290-->\n")]);
+        std::fs::write(cloud.join(".schrumbi-cards.json.icloud"), "").unwrap();
+        reopen(&cloud);
+        flush();
+        assert!(!cloud.join(STORE_NAME).exists());
+        std::fs::write(cloud.join(STORE_NAME), "{\"version\":0,\"cards\":{}}").unwrap();
+        scan(&cloud);
+        assert_eq!(state_of("Plugin?").map(|s| s.phase), Some(Phase::Review), "once it arrived, the plugin's progress is taken");
+    }
+
+    #[test]
+    fn taking_back_leaves_cards_that_changed_since() {
+        let _guard = lock();
+        let root = vault("back", &[("A.md", "Eins? :: 1\nZwei? :: 2\n")]);
+        scan(&root);
+        let told = take_notice().unwrap();
+        let eins = all_cards().iter().find(|c| c.raw.front == "Eins?").cloned().unwrap();
+        set_suspended(&eins, true);
+        Adopted { root: Some(PathBuf::from("/anderswo")), ..told.clone() }.take_back();
+        assert_eq!(phase_of("Zwei?"), Phase::Review, "another vault's undo changes nothing here");
+        told.take_back();
+        assert_eq!(phase_of("Zwei?"), Phase::New);
+        let kept = state_of("Eins?").unwrap();
+        assert!(kept.phase == Phase::Review && kept.suspended);
+    }
+
+    #[test]
+    fn a_synced_store_with_real_progress_wins_over_cards_taken_as_known() {
+        let _guard = lock();
+        let root = vault("synced", &[("A.md", "Eins? :: 1\n")]);
+        scan(&root);
+        let _ = take_notice();
+        flush();
+        let id = all_cards()[0].raw.id.clone();
+        let at = now();
+        let real = CardState { phase: Phase::Review, stability: 80., difficulty: 4., due: at + 9 * 86400, last_review: Some(at - 80 * 86400), reps: 7, note: "A.md".into(), question: "Eins?".into(), ..Default::default() };
+        std::fs::write(root.join(STORE_NAME), serde_json::to_string(&StoreFile { version: 0, cards: BTreeMap::from([(id, real.clone())]), baseline: None }).unwrap()).unwrap();
+        scan(&root);
+        assert_eq!(state_of("Eins?"), Some(real));
     }
 
     #[test]
@@ -1434,7 +1517,7 @@ mod first_open {
         assert_eq!(phase_of("Zwei?"), Phase::New, "paused cards stay as they are");
         assert_eq!(counts("", at).new, 0);
         assert!(adopt_new_as_known("", at).is_none());
-        restore(done.before);
+        done.take_back();
         assert_eq!(phase_of("Eins?"), Phase::New);
         assert_eq!(state_of("Eins?"), None);
         assert_eq!(fresh_count(""), 2);
@@ -1463,6 +1546,17 @@ mod first_open {
 #[cfg(test)]
 mod spreading {
     use super::*;
+
+    #[test]
+    fn a_real_review_beats_a_card_only_taken_as_known_in_a_merge() {
+        let real = CardState { phase: Phase::Review, stability: 80., reps: 7, last_review: Some(100), due: 500, ..Default::default() };
+        let (taken, _) = spread(&items(1), &BTreeMap::new(), 10_000_000, 100, 0.9);
+        let file = |state: &CardState| serde_json::to_string(&StoreFile { version: 0, cards: BTreeMap::from([("0000".to_string(), state.clone())]), baseline: None }).unwrap();
+        for (ours, theirs) in [(file(&real), file(&taken[0].1)), (file(&taken[0].1), file(&real))] {
+            let merged: StoreFile = serde_json::from_str(&merge_store(&ours, &theirs).unwrap()).unwrap();
+            assert_eq!(merged.cards["0000"], real);
+        }
+    }
 
     fn items(n: usize) -> Vec<(String, String, String)> {
         (0..n).map(|i| (format!("{i:04}"), "n.md".to_string(), format!("F{i}"))).collect()
@@ -1535,13 +1629,13 @@ mod spreading {
 
     #[test]
     fn the_message_says_how_far_cards_were_spread() {
-        let words = |days| Adopted { count: 3, spread: 3, days, before: Vec::new() }.spread_words();
+        let words = |days| Adopted { count: 3, spread: 3, days, ..Default::default() }.spread_words();
         assert_eq!(words(1), "fällig ab morgen");
         assert_eq!(words(9), "verteilt auf die nächsten 9 Tage");
         assert_eq!(words(28), "verteilt auf die nächsten 4 Wochen");
         assert_eq!(words(14), "verteilt auf die nächsten 2 Wochen");
-        assert_eq!(Adopted { count: 1, spread: 0, days: 0, before: Vec::new() }.message(), "1 Karte übernommen");
-        assert_eq!(Adopted { count: 30, spread: 20, days: 28, before: Vec::new() }.message(), "30 Karten übernommen, verteilt auf die nächsten 4 Wochen");
+        assert_eq!(Adopted { count: 1, ..Default::default() }.message(), "1 Karte übernommen");
+        assert_eq!(Adopted { count: 30, spread: 20, days: 28, ..Default::default() }.message(), "20 Karten übernommen, verteilt auf die nächsten 4 Wochen");
     }
 
     #[test]

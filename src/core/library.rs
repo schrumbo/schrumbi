@@ -1322,8 +1322,8 @@ impl Library {
         self.is_indexing = false;
         self.follow_outside_moves();
         if let Some(adopted) = super::cards::take_notice() {
-            let before = adopted.before.clone();
-            self.notify(adopted.message(), "calendar-check", None, (!before.is_empty()).then(|| Box::new(move |_: &mut Library| super::cards::restore(before)) as Undo));
+            let message = adopted.message();
+            self.notify(message, "calendar-check", None, Some(Box::new(move |_: &mut Library| adopted.take_back())));
         }
         self.changed();
     }

@@ -302,7 +302,6 @@ pub fn cards_in(text: &str) -> Vec<RawCard> {
 static SR_COMMENT: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"[ \t]*<!--SR:((?:![0-9]{4}-[0-9]{2}-[0-9]{2},[0-9]+,[0-9]+)+)-->").ok());
 static SR_ENTRY: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"!([0-9]{4}-[0-9]{2}-[0-9]{2}),([0-9]+),([0-9]+)").ok());
 
-/// The line without its scheduling comments, the schedules they held, and whether nothing else stood there.
 fn take_schedules(line: &str) -> (String, Vec<SrProgress>, bool) {
     let (Some(comments), Some(entries)) = (SR_COMMENT.as_ref(), SR_ENTRY.as_ref()) else { return (line.to_string(), Vec::new(), false) };
     let code = code_spans(line);
@@ -334,6 +333,11 @@ fn take_schedules(line: &str) -> (String, Vec<SrProgress>, bool) {
 pub fn schedule_comments(lines: &[String]) -> String {
     let Some(comments) = SR_COMMENT.as_ref() else { return String::new() };
     lines.iter().flat_map(|line| comments.find_iter(line).map(|m| m.as_str().to_string())).collect()
+}
+
+/// The text as a person wrote it, without the plugin's comments, to edit it.
+pub fn without_schedules(text: &str) -> String {
+    text.split('\n').map(|line| if line.contains("<!--SR:") { take_schedules(line).0 } else { line.to_string() }).collect::<Vec<_>>().join("\n")
 }
 
 /// A line that holds nothing but the plugin's comments.
@@ -703,6 +707,7 @@ mod tests {
         assert!(is_schedule_line("  <!--SR:!2026-11-10,3,230!2026-11-11,4,250-->"));
         assert!(!is_schedule_line("F :: A <!--SR:!2026-11-10,3,230-->"));
         assert!(!is_schedule_line("<!-- Notiz -->"));
+        assert_eq!(without_schedules("Der {{c1::Satz}} gilt <!--SR:!2026-11-10,3,230-->\nund `<!--SR:!2026-11-10,3,230-->`"), "Der {{c1::Satz}} gilt\nund `<!--SR:!2026-11-10,3,230-->`");
     }
 
     #[test]

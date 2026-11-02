@@ -532,19 +532,18 @@ impl CardsPage {
         cx.notify();
     }
 
-    /// Asks before taking the deck's new cards as known; the toast takes it back.
-    fn adopt_known(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let deck = self.deck.clone();
+    fn adopt_known(&mut self, deck: String, window: &mut Window, cx: &mut Context<Self>) {
         let count = cards::fresh_count(&deck);
         if count == 0 {
             return;
         }
         use gpui_kit::component::WindowExt;
         let me = cx.entity();
+        window.focus(&self.focus, cx);
         window.open_alert_dialog(cx, move |alert, _, _| {
             let (me, deck) = (me.clone(), deck.clone());
             let title = if count == 1 { tr("1 neue Karte als bekannt übernehmen?") } else { trf("%@ neue Karten als bekannt übernehmen?", &[&count.to_string()]) };
-            alert.title(title).description(tr("Sie zählen nicht mehr als neu und kommen als Wiederholungen, verteilt auf die nächsten Wochen. Pausierte Karten bleiben, wie sie sind.")).show_cancel(true).ok_text(tr("Übernehmen")).cancel_text(tr("Abbrechen")).on_ok(move |_, _, cx| {
+            alert.title(title).description(tr("Sie zählen nicht mehr als neu und kommen als Wiederholungen, verteilt auf die nächsten Wochen. Pausierte Karten bleiben, wie sie sind.")).show_cancel(true).ok_text(tr("Als bekannt übernehmen")).cancel_text(tr("Abbrechen")).on_ok(move |_, _, cx| {
                 let deck = deck.clone();
                 me.update(cx, |p, cx| p.adopt_known_now(&deck, cx));
                 true
@@ -554,8 +553,8 @@ impl CardsPage {
 
     fn adopt_known_now(&mut self, deck: &str, cx: &mut Context<Self>) {
         let Some(done) = cards::adopt_new_as_known(deck, cards::now()) else { return };
-        let before = done.before.clone();
-        act(cx, |l| l.notify(done.message(), "calendar-check", None, Some(Box::new(move |_: &mut Library| cards::restore(before)))));
+        let message = done.message();
+        act(cx, |l| l.notify(message, "calendar-check", None, Some(Box::new(move |_: &mut Library| done.take_back()))));
         cx.notify();
     }
 
@@ -572,6 +571,7 @@ impl CardsPage {
         use gpui_kit::component::WindowExt;
         let (me, count) = (cx.entity(), chosen.len());
         let chosen = Rc::new(chosen);
+        window.focus(&self.focus, cx);
         window.open_alert_dialog(cx, move |alert, _, _| {
             let (me, chosen) = (me.clone(), chosen.clone());
             alert.title(trf("%@ Karten löschen?", &[&count.to_string()])).description(tr("Die Zeilen verschwinden aus den Notizen. ⌘Z bringt sie Notiz für Notiz zurück.")).show_cancel(true).ok_text(tr("Löschen")).cancel_text(tr("Abbrechen")).on_ok(move |_, _, cx| {
@@ -984,6 +984,7 @@ impl CardsPage {
                         .context_menu(move |menu, _, _| {
                             let (start, new, deck_start, deck_new) = (m_c.clone(), m_d.clone(), deck_c.clone(), deck_d.clone());
                             let (cram, deck_cram, pause, deck_pause, resume, deck_resume) = (m_c.clone(), deck_c.clone(), m_c.clone(), deck_c.clone(), m_c.clone(), deck_c.clone());
+                            let (known, deck_known, fresh) = (m_c.clone(), deck_c.clone(), cards::fresh_count(&deck_c));
                             menu.item(PopupMenuItem::new(tr("Lernen")).icon(menu_icon("graduation-cap")).on_click(move |_, window, cx| {
                                 let deck = deck_start.clone();
                                 start.update(cx, |p, cx| p.start(deck, window, cx));
@@ -991,6 +992,10 @@ impl CardsPage {
                             .item(PopupMenuItem::new(tr("Alles wiederholen")).icon(menu_icon("repeat")).on_click(move |_, window, cx| {
                                 let deck = deck_cram.clone();
                                 cram.update(cx, |p, cx| p.start_cram(deck, window, cx));
+                            }))
+                            .item(PopupMenuItem::new(tr("Neue Karten als bekannt übernehmen…")).icon(menu_icon("calendar-check")).disabled(fresh == 0).on_click(move |_, window, cx| {
+                                let deck = deck_known.clone();
+                                known.update(cx, |p, cx| p.adopt_known(deck, window, cx));
                             }))
                             .item(PopupMenuItem::new(tr("Alle pausieren")).icon(menu_icon("pause")).on_click(move |_, _, cx| {
                                 deck_pause_all(&deck_pause, true, cx);
@@ -1316,12 +1321,12 @@ impl CardsPage {
                 let me = cx.entity();
                 move |menu, _, _| {
                     let (e, deck) = (me.clone(), cram_deck.clone());
-                    let (known_me, fresh) = (me.clone(), cards::fresh_count(&cram_deck));
+                    let (known_me, known_deck, fresh) = (me.clone(), cram_deck.clone(), cards::fresh_count(&cram_deck));
                     menu.item(PopupMenuItem::new(tr("Alles wiederholen")).icon(menu_icon("repeat")).on_click(move |_, window, cx| {
                         let deck = deck.clone();
                         e.update(cx, |p, cx| p.start_cram(deck, window, cx));
                     }))
-                    .item(PopupMenuItem::new(tr("Neue Karten als bekannt übernehmen…")).icon(menu_icon("calendar-check")).disabled(fresh == 0).on_click(move |_, window, cx| known_me.update(cx, |p, cx| p.adopt_known(window, cx))))
+                    .item(PopupMenuItem::new(tr("Neue Karten als bekannt übernehmen…")).icon(menu_icon("calendar-check")).disabled(fresh == 0).on_click(move |_, window, cx| known_me.update(cx, |p, cx| p.adopt_known(known_deck.clone(), window, cx))))
                     .separator()
                     .item(PopupMenuItem::new(tr("Aus Anki importieren…")).icon(menu_icon("download")).on_click(|_, window, cx| choose_import(window, cx)))
                 }
@@ -1522,7 +1527,7 @@ impl CardsPage {
             let choices = cards::options(card.id(), card.state.as_ref(), &card.note_rel, &card.raw.front, now);
             let cramming = self.session.as_ref().is_some_and(|s| s.cram.is_some());
             let colors = [t.red, t.orange, t.green, t.blue];
-            let line = (font::BODY * 1.22).round();
+            let line = (font::BODY * font::LINE).round();
             let drop = baseline_gap(window, font::BODY, FontWeight::SEMIBOLD, font::CAPTION2, line);
             div()
                 .flex_none()
@@ -1598,7 +1603,6 @@ impl CardsPage {
     }
 }
 
-/// How far the baseline of small text sits above that of larger text in a line of the same height.
 fn baseline_gap(window: &Window, large: f32, weight: FontWeight, small: f32, line: f32) -> f32 {
     let system = window.text_system();
     let family: SharedString = Theme::font_family().into();
@@ -1842,7 +1846,7 @@ impl CardComposer {
             let (f, b) = match card.raw.kind {
                 CardKind::Cloze => {
                     kind = ComposeKind::Cloze;
-                    (written.trim().to_string(), String::new())
+                    (parse::without_schedules(&written).trim().to_string(), String::new())
                 }
                 CardKind::Reverse => {
                     kind = ComposeKind::Both;
