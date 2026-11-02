@@ -159,6 +159,7 @@ pub struct NoteView {
     reader_list: ListState,
     /// The text scale the list measured its items with.
     measured_scale: f32,
+    measured_full: bool,
     /// The formula or diagram being written, drawn while it is written.
     live_preview: Option<(String, Rc<ParsedNote>)>,
     /// A block the reader should bring into view once it knows the block.
@@ -336,7 +337,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, measured_scale: note_scale(), live_preview: None, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -721,7 +722,8 @@ impl NoteView {
     }
 
     fn field_width(&self, value: &str, window: &mut Window) -> Pixels {
-        let column = (self.reader_width.min(px(720.)) - px(space::XXL * 2.)).max(px(120.));
+        let wide = if self.measured_full { self.reader_width } else { self.reader_width.min(px(READER_COLUMN)) };
+        let column = (wide - px(space::XXL * 2.)).max(px(120.));
         let single = self.live.as_ref().is_some_and(|l| l.single && l.cell.is_none());
         if !single {
             return column;
@@ -1513,6 +1515,8 @@ impl NoteView {
                 let source_view = source_me.clone();
                 let is_source = current_mode == Mode::Source;
                 menu = menu.when(live_editor, |menu| menu.item(PopupMenuItem::new(tr("Quelltext")).icon(menu_icon("code")).checked(is_source).on_click(move |_, window, cx| source_view.update(cx, |n, cx| n.set_mode(if is_source { Mode::Live } else { Mode::Source }, window, cx)))));
+                let full = prefs::get().reader_full_width;
+                menu = menu.item(PopupMenuItem::new(tr("Text in voller Breite")).checked(full).on_click(move |_, _, cx| set_reader_full_width(!full, cx)));
                 let g = d.clone();
                 menu = menu.item(PopupMenuItem::new(tr("Graph um diese Notiz")).icon(menu_icon("waypoints")).on_click(move |_, _, cx| {
                             let p = g.clone();
@@ -1646,7 +1650,8 @@ impl NoteView {
             self.reader_width = measured;
         }
         let footnote_list = self.reader_list.clone();
-        let content = move |inner: AnyElement| div().w_full().flex().justify_center().child(div().w_full().max_w(px(720.)).px(px(space::XXL)).child(inner)).into_any_element();
+        let full = self.measured_full;
+        let content = move |inner: AnyElement| reader_column(full, inner);
         let (fragments, definitions) = (self.fragments.clone(), self.definitions.clone());
         let open_me = me.clone();
         let opener = move |line: usize| {
@@ -2253,11 +2258,14 @@ impl Render for NoteView {
         if std::mem::take(&mut self.needs_focus) {
             self.activate(window, cx);
         }
-        if self.measured_scale != note_scale() {
+        let settings = prefs::get();
+        let full = settings.reader_full_width;
+        if self.measured_scale != note_scale() || self.measured_full != full {
             self.measured_scale = note_scale();
+            self.measured_full = full;
             self.reader_list.remeasure();
         }
-        let wanted = prefs::get().note_editor;
+        let wanted = settings.note_editor;
         if wanted != self.editor_kind {
             self.editor_kind = wanted;
             let next = match (self.mode, wanted) {
@@ -2385,6 +2393,24 @@ pub fn scale_font(factor: f32, cx: &mut App) {
     }
 }
 
+/// The widest a reading column gets while notes are not shown in full width.
+pub const READER_COLUMN: f32 = 720.;
+
+/// Turns full-width reading on or off in every window.
+pub fn set_reader_full_width(on: bool, cx: &mut App) {
+    prefs::update(|p| p.reader_full_width = on);
+    cx.refresh_windows();
+}
+
+/// The reading column: the whole pane, or a centered column when full width is off.
+pub fn reader_column(full: bool, inner: AnyElement) -> AnyElement {
+    let column = div().w_full().px(px(space::XXL)).child(inner);
+    if full {
+        return column.into_any_element();
+    }
+    div().w_full().flex().justify_center().child(column.max_w(px(READER_COLUMN))).into_any_element()
+}
+
 /// Sets the editor font size everywhere.
 pub fn set_font_size(size: f32, cx: &mut App) {
     prefs::update(|p| p.editor_font_size = size);
@@ -2504,10 +2530,10 @@ fn word_count(text: &str, t: &Theme) -> Div {
     div().flex_none().flex().justify_end().px(px(space::M)).py(px(space::XS)).border_t_1().border_color(t.separator).text_size(px(font::CAPTION)).text_color(t.secondary).child(if words == 1 { tr("1 Wort") } else { trf("%lld Wörter", &[&words]) })
 }
 
-/// A tab being moved along the tab bar.
+/// A tab being moved along the tab bar or into the split view.
 #[derive(Clone)]
-struct DraggedTab {
-    path: PathBuf,
+pub struct DraggedTab {
+    pub path: PathBuf,
     title: String,
 }
 

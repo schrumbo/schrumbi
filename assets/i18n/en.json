@@ -1519,5 +1519,11 @@
   "Ziehe Dateien ins Fenster. Die App schlägt Modul und Abgabe vor, Enter legt ab.": "Drag files into the window. The app suggests module and deadline, Enter files them.",
   "Uploads sind bestätigt, nichts ist überfällig.": "Uploads are confirmed, nothing is overdue.",
   "Der Ordner dieser Abgabe fehlt. Wähle einen Ordner.": "This deadline's folder does not exist. Choose a folder.",
-  "Dateien behalten ihren Namen": "Files keep their names"
+  "Dateien behalten ihren Namen": "Files keep their names",
+  "Text in voller Breite": "Full-width text",
+  "Text in voller Breite einschalten": "Turn on full-width text",
+  "Text in voller Breite ausschalten": "Turn off full-width text",
+  "Hier öffnen": "Open Here",
+  "Rechts öffnen": "Open on the Right",
+  "Links öffnen": "Open on the Left"
 }

@@ -63,6 +63,11 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("schrift", "Schriftgröße"),
     ("text", "Schriftgröße"),
     ("zoom", "Schriftgröße"),
+    ("breite", "Text in voller Breite"),
+    ("width", "Text in voller Breite"),
+    ("spalte", "Text in voller Breite"),
+    ("lesebreite", "Text in voller Breite"),
+    ("zentriert", "Text in voller Breite"),
     ("language", "Sprache"),
     ("english", "Sprache"),
     ("deutsch", "Sprache"),
@@ -187,6 +192,7 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Rechtschreibung prüfen", Tab::Notes),
     ("Obsidian", Tab::Notes),
     ("Schriftgröße", Tab::Notes),
+    ("Text in voller Breite", Tab::Notes),
     ("Sichern", Tab::Notes),
     ("Pause", Tab::Notes),
     ("PDF-Export", Tab::Notes),
@@ -1877,7 +1883,7 @@ impl Settings {
                     Box::new(move |cx| super::documents::set_font_size((size + 1.).min(24.), cx)),
                 ),
                 t,
-            )],
+            ), row(tr("Text in voller Breite"), Switch::new("n-full-width").checked(p.reader_full_width).on_click(|v, _, cx| super::documents::set_reader_full_width(*v, cx)), t)],
             t,
         );
         let mut save_rows = vec![row(

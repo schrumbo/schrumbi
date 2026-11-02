@@ -12,11 +12,11 @@ use super::preview::FilePreview;
 use super::record::{self, RecordState};
 use super::state::{self, act};
 use super::motion::Soft;
-use super::theme::{Theme, font, space, iconsize, radius};
+use super::theme::{Theme, control, font, space, iconsize, radius};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::tr;
-use crate::core::library::{Library, Route};
+use crate::core::library::{DocDrop, Library, Route};
 use crate::core::text::fold;
 
 /// Hosts every page except the overview, keeping each page's view state alive across navigation.
@@ -49,8 +49,28 @@ pub struct Pages {
     /// Width of the page area, set by the main window each frame.
     pub width: f32,
     fields: Fields,
+    /// A tab or file dragged over the documents, and where it would land.
+    doc_drop: Option<DropHover>,
+    /// A drag of a tab or file is under way.
+    doc_dragging: bool,
+    /// Counts drags, so each one's overlay starts where it first appears.
+    drop_epoch: usize,
+    drop_rect: (f32, f32),
     _subs: Vec<Subscription>,
 }
+
+/// Where a dragged document would land, kept while the pointer stays in that zone.
+#[derive(Clone, PartialEq)]
+struct DropHover {
+    path: std::path::PathBuf,
+    to: DocDrop,
+    /// Only the right edge takes it: the canvas below takes files itself.
+    band: bool,
+    fallback: Option<std::path::PathBuf>,
+}
+
+/// The share of the width at the right edge that opens a file beside a canvas.
+const CANVAS_BAND: f32 = 0.2;
 
 /// Switches to two columns at `on` and back at `off`, so resizing near the limit doesn't flicker.
 fn two_columns(state: &std::cell::Cell<bool>, width: f32, on: f32, off: f32) -> bool {
@@ -83,6 +103,22 @@ impl Pages {
                 }
                 cx.notify();
             }),
+            {
+                let me = cx.weak_entity();
+                cx.intercept_keystrokes(move |e, window, cx| {
+                    let dragging = me.upgrade().is_some_and(|p| p.read(cx).doc_dragging);
+                    if dragging && e.keystroke.key == "escape" && cx.stop_active_drag(window) {
+                        cx.stop_propagation();
+                        if let Some(p) = me.upgrade() {
+                            p.update(cx, |p, cx| {
+                                p.doc_dragging = false;
+                                p.doc_drop = None;
+                                cx.notify();
+                            });
+                        }
+                    }
+                })
+            },
             cx.observe(&search, |this, b, cx| {
                 let selected = b.read(cx).selected.clone();
                 this.preview.update(cx, |p, cx| p.set_path(selected, cx));
@@ -113,6 +149,10 @@ impl Pages {
             module_needs_focus: false,
             width: 1000.,
             fields: Fields::default(),
+            doc_drop: None,
+            doc_dragging: false,
+            drop_epoch: 0,
+            drop_rect: (0., 1.),
             _subs: subs,
         }
     }
@@ -350,6 +390,7 @@ impl Pages {
 
     fn document(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let view = self.doc_view(&path, window, cx);
+        let fallback = self.doc_recent.iter().find(|p| **p != path).cloned();
         let beside = state::read(cx, |l| l.split_document.clone()).filter(|p| *p != path);
         let (quiet, asked) = state::lib(cx).update(cx, |l, _| (std::mem::take(&mut l.quiet_open), std::mem::take(&mut l.focus_document)));
         if self.shown_doc.as_ref() != Some(&path) {
@@ -375,12 +416,16 @@ impl Pages {
                 }
             });
         }
-        match beside {
+        let canvas = |v: &AnyView| v.clone().downcast::<super::canvas_view::CanvasView>().is_ok();
+        let left_canvas = canvas(&view);
+        let split = beside.is_some();
+        let area = match beside {
             Some(other) => {
                 let right = self.doc_view(&other, window, cx);
+                let right_canvas = canvas(&right);
                 let t = Theme::get(cx);
                 let (accent, me) = (t.accent, cx.entity());
-                div()
+                let area = div()
                     .size_full()
                     .flex()
                     .on_drag_move::<module_page::SplitDrag>(move |e, _, cx| {
@@ -397,15 +442,138 @@ impl Pages {
                     .child(div().flex_none().min_w_0().h_full().w(relative(self.split_share)).child(view))
                     .child(div().id("doc-split").h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator).soft(accent.opacity(0.3), 0.).cursor_col_resize().on_drag(module_page::SplitDrag, |d, _, _, cx| cx.new(|_| d.clone())))
                     .child(div().flex_1().min_w_0().h_full().child(right))
-                    .into_any_element()
+                    .into_any_element();
+                (area, right_canvas)
             }
-            None => view.into_any_element(),
+            None => (view.into_any_element(), false),
+        };
+        let (area, right_canvas) = area;
+        let panes = DropPanes { split, share: self.split_share, left_canvas, right_canvas, fallback };
+        self.drop_area(area, panes, window, cx)
+    }
+
+    fn drop_area(&mut self, area: AnyElement, panes: DropPanes, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let t = Theme::get(cx);
+        let rect = self.doc_drop.as_ref().map(|h| panes.rect(h));
+        let split = panes.split;
+        if let Some(r) = rect {
+            self.drop_rect = r;
+        }
+        let alpha = super::motion::follow("doc-drop-alpha", if rect.is_some() { 1. } else { 0. }, super::motion::FAST, window, cx);
+        let (me, tab_panes, file_panes) = (cx.entity(), panes.clone(), panes);
+        let file_me = me.clone();
+        let mut container = div()
+            .relative()
+            .size_full()
+            .on_drag_move::<super::documents::DraggedTab>(move |e, _, cx| {
+                let path = e.drag(cx).path.clone();
+                me.update(cx, |p, cx| p.hover_drop(path, false, e.event.position, e.bounds, &tab_panes, cx));
+            })
+            .on_drag_move::<super::browser::DraggedFile>(move |e, _, cx| {
+                let path = e.drag(cx).0.clone();
+                file_me.update(cx, |p, cx| p.hover_drop(path, true, e.event.position, e.bounds, &file_panes, cx));
+            })
+            .when(rect.is_some(), |d| {
+                d.on_drop(cx.listener(|p, d: &super::documents::DraggedTab, _, cx| p.drop_here(&d.path, cx)))
+                    .on_drop(cx.listener(|p, d: &super::browser::DraggedFile, _, cx| p.drop_here(&d.0, cx)))
+            })
+            .child(area);
+        if alpha > 0.01 {
+            let target = rect.unwrap_or(self.drop_rect);
+            let epoch = self.drop_epoch;
+            let left = super::motion::follow(("doc-drop-left", epoch), target.0, super::motion::FAST, window, cx);
+            let right = super::motion::follow(("doc-drop-right", epoch), target.1, super::motion::FAST, window, cx);
+            let beside = self.doc_drop.as_ref().is_none_or(|h| h.to == DocDrop::Beside);
+            let path = self.doc_drop.as_ref().map(|h| h.path.clone());
+            let (label, mark) = if beside { (tr(if split { "Rechts öffnen" } else { "Daneben öffnen" }), icon("columns-2", iconsize::S, t.accent).into_any_element()) } else { (tr(if split { "Links öffnen" } else { "Hier öffnen" }), path.as_deref().map_or_else(|| div().into_any_element(), |p| file_icon(p, iconsize::S).into_any_element())) };
+            let pill = div().flex().items_center().gap(px(space::S)).px(px(space::M)).py(px(space::XS)).rounded_full().bg(t.material).shadow_md().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).text_color(t.accent).child(mark).child(label);
+            let overlay = div()
+                .absolute()
+                .top(px(control::SUBBAR))
+                .bottom_0()
+                .left(relative(left))
+                .w(relative((right - left).max(0.)))
+                .p(px(space::S))
+                .opacity(alpha)
+                .when(rect.is_some(), |d| {
+                    d.on_drop(cx.listener(|p, d: &super::documents::DraggedTab, _, cx| p.drop_here(&d.path, cx)))
+                        .on_drop(cx.listener(|p, d: &super::browser::DraggedFile, _, cx| p.drop_here(&d.0, cx)))
+                })
+                .child(div().size_full().rounded(px(radius::CARD)).bg(t.accent.opacity(0.12)).border_1().border_color(t.accent.opacity(0.5)).flex().justify_center().pt(px(space::XL)).child(div().child(pill)));
+            container = container.child(overlay);
+        }
+        container.into_any_element()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn hover_drop(&mut self, path: std::path::PathBuf, file: bool, at: Point<Pixels>, bounds: Bounds<Pixels>, panes: &DropPanes, cx: &mut Context<Self>) {
+        if !self.doc_dragging {
+            self.doc_dragging = true;
+            self.drop_epoch += 1;
+        }
+        let top = bounds.top() + px(control::SUBBAR);
+        let x = if bounds.size.width > px(0.) { f32::from(at.x - bounds.left()) / f32::from(bounds.size.width) } else { 0. };
+        let zone = (bounds.contains(&at) && at.y >= top).then(|| panes.zone(x, file)).flatten();
+        let hover = zone.and_then(|(to, band)| {
+            let fallback = panes.fallback.clone();
+            let ok = match &self.doc_drop {
+                Some(h) if h.path == path && h.to == to && h.band == band => true,
+                _ => state::read(cx, |l| l.can_drop_document(&path, to, fallback.as_deref())),
+            };
+            ok.then_some(DropHover { path, to, band, fallback })
+        });
+        if hover != self.doc_drop {
+            self.doc_drop = hover;
+            cx.notify();
+        }
+    }
+
+    fn drop_here(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        self.doc_dragging = false;
+        let Some(h) = self.doc_drop.take().filter(|h| h.path == path) else { return };
+        act(cx, |l| l.drop_document(&h.path, h.to, h.fallback.as_deref()));
+        cx.notify();
+    }
+}
+
+/// How the document area is split, for the drop zones of a dragged tab or file.
+#[derive(Clone)]
+struct DropPanes {
+    split: bool,
+    share: f32,
+    left_canvas: bool,
+    right_canvas: bool,
+    fallback: Option<std::path::PathBuf>,
+}
+
+impl DropPanes {
+    fn zone(&self, x: f32, file: bool) -> Option<(DocDrop, bool)> {
+        let divide = if self.split { self.share } else { 0.5 };
+        let on_right = self.split && x >= divide;
+        let canvas = file && if on_right { self.right_canvas } else { self.left_canvas };
+        if canvas {
+            return (x >= 1. - CANVAS_BAND).then_some((DocDrop::Beside, true));
+        }
+        Some((if x >= divide { DocDrop::Beside } else { DocDrop::Here }, false))
+    }
+
+    fn rect(&self, h: &DropHover) -> (f32, f32) {
+        match (h.to, h.band, self.split) {
+            (_, true, _) => (1. - CANVAS_BAND, 1.),
+            (DocDrop::Beside, _, true) => (self.share, 1.),
+            (DocDrop::Beside, _, false) => (0.5, 1.),
+            (DocDrop::Here, _, true) => (0., self.share),
+            (DocDrop::Here, _, false) => (0., 1.),
         }
     }
 }
 
 impl Render for Pages {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !cx.has_active_drag() {
+            self.doc_dragging = false;
+            self.doc_drop = None;
+        }
         let open = state::read(cx, |l| l.open_documents.clone());
         if !matches!(state::read(cx, |l| l.route().clone()), Route::Doc(_)) {
             self.shown_doc = None;
