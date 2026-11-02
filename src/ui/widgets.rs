@@ -352,6 +352,11 @@ pub fn grouped(t: &Theme) -> Div {
     div().flex().flex_col().rounded(px(radius::CARD)).bg(t.secondary_bg).border_1().border_color(t.separator.opacity(0.6)).overflow_hidden()
 }
 
+/// A [`grouped`] container whose rows sit inset, for lists without dividers.
+pub fn inset_list(t: &Theme) -> Div {
+    grouped(t).p(px(space::XS))
+}
+
 pub fn divider(t: &Theme) -> Div {
     div().h(px(1.)).w_full().bg(t.separator)
 }
@@ -406,6 +411,15 @@ pub fn unavailable(icon_name: &str, title: impl Into<SharedString>, description:
 /// The label of a plain row button with hover feedback.
 /// One line for a file, the same in every list: icon, name, then whatever the list adds.
 pub fn file_row(id: impl Into<ElementId>, path: &Path, name: impl Into<SharedString>, t: &Theme) -> Stateful<Div> {
+    file_row_shaped(id, path, name, 0., t)
+}
+
+/// A file row inside an [`inset_list`]: rounded, so every row hovers with the same shape.
+pub fn inset_file_row(id: impl Into<ElementId>, path: &Path, name: impl Into<SharedString>, t: &Theme) -> Stateful<Div> {
+    file_row_shaped(id, path, name, radius::CONTROL, t).px(px(space::S)).rounded(px(radius::CONTROL))
+}
+
+fn file_row_shaped(id: impl Into<ElementId>, path: &Path, name: impl Into<SharedString>, corner: f32, t: &Theme) -> Stateful<Div> {
     div()
         .id(id)
         .h(px(super::theme::control::M))
@@ -414,7 +428,7 @@ pub fn file_row(id: impl Into<ElementId>, path: &Path, name: impl Into<SharedStr
         .gap(px(space::S))
         .cursor_pointer()
         .key_nav()
-        .soft(t.ink.opacity(0.05), 0.)
+        .soft(t.ink.opacity(0.05), corner)
         .child(file_icon(path, iconsize::S))
         .child(div().flex_1().min_w_0().truncate().child(name.into()))
 }

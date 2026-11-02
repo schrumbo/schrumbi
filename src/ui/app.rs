@@ -185,8 +185,9 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
-    cx.on_window_closed(|cx, _| {
-        if cx.windows().is_empty() && !(super::tray::AVAILABLE && prefs::get().tray) {
+    cx.on_window_closed(|cx, closed| {
+        let keep_running = cfg!(target_os = "macos") && !super::main_window::is_main(closed, cx);
+        if cx.windows().is_empty() && !keep_running && !(super::tray::AVAILABLE && prefs::get().tray) {
             quit(cx);
         }
     })

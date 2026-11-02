@@ -54,16 +54,14 @@ fn recent_notes(t: &Theme) -> Option<Div> {
         return None;
     }
     let now = chrono::Local::now().timestamp() as f64;
-    let hover = t.ink.opacity(0.05);
     let rows = notes.into_iter().enumerate().map(|(i, (path, modified))| {
         let (open, menu) = (path.clone(), path.clone());
-        file_row(("recent-note", i), path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t)
-            .px(px(space::M))
+        inset_file_row(("recent-note", i), path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t)
             .child(caption(super::notes_page::changed_ago(now - modified), t).flex_none())
             .on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
             .context_menu(move |m, _, _| file_menu(m, menu.clone()))
     });
-    Some(div().flex().flex_col().gap(px(space::S)).child(section_title(tr("Zuletzt geschrieben"))).child(grouped(t).children(rows)))
+    Some(div().flex().flex_col().gap(px(space::S)).child(section_title(tr("Zuletzt geschrieben"))).child(inset_list(t).children(rows)))
 }
 
 fn header(lib: &Library, t: &Theme) -> Div {
@@ -304,37 +302,42 @@ fn inbox_text(count: usize) -> String {
     if count == 1 { tr("1 Datei wartet in der Inbox") } else { trf("%lld Dateien warten in der Inbox", &[&count]) }
 }
 
-fn inbox_hint(lib: &Library, t: &Theme) -> Option<Div> {
+fn hint_banner(id: &'static str, t: &Theme, go: impl Fn(&mut App) + 'static) -> Stateful<Div> {
+    banner(t.accent).id(id).py(px(space::S)).flex().items_center().gap(px(space::S)).soft(t.ink.opacity(0.05), radius::CARD).cursor_pointer().on_click(move |_, _, cx| go(cx))
+}
+
+fn hint_button(id: &'static str, label: String, go: impl Fn(&mut App) + 'static) -> Button {
+    Button::new(id).small().label(label).on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).on_click(move |_, _, cx| {
+        cx.stop_propagation();
+        go(cx);
+    })
+}
+
+fn inbox_hint(lib: &Library, t: &Theme) -> Option<Stateful<Div>> {
     let count = lib.inbox.len();
+    let go = |cx: &mut App| act(cx, |l| l.set_route(Route::Inbox));
     (count > 0 && !matches!(lib.next_action(), NextAction::Inbox(_))).then(|| {
-        banner(t.accent)
-            .py(px(space::S))
-            .flex()
-            .items_center()
-            .gap(px(space::S))
+        hint_banner("inbox-hint", t, go)
             .child(icon("inbox", iconsize::S, t.accent))
             .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(inbox_text(count)))
-            .child(Button::new("file-now").small().label(tr("Jetzt ablegen")).on_click(|_, _, cx| act(cx, |l| l.set_route(Route::Inbox))))
+            .child(hint_button("file-now", tr("Jetzt ablegen"), go))
     })
 }
 
 /// Cards waiting today, one key away.
-fn cards_hint(t: &Theme) -> Option<Div> {
+fn cards_hint(t: &Theme) -> Option<Stateful<Div>> {
     let count = crate::core::cards::counts("", crate::core::cards::now()).total();
+    let go = |cx: &mut App| {
+        act(cx, |l| {
+            l.cards_request = Some(String::new());
+            l.set_route(Route::Cards);
+        });
+    };
     (count > 0).then(|| {
-        banner(t.accent)
-            .py(px(space::S))
-            .flex()
-            .items_center()
-            .gap(px(space::S))
+        hint_banner("cards-hint", t, go)
             .child(icon("layers", iconsize::S, t.accent))
             .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(if count == 1 { tr("1 Karte wartet") } else { trf("%@ Karten warten", &[&count.to_string()]) }))
-            .child(Button::new("cards-now").small().label(tr("Lernen")).on_click(|_, _, cx| {
-                act(cx, |l| {
-                    l.cards_request = Some(String::new());
-                    l.set_route(Route::Cards);
-                })
-            }))
+            .child(hint_button("cards-now", tr("Lernen"), go))
     })
 }
 

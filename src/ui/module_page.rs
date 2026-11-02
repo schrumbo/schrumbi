@@ -391,7 +391,7 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     let now = chrono::Local::now().timestamp() as f64;
     let hover_rows = recent.into_iter().enumerate().map(|(i, (path, at))| {
         let (open, menu) = (path.clone(), path.clone());
-        file_row(("module-recent", i), path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t).px(px(space::M)).child(caption(super::notes_page::changed_ago(now - at), t).flex_none()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).context_menu(move |menu_box, _, _| file_menu(menu_box, menu.clone()))
+        inset_file_row(("module-recent", i), path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t).child(caption(super::notes_page::changed_ago(now - at), t).flex_none()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).context_menu(move |menu_box, _, _| file_menu(menu_box, menu.clone()))
     });
     let new_id = m.id.clone();
     let files: AnyElement = if count == 0 {
@@ -406,7 +406,7 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
             t,
         )
     } else {
-        grouped(t).children(hover_rows).into_any_element()
+        inset_list(t).children(hover_rows).into_any_element()
     };
     div()
         .flex()

@@ -580,6 +580,11 @@ pub fn show(cx: &mut App) {
     cx.activate(true);
 }
 
+/// Whether `id` is the main window, open or just closed.
+pub fn is_main(id: WindowId, cx: &App) -> bool {
+    cx.try_global::<MainHandle>().is_some_and(|m| m.0.window_id() == id)
+}
+
 /// Whether the main window is the frontmost one.
 pub fn is_active(cx: &App) -> bool {
     cx.active_window().is_some_and(|w| cx.try_global::<MainHandle>().is_some_and(|m| m.0 == w))
