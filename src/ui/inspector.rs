@@ -224,7 +224,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
     }
     let mut links = div().flex().flex_wrap().items_center().gap(px(space::S));
     if let Some(m) = module.filter(|m| m.name != m.code && !m.name.is_empty()) {
-        links = links.child(div().text_color(t.secondary).child(m.name.clone()));
+        links = links.child(div().max_w_full().truncate().text_color(t.secondary).child(m.name.clone()));
     }
     for (i, link) in module.map(|m| m.links.clone()).unwrap_or_default().into_iter().filter(|k| k.url().is_some()).enumerate() {
         let url = link.url().map(|u| u.to_string()).unwrap_or_default();
