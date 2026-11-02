@@ -458,6 +458,12 @@ fn split_view_follows_the_tabs() {
     lib.set_split(Some(b.clone()));
     lib.close_document(&b);
     assert_eq!(lib.split_document, None);
+    lib.open_document(&b);
+    lib.open_document(&a);
+    lib.set_split(Some(b.clone()));
+    lib.close_document(&a);
+    assert_eq!(lib.active_document, Some(b.clone()));
+    assert_eq!(lib.split_document, None, "the tab that moves to the front leaves the side");
 }
 
 #[test]

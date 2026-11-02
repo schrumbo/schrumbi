@@ -1451,10 +1451,10 @@ impl NoteView {
     }
 
     fn toc_entries(&self) -> Option<Vec<(String, usize)>> {
-        let (_, p) = self.parsed.as_ref()?;
         if matches!(self.mode, Mode::Source) {
             return Some(Vec::new());
         }
+        let (_, p) = self.parsed.as_ref()?;
         let headings = p.headings();
         let anchors: Vec<usize> = p.heading_blocks().into_iter().filter_map(|b| p.sources().get(b).map(|s| self.item_of_line(s.line))).collect();
         if headings.len() < 2 || anchors.len() != headings.len() {
