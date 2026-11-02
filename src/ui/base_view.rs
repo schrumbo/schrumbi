@@ -33,6 +33,7 @@ struct Rendered {
 /// A `.base` file as its own document.
 pub struct BaseView {
     path: PathBuf,
+    fit: super::bar_fit::BarFit,
     source: String,
     parsed: Result<Base, String>,
     view: usize,
@@ -76,7 +77,7 @@ impl BaseView {
         let source = std::fs::read_to_string(&path).unwrap_or_default();
         let parsed = Base::parse(&source);
         let sort = bases::view_sort(&source, 0);
-        Self { path, source, parsed, view: 0, table: None, built: None, sort, filters_open: false, filter_rows: Vec::new(), filter_error: None, cursor: (0, 0), editing: None, closed_groups: Default::default(), focus: cx.focus_handle(), list: UniformListScrollHandle::new(), version: 0, seen_generation: index::current().generation, task: None, _subs: Vec::new() }
+        Self { path, source, parsed, view: 0, table: None, built: None, sort, filters_open: false, filter_rows: Vec::new(), filter_error: None, cursor: (0, 0), editing: None, closed_groups: Default::default(), focus: cx.focus_handle(), list: UniformListScrollHandle::new(), version: 0, seen_generation: index::current().generation, task: None, fit: Default::default(), _subs: Vec::new() }
     }
 
     /// Gives the keyboard to the table.
@@ -513,7 +514,7 @@ impl Render for BaseView {
             div().flex_none().px(px(space::L)).py(px(space::XS)).flex().gap(px(space::L)).border_t_1().border_color(t.separator).child(caption(if n == 1 { tr("1 Ergebnis") } else { trf("%@ Ergebnisse", &[&n.to_string()]) }, &t)).child(div().flex_1()).children(tb.summaries.iter().map(|(c, name, v)| caption(format!("{c} · {name}: {v}"), &t).font_features(tabular())))
         });
         let hand_over = super::vault_tools::in_vault(&self.path, cx).then(|| super::vault_tools::obsidian_button("base-obsidian", self.path.clone()));
-        let tabs = super::documents::document_bar(&self.path, div().children(hand_over).into_any_element(), &t, cx);
+        let tabs = super::documents::document_bar(&self.path, &self.fit, div().children(hand_over).into_any_element(), &t, window, cx);
         div()
             .id("base-page")
             .track_focus(&self.focus)

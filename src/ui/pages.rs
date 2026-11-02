@@ -382,7 +382,7 @@ impl Pages {
         }
         let page = self.notes_page.get_or_insert_with(|| cx.new(|cx| super::notes_page::NotesPage::new(window, cx))).clone();
         let shown = !crate::core::prefs::get().notes_explorer_hidden && width >= 620.;
-        div().size_full().flex().when(shown, |d| d.child(page)).child(div().flex_1().min_w_0().h_full().child(body)).into_any_element()
+        div().size_full().flex().when(shown, |d| d.child(page)).child(div().flex_1().min_w_0().h_full().overflow_hidden().child(body)).into_any_element()
     }
 
     fn document(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -436,9 +436,9 @@ impl Pages {
                         let share = p.split_share;
                         crate::core::prefs::update(|prefs| prefs.split_share = share);
                     }))
-                    .child(div().flex_none().min_w_0().h_full().w(relative(self.split_share)).child(view))
+                    .child(div().flex_none().min_w_0().h_full().overflow_hidden().w(relative(self.split_share)).child(view))
                     .child(div().id("doc-split").h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator).soft(accent.opacity(0.3), 0.).cursor_col_resize().on_drag(module_page::SplitDrag, |d, _, _, cx| cx.new(|_| d.clone())))
-                    .child(div().flex_1().min_w_0().h_full().child(right))
+                    .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(right))
                     .into_any_element();
                 (area, right_canvas)
             }
