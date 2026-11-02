@@ -513,7 +513,7 @@ impl Render for BaseView {
             div().flex_none().px(px(space::L)).py(px(space::XS)).flex().gap(px(space::L)).border_t_1().border_color(t.separator).child(caption(if n == 1 { tr("1 Ergebnis") } else { trf("%@ Ergebnisse", &[&n.to_string()]) }, &t)).child(div().flex_1()).children(tb.summaries.iter().map(|(c, name, v)| caption(format!("{c} · {name}: {v}"), &t).font_features(tabular())))
         });
         let hand_over = super::vault_tools::in_vault(&self.path, cx).then(|| super::vault_tools::obsidian_button("base-obsidian", self.path.clone()));
-        let tabs = super::documents::document_bar(&self.path, div().children(hand_over).into_any_element(), &t, cx);
+        let tabs = super::documents::document_bar(&self.path, div().children(hand_over).into_any_element(), &t, window, cx);
         div()
             .id("base-page")
             .track_focus(&self.focus)

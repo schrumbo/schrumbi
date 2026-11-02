@@ -1,3 +1,4 @@
+pub mod bar_fit;
 pub mod board;
 pub mod inspector;
 pub mod main_window;

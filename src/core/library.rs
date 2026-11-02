@@ -3158,6 +3158,10 @@ impl Library {
         let was_shown = self.route == Route::Doc(path.to_path_buf());
         if self.active_document.as_deref() == Some(path) {
             self.active_document = if self.open_documents.is_empty() { None } else { Some(self.open_documents[i.min(self.open_documents.len() - 1)].clone()) };
+            if self.split_document.is_some() && self.split_document == self.active_document {
+                self.split_document = None;
+                self.save_documents();
+            }
         }
         if was_shown {
             match self.active_document.clone() {
