@@ -743,3 +743,67 @@ fn a_note_made_here_takes_the_name_of_its_heading() {
     assert_eq!(with_first_heading("Text", "Neu"), "# Neu\n\nText");
     assert_eq!(crate::core::text::safe_file_stem(" a/b: c? . "), "a b c");
 }
+
+#[test]
+fn details_follow_the_page_and_the_selection() {
+    let (root, mut lib) = workspace("inspector", &config(2, 1));
+    let a = lib.assignments.iter().find(|a| a.module_id == "m0").unwrap().id.clone();
+    let b = lib.assignments.iter().find(|a| a.module_id == "m1").unwrap().id.clone();
+    lib.set_route(Route::Today);
+    assert!(!lib.show_inspector());
+    lib.select(Some(a.clone()));
+    assert!(lib.show_inspector() && lib.is_selected(&a));
+    lib.dismiss_inspector();
+    assert!(!lib.show_inspector() && lib.selection().is_none());
+
+    lib.select(Some(a.clone()));
+    lib.set_route(Route::Cards);
+    assert!(!lib.show_inspector() && lib.selection().is_none(), "the selection stays on its page");
+    lib.toggle_inspector();
+    assert!(!lib.show_inspector(), "a page without details cannot open them");
+    lib.set_route(Route::Notes);
+    lib.set_route(Route::Today);
+    assert_eq!(lib.selection(), Some(a.as_str()), "coming back brings the selection back");
+    assert!(lib.show_inspector());
+
+    lib.set_route(Route::Grid);
+    lib.select(Some(b.clone()));
+    lib.set_route(Route::Module("m0".into()));
+    assert!(lib.selection().is_none() && !lib.show_inspector());
+    lib.reveal(&b);
+    assert_eq!(*lib.route(), Route::Module("m1".into()));
+    assert!(lib.is_selected(&b));
+    lib.set_route(Route::Search);
+    lib.reveal(&a);
+    assert_eq!(*lib.route(), Route::Module("m0".into()));
+    assert!(lib.is_selected(&a) && lib.show_inspector());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn kept_open_details_survive_esc_and_are_per_kind() {
+    let (root, mut lib) = workspace("inspector-pinned", &config(1, 1));
+    let a = lib.assignments[0].id.clone();
+    lib.set_route(Route::Grid);
+    lib.toggle_inspector();
+    assert!(lib.show_inspector());
+    lib.select(Some(a.clone()));
+    lib.dismiss_inspector();
+    assert!(lib.show_inspector() && lib.selection().is_none(), "Esc lets go of the selection but kept-open details stay");
+    lib.set_route(Route::Graph);
+    assert!(!lib.show_inspector(), "the graph remembers its own choice");
+    lib.graph_selection = Some(root.join("n.md"));
+    assert!(lib.show_inspector());
+    lib.dismiss_inspector();
+    assert!(!lib.show_inspector());
+    lib.set_route(Route::Doc(root.join("n.md")));
+    assert!(!lib.show_inspector());
+    lib.peek_inspector();
+    assert!(lib.show_inspector());
+    lib.set_route(Route::Today);
+    assert!(lib.show_inspector(), "deadline pages stay open as chosen");
+    lib.select(Some(a));
+    lib.toggle_inspector();
+    assert!(!lib.show_inspector() && lib.selection().is_none(), "closing lets go of the selection");
+    let _ = std::fs::remove_dir_all(root);
+}

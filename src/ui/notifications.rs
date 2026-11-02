@@ -22,7 +22,7 @@ pub fn init(cx: &mut App) {
                 Event::Allowed => state::reschedule_reminders(cx),
                 Event::Response { assignment_id, uploaded: true } => act(cx, |l| l.set_status(Some(Status::Uploaded), &assignment_id, true)),
                 Event::Response { assignment_id, uploaded: false } => {
-                    act(cx, |l| l.select(Some(assignment_id.clone())));
+                    act(cx, |l| l.reveal(&assignment_id));
                     super::main_window::show(cx);
                 }
             });

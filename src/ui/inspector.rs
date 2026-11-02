@@ -23,6 +23,10 @@ use crate::core::model::{Assignment, Kind, Status};
 pub struct Inspector {
     graph_preview: Option<(std::path::PathBuf, std::rc::Rc<super::markdown_view::ParsedNote>)>,
     shown: Option<String>,
+    /// The selection seen last; `shown` keeps the assignment while the column closes.
+    seen: Option<String>,
+    /// What the column showed while open, kept while it closes.
+    kind: Option<library::InspectorKind>,
     note: Entity<TextareaState>,
     title: Entity<InputState>,
     due: Entity<DatePickerState>,
@@ -67,7 +71,7 @@ impl Inspector {
             cx.subscribe(&due, |this, _, _: &DatePickerEvent, cx| this.save_manual(cx)),
         ];
         let doc_side = cx.new(|cx| super::doc_side::DocSide::new(window, cx));
-        Self { graph_preview: None, shown: None, note, title, due, syncing: false, doc_side, _subs: subs }
+        Self { graph_preview: None, shown: None, seen: None, kind: None, note, title, due, syncing: false, doc_side, _subs: subs }
     }
 
     fn save_manual(&mut self, cx: &mut Context<Self>) {
@@ -91,8 +95,17 @@ impl Inspector {
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected = state::read(cx, |l| l.selection().map(String::from));
-        if selected == self.shown {
+        if selected == self.seen {
             return;
+        }
+        let returning = self.seen.is_none() && selected == self.shown;
+        self.seen = selected.clone();
+        if selected.is_none() {
+            self.save_manual(cx);
+            return;
+        }
+        if !returning {
+            self.save_manual(cx);
         }
         self.shown = selected.clone();
         self.syncing = true;
@@ -165,17 +178,25 @@ impl Render for Inspector {
         let t = Theme::get(cx);
         let lib = state::lib(cx);
         let l = lib.read(cx);
-        if matches!(l.route(), crate::core::library::Route::Doc(_)) {
-            return self.doc_side.clone().into_any_element();
+        let open = l.show_inspector();
+        if open {
+            self.kind = l.inspector_kind();
         }
-        if matches!(l.route(), crate::core::library::Route::Graph) {
-            return match l.graph_selection.clone() {
-                Some(path) => graph_card(&path, &t, &mut self.graph_preview).into_any_element(),
-                None => unavailable("waypoints", tr("Nichts ausgewählt"), tr("Klicke einen Punkt an, um die Notiz hier zu sehen. Doppelklick öffnet sie."), &t).into_any_element(),
-            };
+        match self.kind {
+            Some(library::InspectorKind::Document) => return self.doc_side.clone().into_any_element(),
+            Some(library::InspectorKind::Graph) => {
+                let path = if open { l.graph_selection.clone() } else { self.graph_preview.as_ref().map(|(p, _)| p.clone()) };
+                return match path {
+                    Some(path) => graph_card(&path, &t, &mut self.graph_preview).into_any_element(),
+                    None => unavailable("waypoints", tr("Keine Notiz ausgewählt"), tr("Klicke einen Punkt an, um die Notiz hier zu sehen. Doppelklick öffnet sie."), &t).into_any_element(),
+                };
+            }
+            Some(library::InspectorKind::Assignments) => {}
+            None => return div().into_any_element(),
         }
-        let Some(a) = l.selected().cloned() else {
-            return unavailable("panel-right", tr("Nichts ausgewählt"), tr("Wähle eine Abgabe, um Details, Dateien und Notizen zu sehen."), &t).into_any_element();
+        let shown = if open { l.selection() } else { self.shown.as_deref() };
+        let Some(a) = shown.and_then(|id| l.assignment(id)).cloned() else {
+            return unavailable("panel-right", tr("Kein Eintrag ausgewählt"), tr("Wähle eine Abgabe, um Details, Dateien und Notizen zu sehen."), &t).into_any_element();
         };
         let body = details(l, &a, &t, &self.note, self.title.clone(), self.due.clone());
         div().id("inspector-scroll").size_full().overflow_y_scrollbar().child(body).into_any_element()

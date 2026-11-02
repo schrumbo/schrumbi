@@ -134,7 +134,9 @@ fn commands(cx: &App) -> Vec<Command> {
     add(&file, tr("Studium als ZIP exportieren…"), "archive", None, Run::Action(Box::new(app::ExportArchive)));
     add(&file, super::platform::reveal_workspace_label(), "folder", None, Run::Action(Box::new(app::RevealWorkspace)));
     add(&file, tr("Anderen Ordner öffnen…"), "folder-open", None, Run::Action(Box::new(app::OpenOtherWorkspace)));
-    add(&view, S::ToggleInspector.label(), "panel-right", keys(S::ToggleInspector), Run::Action(Box::new(app::ToggleInspector)));
+    if state::read(cx, |l| l.inspector_kind().is_some()) {
+        add(&view, S::ToggleInspector.label(), "panel-right", keys(S::ToggleInspector), Run::Action(Box::new(app::ToggleInspector)));
+    }
     add(&view, tr("Seitenleiste ein-/ausblenden"), "panel-left", Some(fixed_keys("B")), Run::Action(Box::new(super::main_window::ToggleSidebar)));
     add(&view, S::Refresh.label(), "refresh-cw", keys(S::Refresh), Run::Action(Box::new(app::Refresh)));
     if active.is_some() {
@@ -157,7 +159,7 @@ fn commands(cx: &App) -> Vec<Command> {
     if in_document && git {
         add(&file, tr("Verlauf dieser Datei"), "history", None, Run::Call(Rc::new(|cx| {
             act(cx, |l| {
-                l.show_inspector = true;
+                l.peek_inspector();
                 l.show_versions = true;
             });
         })));

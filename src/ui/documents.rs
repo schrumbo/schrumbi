@@ -1524,7 +1524,7 @@ impl NoteView {
                 }
                 menu = menu.item(PopupMenuItem::new(tr("Verlauf")).icon(menu_icon("history")).on_click(|_, _, cx| {
                     act(cx, |l| {
-                        l.show_inspector = true;
+                        l.peek_inspector();
                         l.show_versions = true;
                     });
                 }));
