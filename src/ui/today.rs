@@ -59,6 +59,8 @@ pub(super) fn recent_notes_in(within: Option<&std::path::Path>, limit: usize) ->
         recent
             .entry((within.map(std::path::Path::to_path_buf), limit))
             .or_insert_with(|| {
+                let within = within.map(|w| dunce::canonicalize(w).unwrap_or_else(|_| w.to_path_buf()));
+                let within = within.as_deref();
                 let mut notes: Vec<(std::path::PathBuf, f64)> = vault.notes.iter().filter(|(p, _)| !vault.is_template(p) && crate::core::markdown::is_markdown(p) && within.is_none_or(|w| p.starts_with(w))).map(|(p, f)| (p.clone(), f.modified)).collect();
                 notes.sort_by(|a, b| b.1.total_cmp(&a.1));
                 notes.truncate(limit);

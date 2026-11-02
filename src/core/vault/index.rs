@@ -72,7 +72,9 @@ pub fn current() -> Arc<VaultIndex> {
 
 /// Forgets everything, e.g. when the workspace closes.
 pub fn reset() {
-    *CURRENT.write().unwrap() = Arc::new(VaultIndex::default());
+    let mut current = CURRENT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    *current = Arc::new(VaultIndex { generation: current.generation + 1, ..Default::default() });
+    drop(current);
     CACHE.lock().unwrap().clear();
     crate::core::cards::close();
 }
