@@ -225,7 +225,7 @@ impl Default for Prefs {
             editor_font_size: 13.,
             theme: ThemeChoice::System,
             card_retention: 0.9,
-            card_new_per_day: 20,
+            card_new_per_day: 30,
             card_reviews_per_day: 200,
             card_target: None,
             note_mode: NoteMode::default(),

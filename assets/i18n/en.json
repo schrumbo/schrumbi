@@ -1501,5 +1501,14 @@
   "Modul, das noch keinen Ordner hat": "Module without a folder yet",
   "Hake links einen Ordner an oder lege unten einen an. Geht auch später: Rechtsklick auf einen Ordner in den Notizen.": "Tick a folder on the left or create one below. Also possible later: right-click a folder in Notes.",
   "Los geht's": "Let's go",
-  "Einstellungen → Kalender abonnieren, Adresse eintragen.": "Settings → Subscribe to a calendar, enter the address."
+  "Einstellungen → Kalender abonnieren, Adresse eintragen.": "Settings → Subscribe to a calendar, enter the address.",
+  "fällig ab morgen": "due from tomorrow",
+  "verteilt auf die nächsten %@ Tage": "spread over the next %@ days",
+  "verteilt auf die nächsten %@ Wochen": "spread over the next %@ weeks",
+  "1 Karte übernommen": "1 card taken over",
+  "%@ Karten übernommen": "%@ cards taken over",
+  "Neue Karten als bekannt übernehmen…": "Mark New Cards as Known…",
+  "1 neue Karte als bekannt übernehmen?": "Mark 1 new card as known?",
+  "%@ neue Karten als bekannt übernehmen?": "Mark %@ new cards as known?",
+  "Sie zählen nicht mehr als neu und kommen als Wiederholungen, verteilt auf die nächsten Wochen. Pausierte Karten bleiben, wie sie sind.": "They no longer count as new and come back as reviews, spread over the coming weeks. Paused cards stay as they are."
 }

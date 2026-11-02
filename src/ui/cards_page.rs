@@ -532,6 +532,33 @@ impl CardsPage {
         cx.notify();
     }
 
+    /// Asks before taking the deck's new cards as known; the toast takes it back.
+    fn adopt_known(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let deck = self.deck.clone();
+        let count = cards::fresh_count(&deck);
+        if count == 0 {
+            return;
+        }
+        use gpui_kit::component::WindowExt;
+        let me = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let (me, deck) = (me.clone(), deck.clone());
+            let title = if count == 1 { tr("1 neue Karte als bekannt übernehmen?") } else { trf("%@ neue Karten als bekannt übernehmen?", &[&count.to_string()]) };
+            alert.title(title).description(tr("Sie zählen nicht mehr als neu und kommen als Wiederholungen, verteilt auf die nächsten Wochen. Pausierte Karten bleiben, wie sie sind.")).show_cancel(true).ok_text(tr("Übernehmen")).cancel_text(tr("Abbrechen")).on_ok(move |_, _, cx| {
+                let deck = deck.clone();
+                me.update(cx, |p, cx| p.adopt_known_now(&deck, cx));
+                true
+            })
+        });
+    }
+
+    fn adopt_known_now(&mut self, deck: &str, cx: &mut Context<Self>) {
+        let Some(done) = cards::adopt_new_as_known(deck, cards::now()) else { return };
+        let before = done.before.clone();
+        act(cx, |l| l.notify(done.message(), "calendar-check", None, Some(Box::new(move |_: &mut Library| cards::restore(before)))));
+        cx.notify();
+    }
+
     /// Deletes what is chosen from its notes and moves on to the next card in the list.
     fn delete_chosen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let chosen = self.chosen_cards();
@@ -1289,10 +1316,12 @@ impl CardsPage {
                 let me = cx.entity();
                 move |menu, _, _| {
                     let (e, deck) = (me.clone(), cram_deck.clone());
+                    let (known_me, fresh) = (me.clone(), cards::fresh_count(&cram_deck));
                     menu.item(PopupMenuItem::new(tr("Alles wiederholen")).icon(menu_icon("repeat")).on_click(move |_, window, cx| {
                         let deck = deck.clone();
                         e.update(cx, |p, cx| p.start_cram(deck, window, cx));
                     }))
+                    .item(PopupMenuItem::new(tr("Neue Karten als bekannt übernehmen…")).icon(menu_icon("calendar-check")).disabled(fresh == 0).on_click(move |_, window, cx| known_me.update(cx, |p, cx| p.adopt_known(window, cx))))
                     .separator()
                     .item(PopupMenuItem::new(tr("Aus Anki importieren…")).icon(menu_icon("download")).on_click(|_, window, cx| choose_import(window, cx)))
                 }
@@ -1419,7 +1448,7 @@ impl CardsPage {
             .into_any_element()
     }
 
-    fn review(&mut self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn review(&mut self, t: &Theme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(s) = &self.session else { return div().into_any_element() };
         let Some(card) = s.current.clone() else { return self.done_screen(t, cx) };
         let answered: usize = s.ratings.iter().sum();
@@ -1493,6 +1522,8 @@ impl CardsPage {
             let choices = cards::options(card.id(), card.state.as_ref(), &card.note_rel, &card.raw.front, now);
             let cramming = self.session.as_ref().is_some_and(|s| s.cram.is_some());
             let colors = [t.red, t.orange, t.green, t.blue];
+            let line = (font::BODY * 1.22).round();
+            let drop = baseline_gap(window, font::BODY, FontWeight::SEMIBOLD, font::CAPTION2, line);
             div()
                 .flex_none()
                 .p(px(space::M))
@@ -1522,7 +1553,7 @@ impl CardsPage {
                         .key_nav()
                         .soft(hover, radius::CONTROL)
                         .when(!cramming, |d| d.child(div().text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child({ cards::wait_label(now, choices[i].due) })))
-                        .child(div().flex().items_baseline().gap(px(space::XS)).child(div().font_weight(FontWeight::SEMIBOLD).text_color(t.readable(color)).child(if cramming && rating == Rating::Good { tr("Gewusst") } else { rating_name(rating) })).child(div().text_size(px(font::CAPTION2)).text_color(t.tertiary).child(if rating == Rating::Good { format!("{} · {}", i + 1, tr("Leertaste")) } else { (i + 1).to_string() })))
+                        .child(div().flex().items_start().gap(px(space::XS)).child(div().text_size(px(font::BODY)).line_height(px(line)).font_weight(FontWeight::SEMIBOLD).text_color(t.readable(color)).child(if cramming && rating == Rating::Good { tr("Gewusst") } else { rating_name(rating) })).child(div().relative().top(px(drop)).text_size(px(font::CAPTION2)).line_height(px(line)).text_color(t.tertiary).child(if rating == Rating::Good { format!("{} · {}", i + 1, tr("Leertaste")) } else { (i + 1).to_string() })))
                         .on_click(cx.listener(move |p, e: &ClickEvent, _, cx| {
                             if e.click_count() <= 1 {
                                 p.rate(rating, cx);
@@ -1565,6 +1596,16 @@ impl CardsPage {
         let scrollable = div().relative().flex_1().min_h_0().flex().flex_col().child(body).vertical_scrollbar(&self.review_scroll);
         div().size_full().flex().flex_col().child(bar).child(track).child(scrollable).child(footer).into_any_element()
     }
+}
+
+/// How far the baseline of small text sits above that of larger text in a line of the same height.
+fn baseline_gap(window: &Window, large: f32, weight: FontWeight, small: f32, line: f32) -> f32 {
+    let system = window.text_system();
+    let family: SharedString = Theme::font_family().into();
+    let id = |weight: FontWeight| system.resolve_font(&Font { weight, ..font(family.clone()) });
+    let (large_id, small_id) = (id(weight), id(FontWeight::NORMAL));
+    let at = |id: FontId, size: f32| f32::from(system.baseline_offset(id, px(size), px(line)));
+    (at(large_id, large) - at(small_id, small)).max(0.)
 }
 
 /// Starts a card from text in a note; it is written into that note.
@@ -1673,7 +1714,7 @@ impl Render for CardsPage {
         let width = f32::from(window.viewport_size().width);
         let reviewing = self.session.is_some();
         let body: AnyElement = if reviewing {
-            self.review(&t, cx)
+            self.review(&t, window, cx)
         } else if self.all.is_empty() {
             self.empty_room(&t, cx)
         } else {
@@ -1722,7 +1763,7 @@ impl Render for CardsPage {
                     if p.can_undo() {
                         p.undo(cx);
                     }
-                } else if state::read(cx, |l| l.toast.as_ref().is_some_and(|t| matches!(t.icon, "pause" | "rotate-ccw") && t.undo.is_some())) {
+                } else if state::read(cx, |l| l.toast.as_ref().is_some_and(|t| matches!(t.icon, "pause" | "rotate-ccw" | "calendar-check") && t.undo.is_some())) {
                     cx.stop_propagation();
                     act(cx, |l| l.perform_toast_action());
                 }
@@ -1919,17 +1960,28 @@ impl CardComposer {
             let replacement = written.clone();
             let id = card.id().to_string();
             let mut found = false;
+            let mut kept = (String::new(), None::<String>);
             let saved = act(cx, |l| {
                 l.edit_note(card.note.as_path(), "card", if moved { tr("Karte verschoben") } else { tr("Karte geändert") }, |text| {
                     let Some(place) = parse::cards_in(text).into_iter().find(|c| c.id == id).map(|c| c.lines) else { return text.to_string() };
                     found = true;
                     let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-                    let end = (place.1 + 1).min(lines.len());
+                    let mut end = (place.1 + 1).min(lines.len());
                     if place.0 < end {
+                        let inline = parse::schedule_comments(&lines[place.0..end]);
+                        let below = lines.get(end).filter(|l| parse::is_schedule_line(l)).cloned();
+                        if below.is_some() {
+                            end += 1;
+                        }
                         let marks = parse::line_marks(&lines[place.0]).to_string();
                         let quoted: String = marks.chars().take_while(|c| *c == '>' || *c == ' ').collect();
-                        let new: Vec<String> = replacement.split('\n').enumerate().map(|(i, line)| if i == 0 { format!("{marks}{line}") } else { format!("{quoted}{line}") }).collect();
+                        let mut new: Vec<String> = replacement.split('\n').enumerate().map(|(i, line)| if i == 0 { format!("{marks}{line}") } else { format!("{quoted}{line}") }).collect();
+                        if let Some(last) = new.last_mut() {
+                            last.push_str(&inline);
+                        }
+                        new.extend(below.clone());
                         lines.splice(place.0..end, if moved { Vec::new() } else { new });
+                        kept = (inline, below.map(|b| b.trim_start_matches(['>', ' ', '\t']).to_string()));
                     }
                     lines.join("\n")
                 })
@@ -1944,7 +1996,10 @@ impl CardComposer {
                     let _ = target.parent().map(std::fs::create_dir_all);
                     let _ = std::fs::write(&target, "");
                 }
-                let line = written.clone();
+                let line = match &kept {
+                    (inline, Some(below)) => format!("{written}{inline}\n{below}"),
+                    (inline, None) => format!("{written}{inline}"),
+                };
                 act(cx, |l| {
                     l.edit_note(&target, "card", tr("Karte verschoben"), |text| {
                         let joined = if text.is_empty() || text.ends_with("\n\n") { text.to_string() } else if text.ends_with('\n') { format!("{text}\n") } else { format!("{text}\n\n") };
@@ -2237,9 +2292,9 @@ impl CardImport {
             let result = task.await;
             let failed = match result {
                 Ok(done) => {
-                    cards::adopt_import(done.states, done.log);
+                    let spread = cards::adopt_import(done.states, done.log, done.fresh, cards::now()).map(|a| a.spread_words());
                     cx.update(|cx| {
-                        act(cx, |l| l.cards_imported(done.created, done.added, done.duplicates));
+                        act(cx, |l| l.cards_imported(done.created, done.added, done.duplicates, spread));
                         state::reindex(cx);
                     });
                     None
