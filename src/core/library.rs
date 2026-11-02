@@ -2739,7 +2739,8 @@ impl Library {
         let Some(root) = self.root.clone() else { return };
         let rels = prefs::get().open_documents.get(&self.documents_key()).cloned().unwrap_or_default();
         let canonical = |p: PathBuf| dunce::canonicalize(&p).unwrap_or(p);
-        self.open_documents = rels.iter().map(|r| root.join(r)).filter(|p| p.exists()).map(canonical).collect();
+        let mut seen = HashSet::new();
+        self.open_documents = rels.iter().map(|r| root.join(r)).filter(|p| p.exists()).map(canonical).filter(|p| seen.insert(p.clone())).collect();
         self.active_document = self.open_documents.first().cloned();
         let split = prefs::get().split_documents.get(&self.documents_key()).map(|r| canonical(root.join(r)));
         self.split_document = split.filter(|p| self.open_documents.contains(p) && self.active_document.as_ref() != Some(p));
@@ -2807,7 +2808,7 @@ impl Library {
         let open = |f: &Path| f != path && self.open_documents.iter().any(|d| d == f);
         self.split_document.clone().filter(|s| s != path).or_else(|| fallback.filter(|f| open(f)).map(Path::to_path_buf)).or_else(|| {
             let i = self.open_documents.iter().position(|d| d == path)?;
-            self.open_documents.get(i + 1).or_else(|| i.checked_sub(1).and_then(|j| self.open_documents.get(j))).cloned()
+            self.open_documents.get(i + 1).or_else(|| i.checked_sub(1).and_then(|j| self.open_documents.get(j))).filter(|d| *d != path).cloned()
         })
     }
 

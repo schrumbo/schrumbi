@@ -494,6 +494,10 @@ impl Pages {
                 .w(relative((right - left).max(0.)))
                 .p(px(space::S))
                 .opacity(alpha)
+                .when(rect.is_some(), |d| {
+                    d.on_drop(cx.listener(|p, d: &super::documents::DraggedTab, _, cx| p.drop_here(&d.path, cx)))
+                        .on_drop(cx.listener(|p, d: &super::browser::DraggedFile, _, cx| p.drop_here(&d.0, cx)))
+                })
                 .child(div().size_full().rounded(px(radius::CARD)).bg(t.accent.opacity(0.12)).border_1().border_color(t.accent.opacity(0.5)).flex().justify_center().pt(px(space::XL)).child(div().child(pill)));
             container = container.child(overlay);
         }
