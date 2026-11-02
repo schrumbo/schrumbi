@@ -12,10 +12,13 @@ case "$cmd" in
     task="${1:?task}"
     wt="$ROOT/.claude/worktrees/$name"
     git -C "$ROOT" worktree add -q -b "herd/$name" "$wt" HEAD || exit 1
+    grep -qx '/.cargo/' "$ROOT/.git/info/exclude" || echo '/.cargo/' >> "$ROOT/.git/info/exclude"
+    mkdir -p "$wt/.cargo"
+    printf '[patch.crates-io]\ngpui-component = { path = "%s/vendor/gpui-component" }\n' "$ROOT" > "$wt/.cargo/config.toml"
     reach="${HC_TERMINAL_ID:-}"
-    prompt="You work alone in the git worktree $wt on branch herd/$name. Only touch this worktree. Follow the ship skill and commit here at stable points; never push or merge. Do not start other hc agents. Task: $task"
+    prompt="You work alone in the git worktree $wt on branch herd/$name. Only touch this worktree. Follow the ship skill and commit here at stable points; never push or merge. Do not start other hc agents. Helpers share one build cache, so cargo may wait for another helper's build; that is normal, do not cancel it. Do not edit vendor/. Task: $task"
     [ -n "$reach" ] && prompt="$prompt Report the result or any blocker with: hc send $reach \"<text>\""
-    hc run --bg --json --name "$name" --cwd "$wt" --label herd=1 -- env RUSTC_WRAPPER=sccache claude --model "$model" --permission-mode "${HERD_MODE:-auto}" "$prompt" | jq -c '{address, name}'
+    hc run --bg --json --name "$name" --cwd "$wt" --label herd=1 -- env RUSTC_WRAPPER=sccache CARGO_BUILD_BUILD_DIR="$ROOT/target/herd" claude --model "$model" --permission-mode "${HERD_MODE:-auto}" "$prompt" | jq -c '{address, name}'
     for _ in $(seq 1 30); do
       screen=$(hc read --lines 30 "$name" 2>/dev/null)
       case "$screen" in

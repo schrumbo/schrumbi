@@ -5,7 +5,7 @@ description: Runs independent features in parallel as separate Claude sessions i
 
 # Herd
 
-Each helper is a full session with its own context, so it costs far more than a subagent. Use it only for tasks that run long and do not overlap. A first build in a new worktree takes minutes; `sccache` shares dependencies between worktrees.
+Each helper is a full session with its own context, so it costs far more than a subagent. Use it only for tasks that run long and do not overlap. All helpers share one build dir (`target/herd`) and the main tree's `vendor/`, so dependencies compile once and cargo runs one build at a time instead of four at once. Work on `vendor/` is not herd work.
 
 ```sh
 .claude/bin/herd new <name> "<exact task and acceptance check>"
