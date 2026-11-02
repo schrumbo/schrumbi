@@ -305,11 +305,17 @@ impl FilingForm {
         self.role = r;
         let keep = r != FileRole::Material && matches!(self.target, Some(Target::Assignment(_)));
         if keep {
-            self.rename = renames_by_default(cx);
+            self.rename = self.renames_for_role(cx);
         } else {
             self.select_default(window, cx);
         }
         cx.notify();
+    }
+
+    /// Renaming is on when the workspace wants it, and for a task sheet whose name would otherwise count as the submission.
+    fn renames_for_role(&self, cx: &App) -> bool {
+        let author = state::read(cx, |l| l.config.as_ref().map(|c| c.author.clone()).unwrap_or_default());
+        renames_by_default(cx) || (self.role == FileRole::Brief && self.path().is_some_and(|p| !FileRole::is_brief(&name_of(p), &author)))
     }
 
     fn select_default(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -323,7 +329,7 @@ impl FilingForm {
     fn select(&mut self, t: Target, window: &mut Window, cx: &mut Context<Self>) {
         match &t {
             Target::Assignment(id) => {
-                self.rename = renames_by_default(cx);
+                self.rename = self.renames_for_role(cx);
                 if self.role == FileRole::Work
                     && let Some(a) = state::read(cx, |l| l.assignment(id).cloned())
                 {
@@ -363,7 +369,8 @@ impl FilingForm {
         if !self.can_file(lib.read(cx), cx) {
             return;
         }
-        act(cx, |l| l.file(&path, &folder, &name, true));
+        let assignment = self.target_assignment(lib.read(cx)).map(|a| a.id);
+        act(cx, |l| l.file_for(&path, &folder, &name, assignment.as_deref(), true));
         if self.role == FileRole::Work {
             prefs::remember_coauthors(&self.coauthors);
         }
@@ -377,9 +384,9 @@ impl FilingForm {
         }
         let Some(current) = self.path().cloned() else { return };
         let lib = state::lib(cx);
-        let (folder, current_name, naming, namings, ignore, week) = {
+        let (folder, current_name, naming, namings, ignore, week, assignment) = {
             let l = lib.read(cx);
-            (self.folder(l), self.final_name(l, cx), self.module_id(l).and_then(|m| l.naming(&m)).filter(|_| self.rename), l.namings(), l.title_ignore_words(), self.target_assignment(l).and_then(|a| a.week).or_else(|| l.current_week().map(|w| w.index)))
+            (self.folder(l), self.final_name(l, cx), self.module_id(l).and_then(|m| l.naming(&m)).filter(|_| self.rename), l.namings(), l.title_ignore_words(), self.target_assignment(l).and_then(|a| a.week).or_else(|| l.current_week().map(|w| w.index)), self.target_assignment(l).map(|a| a.id))
         };
         let Some(folder) = folder else { return };
         let rest: Vec<PathBuf> = self.paths[self.index..].to_vec();
@@ -410,7 +417,7 @@ impl FilingForm {
                 let first = if numbers_files { numbered(&current_name, 1, extension(&current_name)) } else { current_name };
                 let mut items = vec![(current, folder.clone(), first)];
                 items.extend(others.into_iter().map(|(p, n)| (p, folder.clone(), n)));
-                act(cx, |l| l.file_batch(items));
+                act(cx, |l| l.file_batch(items, assignment.as_deref()));
                 cx.emit(FilingEvent::Finished);
             });
         })
@@ -891,7 +898,7 @@ impl Render for FilingForm {
             .child(chips)
             .child(match &folder {
                 Some(f) => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", iconsize::XS, t.secondary)).child(div().truncate().child(l.relative_path(f))),
-                None if matches!(self.target, Some(Target::Assignment(_))) => caption(tr("Der Ordner dieser Abgabe fehlt. Wähle einen Ordner."), &t),
+                None if self.target_assignment(l).is_some() => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange).child(icon("folder-search", iconsize::XS, t.orange)).child(tr("Der Ordner dieser Abgabe fehlt. Wähle einen Ordner.")),
                 None => caption(if material { tr("Wähle einen Ordner.") } else { tr("Wähle eine Abgabe oder einen Ordner.") }, &t),
             });
 

@@ -796,3 +796,39 @@ fn own_structure_files_only_into_existing_folders() {
     assert_eq!(lib.filing_folder(&a), Some(a.folder.clone()));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn filing_a_file_where_it_already_is_keeps_its_name() {
+    let (root, mut lib) = workspace("organize-same-place", &config(1, 1));
+    std::fs::create_dir_all(root.join("M0")).unwrap();
+    let file = root.join("M0/Entwurf.pdf");
+    std::fs::write(&file, "x").unwrap();
+    assert_eq!(lib.file(&file, &root.join("M0"), "Entwurf.pdf", true), Some(file.clone()));
+    assert!(file.exists() && !root.join("M0/Entwurf-2.pdf").exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_file_filed_into_a_fallback_folder_still_counts_and_undo_takes_both_back() {
+    let (root, mut lib) = workspace("organize-fallback", &config(1, 1));
+    let mut c = lib.config.clone().unwrap();
+    c.set_organizes(false);
+    lib.update_config(c);
+    std::fs::create_dir_all(root.join("M0")).unwrap();
+    let a = lib.assignments.first().cloned().unwrap();
+    let source = root.join("Poster.pdf");
+    std::fs::write(&source, "x").unwrap();
+    let folder = lib.filing_folder(&a).unwrap();
+    assert_eq!(folder, root.join("M0"));
+    let target = lib.file_for(&source, &folder, "Poster.pdf", Some(&a.id), true).unwrap();
+    assert!(lib.is_linked(&target, &a.id));
+    if let Some(job) = lib.scan_job() {
+        lib.apply_scan(job.run());
+    }
+    assert!(lib.evaluation(&a).files.contains(&target));
+    lib.undo();
+    assert!(source.exists() && !target.exists());
+    assert!(!lib.is_linked(&target, &a.id));
+    assert!(!a.folder.exists());
+    let _ = std::fs::remove_dir_all(root);
+}

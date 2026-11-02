@@ -416,9 +416,9 @@ fn order_choice(id: &'static str, icon_name: &'static str, title: String, detail
         .p(px(space::M))
         .rounded(px(radius::CARD))
         .border(px(2.))
-        .border_color(if selected { t.accent } else { t.separator.opacity(0.6) })
+        .border_color(if selected { t.accent } else { t.separator })
         .bg(fill)
-        .soft(hover, radius::CARD)
+        .soft(hover, radius::CARD - 2.)
         .cursor_pointer()
         .key_nav()
         .on_click(on_click)
@@ -459,7 +459,7 @@ impl Render for Setup {
                 }));
                 let sample_module = Module { code: self.draft.modules.first().map_or("ABC".into(), |m| m.code.clone()), ..Default::default() };
                 let author_text = if self.draft.author.is_empty() { tr("Nachname-V") } else { self.draft.author.clone() };
-                let organizes = self.draft.organizes() != Some(false);
+                let organizes = self.draft.organizes();
                 let (help, own) = (me.clone(), me.clone());
                 let help = move |_: &ClickEvent, _: &mut Window, cx: &mut App| help.update(cx, |s, cx| {
                     s.draft.set_organizes(true);
@@ -480,7 +480,7 @@ impl Render for Setup {
                         grouped(&t)
                             .child(form_row(tr("Studiengang"), Input::new(&name), &t))
                             .when(!state::read(cx, |l| l.is_vault), |d| d.child(divider(&t)).child(form_row(tr("Kürzel in Dateinamen"), Input::new(&author), &t)))
-                            .when(!state::read(cx, |l| l.is_vault) && organizes, |d| d.child(divider(&t)).child(form_row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).text_color(t.secondary).child(example), &t)),)
+                            .when(!state::read(cx, |l| l.is_vault) && self.draft.rename_on_filing, |d| d.child(divider(&t)).child(form_row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).text_color(t.secondary).child(example), &t)),)
                     )
                     .child(
                         div()
@@ -492,8 +492,8 @@ impl Render for Setup {
                                 div()
                                     .flex()
                                     .gap(px(space::M))
-                                    .child(order_choice("setup-order-help", "wand-sparkles", tr("Schrumbi hilft beim Ordnen"), tr("Benennt abgelegte Dateien nach einem Muster, legt Abgabeordner an und meldet, was fehlt."), organizes, help, &t))
-                                    .child(order_choice("setup-order-own", "folder-tree", tr("Meine eigene Struktur"), tr("Schrumbi liest nur. Dateien landen dort, wo du sie hinlegst, mit ihrem Namen."), !organizes, own, &t)),
+                                    .child(order_choice("setup-order-help", "wand-sparkles", tr("Schrumbi hilft beim Ordnen"), tr("Benennt abgelegte Dateien nach einem Muster, legt Abgabeordner an und meldet, was fehlt."), organizes == Some(true), help, &t))
+                                    .child(order_choice("setup-order-own", "folder-tree", tr("Meine eigene Struktur"), tr("Schrumbi liest nur. Dateien landen dort, wo du sie hinlegst, mit ihrem Namen."), organizes == Some(false), own, &t)),
                             )
                             .child(caption(tr("Lässt sich jederzeit in den Einstellungen ändern, auch einzeln."), &t)),
                     )

@@ -373,12 +373,17 @@ impl Render for UploadPanel {
                             let _ = opener::open(url.as_str());
                         }))
                     })
-                    .child(Button::new("upload-reveal").ghost().small().icon(menu_icon("folder")).label(super::platform::reveal_label()).on_click(move |_, _, _| {
+                    .child(Button::new("upload-reveal").ghost().small().icon(menu_icon("folder")).label(super::platform::reveal_label()).on_click(move |_, _, cx| {
                         match &first {
                             Some(f) => library::reveal(f),
-                            None => {
+                            None if state::read(cx, |l| l.config.as_ref().is_none_or(|c| c.create_folders)) => {
                                 let _ = std::fs::create_dir_all(&folder);
                                 library::open_path(&folder);
+                            }
+                            None => {
+                                if let Some(existing) = folder.ancestors().find(|p| p.is_dir()) {
+                                    library::open_path(existing);
+                                }
                             }
                         }
                     })),
