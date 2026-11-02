@@ -197,20 +197,12 @@ pub fn open(root: &Path) {
     let log = read_log(&log_path);
     let mut store = STORE.write().unwrap();
     if same_root {
-        let theirs = file.baseline;
-        for (id, state) in file.cards {
-            if store.file.cards.get(&id).is_none_or(|mine| weight(&state) > weight(mine) || (weight(&state) == weight(mine) && state != *mine)) {
-                store.file.cards.insert(id, state);
-            }
-        }
+        join(&mut store.file, file);
         if log.len() != store.log.len() {
             store.log = log;
         }
-        if store.file.baseline.is_none() {
-            store.file.baseline = theirs;
-        }
         store.stamps = [store_stamp, log_stamp];
-        store.unread = unread && store.file.cards.is_empty();
+        store.unread = unread && (store.unread || store.file.cards.is_empty());
         store.revision += 1;
         store.cache = None;
         store.counts.clear();
@@ -251,10 +243,34 @@ pub fn flush() {
         (root, json, store.unread)
     };
     let path = root.join(STORE_NAME);
-    if unread && path.exists() && std::fs::rename(&path, root.join(format!("{STORE_NAME}.unread-{}", now()))).is_err() {
-        STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner).dirty = true;
-        return;
-    }
+    let json = if unread && path.exists() {
+        match std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<StoreFile>(&b).ok()) {
+            Some(theirs) => {
+                let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+                join(&mut store.file, theirs);
+                store.unread = false;
+                store.revision += 1;
+                store.cache = None;
+                store.counts.clear();
+                store.stats.clear();
+                let Ok(json) = serde_json::to_vec_pretty(&store.file) else { return };
+                json
+            }
+            None if std::fs::copy(&path, root.join(format!("{STORE_NAME}.unread-{}", now()))).is_ok() => json,
+            None => {
+                STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner).dirty = true;
+                if !cfg!(test) {
+                    std::thread::spawn(|| {
+                        std::thread::sleep(std::time::Duration::from_secs(30));
+                        flush();
+                    });
+                }
+                return;
+            }
+        }
+    } else {
+        json
+    };
     crate::core::workspace::backup(&path);
     let tmp = root.join(format!("{STORE_NAME}.tmp"));
     if std::fs::write(&tmp, json).is_ok() && std::fs::rename(tmp, &path).is_ok() {
@@ -483,6 +499,17 @@ fn weight(state: &CardState) -> (bool, Option<i64>) {
     (state.reps > 0, state.last_review)
 }
 
+fn join(mine: &mut StoreFile, theirs: StoreFile) {
+    for (id, state) in theirs.cards {
+        if mine.cards.get(&id).is_none_or(|kept| weight(&state) > weight(kept) || (weight(&state) == weight(kept) && state != *kept)) {
+            mine.cards.insert(id, state);
+        }
+    }
+    if mine.baseline.is_none() {
+        mine.baseline = theirs.baseline;
+    }
+}
+
 fn day_start(day: NaiveDate) -> i64 {
     day.and_hms_opt(DAY_STARTS_AT as u32, 0, 0).and_then(|d| Local.from_local_datetime(&d).earliest()).map_or_else(|| day.and_hms_opt(12, 0, 0).map_or(0, |d| d.and_utc().timestamp()), |d| d.timestamp())
 }
@@ -560,7 +587,7 @@ pub fn settle(at: i64) {
     let vault = index::current();
     let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(root) = store.root.clone() else { return };
-    if vault.root != root {
+    if vault.root != root || store.unread {
         return;
     }
     let first_open = std::mem::take(&mut store.first_open);
@@ -570,13 +597,6 @@ pub fn settle(at: i64) {
     if adopted.spread > 0 {
         adopted.root = Some(root);
         store.notice = Some(adopted);
-    }
-    if store.unread {
-        store.revision += 1;
-        store.cache = None;
-        store.counts.clear();
-        store.stats.clear();
-        return;
     }
     drop(store);
     save();
@@ -1333,7 +1353,7 @@ mod first_open {
         std::fs::write(root.join(STORE_NAME), "{ halb").unwrap();
         reopen(&root);
         flush();
-        assert_eq!(state_of("Plugin?").map(|s| s.phase), Some(Phase::Review), "the plugin's progress is used, only not written");
+        assert_eq!(state_of("Plugin?"), None);
         assert!(take_notice().is_none());
         assert_eq!(std::fs::read_to_string(root.join(STORE_NAME)).unwrap(), "{ halb");
         let neu = all_cards().iter().find(|c| c.raw.front == "Neu?").cloned().unwrap();
@@ -1343,7 +1363,21 @@ mod first_open {
         assert_eq!(aside.len(), 1, "the unreadable store is kept next to the new one");
         assert_eq!(std::fs::read_to_string(&aside[0]).unwrap(), "{ halb");
         let saved: StoreFile = serde_json::from_slice(&std::fs::read(root.join(STORE_NAME)).unwrap()).unwrap();
-        assert_eq!(saved.cards.len(), 2);
+        assert_eq!(saved.cards.len(), 1);
+        scan(&root);
+        assert_eq!(state_of("Plugin?").map(|s| s.phase), Some(Phase::Review), "once written, the plugin's progress is taken");
+        let late = vault("late", &[("A.md", "Alt? :: ja\nNeu? :: x\n")]);
+        std::fs::write(late.join(STORE_NAME), "{ halb").unwrap();
+        reopen(&late);
+        let old = all_cards().iter().find(|c| c.raw.front == "Alt?").map(|c| c.raw.id.clone()).unwrap();
+        let real = CardState { phase: Phase::Review, stability: 50., reps: 4, last_review: Some(1000), due: 2000, ..Default::default() };
+        std::fs::write(late.join(STORE_NAME), serde_json::to_string(&StoreFile { version: 0, cards: BTreeMap::from([(old, real.clone())]), baseline: None }).unwrap()).unwrap();
+        let neu = all_cards().iter().find(|c| c.raw.front == "Neu?").cloned().unwrap();
+        set_suspended(&neu, true);
+        flush();
+        let saved: StoreFile = serde_json::from_slice(&std::fs::read(late.join(STORE_NAME)).unwrap()).unwrap();
+        assert_eq!(saved.cards.len(), 2, "a store that became readable meanwhile is joined, not replaced");
+        assert_eq!(state_of("Alt?"), Some(real));
         let cloud = vault("cloud", &[("A.md", "Plugin? :: ja <!--SR:!2030-01-15,40,290-->\n")]);
         std::fs::write(cloud.join(".schrumbi-cards.json.icloud"), "").unwrap();
         reopen(&cloud);
