@@ -354,20 +354,20 @@ fn attach_schedules(cards: &mut [RawCard], schedules: &[(Vec<SrProgress>, bool)]
 fn read_cards(text: &str, strip_schedules: bool) -> Vec<RawCard> {
     let prepared = crate::core::vault::syntax::prepare(text);
     let mut schedules: Vec<(Vec<SrProgress>, bool)> = Vec::new();
-    let owned: Vec<String> = prepared
+    let owned: Vec<std::borrow::Cow<str>> = prepared
         .split('\n')
         .map(|line| {
             if strip_schedules && line.contains("<!--SR:") {
                 let (kept, found, alone) = take_schedules(line);
                 schedules.push((found, alone));
-                kept
+                std::borrow::Cow::Owned(kept)
             } else {
                 schedules.push((Vec::new(), false));
-                line.to_string()
+                std::borrow::Cow::Borrowed(line)
             }
         })
         .collect();
-    let lines: Vec<&str> = owned.iter().map(String::as_str).collect();
+    let lines: Vec<&str> = owned.iter().map(|l| &**l).collect();
     let start = frontmatter_end(&lines);
     let head = lines.get(..start).unwrap_or_default().join("\n");
     if head.lines().any(|l| matches!(l.replace(' ', "").as_str(), "cards:false" | "karten:false")) {
