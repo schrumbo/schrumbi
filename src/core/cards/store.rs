@@ -240,7 +240,7 @@ pub fn close() {
 /// Writes the cards' state now, if anything is waiting. Called on quitting.
 pub fn flush() {
     let _guard = SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let (root, json) = {
+    let (root, json, unread) = {
         let mut store = STORE.write().unwrap();
         if !store.dirty {
             return;
@@ -248,9 +248,13 @@ pub fn flush() {
         store.dirty = false;
         let Some(root) = store.root.clone() else { return };
         let Ok(json) = serde_json::to_vec_pretty(&store.file) else { return };
-        (root, json)
+        (root, json, store.unread)
     };
     let path = root.join(STORE_NAME);
+    if unread && path.exists() && std::fs::rename(&path, root.join(format!("{STORE_NAME}.unread-{}", now()))).is_err() {
+        STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner).dirty = true;
+        return;
+    }
     crate::core::workspace::backup(&path);
     let tmp = root.join(format!("{STORE_NAME}.tmp"));
     if std::fs::write(&tmp, json).is_ok() && std::fs::rename(tmp, &path).is_ok() {
@@ -451,7 +455,7 @@ impl Adopted {
     pub fn message(&self) -> String {
         use crate::core::i18n::{tr, trf};
         let shown = if self.spread == 0 { self.count } else { self.spread };
-        let head = if shown == 1 { tr("1 Karte übernommen") } else { trf("%@ Karten übernommen", &[&shown.to_string()]) };
+        let head = if shown == 1 { tr("1 Karte als bekannt übernommen") } else { trf("%@ Karten als bekannt übernommen", &[&shown.to_string()]) };
         if self.spread == 0 { head } else { format!("{head}, {}", self.spread_words()) }
     }
 
@@ -556,7 +560,7 @@ pub fn settle(at: i64) {
     let vault = index::current();
     let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(root) = store.root.clone() else { return };
-    if vault.root != root || store.unread {
+    if vault.root != root {
         return;
     }
     let first_open = std::mem::take(&mut store.first_open);
@@ -566,6 +570,13 @@ pub fn settle(at: i64) {
     if adopted.spread > 0 {
         adopted.root = Some(root);
         store.notice = Some(adopted);
+    }
+    if store.unread {
+        store.revision += 1;
+        store.cache = None;
+        store.counts.clear();
+        store.stats.clear();
+        return;
     }
     drop(store);
     save();
@@ -1322,9 +1333,17 @@ mod first_open {
         std::fs::write(root.join(STORE_NAME), "{ halb").unwrap();
         reopen(&root);
         flush();
-        assert_eq!(state_of("Plugin?"), None);
+        assert_eq!(state_of("Plugin?").map(|s| s.phase), Some(Phase::Review), "the plugin's progress is used, only not written");
         assert!(take_notice().is_none());
         assert_eq!(std::fs::read_to_string(root.join(STORE_NAME)).unwrap(), "{ halb");
+        let neu = all_cards().iter().find(|c| c.raw.front == "Neu?").cloned().unwrap();
+        set_suspended(&neu, true);
+        flush();
+        let aside: Vec<PathBuf> = std::fs::read_dir(&root).unwrap().flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().contains(".unread-")).collect();
+        assert_eq!(aside.len(), 1, "the unreadable store is kept next to the new one");
+        assert_eq!(std::fs::read_to_string(&aside[0]).unwrap(), "{ halb");
+        let saved: StoreFile = serde_json::from_slice(&std::fs::read(root.join(STORE_NAME)).unwrap()).unwrap();
+        assert_eq!(saved.cards.len(), 2);
         let cloud = vault("cloud", &[("A.md", "Plugin? :: ja <!--SR:!2030-01-15,40,290-->\n")]);
         std::fs::write(cloud.join(".schrumbi-cards.json.icloud"), "").unwrap();
         reopen(&cloud);
@@ -1634,8 +1653,8 @@ mod spreading {
         assert_eq!(words(9), "verteilt auf die nächsten 9 Tage");
         assert_eq!(words(28), "verteilt auf die nächsten 4 Wochen");
         assert_eq!(words(14), "verteilt auf die nächsten 2 Wochen");
-        assert_eq!(Adopted { count: 1, ..Default::default() }.message(), "1 Karte übernommen");
-        assert_eq!(Adopted { count: 30, spread: 20, days: 28, ..Default::default() }.message(), "20 Karten übernommen, verteilt auf die nächsten 4 Wochen");
+        assert_eq!(Adopted { count: 1, ..Default::default() }.message(), "1 Karte als bekannt übernommen");
+        assert_eq!(Adopted { count: 30, spread: 20, days: 28, ..Default::default() }.message(), "20 Karten als bekannt übernommen, verteilt auf die nächsten 4 Wochen");
     }
 
     #[test]

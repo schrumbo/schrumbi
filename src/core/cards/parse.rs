@@ -332,7 +332,13 @@ fn take_schedules(line: &str) -> (String, Vec<SrProgress>, bool) {
 /// The Obsidian Spaced Repetition plugin's comments standing in these lines, to keep them when a card is rewritten.
 pub fn schedule_comments(lines: &[String]) -> String {
     let Some(comments) = SR_COMMENT.as_ref() else { return String::new() };
-    lines.iter().flat_map(|line| comments.find_iter(line).map(|m| m.as_str().to_string())).collect()
+    lines
+        .iter()
+        .flat_map(|line| {
+            let code = code_spans(line);
+            comments.find_iter(line).filter(move |m| !code.iter().any(|s| s.contains(&m.start()) || s.contains(&(m.end() - 1)))).map(|m| m.as_str().to_string()).collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// The text as a person wrote it, without the plugin's comments, to edit it.
@@ -704,6 +710,7 @@ mod tests {
         let lines = vec!["F :: A <!--SR:!2026-11-10,3,230-->".to_string(), "mehr".to_string()];
         assert_eq!(schedule_comments(&lines), " <!--SR:!2026-11-10,3,230-->");
         assert_eq!(schedule_comments(&["F :: A".to_string()]), "");
+        assert_eq!(schedule_comments(&["und `<!--SR:!2026-11-10,3,230-->`".to_string()]), "");
         assert!(is_schedule_line("  <!--SR:!2026-11-10,3,230!2026-11-11,4,250-->"));
         assert!(!is_schedule_line("F :: A <!--SR:!2026-11-10,3,230-->"));
         assert!(!is_schedule_line("<!-- Notiz -->"));
