@@ -14,6 +14,7 @@ use gpui_kit::*;
 
 use super::fields::Fields;
 use super::inspector::{datetime_picker, picked};
+use super::motion::Soft;
 use super::quick::Dismissed;
 use super::state::{self, act};
 use super::theme::{Theme, font, iconsize, radius, space};
@@ -403,6 +404,29 @@ impl Setup {
     }
 }
 
+fn order_choice(id: &'static str, icon_name: &'static str, title: String, detail: String, selected: bool, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, t: &Theme) -> Stateful<Div> {
+    let (fill, hover) = if selected { (t.accent.opacity(0.1), t.accent.opacity(0.16)) } else { (t.ink.opacity(0.03), t.ink.opacity(0.07)) };
+    div()
+        .id(id)
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_start()
+        .gap(px(space::M))
+        .p(px(space::M))
+        .rounded(px(radius::CARD))
+        .border(px(2.))
+        .border_color(if selected { t.accent } else { t.separator })
+        .bg(fill)
+        .soft(hover, radius::CARD - 2.)
+        .cursor_pointer()
+        .key_nav()
+        .on_click(on_click)
+        .child(icon(icon_name, iconsize::M, if selected { t.accent_text } else { t.secondary }))
+        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().font_weight(FontWeight::SEMIBOLD).child(title)).child(caption(detail, t)))
+        .child(div().flex_none().size(px(iconsize::S)).when(selected, |d| d.child(icon("check", iconsize::S, t.accent_text))))
+}
+
 fn form_row(label: String, content: impl IntoElement, t: &Theme) -> Div {
     div().flex().items_center().gap(px(space::M)).px(px(space::L)).py(px(space::S)).child(div().w(px(170.)).text_color(t.secondary).child(label)).child(div().flex_1().child(content))
 }
@@ -435,6 +459,16 @@ impl Render for Setup {
                 }));
                 let sample_module = Module { code: self.draft.modules.first().map_or("ABC".into(), |m| m.code.clone()), ..Default::default() };
                 let author_text = if self.draft.author.is_empty() { tr("Nachname-V") } else { self.draft.author.clone() };
+                let organizes = self.draft.organizes();
+                let (help, own) = (me.clone(), me.clone());
+                let help = move |_: &ClickEvent, _: &mut Window, cx: &mut App| help.update(cx, |s, cx| {
+                    s.draft.set_organizes(true);
+                    cx.notify();
+                });
+                let own = move |_: &ClickEvent, _: &mut Window, cx: &mut App| own.update(cx, |s, cx| {
+                    s.draft.set_organizes(false);
+                    cx.notify();
+                });
                 let example = Naming::with_author(&sample_module, self.draft.semesters.first(), &author_text, "", CoauthorStyle::Initial).render(&tr("Titel"), Local::now().date_naive(), "pdf", &[], None, None, None);
                 div()
                     .flex()
@@ -445,8 +479,23 @@ impl Render for Setup {
                     .child(
                         grouped(&t)
                             .child(form_row(tr("Studiengang"), Input::new(&name), &t))
-                            .when(!state::read(cx, |l| l.is_vault), |d| d.child(divider(&t)).child(form_row(tr("Kürzel in Dateinamen"), Input::new(&author), &t)).child(divider(&t)))
-                            .when(!state::read(cx, |l| l.is_vault), |d| d.child(form_row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).text_color(t.secondary).child(example), &t)),)
+                            .when(!state::read(cx, |l| l.is_vault), |d| d.child(divider(&t)).child(form_row(tr("Kürzel in Dateinamen"), Input::new(&author), &t)))
+                            .when(!state::read(cx, |l| l.is_vault), |d| d.child(divider(&t)).child(form_row(tr("Beispiel"), if self.draft.rename_on_filing { div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).text_color(t.secondary).child(example) } else { div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(tr("Dateien behalten ihren Namen")) }, &t)),)
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(space::S))
+                            .child(section_title(tr("Ordnung")))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(space::M))
+                                    .child(order_choice("setup-order-help", "wand-sparkles", tr("Schrumbi hilft beim Ordnen"), tr("Benennt abgelegte Dateien nach einem Muster, legt Abgabeordner an und meldet, was fehlt."), organizes == Some(true), help, &t))
+                                    .child(order_choice("setup-order-own", "folder-tree", tr("Meine eigene Struktur"), tr("Schrumbi liest nur. Dateien landen dort, wo du sie hinlegst, mit ihrem Namen."), organizes == Some(false), own, &t)),
+                            )
+                            .child(caption(tr("Lässt sich jederzeit in den Einstellungen ändern, auch einzeln."), &t)),
                     )
             }
             1 => {
@@ -533,7 +582,7 @@ impl Render for Setup {
                     .gap(px(space::L))
                     .child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Alles bereit")))
                     .child(div().text_color(t.secondary).child(trf("%@ Module, %@ wöchentliche Abgaben. Das meiste geht von hier aus so:", &[&modules.to_string(), &weekly.to_string()])))
-                    .child(tip("inbox", tr("Dateien ablegen"), tr("Ziehe Dateien ins Fenster. Die App schlägt Modul, Abgabe und Namen vor, Enter legt ab.")))
+                    .child(tip("inbox", tr("Dateien ablegen"), if self.draft.rename_on_filing { tr("Ziehe Dateien ins Fenster. Die App schlägt Modul, Abgabe und Namen vor, Enter legt ab.") } else { tr("Ziehe Dateien ins Fenster. Die App schlägt Modul und Abgabe vor, Enter legt ab.") }))
                     .child(tip("square-pen", tr("Notizen schreiben"), trf("%@N legt eine an, ihr Dateiname folgt der ersten Überschrift.", &[&command])))
                     .child(tip("layers", tr("Karten lernen"), tr("Schreibe „Frage :: Antwort“ in eine Notiz, die Karte erscheint im Tab Karten.")))
                     .child(tip("search", tr("Alles finden"), trf("%@K zeigt jeden Befehl, / sucht in Dateien und Notizen.", &[&command])))
@@ -593,6 +642,7 @@ impl Render for Setup {
                 }));
                 let adder = me.clone();
                 let can_add = !self.new_module.trim().is_empty();
+                let creates = self.draft.create_folders;
                 div()
                     .h_full()
                     .flex()
@@ -606,7 +656,7 @@ impl Render for Setup {
                             .min_h_0()
                             .flex()
                             .gap(px(space::M))
-                            .child(div().flex_1().min_w_0().h_full().flex().flex_col().gap(px(space::S)).child(div().flex_1().min_h_0().rounded(px(radius::CARD)).border_1().border_color(t.separator).overflow_hidden().child(self.folders.clone())).child(div().flex_none().flex().gap(px(space::S)).child(div().flex_1().min_w_0().child(Input::new(&add_field).small())).child(Button::new("setup-add").small().icon(menu_icon("plus")).label(tr("Anlegen")).disabled(!can_add).on_click(move |_, window, cx| adder.update(cx, |s, cx| s.add_module(window, cx))))))
+                            .child(div().flex_1().min_w_0().h_full().flex().flex_col().gap(px(space::S)).child(div().flex_1().min_h_0().rounded(px(radius::CARD)).border_1().border_color(t.separator).overflow_hidden().child(self.folders.clone())).when(creates, |d| d.child(div().flex_none().flex().gap(px(space::S)).child(div().flex_1().min_w_0().child(Input::new(&add_field).small())).child(Button::new("setup-add").small().icon(menu_icon("plus")).label(tr("Anlegen")).disabled(!can_add).on_click(move |_, window, cx| adder.update(cx, |s, cx| s.add_module(window, cx)))))))
                             .child(
                                 div()
                                     .w(px(320.))
@@ -620,7 +670,7 @@ impl Render for Setup {
                                     .overflow_hidden()
                                     .child(div().flex_none().px(px(space::M)).py(px(space::S)).border_b_1().border_color(t.separator).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(if picked == 1 { tr("1 Modul") } else { trf("%lld Module", &[&picked]) }))
                                     .child(if empty {
-                                        unavailable("library", tr("Noch kein Modul"), tr("Hake links einen Ordner an oder lege unten einen an. Geht auch später: Rechtsklick auf einen Ordner in den Notizen."), &t).into_any_element()
+                                        unavailable("library", tr("Noch kein Modul"), if creates { tr("Hake links einen Ordner an oder lege unten einen an. Geht auch später: Rechtsklick auf einen Ordner in den Notizen.") } else { tr("Hake links einen Ordner an. Geht auch später: Rechtsklick auf einen Ordner in den Notizen.") }, &t).into_any_element()
                                     } else {
                                         div().id("setup-modules").flex_1().min_h_0().overflow_y_scrollbar().child(list).into_any_element()
                                     }),
@@ -648,7 +698,7 @@ impl Render for Setup {
             }))
             .capture_action(cx.listener(|s, a: &gpui_kit::component::input::Enter, window, cx| {
                 if !a.secondary {
-                    if s.step == 2 && !s.new_module.trim().is_empty() {
+                    if s.step == 2 && s.draft.create_folders && !s.new_module.trim().is_empty() {
                         s.add_module(window, cx);
                     } else {
                         s.go_on(cx);

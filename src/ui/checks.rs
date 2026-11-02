@@ -47,16 +47,17 @@ fn card(title: String, subtitle: String, icon_name: &str, tint: Hsla, actions: O
 }
 
 pub fn render(lib_entity: &Entity<Library>, st: &ChecksState, fields: &mut Fields, window: &mut Window, cx: &mut Context<Pages>, t: &Theme) -> AnyElement {
-    let (issues, unconfirmed, overdue, missing, suggestions) = {
+    let (issues, unconfirmed, overdue, missing, suggestions, checks_structure) = {
         let lib = lib_entity.read(cx);
         let issues: Vec<_> = lib.misnamed().into_iter().map(|(a, f)| (a.clone(), f)).collect();
         let suggestions: Vec<Option<String>> = issues.iter().map(|(a, f)| lib.suggested_name(f, a)).collect();
         let unconfirmed: Vec<_> = lib.unconfirmed().into_iter().cloned().collect();
         let overdue: Vec<_> = lib.action_items().iter().filter(|a| lib.status(a) == Status::Overdue).cloned().collect();
-        (issues, unconfirmed, overdue, lib.missing_folders(), suggestions)
+        (issues, unconfirmed, overdue, lib.missing_folders(), suggestions, lib.config.as_ref().is_none_or(|c| c.check_names && c.check_folders))
     };
     if issues.is_empty() && unconfirmed.is_empty() && overdue.is_empty() && missing.is_empty() {
-        return unavailable("badge-check", tr("Alles in Ordnung"), tr("Dateinamen stimmen, Uploads sind bestätigt, alle Ordner existieren."), t).into_any_element();
+        let detail = if checks_structure { tr("Dateinamen stimmen, Uploads sind bestätigt, alle Ordner existieren.") } else { tr("Uploads sind bestätigt, nichts ist überfällig.") };
+        return unavailable("badge-check", tr("Alles in Ordnung"), detail, t).into_any_element();
     }
     let mut col = div()
         .w_full()

@@ -57,6 +57,7 @@ pub struct FilingForm {
     date: Entity<DatePickerState>,
     date_value: NaiveDate,
     rename: bool,
+    renames_by_default: bool,
     grab_focus: bool,
     details: bool,
     /// Width of the form, measured while painting.
@@ -109,6 +110,7 @@ impl FilingForm {
                 }
             }),
         ];
+        let renames = renames_by_default(cx);
         let mut form = Self {
             paths,
             preset,
@@ -127,7 +129,8 @@ impl FilingForm {
             draft,
             date,
             date_value: Local::now().date_naive(),
-            rename: true,
+            rename: renames,
+            renames_by_default: renames,
             grab_focus,
             details: false,
             width: 560.,
@@ -251,7 +254,7 @@ impl FilingForm {
             self.set_date(d, window, cx);
         }
         self.facts = Some(facts);
-        self.details = self.target.is_none() || (self.rename && self.title.read(cx).value().trim().is_empty());
+        self.details = state::read(cx, |l| self.folder(l).is_none()) || (self.rename && self.title.read(cx).value().trim().is_empty());
         if self.grab_focus {
             self.refocus(window, cx);
         }
@@ -272,7 +275,7 @@ impl FilingForm {
 
     fn folder(&self, l: &Library) -> Option<PathBuf> {
         match &self.target {
-            Some(Target::Assignment(_)) => self.target_assignment(l).map(|a| a.folder),
+            Some(Target::Assignment(_)) => self.target_assignment(l).and_then(|a| l.filing_folder(&a)),
             Some(Target::Folder(f)) => Some(f.clone()),
             None => None,
         }
@@ -305,11 +308,32 @@ impl FilingForm {
         self.role = r;
         let keep = r != FileRole::Material && matches!(self.target, Some(Target::Assignment(_)));
         if keep {
-            self.rename = true;
+            self.rename = self.renames_for_role(cx);
         } else {
             self.select_default(window, cx);
         }
         cx.notify();
+    }
+
+    /// Renaming is on when the workspace wants it, and for a task sheet whose name would otherwise count as the submission.
+    fn renames_for_role(&self, cx: &App) -> bool {
+        let author = state::read(cx, |l| l.config.as_ref().map(|c| c.author.clone()).unwrap_or_default());
+        renames_by_default(cx) || (self.role == FileRole::Brief && self.path().is_some_and(|p| !FileRole::is_brief(&name_of(p), &author)))
+    }
+
+    fn follow_rename_setting(&mut self, cx: &App) {
+        let now = renames_by_default(cx);
+        if now == self.renames_by_default {
+            return;
+        }
+        self.renames_by_default = now;
+        self.rename = match &self.target {
+            Some(Target::Folder(f)) => now && state::read(cx, |l| l.module_containing(f).is_some()),
+            _ => self.renames_for_role(cx),
+        };
+        if self.rename && self.facts.is_some() && self.title.read(cx).value().trim().is_empty() {
+            self.details = true;
+        }
     }
 
     fn select_default(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -323,7 +347,7 @@ impl FilingForm {
     fn select(&mut self, t: Target, window: &mut Window, cx: &mut Context<Self>) {
         match &t {
             Target::Assignment(id) => {
-                self.rename = true;
+                self.rename = self.renames_for_role(cx);
                 if self.role == FileRole::Work
                     && let Some(a) = state::read(cx, |l| l.assignment(id).cloned())
                 {
@@ -332,7 +356,7 @@ impl FilingForm {
             }
             Target::Folder(f) => {
                 let (in_module, near) = state::read(cx, |l| (l.module_containing(f).is_some(), l.bylines_near(f)));
-                self.rename = in_module;
+                self.rename = in_module && renames_by_default(cx);
                 if self.role == FileRole::Material {
                     let from_pdf = byline_from(self.facts.as_ref().and_then(|f| f.pdf_author.as_deref()));
                     let b = if from_pdf.is_empty() { near.first().cloned().unwrap_or_default() } else { from_pdf };
@@ -363,7 +387,8 @@ impl FilingForm {
         if !self.can_file(lib.read(cx), cx) {
             return;
         }
-        act(cx, |l| l.file(&path, &folder, &name, true));
+        let assignment = self.target_assignment(lib.read(cx)).map(|a| a.id);
+        act(cx, |l| l.file_for(&path, &folder, &name, assignment.as_deref(), true));
         if self.role == FileRole::Work {
             prefs::remember_coauthors(&self.coauthors);
         }
@@ -377,9 +402,9 @@ impl FilingForm {
         }
         let Some(current) = self.path().cloned() else { return };
         let lib = state::lib(cx);
-        let (folder, current_name, naming, namings, ignore, week) = {
+        let (folder, current_name, naming, namings, ignore, week, assignment) = {
             let l = lib.read(cx);
-            (self.folder(l), self.final_name(l, cx), self.module_id(l).and_then(|m| l.naming(&m)).filter(|_| self.rename), l.namings(), l.title_ignore_words(), self.target_assignment(l).and_then(|a| a.week).or_else(|| l.current_week().map(|w| w.index)))
+            (self.folder(l), self.final_name(l, cx), self.module_id(l).and_then(|m| l.naming(&m)).filter(|_| self.rename), l.namings(), l.title_ignore_words(), self.target_assignment(l).and_then(|a| a.week).or_else(|| l.current_week().map(|w| w.index)), self.target_assignment(l).map(|a| a.id))
         };
         let Some(folder) = folder else { return };
         let rest: Vec<PathBuf> = self.paths[self.index..].to_vec();
@@ -410,7 +435,7 @@ impl FilingForm {
                 let first = if numbers_files { numbered(&current_name, 1, extension(&current_name)) } else { current_name };
                 let mut items = vec![(current, folder.clone(), first)];
                 items.extend(others.into_iter().map(|(p, n)| (p, folder.clone(), n)));
-                act(cx, |l| l.file_batch(items));
+                act(cx, |l| l.file_batch(items, assignment.as_deref()));
                 cx.emit(FilingEvent::Finished);
             });
         })
@@ -668,8 +693,13 @@ fn suggestion(id: SharedString, label: String, selected: bool, t: &Theme) -> Sta
     div().id(id).px(px(space::S)).py(px(space::XS)).rounded_full().bg(fill).soft(hover, radius::FULL).cursor_pointer().key_nav().text_size(px(font::CAPTION)).text_color(if selected { t.accent } else { t.primary }).child(label)
 }
 
+fn renames_by_default(cx: &App) -> bool {
+    state::read(cx, |l| l.config.as_ref().is_none_or(|c| c.rename_on_filing))
+}
+
 impl Render for FilingForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.follow_rename_setting(cx);
         let t = Theme::get(cx);
         let Some(path) = self.path().cloned() else {
             return unavailable("circle-check", tr("Fertig"), tr("Alle Dateien wurden abgelegt."), &t).into_any_element();
@@ -887,6 +917,7 @@ impl Render for FilingForm {
             .child(chips)
             .child(match &folder {
                 Some(f) => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", iconsize::XS, t.secondary)).child(div().truncate().child(l.relative_path(f))),
+                None if self.target_assignment(l).is_some() => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange).child(icon("folder-search", iconsize::XS, t.orange)).child(tr("Der Ordner dieser Abgabe fehlt. Wähle einen Ordner.")),
                 None => caption(if material { tr("Wähle einen Ordner.") } else { tr("Wähle eine Abgabe oder einen Ordner.") }, &t),
             });
 

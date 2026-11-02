@@ -125,7 +125,7 @@ pub fn evaluate(assignments: &[Assignment], listings: &Listings, config: &StudyC
             }
         }
         let naming = namings.get(a.module_id.as_str());
-        let misnamed: Vec<PathBuf> = if a.upload { matched.iter().filter(|p| !naming.is_none_or(|n| n.is_valid(file_name(p)))).cloned().collect() } else { Vec::new() };
+        let misnamed: Vec<PathBuf> = if a.upload && config.check_names { matched.iter().filter(|p| !naming.is_none_or(|n| n.is_valid(file_name(p)))).cloned().collect() } else { Vec::new() };
         let briefs: Vec<PathBuf> = briefs.into_iter().filter(|b| !matched.contains(b)).collect();
         let e = if let Some(o) = override_ {
             let on_time = o.date <= a.due || matched.is_empty() || matched.iter().any(|p| file_date(p) <= a.due);

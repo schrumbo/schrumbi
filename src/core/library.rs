@@ -609,8 +609,14 @@ impl Library {
         if self.config.as_ref() == Some(&c) {
             return false;
         }
+        let checks = |c: &StudyConfig| (c.check_names, c.check_folders);
+        let recheck = self.config.as_ref().map(checks) != Some(checks(&c));
         self.config = Some(c);
-        self.changed();
+        if recheck {
+            self.reevaluate();
+        } else {
+            self.changed();
+        }
         true
     }
 
@@ -1725,6 +1731,9 @@ impl Library {
                 }
             }
         }
+        if self.config.as_ref().is_some_and(|c| !c.create_folders) {
+            out.retain(|t| t.path.is_dir());
+        }
         out
     }
 
@@ -1934,7 +1943,26 @@ impl Library {
 
     pub fn missing_folders(&self) -> Vec<PathBuf> {
         let (Some(root), Some(c), Some(s)) = (self.root.as_ref(), self.config.as_ref(), self.semester()) else { return Vec::new() };
+        if !c.check_folders {
+            return Vec::new();
+        }
         schedule::expected_folders(c, s, root).into_iter().filter(|p| !p.exists()).collect()
+    }
+
+    /// Whether Aufräumen should show that folders are missing.
+    pub fn reports_missing_folders(&self) -> bool {
+        self.missing_folder_count > 0 && self.config.as_ref().is_some_and(|c| c.check_folders)
+    }
+
+    /// Where filing into an assignment puts the file: its folder, or when Schrumbi may not create folders,
+    /// the nearest existing folder inside the module; `None` when not even the module folder exists.
+    pub fn filing_folder(&self, a: &Assignment) -> Option<PathBuf> {
+        let (Some(root), Some(c)) = (self.root.as_ref(), self.config.as_ref()) else { return Some(a.folder.clone()) };
+        if c.create_folders || a.folder.is_dir() {
+            return Some(a.folder.clone());
+        }
+        let module = root.join(&c.module(&a.module_id)?.folder);
+        a.folder.ancestors().take_while(|p| p.starts_with(&module)).find(|p| p.is_dir()).map(Path::to_path_buf)
     }
 
     // MARK: Feedback
@@ -2177,13 +2205,20 @@ impl Library {
 
     /// Moves files inside the workspace, copies files from outside. Returns the new path.
     pub fn file(&mut self, path: &Path, folder: &Path, name: &str, announce: bool) -> Option<PathBuf> {
+        self.file_for(path, folder, name, None, announce)
+    }
+
+    /// Like `file`; a file filed for an assignment into another folder than the assignment's own is linked to it, so it still counts.
+    pub fn file_for(&mut self, path: &Path, folder: &Path, name: &str, assignment: Option<&str>, announce: bool) -> Option<PathBuf> {
         let inside = self.inside(path);
+        let link_to = assignment.and_then(|id| self.assignment(id)).filter(|a| a.folder != folder).map(|a| a.id.clone());
         let result: Result<PathBuf> = (|| {
             std::fs::create_dir_all(folder)?;
-            let target = unique_path(&folder.join(name));
-            if target == path {
-                return Ok(target);
+            let wanted = folder.join(name);
+            if wanted == path {
+                return Ok(wanted);
             }
+            let target = unique_path(&wanted);
             if inside { move_path(path, &target)? } else { copy_path(path, &target)? }
             Ok(target)
         })();
@@ -2193,6 +2228,16 @@ impl Library {
                 if inside {
                     self.path_moved(path, &target);
                     links = self.relink(path, &target).0;
+                }
+                if let Some(id) = link_to {
+                    let before = self.state_snapshot();
+                    let rel = self.relative_path(&target);
+                    let list = self.state.linked_files.entry(id).or_default();
+                    if !list.contains(&rel) {
+                        list.push(rel);
+                        self.save_state();
+                        links.push(before);
+                    }
                 }
                 self.refresh();
                 self.sync_soon = true;
@@ -2213,19 +2258,20 @@ impl Library {
     }
 
     /// Files several items and shows one undoable toast.
-    pub fn file_batch(&mut self, items: Vec<(PathBuf, PathBuf, String)>) {
+    pub fn file_batch(&mut self, items: Vec<(PathBuf, PathBuf, String)>, assignment: Option<&str>) {
         let mut done: Vec<Change> = Vec::new();
         let mut last = None;
         for (path, folder, name) in items {
             let inside = self.inside(&path);
-            if let Some(t) = self.file(&path, &folder, &name, false) {
+            if let Some(t) = self.file_for(&path, &folder, &name, assignment, false) {
                 done.push(filing_change(&path, &t, inside));
                 last = Some(t);
             }
         }
+        let filed = done.len();
         done.append(&mut self.pending_link_changes);
         let Some(last) = last else { return };
-        let message = if done.len() == 1 { trf("Abgelegt: %@", &[&name_of(&last)]) } else { trf("%lld Dateien abgelegt", &[&done.len()]) };
+        let message = if filed == 1 { trf("Abgelegt: %@", &[&name_of(&last)]) } else { trf("%lld Dateien abgelegt", &[&filed]) };
         self.commit(message, "inbox", done);
     }
 

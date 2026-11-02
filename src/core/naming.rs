@@ -2,7 +2,7 @@ use chrono::{Datelike, Local, NaiveDate};
 use regex::Regex;
 
 use super::model::{CoauthorStyle, Module, Semester, StudyConfig};
-use super::{day, filing, text};
+use super::{day, text};
 
 /// Title, co-authors and date read back from a convention name.
 #[derive(Debug, Clone, PartialEq)]
@@ -163,9 +163,9 @@ impl Naming {
         Some(Parsed { title: c.name("title").map_or(String::new(), |m| m.as_str().to_string()), coauthors, date })
     }
 
-    /// Best-effort title extracted from an existing file name.
+    /// Title from an existing file name, keeping every word.
     pub fn guess_title(file_name: &str) -> String {
-        Self::clean(&filing::clean_file_name(file_name).unwrap_or_else(|| stem(file_name).to_string()))
+        Self::clean(stem(file_name))
     }
 }
 

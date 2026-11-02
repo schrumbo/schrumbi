@@ -108,6 +108,12 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Inbox-Ordner", Tab::General),
     ("Matrikelnummer", Tab::General),
     ("Mitautor:innen", Tab::General),
+    ("Ablegen und Ordner", Tab::General),
+    ("Ordnung", Tab::General),
+    ("Beim Ablegen umbenennen", Tab::General),
+    ("Dateinamen prüfen", Tab::General),
+    ("Fehlende Ordner melden", Tab::General),
+    ("Ordner anlegen", Tab::General),
     ("Noten", Tab::General),
     ("Notensystem", Tab::General),
     ("Bezeichnung der Punkte", Tab::General),
@@ -403,6 +409,38 @@ fn picker(id: impl Into<ElementId>, label: String, build: impl Fn(PopupMenu) -> 
     Picker { button: Button::new(id).label(label).dropdown_caret(true), build: std::rc::Rc::new(build) }
 }
 
+fn filing_section(c: &StudyConfig, t: &Theme) -> Div {
+    let organizes = c.organizes();
+    let label = match organizes {
+        Some(true) => tr("Schrumbi hilft beim Ordnen"),
+        Some(false) => tr("Meine eigene Struktur"),
+        None => tr("Eigene Auswahl"),
+    };
+    let switch = |id: &'static str, on: bool, set: fn(&mut StudyConfig, bool)| Switch::new(id).checked(on).on_click(move |v, _, cx| {
+        let v = *v;
+        edit_config(cx, |c| set(c, v));
+    });
+    section(
+        Some(tr("Ablegen und Ordner")),
+        Some(tr("Schrumbi benennt und verschiebt nie etwas von selbst. Ohne „Ordner anlegen“ landen Dateien nur in Ordnern, die es schon gibt.")),
+        vec![
+            row(
+                tr("Ordnung"),
+                picker("g-organize", label, move |m| {
+                    m.item(PopupMenuItem::new(tr("Schrumbi hilft beim Ordnen")).checked(organizes == Some(true)).on_click(|_, _, cx| edit_config(cx, |c| c.set_organizes(true))))
+                        .item(PopupMenuItem::new(tr("Meine eigene Struktur")).checked(organizes == Some(false)).on_click(|_, _, cx| edit_config(cx, |c| c.set_organizes(false))))
+                }),
+                t,
+            ),
+            row(tr("Beim Ablegen umbenennen"), switch("g-rename", c.rename_on_filing, |c, v| c.rename_on_filing = v), t),
+            row(tr("Dateinamen prüfen"), switch("g-check-names", c.check_names, |c, v| c.check_names = v), t),
+            row(tr("Fehlende Ordner melden"), switch("g-check-folders", c.check_folders, |c, v| c.check_folders = v), t),
+            row(tr("Ordner anlegen"), switch("g-create-folders", c.create_folders, |c, v| c.create_folders = v), t),
+        ],
+        t,
+    )
+}
+
 fn minus(id: impl Into<ElementId>, help: String, f: impl Fn(&mut App) + 'static) -> Button {
     Button::new(id).ghost().small().icon(menu_icon("circle-minus")).tooltip(help).on_click(move |_, _, cx| f(cx))
 }
@@ -693,6 +731,7 @@ impl Settings {
             ],
             t,
         );
+        let filing = filing_section(c, t);
         let grades = section(
             Some(tr("Noten")),
             None,
@@ -941,7 +980,7 @@ impl Settings {
                 .collect(),
             t,
         );
-        div().flex().flex_col().gap(px(space::XL)).child(language).child(studium).child(grades).child(sidebar).child(reminders).child(incoming).child(calendar).child(system).child(search).child(storage)
+        div().flex().flex_col().gap(px(space::XL)).child(language).child(studium).child(filing).child(grades).child(sidebar).child(reminders).child(incoming).child(calendar).child(system).child(search).child(storage)
     }
 }
 

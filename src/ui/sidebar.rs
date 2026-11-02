@@ -54,7 +54,7 @@ struct Entry {
 }
 
 fn entries(lib: &Library) -> Vec<Entry> {
-    let issues = lib.misnamed().len() + usize::from(lib.missing_folder_count > 0);
+    let issues = lib.misnamed().len() + usize::from(lib.reports_missing_folders());
     let mut v = vec![
         Entry { key: None, route: Route::Today, icon: "layout-grid", label: tr("Übersicht"), shortcut: Some("1"), badge: lib.action_items().len(), urgent: true },
         Entry { key: Some("semester"), route: Route::Grid, icon: "table", label: tr("Semester"), shortcut: Some("2"), badge: 0, urgent: false },
