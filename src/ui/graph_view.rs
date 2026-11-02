@@ -127,7 +127,11 @@ impl GraphView {
         self.positions = layout.positions.clone();
         self.graph = graph.clone();
         self.layout = Arc::new(Mutex::new(layout));
-        self.selected = None;
+        let picked = state::read(cx, |l| l.graph_selection.clone());
+        self.selected = picked.as_ref().and_then(|p| self.graph.nodes.iter().position(|n| matches!(&n.kind, NodeKind::Note(q) if q == p))).map(|i| i as u32);
+        if picked.is_some() && self.selected.is_none() {
+            act(cx, |l| l.graph_selection = None);
+        }
         self.hover = None;
         self.fitted = false;
         self.hand_moved = false;

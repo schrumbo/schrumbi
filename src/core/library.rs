@@ -540,6 +540,7 @@ impl Library {
         self.selection = None;
         self.parked_selection = None;
         self.inspector_peek = false;
+        self.graph_selection = None;
         self.route = Route::Today;
         self.back_routes.clear();
         self.forward_routes.clear();

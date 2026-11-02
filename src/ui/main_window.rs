@@ -38,8 +38,8 @@ pub struct MainWindow {
     shown_route: Option<Route>,
     slides: Option<(std::path::PathBuf, Entity<super::vault_tools::Slides>)>,
     error_shown: bool,
-    /// The selection count when a click on the page began, if nothing inside claimed it.
-    press_stamp: Option<u64>,
+    /// The selection count and place when a press on the page began, if nothing inside claimed it.
+    press_stamp: Option<(u64, Point<Pixels>)>,
     _subs: Vec<Subscription>,
 }
 
@@ -295,9 +295,7 @@ impl MainWindow {
                     .ghost()
                     .size(px(control::M))
                     .rounded_full()
-                    .bg(t.ink.opacity(if show { 0.14 } else { 0.06 }))
-                    .border_1()
-                    .border_color(t.ink.opacity(0.1))
+                    .when(offered, |b| b.bg(t.ink.opacity(if show { 0.14 } else { 0.06 })).border_1().border_color(t.ink.opacity(0.1)))
                     .icon(menu_icon("panel-right"))
                     .disabled(!offered)
                     .tooltip(if offered { format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()) } else { tr("Diese Seite hat keine Details") })
@@ -356,11 +354,12 @@ impl Render for MainWindow {
         let base = div()
             .child(gpui_kit::base::TextSelectionLayer)
             .id("main")
-            .capture_any_mouse_down(|e, _, cx| {
+            .capture_any_mouse_down(cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                this.press_stamp = None;
                 if e.button == MouseButton::Right {
                     pause_tooltips(cx);
                 }
-            })
+            }))
             .track_focus(&self.focus)
             .key_context("MainWindow")
             .size_full()
@@ -470,12 +469,13 @@ impl Render for MainWindow {
                     .flex_col()
                     .child(self.toolbar(l, left, page_width + inspector_target, &t))
                     .child(div().id("page-area").flex_1().min_h_0().mr(px(inspector_w))
-                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                            this.press_stamp = (!window.default_prevented()).then(|| state::read(cx, Library::selection_stamp));
+                        .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                            this.press_stamp = (!window.default_prevented()).then(|| (state::read(cx, Library::selection_stamp), e.position));
                         }))
-                        .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                            let Some(stamp) = this.press_stamp.take() else { return };
-                            if state::read(cx, |l| l.selection_stamp() == stamp && l.selection().is_some()) {
+                        .on_mouse_up(MouseButton::Left, cx.listener(|this, e: &MouseUpEvent, _, cx| {
+                            let Some((stamp, at)) = this.press_stamp.take() else { return };
+                            let still = f32::from((e.position.x - at.x).abs() + (e.position.y - at.y).abs()) < 6.;
+                            if still && state::read(cx, |l| l.selection_stamp() == stamp && l.selection().is_some()) {
                                 act(cx, |l| l.select(None));
                             }
                         }))

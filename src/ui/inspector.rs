@@ -27,6 +27,8 @@ pub struct Inspector {
     seen: Option<String>,
     /// What the column showed while open, kept while it closes.
     kind: Option<library::InspectorKind>,
+    /// Title and due as loaded into the fields; only what the user changed since is written back.
+    loaded: Option<(String, Option<chrono::DateTime<chrono::Utc>>)>,
     note: Entity<TextareaState>,
     title: Entity<InputState>,
     due: Entity<DatePickerState>,
@@ -71,7 +73,7 @@ impl Inspector {
             cx.subscribe(&due, |this, _, _: &DatePickerEvent, cx| this.save_manual(cx)),
         ];
         let doc_side = cx.new(|cx| super::doc_side::DocSide::new(window, cx));
-        Self { graph_preview: None, shown: None, seen: None, kind: None, note, title, due, syncing: false, doc_side, _subs: subs }
+        Self { graph_preview: None, shown: None, seen: None, kind: None, loaded: None, note, title, due, syncing: false, doc_side, _subs: subs }
     }
 
     fn save_manual(&mut self, cx: &mut Context<Self>) {
@@ -79,15 +81,18 @@ impl Inspector {
             return;
         }
         let Some(id) = self.shown.clone() else { return };
+        let Some((loaded_title, loaded_due)) = self.loaded.clone() else { return };
         let Some(mut m) = state::read(cx, |l| l.assignment(&id).and_then(|a| l.manual_for(a)).cloned()) else { return };
         let original = m.clone();
         let title = self.title.read(cx).value().trim().to_string();
-        if !title.is_empty() {
-            m.title = title;
+        let due = picked(&self.due, cx);
+        if !title.is_empty() && title != loaded_title {
+            m.title = title.clone();
         }
-        if let Some(d) = picked(&self.due, cx) {
+        if let Some(d) = due.filter(|d| Some(*d) != loaded_due) {
             m.due = d;
         }
+        self.loaded = Some((title, due));
         if m != original {
             act(cx, |l| l.update_manual(m));
         }
@@ -98,14 +103,12 @@ impl Inspector {
         if selected == self.seen {
             return;
         }
-        let returning = self.seen.is_none() && selected == self.shown;
+        if self.seen.is_some() {
+            self.save_manual(cx);
+        }
         self.seen = selected.clone();
         if selected.is_none() {
-            self.save_manual(cx);
             return;
-        }
-        if !returning {
-            self.save_manual(cx);
         }
         self.shown = selected.clone();
         self.syncing = true;
@@ -114,10 +117,12 @@ impl Inspector {
             (selected.as_deref().map(|id| l.note(id)).unwrap_or_default(), a.and_then(|a| l.manual_for(a)).cloned())
         });
         self.note.update(cx, |s, cx| s.set_value(note, window, cx));
+        self.loaded = None;
         if let Some(m) = manual {
             self.title.update(cx, |s, cx| s.set_value(m.title.clone(), window, cx));
             let local = day::wall(m.due.with_timezone(&Local));
             self.due.update(cx, |s, cx| s.set_date_time(local, window, cx));
+            self.loaded = Some((m.title.trim().to_string(), picked(&self.due, cx)));
         }
         self.syncing = false;
     }
