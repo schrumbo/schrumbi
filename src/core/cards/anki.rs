@@ -55,6 +55,8 @@ pub struct ImportResult {
     pub media: usize,
     pub states: Vec<(String, CardState)>,
     pub log: Vec<ReviewLog>,
+    /// Cards never reviewed in Anki, to take as known: id, note and question.
+    pub fresh: Vec<(String, String, String)>,
 }
 
 /// Reads a package or a text export, whichever the file is.
@@ -505,6 +507,8 @@ pub fn write(package: Package, folder: &Path, keep_progress: bool, known: &HashS
                         note: rel_of(&path),
                         question: card.front.clone(),
                     }));
+                } else if keep_progress {
+                    result.fresh.push((card.id.clone(), rel_of(&path), card.front.clone()));
                 }
             }
             for tag in note.tags {
@@ -669,6 +673,13 @@ mod tests {
         assert_eq!(known.1.due, 1700000000 + 100 * 86_400);
         assert!(result.states.iter().any(|(_, s)| s.suspended));
         assert_eq!(result.log.len(), 1);
+        assert_eq!(result.fresh.len(), 2, "the two cloze cards were never reviewed");
+        assert!(result.fresh.iter().all(|(id, ..)| !result.states.iter().any(|(s, _)| s == id)));
+        assert!(result.fresh.iter().all(|(_, note, question)| note.ends_with("Analysis.md") && !question.is_empty()));
+        let fresh_ids: Vec<&String> = result.fresh.iter().map(|(id, ..)| id).collect();
+        assert!(cards.iter().filter(|c| c.kind == parse::CardKind::Cloze).all(|c| fresh_ids.contains(&&c.id)));
+        let dropped = write(read(&dir.join(if modern { "m.apkg" } else { "o.apkg" })).unwrap(), &dir.join("Neu"), false, &HashSet::new(), |p| p.to_string_lossy().to_string()).unwrap();
+        assert!(dropped.fresh.is_empty() && dropped.states.is_empty(), "starting over keeps everything new");
         let again: HashSet<String> = cards.iter().map(|c| c.id.clone()).collect();
         let second = write(read(&dir.join(if modern { "m.apkg" } else { "o.apkg" })).unwrap(), &target, true, &again, |p| p.to_string_lossy().to_string()).unwrap();
         assert_eq!((second.added, second.duplicates), (0, 4));

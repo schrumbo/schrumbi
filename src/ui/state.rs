@@ -88,11 +88,18 @@ pub fn act<R>(cx: &mut App, f: impl FnOnce(&mut Library) -> R) -> R {
     if soon {
         super::sync::soon(cx);
     }
+    time_toast(before, cx);
+    scan(cx);
+    sync_reminders(cx);
+    out
+}
+
+fn time_toast(before: Option<u64>, cx: &mut App) {
+    let lib = lib(cx);
     let toast = lib.read(cx).toast.as_ref().map(|t| (t.id, t.undo.is_some()));
     if let Some((id, undoable)) = toast
         && Some(id) != before
     {
-        let lib = lib.clone();
         cx.spawn(async move |cx| {
             cx.background_executor().timer(Duration::from_secs(if undoable { 6 } else { 3 })).await;
             while cx.update(|cx| lib.read(cx).toast_hovered) {
@@ -105,9 +112,6 @@ pub fn act<R>(cx: &mut App, f: impl FnOnce(&mut Library) -> R) -> R {
         })
         .detach();
     }
-    scan(cx);
-    sync_reminders(cx);
-    out
 }
 
 /// Reads without changing anything.
@@ -144,10 +148,12 @@ pub fn reindex(cx: &mut App) {
     cx.spawn(async move |cx| {
         let (count, catalog) = task.await;
         cx.update(|cx| {
+            let before = lib.read(cx).toast.as_ref().map(|t| t.id);
             lib.update(cx, |l, cx| {
                 l.apply_index(count, catalog);
                 cx.notify();
             });
+            time_toast(before, cx);
             if std::mem::take(&mut cx.global_mut::<Store>().index_again) {
                 reindex(cx);
             }

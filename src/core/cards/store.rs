@@ -7,7 +7,7 @@ use chrono::{Duration, Local, NaiveDate, TimeZone};
 use serde::{Deserialize, Serialize};
 
 use super::fsrs::{self, Memory, Rating};
-use super::parse::{CardKind, RawCard};
+use super::parse::{CardKind, RawCard, SrProgress};
 use crate::core::markdown;
 use crate::core::prefs;
 use crate::core::vault::index::{self, VaultIndex};
@@ -58,6 +58,9 @@ pub struct CardState {
 struct StoreFile {
     version: u32,
     cards: BTreeMap<String, CardState>,
+    /// When the cards a vault held at its first open were taken as known; stores from before this have none and count as done.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baseline: Option<i64>,
 }
 
 /// One answered card, kept for statistics and for fitting the scheduler later.
@@ -135,6 +138,12 @@ struct Store {
     stamps: [Option<(u64, std::time::SystemTime)>; 2],
     /// A new state of the cards still has to reach the disk.
     dirty: bool,
+    /// The vault has never had cards remembered: what it holds now is taken as known on the next settle.
+    first_open: bool,
+    /// Cards taken as known that nobody was told about yet.
+    notice: Option<Adopted>,
+    /// Remembered cards exist but could not be read yet, like a file still in the cloud: nothing is written on its own.
+    unread: bool,
 }
 
 static STORE: LazyLock<RwLock<Store>> = LazyLock::new(Default::default);
@@ -182,26 +191,31 @@ pub fn open(root: &Path) {
         }
         same
     };
-    let file: StoreFile = std::fs::read(&store_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let read: Option<StoreFile> = std::fs::read(&store_path).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    let unread = read.is_none() && (store_stamp.is_some() || !never_used(root));
+    let file = read.unwrap_or_default();
     let log = read_log(&log_path);
     let mut store = STORE.write().unwrap();
     if same_root {
-        for (id, state) in file.cards {
-            if store.file.cards.get(&id).is_none_or(|mine| state.last_review > mine.last_review || (state.last_review == mine.last_review && state != *mine)) {
-                store.file.cards.insert(id, state);
-            }
-        }
+        join(&mut store.file, file);
         if log.len() != store.log.len() {
             store.log = log;
         }
         store.stamps = [store_stamp, log_stamp];
+        store.unread = unread && (store.unread || store.file.cards.is_empty());
         store.revision += 1;
         store.cache = None;
         store.counts.clear();
         store.stats.clear();
     } else {
-        *store = Store { root: Some(root.to_path_buf()), file, log, revision: store.revision + 1, stamps: [store_stamp, log_stamp], ..Default::default() };
+        let first_open = never_used(root);
+        *store = Store { root: Some(root.to_path_buf()), file, log, revision: store.revision + 1, stamps: [store_stamp, log_stamp], first_open, unread, ..Default::default() };
     }
+}
+
+fn never_used(root: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else { return false };
+    !entries.flatten().any(|e| e.file_name().to_string_lossy().contains("schrumbi-cards"))
 }
 
 fn read_log(path: &Path) -> Vec<ReviewLog> {
@@ -218,7 +232,7 @@ pub fn close() {
 /// Writes the cards' state now, if anything is waiting. Called on quitting.
 pub fn flush() {
     let _guard = SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let (root, json) = {
+    let (root, json, unread) = {
         let mut store = STORE.write().unwrap();
         if !store.dirty {
             return;
@@ -226,14 +240,25 @@ pub fn flush() {
         store.dirty = false;
         let Some(root) = store.root.clone() else { return };
         let Ok(json) = serde_json::to_vec_pretty(&store.file) else { return };
-        (root, json)
+        (root, json, store.unread)
     };
     let path = root.join(STORE_NAME);
     crate::core::workspace::backup(&path);
     let tmp = root.join(format!("{STORE_NAME}.tmp"));
-    if std::fs::write(&tmp, json).is_ok() && std::fs::rename(tmp, &path).is_ok() {
+    if std::fs::write(&tmp, json).is_err() {
+        return;
+    }
+    if unread && path.exists() {
+        let aside = root.join(format!("{STORE_NAME}.unread-{}", now()));
+        if std::fs::hard_link(&path, &aside).is_err() {
+            let _ = std::fs::rename(&path, &aside);
+        }
+    }
+    if std::fs::rename(tmp, &path).is_ok() {
         let stamp = stamp_of(&path);
-        STORE.write().unwrap().stamps[0] = stamp;
+        let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        store.stamps[0] = stamp;
+        store.unread = false;
     }
 }
 
@@ -334,18 +359,25 @@ pub fn reconcile() {
     }
     let cards = collect(&vault, &mut store);
     let known: HashSet<&str> = cards.iter().map(|c| c.raw.id.as_str()).collect();
+    let mut moved: Vec<(String, String)> = Vec::new();
+    let mut claimed: HashSet<&str> = HashSet::new();
+    for card in cards.iter().filter(|c| c.state.is_none()) {
+        if let Some(old) = card.raw.legacy.as_deref().filter(|old| !known.contains(old) && store.file.cards.contains_key(*old) && claimed.insert(old)) {
+            moved.push((old.to_string(), card.raw.id.clone()));
+        }
+    }
     let mut lost: HashMap<String, Vec<String>> = HashMap::new();
     for (id, state) in &store.file.cards {
-        if !known.contains(id.as_str()) {
+        if !known.contains(id.as_str()) && !claimed.contains(id.as_str()) {
             lost.entry(state.note.clone()).or_default().push(id.clone());
         }
     }
-    let mut moved: Vec<(String, String)> = Vec::new();
     let mut seen_here: Vec<(String, String)> = Vec::new();
     for card in &cards {
         match &card.state {
             Some(state) if state.note != *card.note_rel || state.question != card.raw.front => seen_here.push((card.raw.id.clone(), card.note_rel.to_string())),
             Some(_) => {}
+            None if moved.iter().any(|(_, new)| *new == card.raw.id) => {}
             None => {
                 let Some(candidates) = lost.get_mut(card.note_rel.as_str()) else { continue };
                 let best = candidates
@@ -363,10 +395,12 @@ pub fn reconcile() {
         return;
     }
     let fronts: HashMap<&str, &str> = cards.iter().map(|c| (c.raw.id.as_str(), c.raw.front.as_str())).collect();
+    let notes: HashMap<&str, &str> = cards.iter().map(|c| (c.raw.id.as_str(), c.note_rel.as_str())).collect();
     let mut logged = false;
     for (old, new) in moved {
         if let Some(mut state) = store.file.cards.remove(&old) {
             state.question = fronts.get(new.as_str()).unwrap_or(&"").to_string();
+            state.note = notes.get(new.as_str()).unwrap_or(&"").to_string();
             for entry in store.log.iter_mut().filter(|l| l.card == old) {
                 entry.card = new.clone();
                 logged = true;
@@ -386,6 +420,201 @@ pub fn reconcile() {
     }
     drop(store);
     save();
+}
+
+/// What taking cards as known did, to tell about and to take back.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Adopted {
+    /// Cards that got a state.
+    pub count: usize,
+    /// Of those, the ones spread as reviews over the coming days.
+    pub spread: usize,
+    /// The last of those days, counted from today.
+    pub days: i64,
+    /// How the spread cards stood before, and how they stand now.
+    pub changes: Vec<(String, Option<CardState>, CardState)>,
+    /// The vault this happened in.
+    pub root: Option<PathBuf>,
+}
+
+impl Adopted {
+    /// How far the cards were spread, as the end of a sentence.
+    pub fn spread_words(&self) -> String {
+        use crate::core::i18n::{tr, trf};
+        match self.days {
+            ..=1 => tr("fällig ab morgen"),
+            d @ 2..=13 => trf("verteilt auf die nächsten %@ Tage", &[&d.to_string()]),
+            d => trf("verteilt auf die nächsten %@ Wochen", &[&((d + 3) / 7).to_string()]),
+        }
+    }
+
+    /// One calm sentence for a toast, about the cards that can be taken back.
+    pub fn message(&self) -> String {
+        use crate::core::i18n::{tr, trf};
+        let shown = if self.spread == 0 { self.count } else { self.spread };
+        let head = if shown == 1 { tr("1 Karte als bekannt übernommen") } else { trf("%@ Karten als bekannt übernommen", &[&shown.to_string()]) };
+        if self.spread == 0 { head } else { format!("{head}, {}", self.spread_words()) }
+    }
+
+    /// Takes the spread cards back to how they stood, leaving any that changed since or belong to another vault.
+    pub fn take_back(self) {
+        let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if store.root != self.root {
+            return;
+        }
+        for (id, before, after) in self.changes {
+            if store.file.cards.get(&id) != Some(&after) {
+                continue;
+            }
+            match before {
+                Some(state) => store.file.cards.insert(id, state),
+                None => store.file.cards.remove(&id),
+            };
+        }
+        drop(store);
+        save();
+    }
+}
+
+fn weight(state: &CardState) -> (bool, Option<i64>) {
+    (state.reps > 0, state.last_review)
+}
+
+fn join(mine: &mut StoreFile, theirs: StoreFile) {
+    for (id, state) in theirs.cards {
+        if mine.cards.get(&id).is_none_or(|kept| weight(&state) > weight(kept) || (weight(&state) == weight(kept) && state != *kept)) {
+            mine.cards.insert(id, state);
+        }
+    }
+    if mine.baseline.is_none() {
+        mine.baseline = theirs.baseline;
+    }
+}
+
+fn day_start(day: NaiveDate) -> i64 {
+    day.and_hms_opt(DAY_STARTS_AT as u32, 0, 0).and_then(|d| Local.from_local_datetime(&d).earliest()).map_or_else(|| day.and_hms_opt(12, 0, 0).map_or(0, |d| d.and_utc().timestamp()), |d| d.timestamp())
+}
+
+fn sr_state(sr: &SrProgress, note: &str, question: &str) -> CardState {
+    let due = day_start(sr.due);
+    let interval = sr.interval.max(1) as f64;
+    CardState {
+        phase: Phase::Review,
+        stability: interval.min(36500.),
+        difficulty: (10. - (sr.ease as f64 - 130.) * 9. / 220.).clamp(1., 10.),
+        due,
+        last_review: Some(due - sr.interval.max(1) as i64 * 86400),
+        reps: 1,
+        note: note.to_string(),
+        question: question.to_string(),
+        ..Default::default()
+    }
+}
+
+fn spread(items: &[(String, String, String)], states: &BTreeMap<String, CardState>, at: i64, per_day: usize, retention: f64) -> (Vec<(String, CardState)>, i64) {
+    let mut order: Vec<&(String, String, String)> = items.iter().collect();
+    order.sort_by(|a, b| a.0.cmp(&b.0));
+    order.dedup_by(|a, b| a.0 == b.0);
+    let count = order.len();
+    if count == 0 {
+        return (Vec::new(), 0);
+    }
+    let (span, per_day, today) = (count.clamp(14, 28), per_day.max(1), day_of(at));
+    let mut load: HashMap<i64, usize> = HashMap::new();
+    for state in states.values().filter(|s| s.phase != Phase::New && !s.suspended) {
+        *load.entry((day_of(state.due) - today).num_days()).or_default() += 1;
+    }
+    let unit = fsrs::interval(1., retention).max(0.01);
+    let mut last = 0;
+    let mut out = Vec::with_capacity(count);
+    for (i, (id, note, question)) in order.into_iter().enumerate() {
+        let mut day = 1 + (i * span / count) as i64;
+        while load.get(&day).copied().unwrap_or(0) >= per_day {
+            day += 1;
+        }
+        *load.entry(day).or_default() += 1;
+        last = last.max(day);
+        out.push((id.clone(), CardState { phase: Phase::Review, stability: day as f64 / unit, difficulty: 5., due: day_start(today + Duration::days(day)), last_review: Some(at), note: note.clone(), question: question.clone(), ..Default::default() }));
+    }
+    (out, last)
+}
+
+fn settle_file(file: &mut StoreFile, cards: &[Card], first_open: bool, at: i64, per_day: usize, retention: f64) -> Option<Adopted> {
+    let mut adopted = Adopted::default();
+    for card in cards.iter().filter(|c| c.state.is_none()) {
+        if let Some(sr) = card.raw.sr.as_ref().filter(|_| !file.cards.contains_key(&card.raw.id)) {
+            file.cards.insert(card.raw.id.clone(), sr_state(sr, &card.note_rel, &card.raw.front));
+            adopted.count += 1;
+        }
+    }
+    if first_open {
+        let fresh: Vec<(String, String, String)> = cards.iter().filter(|c| !file.cards.contains_key(&c.raw.id)).map(|c| (c.raw.id.clone(), c.note_rel.to_string(), c.raw.front.clone())).collect();
+        let (states, days) = spread(&fresh, &file.cards, at, per_day, retention);
+        adopted.spread = states.len();
+        adopted.count += states.len();
+        adopted.days = days;
+        for (id, state) in states {
+            adopted.changes.push((id.clone(), None, state.clone()));
+            file.cards.insert(id, state);
+        }
+        file.baseline = Some(at);
+    }
+    (adopted.count > 0 || first_open).then_some(adopted)
+}
+
+/// Gives cards their first state where it is already known: once for all cards a vault holds when it is first opened,
+/// and whenever a card without progress carries the Obsidian Spaced Repetition plugin's. The notes are never written.
+pub fn settle(at: i64) {
+    let vault = index::current();
+    let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(root) = store.root.clone() else { return };
+    if vault.root != root || store.unread {
+        return;
+    }
+    let first_open = std::mem::take(&mut store.first_open);
+    let cards = collect(&vault, &mut store);
+    let p = prefs::get();
+    let Some(mut adopted) = settle_file(&mut store.file, &cards, first_open, at, p.card_reviews_per_day as usize, p.card_retention.clamp(0.7, 0.99)) else { return };
+    if adopted.spread > 0 {
+        adopted.root = Some(root);
+        store.notice = Some(adopted);
+    }
+    drop(store);
+    save();
+}
+
+/// Cards taken as known on a first open that nobody was told about yet.
+pub fn take_notice() -> Option<Adopted> {
+    STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner).notice.take()
+}
+
+/// New cards of a deck that could be taken as known; paused ones stay as they are.
+pub fn fresh_count(deck: &str) -> usize {
+    all_cards().iter().filter(|c| c.in_deck(deck) && c.phase() == Phase::New && !c.suspended()).count()
+}
+
+/// Takes the new cards of a deck as already known, spread as reviews over the coming weeks. `restore(before)` takes it back.
+pub fn adopt_new_as_known(deck: &str, at: i64) -> Option<Adopted> {
+    let cards = all_cards();
+    let fresh: Vec<(String, String, String)> = cards.iter().filter(|c| c.in_deck(deck) && c.phase() == Phase::New && !c.suspended()).map(|c| (c.raw.id.clone(), c.note_rel.to_string(), c.raw.front.clone())).collect();
+    if fresh.is_empty() {
+        return None;
+    }
+    let p = prefs::get();
+    let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let fresh: Vec<(String, String, String)> = fresh.into_iter().filter(|(id, ..)| store.file.cards.get(id).is_none_or(|s| s.phase == Phase::New && !s.suspended)).collect();
+    if fresh.is_empty() {
+        return None;
+    }
+    let (states, days) = spread(&fresh, &store.file.cards, at, p.card_reviews_per_day as usize, p.card_retention.clamp(0.7, 0.99));
+    let mut adopted = Adopted { count: states.len(), spread: states.len(), days, changes: Vec::new(), root: store.root.clone() };
+    for (id, state) in states {
+        let before = store.file.cards.insert(id.clone(), state.clone());
+        adopted.changes.push((id, before, state));
+    }
+    drop(store);
+    save();
+    Some(adopted)
 }
 
 /// Moves a card's progress to a new identity after it was edited here.
@@ -648,7 +877,7 @@ pub fn set_many_suspended(cards: &[Card], suspended: bool) {
 pub fn reset_many(cards: &[Card]) {
     let mut store = STORE.write().unwrap();
     for card in cards {
-        store.file.cards.remove(&card.raw.id);
+        store.file.cards.insert(card.raw.id.clone(), started_over(card));
     }
     drop(store);
     save();
@@ -675,10 +904,14 @@ pub fn bury(card: &Card, at: i64) {
     edit_state(card, |s| s.buried_until = Some(next_day_start(at)));
 }
 
+fn started_over(card: &Card) -> CardState {
+    CardState { note: card.note_rel.to_string(), question: card.raw.front.clone(), ..Default::default() }
+}
+
 /// Starts a card over, as if it had never been seen.
 pub fn reset(card: &Card) {
     let mut store = STORE.write().unwrap();
-    store.file.cards.remove(&card.raw.id);
+    store.file.cards.insert(card.raw.id.clone(), started_over(card));
     drop(store);
     save();
 }
@@ -900,10 +1133,17 @@ fn work_out_stats(deck: &str, at: i64) -> Stats {
     result
 }
 
-/// Adds what an import brought along: progress and past reviews.
-pub fn adopt_import(states: Vec<(String, CardState)>, log: Vec<ReviewLog>) {
+/// Adds what an import brought along: progress and past reviews. Cards never reviewed there are taken as known and spread.
+pub fn adopt_import(states: Vec<(String, CardState)>, log: Vec<ReviewLog>, fresh: Vec<(String, String, String)>, at: i64) -> Option<Adopted> {
+    let p = prefs::get();
     let mut store = STORE.write().unwrap();
     for (id, state) in states {
+        store.file.cards.insert(id, state);
+    }
+    let fresh: Vec<(String, String, String)> = fresh.into_iter().filter(|(id, ..)| !store.file.cards.contains_key(id)).collect();
+    let (spread_states, days) = spread(&fresh, &store.file.cards, at, p.card_reviews_per_day as usize, p.card_retention.clamp(0.7, 0.99));
+    let adopted = (!spread_states.is_empty()).then(|| Adopted { count: spread_states.len(), spread: spread_states.len(), days, changes: spread_states.iter().map(|(id, state)| (id.clone(), None, state.clone())).collect(), root: store.root.clone() });
+    for (id, state) in spread_states {
         store.file.cards.insert(id, state);
     }
     let root = store.root.clone();
@@ -916,6 +1156,7 @@ pub fn adopt_import(states: Vec<(String, CardState)>, log: Vec<ReviewLog>) {
         }
     }
     save();
+    adopted
 }
 
 /// The cards known so far, to leave out what an import already finds.
@@ -936,8 +1177,9 @@ pub fn next_due(deck: &str, at: i64) -> Option<i64> {
 /// Whichever side reviewed a card last wins; the log is simply the union of both.
 pub fn merge_store(ours: &str, theirs: &str) -> Option<String> {
     let (mut a, b): (StoreFile, StoreFile) = (serde_json::from_str(ours).ok()?, serde_json::from_str(theirs).ok()?);
+    a.baseline = a.baseline.or(b.baseline);
     for (id, state) in b.cards {
-        let newer = a.cards.get(&id).is_none_or(|mine| state.last_review > mine.last_review);
+        let newer = a.cards.get(&id).is_none_or(|mine| weight(&state) > weight(mine));
         if newer {
             a.cards.insert(id, state);
         }
@@ -1043,6 +1285,412 @@ mod tests {
         let line = |t: i64| format!("{{\"card\":\"c\",\"at\":{t},\"rating\":\"good\",\"phase\":\"review\",\"days\":1.0}}\n");
         let log = merge_log(&(line(1) + &line(3)), &(line(2) + &line(3)));
         assert_eq!(log.lines().count(), 3);
+    }
+}
+
+#[cfg(test)]
+mod first_open {
+    use super::*;
+    use crate::core::cards::parse;
+
+    fn vault(name: &str, notes: &[(&str, &str)]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("schrumbi-cards-first-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (file, text) in notes {
+            std::fs::write(dir.join(file), text).unwrap();
+        }
+        dunce::canonicalize(dir).unwrap()
+    }
+
+    fn scan(root: &Path) {
+        index::rebuild(root, &[]);
+        open(root);
+        reconcile();
+        settle(now());
+    }
+
+    fn reopen(root: &Path) {
+        close();
+        scan(root);
+    }
+
+    fn state_of(front: &str) -> Option<CardState> {
+        all_cards().iter().find(|c| c.raw.front == front).and_then(|c| c.state.clone())
+    }
+
+    fn phase_of(front: &str) -> Phase {
+        all_cards().iter().find(|c| c.raw.front == front).map(Card::phase).unwrap()
+    }
+
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::core::edge_tests::VAULT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[test]
+    fn a_store_that_cannot_be_read_is_never_written_on_its_own() {
+        let _guard = lock();
+        let root = vault("unread", &[("A.md", "Plugin? :: ja <!--SR:!2030-01-15,40,290-->\nNeu? :: x\n")]);
+        std::fs::write(root.join(STORE_NAME), "{ halb").unwrap();
+        reopen(&root);
+        flush();
+        assert_eq!(state_of("Plugin?"), None);
+        assert!(take_notice().is_none());
+        assert_eq!(std::fs::read_to_string(root.join(STORE_NAME)).unwrap(), "{ halb");
+        let neu = all_cards().iter().find(|c| c.raw.front == "Neu?").cloned().unwrap();
+        set_suspended(&neu, true);
+        flush();
+        let aside: Vec<PathBuf> = std::fs::read_dir(&root).unwrap().flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().contains(".unread-")).collect();
+        assert_eq!(aside.len(), 1, "the unreadable store is kept next to the new one");
+        assert_eq!(std::fs::read_to_string(&aside[0]).unwrap(), "{ halb");
+        let saved: StoreFile = serde_json::from_slice(&std::fs::read(root.join(STORE_NAME)).unwrap()).unwrap();
+        assert_eq!(saved.cards.len(), 1);
+        scan(&root);
+        assert_eq!(state_of("Plugin?").map(|s| s.phase), Some(Phase::Review), "once written, the plugin's progress is taken");
+        let late = vault("late", &[("A.md", "Alt? :: ja\nNeu? :: x\n")]);
+        std::fs::write(late.join(STORE_NAME), "{ halb").unwrap();
+        reopen(&late);
+        let old = all_cards().iter().find(|c| c.raw.front == "Alt?").map(|c| c.raw.id.clone()).unwrap();
+        let real = CardState { phase: Phase::Review, stability: 50., reps: 4, last_review: Some(1000), due: 2000, ..Default::default() };
+        std::fs::write(late.join(STORE_NAME), serde_json::to_string(&StoreFile { version: 0, cards: BTreeMap::from([(old, real.clone())]), baseline: None }).unwrap()).unwrap();
+        let neu = all_cards().iter().find(|c| c.raw.front == "Neu?").cloned().unwrap();
+        set_suspended(&neu, true);
+        flush();
+        let aside: Vec<PathBuf> = std::fs::read_dir(&late).unwrap().flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().contains(".unread-")).collect();
+        assert_eq!(aside.len(), 1);
+        let kept: StoreFile = serde_json::from_slice(&std::fs::read(&aside[0]).unwrap()).unwrap();
+        assert_eq!(kept.cards.values().next(), Some(&real), "a store that became readable meanwhile is kept, never overwritten");
+        let cloud = vault("cloud", &[("A.md", "Plugin? :: ja <!--SR:!2030-01-15,40,290-->\n")]);
+        std::fs::write(cloud.join(".schrumbi-cards.json.icloud"), "").unwrap();
+        reopen(&cloud);
+        flush();
+        assert!(!cloud.join(STORE_NAME).exists());
+        std::fs::write(cloud.join(STORE_NAME), "{\"version\":0,\"cards\":{}}").unwrap();
+        scan(&cloud);
+        assert_eq!(state_of("Plugin?").map(|s| s.phase), Some(Phase::Review), "once it arrived, the plugin's progress is taken");
+    }
+
+    #[test]
+    fn taking_back_leaves_cards_that_changed_since() {
+        let _guard = lock();
+        let root = vault("back", &[("A.md", "Eins? :: 1\nZwei? :: 2\n")]);
+        scan(&root);
+        let told = take_notice().unwrap();
+        let eins = all_cards().iter().find(|c| c.raw.front == "Eins?").cloned().unwrap();
+        set_suspended(&eins, true);
+        Adopted { root: Some(PathBuf::from("/anderswo")), ..told.clone() }.take_back();
+        assert_eq!(phase_of("Zwei?"), Phase::Review, "another vault's undo changes nothing here");
+        told.take_back();
+        assert_eq!(phase_of("Zwei?"), Phase::New);
+        let kept = state_of("Eins?").unwrap();
+        assert!(kept.phase == Phase::Review && kept.suspended);
+    }
+
+    #[test]
+    fn a_synced_store_with_real_progress_wins_over_cards_taken_as_known() {
+        let _guard = lock();
+        let root = vault("synced", &[("A.md", "Eins? :: 1\n")]);
+        scan(&root);
+        let _ = take_notice();
+        flush();
+        let id = all_cards()[0].raw.id.clone();
+        let at = now();
+        let real = CardState { phase: Phase::Review, stability: 80., difficulty: 4., due: at + 9 * 86400, last_review: Some(at - 80 * 86400), reps: 7, note: "A.md".into(), question: "Eins?".into(), ..Default::default() };
+        std::fs::write(root.join(STORE_NAME), serde_json::to_string(&StoreFile { version: 0, cards: BTreeMap::from([(id, real.clone())]), baseline: None }).unwrap()).unwrap();
+        scan(&root);
+        assert_eq!(state_of("Eins?"), Some(real));
+    }
+
+    #[test]
+    fn what_a_vault_holds_at_its_first_open_is_known_once() {
+        let _guard = lock();
+        let root = vault("once", &[("A.md", "Eins? :: 1\nZwei? :: 2\nDrei ::: 3\n")]);
+        let at = now();
+        scan(&root);
+        let cards = all_cards();
+        assert_eq!(cards.len(), 4);
+        for card in cards.iter() {
+            let state = card.state.as_ref().unwrap();
+            assert_eq!(state.phase, Phase::Review);
+            assert!(state.due >= next_day_start(at) && state.due < at + 30 * 86400, "{state:?}");
+            assert!(state.stability > 0. && state.last_review.is_some());
+            assert_eq!(state.note, "A.md");
+        }
+        assert_eq!(counts("", at).new, 0);
+        assert_eq!(stats("", at).new, 0);
+        let told = take_notice().unwrap();
+        assert_eq!((told.count, told.spread), (4, 4));
+        assert!(take_notice().is_none());
+        flush();
+        let saved: StoreFile = serde_json::from_slice(&std::fs::read(root.join(STORE_NAME)).unwrap()).unwrap();
+        assert!(saved.baseline.is_some());
+        let before = state_of("Eins?");
+        std::fs::write(root.join("B.md"), "Vier? :: 4\n").unwrap();
+        scan(&root);
+        assert_eq!(phase_of("Vier?"), Phase::New);
+        reopen(&root);
+        assert_eq!(phase_of("Vier?"), Phase::New);
+        assert_eq!(state_of("Eins?"), before);
+        assert!(take_notice().is_none());
+        close();
+    }
+
+    #[test]
+    fn an_empty_vault_remembers_its_first_open_too() {
+        let _guard = lock();
+        let root = vault("empty", &[("A.md", "Nur Text\n")]);
+        scan(&root);
+        assert!(take_notice().is_none());
+        flush();
+        assert!(root.join(STORE_NAME).exists());
+        std::fs::write(root.join("B.md"), "Neu? :: ja\n").unwrap();
+        reopen(&root);
+        assert_eq!(phase_of("Neu?"), Phase::New);
+        close();
+    }
+
+    #[test]
+    fn stores_from_older_versions_change_nothing() {
+        let _guard = lock();
+        let root = vault("older", &[("A.md", "Alt? :: 1\nNeu? :: 2\n")]);
+        let old = parse::cards_in("Alt? :: 1")[0].id.clone();
+        let kept = CardState { phase: Phase::Review, stability: 9., difficulty: 4., due: 1, last_review: Some(0), reps: 3, note: "A.md".into(), question: "Alt?".into(), ..Default::default() };
+        let file = format!("{{\"version\":0,\"cards\":{{\"{old}\":{}}}}}", serde_json::to_string(&kept).unwrap());
+        std::fs::write(root.join(STORE_NAME), &file).unwrap();
+        scan(&root);
+        assert_eq!(state_of("Alt?"), Some(kept));
+        assert_eq!(phase_of("Neu?"), Phase::New);
+        assert!(take_notice().is_none());
+        close();
+        let only_log = vault("only-log", &[("A.md", "F? :: A\n")]);
+        std::fs::write(only_log.join(LOG_NAME), "").unwrap();
+        scan(&only_log);
+        assert_eq!(phase_of("F?"), Phase::New, "a vault with reviews was used before");
+        close();
+        let synced = vault("synced", &[("A.md", "F? :: A\n")]);
+        std::fs::write(synced.join(".schrumbi-cards (Konflikt).json"), "{}").unwrap();
+        scan(&synced);
+        assert_eq!(phase_of("F?"), Phase::New, "a copy from a sync counts as used");
+        close();
+    }
+
+    #[test]
+    fn plugin_progress_is_taken_over_without_touching_the_note() {
+        let _guard = lock();
+        let text = "Plugin? :: ja <!--SR:!2030-01-15,40,290-->\nOhne? :: nein\n";
+        let root = vault("plugin", &[("A.md", text)]);
+        scan(&root);
+        let state = state_of("Plugin?").unwrap();
+        assert_eq!(state.due, day_start(NaiveDate::from_ymd_opt(2030, 1, 15).unwrap()));
+        assert_eq!(state.stability, 40.);
+        assert!(state.difficulty < 5.);
+        assert_eq!(state.last_review, Some(state.due - 40 * 86400));
+        assert_eq!(take_notice().map(|n| (n.count, n.spread)), Some((2, 1)));
+        std::fs::write(root.join("B.md"), "Später? :: x <!--SR:!2030-02-01,5,250-->\nLeer? :: y\n").unwrap();
+        scan(&root);
+        assert_eq!(state_of("Später?").map(|s| s.stability), Some(5.));
+        assert_eq!(phase_of("Leer?"), Phase::New);
+        let later = all_cards().iter().find(|c| c.raw.front == "Später?").cloned().unwrap();
+        reset(&later);
+        scan(&root);
+        assert_eq!(phase_of("Später?"), Phase::New, "starting over is not undone by the comment");
+        assert_eq!(std::fs::read_to_string(root.join("A.md")).unwrap(), text);
+        close();
+    }
+
+    #[test]
+    fn progress_under_an_id_that_held_the_comment_moves_over() {
+        let _guard = lock();
+        let text = "Begriff ::: Erklärung <!--SR:!2030-01-15,40,290!2030-01-20,50,250-->\n";
+        let root = vault("legacy", &[("A.md", text)]);
+        let reverse = parse::cards_in(text)[1].clone();
+        let old = reverse.legacy.clone().unwrap();
+        let mine = CardState { phase: Phase::Review, stability: 77., difficulty: 3., due: 5, last_review: Some(4), reps: 6, note: "A.md".into(), question: "Erklärung <!--SR:!2030-01-15,40,290!2030-01-20,50,250-->".into(), ..Default::default() };
+        std::fs::write(root.join(STORE_NAME), format!("{{\"version\":0,\"cards\":{{\"{old}\":{}}}}}", serde_json::to_string(&mine).unwrap())).unwrap();
+        let line = |id: &str| format!("{{\"card\":\"{id}\",\"at\":4,\"rating\":\"good\",\"phase\":\"review\",\"days\":1.0}}\n");
+        std::fs::write(root.join(LOG_NAME), line(&old)).unwrap();
+        scan(&root);
+        let moved = state_of("Erklärung").unwrap();
+        assert_eq!((moved.stability, moved.reps, moved.question.as_str()), (77., 6, "Erklärung"));
+        assert_eq!(state_of("Begriff").map(|s| s.stability), Some(40.), "the other direction takes the plugin's progress");
+        assert!(!STORE.read().unwrap().file.cards.contains_key(&old));
+        assert_eq!(read_log(&root.join(LOG_NAME))[0].card, reverse.id);
+        close();
+    }
+
+    #[test]
+    fn a_reworded_card_keeps_what_the_first_open_gave_it() {
+        let _guard = lock();
+        let root = vault("reword", &[("A.md", "Wie heißt die Hauptstadt? :: Berlin\n")]);
+        scan(&root);
+        let before = state_of("Wie heißt die Hauptstadt?").unwrap();
+        std::fs::write(root.join("A.md"), "Wie heißt die Hauptstadt hier? :: Berlin\n").unwrap();
+        scan(&root);
+        let after = state_of("Wie heißt die Hauptstadt hier?").unwrap();
+        assert_eq!((after.phase, after.due, after.stability), (before.phase, before.due, before.stability));
+        close();
+    }
+
+    #[test]
+    fn new_cards_taken_as_known_come_back_on_undo() {
+        let _guard = lock();
+        let root = vault("manual", &[("A.md", "Text\n")]);
+        scan(&root);
+        std::fs::write(root.join("A.md"), "Eins? :: 1\nZwei? :: 2\n").unwrap();
+        std::fs::create_dir_all(root.join("Sub")).unwrap();
+        std::fs::write(root.join("Sub/B.md"), "Drei? :: 3\n").unwrap();
+        scan(&root);
+        assert_eq!(fresh_count(""), 3);
+        assert_eq!(fresh_count("Sub"), 1);
+        let paused = all_cards().iter().find(|c| c.raw.front == "Zwei?").cloned().unwrap();
+        set_suspended(&paused, true);
+        let at = now();
+        let done = adopt_new_as_known("", at).unwrap();
+        assert_eq!((done.count, done.spread), (2, 2));
+        assert_eq!(phase_of("Eins?"), Phase::Review);
+        assert_eq!(phase_of("Drei?"), Phase::Review);
+        assert_eq!(phase_of("Zwei?"), Phase::New, "paused cards stay as they are");
+        assert_eq!(counts("", at).new, 0);
+        assert!(adopt_new_as_known("", at).is_none());
+        done.take_back();
+        assert_eq!(phase_of("Eins?"), Phase::New);
+        assert_eq!(state_of("Eins?"), None);
+        assert_eq!(fresh_count(""), 2);
+        close();
+    }
+
+    #[test]
+    fn imported_cards_never_reviewed_are_spread() {
+        let _guard = lock();
+        let root = vault("import", &[("A.md", "Text\n")]);
+        scan(&root);
+        let reviewed = CardState { phase: Phase::Review, stability: 12., due: 9, last_review: Some(1), reps: 2, ..Default::default() };
+        let fresh = vec![("n1".to_string(), "Anki/D.md".to_string(), "F1".to_string()), ("n2".to_string(), "Anki/D.md".to_string(), "F2".to_string())];
+        let done = adopt_import(vec![("r".to_string(), reviewed.clone())], Vec::new(), fresh, now()).unwrap();
+        assert_eq!((done.count, done.spread), (2, 2));
+        let store = STORE.read().unwrap();
+        assert_eq!(store.file.cards["r"], reviewed);
+        assert_eq!(store.file.cards["n1"].phase, Phase::Review);
+        assert_eq!(store.file.cards["n2"].note, "Anki/D.md");
+        drop(store);
+        assert!(adopt_import(Vec::new(), Vec::new(), Vec::new(), now()).is_none());
+        close();
+    }
+}
+
+#[cfg(test)]
+mod spreading {
+    use super::*;
+
+    #[test]
+    fn a_real_review_beats_a_card_only_taken_as_known_in_a_merge() {
+        let real = CardState { phase: Phase::Review, stability: 80., reps: 7, last_review: Some(100), due: 500, ..Default::default() };
+        let (taken, _) = spread(&items(1), &BTreeMap::new(), 10_000_000, 100, 0.9);
+        let file = |state: &CardState| serde_json::to_string(&StoreFile { version: 0, cards: BTreeMap::from([("0000".to_string(), state.clone())]), baseline: None }).unwrap();
+        for (ours, theirs) in [(file(&real), file(&taken[0].1)), (file(&taken[0].1), file(&real))] {
+            let merged: StoreFile = serde_json::from_str(&merge_store(&ours, &theirs).unwrap()).unwrap();
+            assert_eq!(merged.cards["0000"], real);
+        }
+    }
+
+    fn items(n: usize) -> Vec<(String, String, String)> {
+        (0..n).map(|i| (format!("{i:04}"), "n.md".to_string(), format!("F{i}"))).collect()
+    }
+
+    #[test]
+    fn few_cards_spread_over_two_weeks_many_over_four() {
+        let at = now();
+        let today = day_of(at);
+        let day = |s: &CardState| (day_of(s.due) - today).num_days();
+        let (few, last) = spread(&items(5), &BTreeMap::new(), at, 200, 0.9);
+        assert_eq!(few.len(), 5);
+        assert!(few.iter().all(|(_, s)| (1..=14).contains(&day(s))));
+        assert!(last <= 14);
+        let (many, last) = spread(&items(500), &BTreeMap::new(), at, 200, 0.9);
+        assert_eq!(last, 28);
+        assert!(many.iter().all(|(_, s)| (1..=28).contains(&day(s)) && s.phase == Phase::Review));
+        let mut per_day: HashMap<i64, usize> = HashMap::new();
+        for (_, s) in &many {
+            *per_day.entry(day(s)).or_default() += 1;
+        }
+        assert!(per_day.values().all(|n| *n <= 19), "{per_day:?}");
+        assert_eq!(spread(&items(500), &BTreeMap::new(), at, 200, 0.9).0, many, "the same cards land on the same days");
+        let (one, last) = spread(&items(1), &BTreeMap::new(), at, 200, 0.9);
+        assert_eq!((day(&one[0].1), last), (1, 1));
+    }
+
+    #[test]
+    fn no_day_gets_more_than_the_review_limit() {
+        let at = now();
+        let today = day_of(at);
+        let busy: BTreeMap<String, CardState> = (0..10).map(|i| (format!("old{i}"), CardState { phase: Phase::Review, due: day_start(today + Duration::days(1)), ..Default::default() })).collect();
+        let (placed, last) = spread(&items(100), &busy, at, 10, 0.9);
+        let mut per_day: HashMap<i64, usize> = HashMap::new();
+        for (_, s) in &placed {
+            *per_day.entry((day_of(s.due) - today).num_days()).or_default() += 1;
+        }
+        assert_eq!(per_day.get(&1), None, "tomorrow is already full");
+        assert!(per_day.values().all(|n| *n <= 10));
+        assert!(last > 10);
+        assert_eq!(placed.len(), 100);
+    }
+
+    #[test]
+    fn the_memory_matches_the_day_it_comes_back() {
+        let at = now();
+        let (placed, _) = spread(&items(28), &BTreeMap::new(), at, 200, 0.9);
+        for (_, s) in &placed {
+            let days = (day_of(s.due) - day_of(at)).num_days() as f64;
+            assert!((fsrs::interval(s.stability, 0.9) - days).abs() < 1e-6);
+            assert_eq!(s.last_review, Some(at));
+            assert_eq!(s.reps, 0);
+        }
+        let (strict, _) = spread(&items(1), &BTreeMap::new(), at, 200, 0.95);
+        assert!(strict[0].1.stability > 1.);
+    }
+
+    #[test]
+    fn plugin_ease_and_interval_read_as_difficulty_and_stability() {
+        let sr = |interval, ease| SrProgress { due: NaiveDate::from_ymd_opt(2030, 3, 1).unwrap(), interval, ease };
+        let easy = sr_state(&sr(10, 350), "n.md", "F");
+        let hard = sr_state(&sr(10, 130), "n.md", "F");
+        let normal = sr_state(&sr(10, 250), "n.md", "F");
+        assert_eq!((easy.difficulty, hard.difficulty), (1., 10.));
+        assert!(normal.difficulty > 4. && normal.difficulty < 6.);
+        assert_eq!(sr_state(&sr(0, 250), "n.md", "F").stability, 1.);
+        assert_eq!(sr_state(&sr(90000, 250), "n.md", "F").stability, 36500.);
+        assert_eq!((normal.phase, normal.reps, normal.note.as_str(), normal.question.as_str()), (Phase::Review, 1, "n.md", "F"));
+    }
+
+    #[test]
+    fn the_message_says_how_far_cards_were_spread() {
+        let words = |days| Adopted { count: 3, spread: 3, days, ..Default::default() }.spread_words();
+        assert_eq!(words(1), "fällig ab morgen");
+        assert_eq!(words(9), "verteilt auf die nächsten 9 Tage");
+        assert_eq!(words(28), "verteilt auf die nächsten 4 Wochen");
+        assert_eq!(words(14), "verteilt auf die nächsten 2 Wochen");
+        assert_eq!(Adopted { count: 1, ..Default::default() }.message(), "1 Karte als bekannt übernommen");
+        assert_eq!(Adopted { count: 30, spread: 20, days: 28, ..Default::default() }.message(), "20 Karten als bekannt übernommen, verteilt auf die nächsten 4 Wochen");
+    }
+
+    #[test]
+    fn merging_keeps_the_mark_of_the_first_open() {
+        let a = r#"{"version":0,"cards":{}}"#;
+        let b = r#"{"version":0,"cards":{},"baseline":42}"#;
+        let merged: StoreFile = serde_json::from_str(&merge_store(a, b).unwrap()).unwrap();
+        assert_eq!(merged.baseline, Some(42));
+        let none: StoreFile = serde_json::from_str(&merge_store(a, a).unwrap()).unwrap();
+        assert_eq!(none.baseline, None);
+        assert!(!merge_store(a, a).unwrap().contains("baseline"));
+    }
+
+    #[test]
+    fn thirty_new_cards_a_day_unless_the_settings_say_otherwise() {
+        assert_eq!(prefs::Prefs::default().card_new_per_day, 30);
+        let stored: prefs::Prefs = serde_json::from_str(r#"{"cardNewPerDay":20}"#).unwrap();
+        assert_eq!(stored.card_new_per_day, 20);
+        let missing: prefs::Prefs = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.card_new_per_day, 30);
     }
 }
 

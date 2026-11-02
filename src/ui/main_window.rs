@@ -367,7 +367,7 @@ impl Render for MainWindow {
             .bg(t.content)
             .font_family(Theme::font_family())
             .text_size(px(font::BODY))
-            .line_height(relative(1.22))
+            .line_height(relative(font::LINE))
             .text_color(t.primary)
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
                 if window.context_stack().iter().any(|c| c.contains("NoteEditor")) {

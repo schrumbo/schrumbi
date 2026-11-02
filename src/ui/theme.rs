@@ -74,6 +74,7 @@ pub mod font {
     pub const CALLOUT: f32 = 12.;
     pub const CAPTION: f32 = 11.;
     pub const CAPTION2: f32 = 10.;
+    pub const LINE: f32 = 1.22;
 }
 
 static NOTE_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1065353216);

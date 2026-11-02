@@ -224,6 +224,7 @@ impl IndexJob {
         super::vault::index::rebuild(vault_root, &self.exclude);
         super::cards::open(&dunce::canonicalize(vault_root).unwrap_or_else(|_| vault_root.clone()));
         super::cards::reconcile();
+        super::cards::settle(super::cards::now());
         (count, catalog)
     }
 }
@@ -1384,6 +1385,10 @@ impl Library {
         self.index_count = count;
         self.is_indexing = false;
         self.follow_outside_moves();
+        if let Some(adopted) = super::cards::take_notice() {
+            let message = adopted.message();
+            self.notify(message, "calendar-check", None, Some(Box::new(move |_: &mut Library| adopted.take_back())));
+        }
         self.changed();
     }
 
@@ -2441,12 +2446,16 @@ impl Library {
     }
 
     /// Reports an import of flashcards; taking it back removes the new files.
-    pub fn cards_imported(&mut self, created: Vec<PathBuf>, added: usize, duplicates: usize) {
+    pub fn cards_imported(&mut self, created: Vec<PathBuf>, added: usize, duplicates: usize, spread: Option<String>) {
         self.refresh();
         let message = match (added, duplicates) {
             (1, 0) => tr("1 Karte importiert"),
             (n, 0) => trf("%@ Karten importiert", &[&n.to_string()]),
             (n, d) => trf("%@ Karten importiert, %@ waren schon da", &[&n.to_string(), &d.to_string()]),
+        };
+        let message = match spread {
+            Some(words) => format!("{message} · {words}"),
+            None => message,
         };
         self.commit(message, "layers", created.into_iter().map(Change::Trash).collect());
     }

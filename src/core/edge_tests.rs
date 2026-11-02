@@ -631,7 +631,7 @@ fn renaming_keeps_links_alive_and_undo_takes_all_of_it_back() {
     assert_eq!(read("Offen.md"), "[[Neu]]");
 }
 
-static VAULT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static VAULT_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn vault_folder(name: &str) -> (PathBuf, Library) {
     let root = dunce::canonicalize(folder(name)).unwrap();

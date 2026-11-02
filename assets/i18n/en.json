@@ -1528,5 +1528,15 @@
   "Text in voller Breite ausschalten": "Turn off full-width text",
   "Hier öffnen": "Open Here",
   "Rechts öffnen": "Open on the Right",
-  "Links öffnen": "Open on the Left"
+  "Links öffnen": "Open on the Left",
+  "fällig ab morgen": "due from tomorrow",
+  "verteilt auf die nächsten %@ Tage": "spread over the next %@ days",
+  "verteilt auf die nächsten %@ Wochen": "spread over the next %@ weeks",
+  "1 Karte als bekannt übernommen": "1 card marked as known",
+  "%@ Karten als bekannt übernommen": "%@ cards marked as known",
+  "Neue Karten als bekannt übernehmen…": "Mark New Cards as Known…",
+  "1 neue Karte als bekannt übernehmen?": "Mark 1 new card as known?",
+  "%@ neue Karten als bekannt übernehmen?": "Mark %@ new cards as known?",
+  "Als bekannt übernehmen": "Mark as Known",
+  "Sie zählen nicht mehr als neu und kommen als Wiederholungen, verteilt auf die nächsten Wochen. Pausierte Karten bleiben, wie sie sind.": "They no longer count as new and come back as reviews, spread over the coming weeks. Paused cards stay as they are."
 }

@@ -17,6 +17,18 @@ pub struct RawCard {
     pub context: Vec<String>,
     /// Cards from one place in a note; they do not come up on the same day.
     pub group: String,
+    /// Progress the Obsidian Spaced Repetition plugin wrote beside the card.
+    pub sr: Option<SrProgress>,
+    /// The id older versions gave the card while its scheduling comment still counted as text.
+    pub legacy: Option<String>,
+}
+
+/// One schedule of an `<!--SR:!2026-11-20,12,250-->` comment: due day, interval in days, ease in percent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SrProgress {
+    pub due: chrono::NaiveDate,
+    pub interval: u32,
+    pub ease: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,15 +247,15 @@ fn cloze_cards(text: &str, lines: (usize, usize), context: &[String], tagged: bo
             result
         };
         let id = card_id(CardKind::Cloze, &format!("{number}|{text}"));
-        out.push(RawCard { id, kind: CardKind::Cloze, front: render(true), back: render(false), lines, context: context.to_vec(), group: group.clone() });
+        out.push(RawCard { id, kind: CardKind::Cloze, front: render(true), back: render(false), lines, context: context.to_vec(), group: group.clone(), sr: None, legacy: None });
     }
 }
 
 fn add_basic(front: String, back: String, both: bool, lines: (usize, usize), context: &[String], out: &mut Vec<RawCard>) {
     let group = hash(&normal(&format!("{front}|{back}")));
-    out.push(RawCard { id: card_id(CardKind::Basic, &front), kind: CardKind::Basic, front: front.clone(), back: back.clone(), lines, context: context.to_vec(), group: group.clone() });
+    out.push(RawCard { id: card_id(CardKind::Basic, &front), kind: CardKind::Basic, front: front.clone(), back: back.clone(), lines, context: context.to_vec(), group: group.clone(), sr: None, legacy: None });
     if both {
-        out.push(RawCard { id: card_id(CardKind::Reverse, &back), kind: CardKind::Reverse, front: back, back: front, lines, context: context.to_vec(), group });
+        out.push(RawCard { id: card_id(CardKind::Reverse, &back), kind: CardKind::Reverse, front: back, back: front, lines, context: context.to_vec(), group, sr: None, legacy: None });
     }
 }
 
@@ -271,9 +283,101 @@ pub fn line_marks(line: &str) -> &str {
 /// `Frage :: Antwort` is a card, `:::` learns both ways, a line with only `?` (or `??`) separates a longer question
 /// from its answer, `{{c1::Lücke}}` hides a part. Notes tagged `#flashcards` or `#karten` also count `{{Lücke}}` and
 /// `==Markiertes==`. Frontmatter `cards: false` leaves a note out. Code, formulas and comments never make a card.
+/// Scheduling comments are progress, not text: a card's id and answer leave them out.
 pub fn cards_in(text: &str) -> Vec<RawCard> {
+    let mut cards = read_cards(text, true);
+    if text.contains("<!--SR:") {
+        let older = read_cards(text, false);
+        if older.len() == cards.len() {
+            for (card, old) in cards.iter_mut().zip(older) {
+                if old.id != card.id && old.kind == card.kind && old.lines.0 == card.lines.0 {
+                    card.legacy = Some(old.id);
+                }
+            }
+        }
+    }
+    cards
+}
+
+static SR_COMMENT: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"[ \t]*<!--SR:((?:![0-9]{4}-[0-9]{2}-[0-9]{2},[0-9]+,[0-9]+)+)-->").ok());
+static SR_ENTRY: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"!([0-9]{4}-[0-9]{2}-[0-9]{2}),([0-9]+),([0-9]+)").ok());
+
+fn take_schedules(line: &str) -> (String, Vec<SrProgress>, bool) {
+    let (Some(comments), Some(entries)) = (SR_COMMENT.as_ref(), SR_ENTRY.as_ref()) else { return (line.to_string(), Vec::new(), false) };
+    let code = code_spans(line);
+    let mut found = Vec::new();
+    let mut kept = String::with_capacity(line.len());
+    let mut at = 0;
+    for comment in comments.captures_iter(line) {
+        let Some(whole) = comment.get(0) else { continue };
+        if code.iter().any(|s| s.contains(&whole.start()) || s.contains(&(whole.end() - 1))) {
+            continue;
+        }
+        kept.push_str(line.get(at..whole.start()).unwrap_or_default());
+        at = whole.end();
+        for entry in entries.captures_iter(&comment[1]) {
+            if let (Ok(due), Ok(interval), Ok(ease)) = (chrono::NaiveDate::parse_from_str(&entry[1], "%Y-%m-%d"), entry[2].parse(), entry[3].parse()) {
+                found.push(SrProgress { due, interval, ease });
+            }
+        }
+    }
+    if at == 0 {
+        return (line.to_string(), found, false);
+    }
+    kept.push_str(line.get(at..).unwrap_or_default());
+    let alone = kept.trim().is_empty();
+    (kept, found, alone)
+}
+
+/// The Obsidian Spaced Repetition plugin's comments standing in these lines, to keep them when a card is rewritten.
+pub fn schedule_comments(lines: &[String]) -> String {
+    let Some(comments) = SR_COMMENT.as_ref() else { return String::new() };
+    lines
+        .iter()
+        .flat_map(|line| {
+            let code = code_spans(line);
+            comments.find_iter(line).filter(move |m| !code.iter().any(|s| s.contains(&m.start()) || s.contains(&(m.end() - 1)))).map(|m| m.as_str().to_string()).collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The text as a person wrote it, without the plugin's comments, to edit it.
+pub fn without_schedules(text: &str) -> String {
+    text.split('\n').map(|line| if line.contains("<!--SR:") { take_schedules(line).0 } else { line.to_string() }).collect::<Vec<_>>().join("\n")
+}
+
+/// A line that holds nothing but the plugin's comments.
+pub fn is_schedule_line(line: &str) -> bool {
+    line.contains("<!--SR:") && take_schedules(line).2
+}
+
+fn attach_schedules(cards: &mut [RawCard], schedules: &[(Vec<SrProgress>, bool)], first: usize, last: usize) {
+    let mut found: Vec<SrProgress> = schedules[first..=last].iter().flat_map(|(s, _)| s.iter().copied()).collect();
+    if let Some((below, true)) = schedules.get(last + 1) {
+        found.extend(below.iter().copied());
+    }
+    for (card, schedule) in cards.iter_mut().zip(found) {
+        card.sr = Some(schedule);
+    }
+}
+
+fn read_cards(text: &str, strip_schedules: bool) -> Vec<RawCard> {
     let prepared = crate::core::vault::syntax::prepare(text);
-    let lines: Vec<&str> = prepared.split('\n').collect();
+    let mut schedules: Vec<(Vec<SrProgress>, bool)> = Vec::new();
+    let owned: Vec<std::borrow::Cow<str>> = prepared
+        .split('\n')
+        .map(|line| {
+            if strip_schedules && line.contains("<!--SR:") {
+                let (kept, found, alone) = take_schedules(line);
+                schedules.push((found, alone));
+                std::borrow::Cow::Owned(kept)
+            } else {
+                schedules.push((Vec::new(), false));
+                std::borrow::Cow::Borrowed(line)
+            }
+        })
+        .collect();
+    let lines: Vec<&str> = owned.iter().map(|l| &**l).collect();
     let start = frontmatter_end(&lines);
     let head = lines.get(..start).unwrap_or_default().join("\n");
     if head.lines().any(|l| matches!(l.replace(' ', "").as_str(), "cards:false" | "karten:false")) {
@@ -339,6 +443,7 @@ pub fn cards_in(text: &str) -> Vec<RawCard> {
         }
         let crumbs: Vec<String> = context.iter().map(|(_, h)| h.clone()).collect();
         let next_mark = lines.get(i + 1).map(|l| strip_marks(l).trim());
+        let from = out.len();
         if matches!(next_mark, Some("?") | Some("??")) {
             let both = next_mark == Some("??");
             let mut end = i + 2;
@@ -348,7 +453,6 @@ pub fn cards_in(text: &str) -> Vec<RawCard> {
             let back = lines[i + 2..end].iter().map(|l| strip_quote(l)).collect::<Vec<_>>().join("\n");
             let front = strip_marks(line).trim();
             if !gaps_in(front, tagged).is_empty() {
-                let from = out.len();
                 cloze_cards(front, (i, end - 1), &crumbs, tagged, &mut out);
                 for card in &mut out[from..] {
                     card.back = format!("{}\n\n{}", card.back, back.trim());
@@ -356,6 +460,7 @@ pub fn cards_in(text: &str) -> Vec<RawCard> {
             } else if !back.trim().is_empty() {
                 add_basic(front.to_string(), back.trim().to_string(), both, (i, end - 1), &crumbs, &mut out);
             }
+            attach_schedules(&mut out[from..], &schedules, i, end - 1);
             i = end;
             continue;
         }
@@ -367,6 +472,7 @@ pub fn cards_in(text: &str) -> Vec<RawCard> {
         } else {
             cloze_cards(body, (i, i), &crumbs, tagged, &mut out);
         }
+        attach_schedules(&mut out[from..], &schedules, i, i);
         i += 1;
     }
     out
@@ -526,6 +632,89 @@ mod tests {
         let b = &cards_in("# Neu\n- frage?   :: andere Antwort")[0];
         assert_eq!(a.id, b.id);
         assert_ne!(a.id, cards_in("Andere Frage? :: Antwort")[0].id);
+    }
+
+    fn sr(due: &str, interval: u32, ease: u32) -> Option<SrProgress> {
+        Some(SrProgress { due: chrono::NaiveDate::parse_from_str(due, "%Y-%m-%d").unwrap(), interval, ease })
+    }
+
+    #[test]
+    fn spaced_repetition_comments_are_progress_not_text() {
+        let inline = cards_in("Frage? :: Antwort <!--SR:!2026-11-20,12,250-->");
+        assert_eq!(inline.len(), 1);
+        assert_eq!(inline[0].back, "Antwort");
+        assert_eq!(inline[0].sr, sr("2026-11-20", 12, 250));
+        assert_eq!(inline[0].id, cards_in("Frage? :: Antwort")[0].id);
+        let below = cards_in("Frage? :: Antwort\n<!--SR:!2026-11-20,12,250-->\n\nAndere? :: Text");
+        assert_eq!(below.len(), 2);
+        assert_eq!(below[0].sr, sr("2026-11-20", 12, 250));
+        assert_eq!(below[1].sr, None);
+        let long = cards_in("Lange Frage\n?\nAntwort\nzweite Zeile\n<!--SR:!2026-12-01,30,270-->");
+        assert_eq!(long[0].back, "Antwort\nzweite Zeile");
+        assert_eq!(long[0].sr, sr("2026-12-01", 30, 270));
+        assert_eq!(long[0].lines, (0, 3));
+    }
+
+    #[test]
+    fn both_directions_and_gaps_take_one_schedule_each() {
+        let both = cards_in("Term ::: Erklärung <!--SR:!2026-11-10,3,230!2026-11-12,5,250-->");
+        assert_eq!(both.len(), 2);
+        assert_eq!((both[0].sr, both[1].sr), (sr("2026-11-10", 3, 230), sr("2026-11-12", 5, 250)));
+        assert_eq!(both[1].front, "Erklärung");
+        assert_eq!(both[1].id, cards_in("Term ::: Erklärung")[1].id);
+        let gaps = cards_in("Der {{c1::Satz}} von {{c2::Euler}}\n<!--SR:!2026-11-10,3,230!2026-11-12,5,250-->");
+        assert_eq!(gaps.len(), 2);
+        assert_eq!((gaps[0].sr, gaps[1].sr), (sr("2026-11-10", 3, 230), sr("2026-11-12", 5, 250)));
+        let inline = cards_in("Der {{c1::Satz}} von {{c2::Euler}} <!--SR:!2026-11-10,3,230-->");
+        assert_eq!(inline[0].sr, sr("2026-11-10", 3, 230));
+        assert_eq!(inline[1].sr, None);
+        assert!(!inline[0].back.contains("SR"));
+        assert_eq!(inline[0].id, cards_in("Der {{c1::Satz}} von {{c2::Euler}}")[0].id);
+    }
+
+    #[test]
+    fn ids_stay_put_when_the_plugin_reschedules() {
+        let a = cards_in("Term ::: Erklärung <!--SR:!2026-11-10,3,230!2026-11-12,5,250-->");
+        let b = cards_in("Term ::: Erklärung <!--SR:!2027-01-10,60,250!2027-02-12,90,270-->");
+        assert_eq!(a.iter().map(|c| &c.id).collect::<Vec<_>>(), b.iter().map(|c| &c.id).collect::<Vec<_>>());
+        let long_a = cards_in("Hin\n??\nHer\n<!--SR:!2026-11-10,3,230!2026-11-12,5,250-->");
+        let long_b = cards_in("Hin\n??\nHer\n<!--SR:!2026-12-10,9,230!2026-12-12,9,250-->");
+        assert_eq!(long_a[1].id, long_b[1].id);
+        assert_eq!(long_a[1].id, cards_in("Hin\n??\nHer")[1].id);
+    }
+
+    #[test]
+    fn the_id_an_older_version_gave_is_kept_for_moving_progress() {
+        let line = "Term ::: Erklärung <!--SR:!2026-11-10,3,230!2026-11-12,5,250-->";
+        let cards = cards_in(line);
+        assert_eq!(cards[0].legacy, None);
+        assert_eq!(cards[1].legacy, Some(card_id(CardKind::Reverse, "Erklärung <!--SR:!2026-11-10,3,230!2026-11-12,5,250-->")));
+        let gap = "Der {{c1::Satz}} gilt <!--SR:!2026-11-10,3,230-->";
+        assert_eq!(cards_in(gap)[0].legacy, Some(card_id(CardKind::Cloze, &format!("1|{gap}"))));
+        let long = cards_in("Hin\n??\nHer\n<!--SR:!2026-11-10,3,230-->");
+        assert_eq!(long[1].legacy, Some(card_id(CardKind::Reverse, "Her\n<!--SR:!2026-11-10,3,230-->")));
+        assert!(cards_in("Frage :: Antwort").iter().all(|c| c.legacy.is_none()));
+    }
+
+    #[test]
+    fn broken_or_foreign_comments_stay_comments() {
+        assert!(cards_in("<!--SR:!2026-11-10,3,230-->").is_empty());
+        let card = &cards_in("F :: A <!-- Notiz -->")[0];
+        assert_eq!(card.sr, None);
+        assert_eq!(cards_in("F :: A <!--SR:!kaputt-->")[0].sr, None);
+        assert_eq!(cards_in("`F :: A <!--SR:!2026-11-10,3,230-->`").len(), 0);
+    }
+
+    #[test]
+    fn rewriting_a_card_can_keep_its_comments() {
+        let lines = vec!["F :: A <!--SR:!2026-11-10,3,230-->".to_string(), "mehr".to_string()];
+        assert_eq!(schedule_comments(&lines), " <!--SR:!2026-11-10,3,230-->");
+        assert_eq!(schedule_comments(&["F :: A".to_string()]), "");
+        assert_eq!(schedule_comments(&["und `<!--SR:!2026-11-10,3,230-->`".to_string()]), "");
+        assert!(is_schedule_line("  <!--SR:!2026-11-10,3,230!2026-11-11,4,250-->"));
+        assert!(!is_schedule_line("F :: A <!--SR:!2026-11-10,3,230-->"));
+        assert!(!is_schedule_line("<!-- Notiz -->"));
+        assert_eq!(without_schedules("Der {{c1::Satz}} gilt <!--SR:!2026-11-10,3,230-->\nund `<!--SR:!2026-11-10,3,230-->`"), "Der {{c1::Satz}} gilt\nund `<!--SR:!2026-11-10,3,230-->`");
     }
 
     #[test]
