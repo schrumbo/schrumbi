@@ -1604,6 +1604,17 @@ impl CardsPage {
 }
 
 fn baseline_gap(window: &Window, large: f32, weight: FontWeight, small: f32) -> f32 {
+    thread_local!(static GAPS: std::cell::RefCell<std::collections::HashMap<(u32, u16, u32), f32>> = std::cell::RefCell::new(std::collections::HashMap::new()));
+    let key = (large.to_bits(), weight.0 as u16, small.to_bits());
+    if let Some(gap) = GAPS.with(|g| g.borrow().get(&key).copied()) {
+        return gap;
+    }
+    let gap = measure_gap(window, large, weight, small);
+    GAPS.with(|g| g.borrow_mut().insert(key, gap));
+    gap
+}
+
+fn measure_gap(window: &Window, large: f32, weight: FontWeight, small: f32) -> f32 {
     let system = window.text_system();
     let family: SharedString = Theme::font_family().into();
     let id = |weight: FontWeight| system.resolve_font(&Font { weight, ..font(family.clone()) });
