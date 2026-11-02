@@ -455,6 +455,7 @@ impl Pages {
     fn drop_area(&mut self, area: AnyElement, panes: DropPanes, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = Theme::get(cx);
         let rect = self.doc_drop.as_ref().map(|h| panes.rect(h));
+        let split = panes.split;
         if let Some(r) = rect {
             self.drop_rect = r;
         }
@@ -484,7 +485,7 @@ impl Pages {
             let right = super::motion::follow(("doc-drop-right", epoch), target.1, super::motion::FAST, window, cx);
             let beside = self.doc_drop.as_ref().is_none_or(|h| h.to == DocDrop::Beside);
             let path = self.doc_drop.as_ref().map(|h| h.path.clone());
-            let (label, mark) = if beside { (tr("Daneben öffnen"), icon("columns-2", iconsize::S, t.accent).into_any_element()) } else { (tr("Hier öffnen"), path.as_deref().map_or_else(|| div().into_any_element(), |p| file_icon(p, iconsize::S).into_any_element())) };
+            let (label, mark) = if beside { (tr(if split { "Rechts öffnen" } else { "Daneben öffnen" }), icon("columns-2", iconsize::S, t.accent).into_any_element()) } else { (tr(if split { "Links öffnen" } else { "Hier öffnen" }), path.as_deref().map_or_else(|| div().into_any_element(), |p| file_icon(p, iconsize::S).into_any_element())) };
             let pill = div().flex().items_center().gap(px(space::S)).px(px(space::M)).py(px(space::XS)).rounded_full().bg(t.material).shadow_md().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).text_color(t.accent).child(mark).child(label);
             let overlay = div()
                 .absolute()
