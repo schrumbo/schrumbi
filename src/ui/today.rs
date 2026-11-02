@@ -44,19 +44,40 @@ pub fn render(lib: &Library, width: f32, t: &Theme) -> Div {
         .children(recent_notes(t))
 }
 
+/// Notes newest first, optionally only below `within`; computed once per vault scan and folder.
+pub(super) fn recent_notes_in(within: Option<&std::path::Path>, limit: usize) -> Vec<(std::path::PathBuf, f64)> {
+    type Recent = std::collections::HashMap<(Option<std::path::PathBuf>, usize), Vec<(std::path::PathBuf, f64)>>;
+    thread_local! {
+        static CACHE: std::cell::RefCell<(u64, std::path::PathBuf, Recent)> = std::cell::RefCell::new(Default::default());
+    }
+    let vault = crate::core::vault::index::current();
+    CACHE.with_borrow_mut(|(generation, root, recent)| {
+        if *generation != vault.generation || *root != vault.root {
+            (*generation, *root) = (vault.generation, vault.root.clone());
+            recent.clear();
+        }
+        recent
+            .entry((within.map(std::path::Path::to_path_buf), limit))
+            .or_insert_with(|| {
+                let mut notes: Vec<(std::path::PathBuf, f64)> = vault.notes.iter().filter(|(p, _)| !vault.is_template(p) && crate::core::markdown::is_markdown(p) && within.is_none_or(|w| p.starts_with(w))).map(|(p, f)| (p.clone(), f.modified)).collect();
+                notes.sort_by(|a, b| b.1.total_cmp(&a.1));
+                notes.truncate(limit);
+                notes
+            })
+            .clone()
+    })
+}
+
 /// What was written last, one click away.
 fn recent_notes(t: &Theme) -> Option<Div> {
-    let vault = crate::core::vault::index::current();
-    let mut notes: Vec<(&std::path::PathBuf, f64)> = vault.notes.iter().filter(|(p, _)| !vault.is_template(p)).filter(|(p, _)| crate::core::markdown::is_markdown(p)).map(|(p, f)| (p, f.modified)).collect();
-    notes.sort_by(|a, b| b.1.total_cmp(&a.1));
-    notes.truncate(5);
+    let notes = recent_notes_in(None, 5);
     if notes.is_empty() {
         return None;
     }
     let now = chrono::Local::now().timestamp() as f64;
     let rows = notes.into_iter().enumerate().map(|(i, (path, modified))| {
         let (open, menu) = (path.clone(), path.clone());
-        inset_file_row(("recent-note", i), path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t)
+        inset_file_row(("recent-note", i), &path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t)
             .child(caption(super::notes_page::changed_ago(now - modified), t).flex_none())
             .on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
             .context_menu(move |m, _, _| file_menu(m, menu.clone()))

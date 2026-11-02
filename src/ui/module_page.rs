@@ -382,16 +382,13 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
         grouped(t).py(px(space::XS)).px(px(space::M)).children(next.iter().map(|a| entry(lib, a, st, view.clone(), t))).into_any_element()
     };
     let more = (all > next.len()).then(|| more_link("to-deadlines", trf("Alle %@", &[&all.to_string()]), ModuleTab::Deadlines, view.clone(), t));
-    let vault = crate::core::vault::index::current();
     let folder = lib.root.as_ref().map(|r| r.join(&m.folder)).unwrap_or_default();
-    let mut recent: Vec<(&std::path::PathBuf, f64)> = vault.notes.iter().filter(|(p, _)| p.starts_with(&folder) && crate::core::markdown::is_markdown(p)).map(|(p, f)| (p, f.modified)).collect();
-    recent.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let recent = super::today::recent_notes_in(Some(&folder), 6);
     let count = recent.len();
-    recent.truncate(6);
     let now = chrono::Local::now().timestamp() as f64;
     let hover_rows = recent.into_iter().enumerate().map(|(i, (path, at))| {
         let (open, menu) = (path.clone(), path.clone());
-        inset_file_row(("module-recent", i), path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t).child(caption(super::notes_page::changed_ago(now - at), t).flex_none()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).context_menu(move |menu_box, _, _| file_menu(menu_box, menu.clone()))
+        inset_file_row(("module-recent", i), &path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t).child(caption(super::notes_page::changed_ago(now - at), t).flex_none()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).context_menu(move |menu_box, _, _| file_menu(menu_box, menu.clone()))
     });
     let new_id = m.id.clone();
     let files: AnyElement = if count == 0 {
