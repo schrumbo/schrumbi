@@ -143,10 +143,15 @@ fn commands(cx: &App) -> Vec<Command> {
             add(&view, S::SplitPreview.label(), "columns-2", keys(S::SplitPreview), Run::NoteAction(Box::new(app::SplitPreview)));
         }
         add(&view, S::ExportPdf.label(), "share", keys(S::ExportPdf), Run::NoteAction(Box::new(app::ExportPdf)));
+        let full = crate::core::prefs::get().reader_full_width;
+        add(&view, if full { tr("Text in voller Breite ausschalten") } else { tr("Text in voller Breite einschalten") }, "move-horizontal", None, Run::Call(Rc::new(move |cx| super::documents::set_reader_full_width(!full, cx))));
         add(&file, tr("Sichern"), "save", Some(fixed_keys("S")), Run::NoteAction(Box::new(app::Save)));
     }
     if in_document {
         add(&view, S::CloseTab.label(), "x", keys(S::CloseTab), Run::Action(Box::new(app::CloseTab)));
+    }
+    if in_document && state::read(cx, |l| l.split_document.is_some()) {
+        add(&view, tr("Geteilte Ansicht schließen"), "columns-2", None, Run::Call(Rc::new(|cx| act(cx, |l| l.set_split(None)))));
     }
     if state::read(cx, |l| l.can_undo()) {
         add(&edit, tr("Widerrufen"), "undo-2", Some(fixed_keys("Z")), Run::Action(Box::new(app::Undo)));

@@ -1501,5 +1501,9 @@
   "Modul, das noch keinen Ordner hat": "Module without a folder yet",
   "Hake links einen Ordner an oder lege unten einen an. Geht auch später: Rechtsklick auf einen Ordner in den Notizen.": "Tick a folder on the left or create one below. Also possible later: right-click a folder in Notes.",
   "Los geht's": "Let's go",
-  "Einstellungen → Kalender abonnieren, Adresse eintragen.": "Settings → Subscribe to a calendar, enter the address."
+  "Einstellungen → Kalender abonnieren, Adresse eintragen.": "Settings → Subscribe to a calendar, enter the address.",
+  "Text in voller Breite": "Full-width text",
+  "Text in voller Breite einschalten": "Turn on full-width text",
+  "Text in voller Breite ausschalten": "Turn off full-width text",
+  "Hier öffnen": "Open Here"
 }

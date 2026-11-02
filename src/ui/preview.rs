@@ -119,7 +119,7 @@ impl Render for FilePreview {
                 .size_full()
                 .overflow_y_scrollbar()
                 .child(super::image_view::wheel_zoom(|factor, _, _, cx| super::documents::scale_font(factor, cx)))
-                .child(div().w_full().flex().justify_center().child(div().w_full().max_w(px(680.)).p(px(space::XL)).child(super::markdown_view::render(text, self.path.as_deref().and_then(Path::parent), None, &t))))
+                .child(div().w_full().flex().justify_center().child(div().w_full().when(!crate::core::prefs::get().reader_full_width, |d| d.max_w(px(680.))).p(px(space::XL)).child(super::markdown_view::render(text, self.path.as_deref().and_then(Path::parent), None, &t))))
                 .into_any_element(),
             Content::Text(text) => div()
                 .relative()

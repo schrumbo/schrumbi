@@ -22,6 +22,13 @@ use super::text::fold;
 use super::workspace::{self, CONFIG_NAME, STATE_NAME};
 use super::{day, prefs, schedule};
 
+/// Where a dragged document lands in the document area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocDrop {
+    Here,
+    Beside,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Route {
     Today,
@@ -2779,6 +2786,64 @@ impl Library {
         self.split_document = path.filter(|p| self.open_documents.contains(p) && self.active_document.as_ref() != Some(p));
         self.save_documents();
         self.changed();
+    }
+
+    fn left_after_move(&self, path: &Path, fallback: Option<&Path>) -> Option<PathBuf> {
+        self.split_document.clone().filter(|s| s != path).or_else(|| fallback.filter(|f| *f != path && self.open_documents.iter().any(|d| d == f)).map(Path::to_path_buf))
+    }
+
+    /// Whether dropping a dragged document there changes anything. `fallback` takes the shown pane when the shown document itself moves beside.
+    pub fn can_drop_document(&self, path: &Path, to: DocDrop, fallback: Option<&Path>) -> bool {
+        let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if !self.open_documents.contains(&path) && !(path.exists() && Self::opens_in_app(&path)) {
+            return false;
+        }
+        let shown = self.active_document.as_ref() == Some(&path);
+        match to {
+            DocDrop::Here => !shown,
+            DocDrop::Beside => self.active_document.is_some() && self.split_document.as_ref() != Some(&path) && (!shown || self.left_after_move(&path, fallback).is_some()),
+        }
+    }
+
+    /// Shows a dragged document in the shown pane or beside it, opening it as a tab first.
+    pub fn drop_document(&mut self, path: &Path, to: DocDrop, fallback: Option<&Path>) {
+        if !self.can_drop_document(path, to, fallback) {
+            return;
+        }
+        let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        match to {
+            DocDrop::Here => {
+                if self.split_document.as_ref() == Some(&path)
+                    && let Some(shown) = self.active_document.clone()
+                {
+                    self.split_document = Some(shown);
+                    self.active_document = Some(path.clone());
+                    self.save_documents();
+                    self.set_route(Route::Doc(path));
+                } else {
+                    self.open_file(&path);
+                    self.pin_document(&path);
+                }
+            }
+            DocDrop::Beside => {
+                if !self.open_documents.contains(&path) {
+                    let at = self.active_document.as_ref().and_then(|a| self.open_documents.iter().position(|d| d == a)).map_or(self.open_documents.len(), |i| i + 1);
+                    self.open_documents.insert(at, path.clone());
+                }
+                self.pin_document(&path);
+                let left = (self.active_document.as_ref() == Some(&path)).then(|| self.left_after_move(&path, fallback)).flatten();
+                self.split_document = Some(path);
+                self.follow_outside_moves();
+                self.save_documents();
+                match left {
+                    Some(left) => {
+                        self.active_document = Some(left.clone());
+                        self.set_route(Route::Doc(left));
+                    }
+                    None => self.changed(),
+                }
+            }
+        }
     }
 
     /// The buffer for a note, created on first use.
