@@ -2146,7 +2146,18 @@ impl Library {
     /// Records a step and shows it as a toast that offers to take it back.
     fn commit(&mut self, message: String, icon: &'static str, changes: Vec<Change>) {
         self.record(message.clone(), changes);
-        self.notify(message, icon, None, Some(Box::new(|lib: &mut Library| lib.undo())));
+        let undo = self.undo_latest();
+        self.notify(message, icon, None, Some(undo));
+    }
+
+    /// Takes back the latest step, but only while it still is the latest; a toast must not undo a later edit.
+    fn undo_latest(&self) -> Undo {
+        let (count, label) = (self.undo_steps.len(), self.undo_steps.last().map(|s| s.label.clone()));
+        Box::new(move |lib: &mut Library| {
+            if lib.undo_steps.len() == count && lib.undo_steps.last().map(|s| s.label.clone()) == label {
+                lib.undo();
+            }
+        })
     }
 
     /// Records an edit made by continuous input; edits of the same `kind` in quick succession become one step.
@@ -2210,7 +2221,8 @@ impl Library {
             self.redo_steps.push(Step { label, changes: failed });
             return;
         }
-        self.notify(trf("Wiederholt: %@", &[&label]), "redo-2", None, Some(Box::new(|lib: &mut Library| lib.undo())));
+        let undo = self.undo_latest();
+        self.notify(trf("Wiederholt: %@", &[&label]), "redo-2", None, Some(undo));
     }
 
     /// Applies a step; returns its reverse and the changes that failed, so they can be tried again.
@@ -2290,7 +2302,10 @@ impl Library {
                     Change::Note { path, text: before }
                 }
                 Change::Cards { root, swaps } => {
-                    let back = super::cards::swap(root.as_deref(), swaps).ok_or_else(|| anyhow::anyhow!(tr("Die Karten gehören zu einem anderen Ordner")))?;
+                    let back = super::cards::swap(root.as_deref(), swaps).unwrap_or_else(|| {
+                        self.last_error = Some(tr("Die Karten gehören zu einem anderen Ordner und bleiben, wie sie sind."));
+                        Vec::new()
+                    });
                     Change::Cards { root, swaps: back }
                 }
             })
@@ -2460,12 +2475,14 @@ impl Library {
     pub fn cards_known(&mut self, adopted: super::cards::Adopted) {
         let message = adopted.message();
         self.record(adopted.label(), vec![Change::Cards { root: adopted.root, swaps: adopted.changes }]);
-        self.notify(message, "calendar-check", None, Some(Box::new(|lib: &mut Library| lib.undo())));
+        let undo = self.undo_latest();
+        self.notify(message, "calendar-check", None, Some(undo));
     }
 
-    /// Records a change to cards' progress; `back` are the swaps that take it back.
+    /// Records a change to cards' progress; `back` are the swaps that take it back. Without any, it only tells.
     pub fn cards_changed(&mut self, message: String, icon: &'static str, back: Vec<super::cards::Swap>) {
         if back.is_empty() {
+            self.notify(message, icon, None, None);
             return;
         }
         self.commit(message, icon, vec![Change::Cards { root: super::cards::store_root(), swaps: back }]);

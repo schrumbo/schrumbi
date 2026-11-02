@@ -473,20 +473,29 @@ pub fn swap(root: Option<&Path>, swaps: Vec<Swap>) -> Option<Vec<Swap>> {
     }
     let mut back = Vec::new();
     for (id, from, to) in swaps {
-        if store.file.cards.get(&id) != from.as_ref() {
+        let now = store.file.cards.get(&id).cloned();
+        if progress(now.as_ref()) != progress(from.as_ref()) {
             continue;
         }
+        let to = to.map(|state| match &now {
+            Some(seen) => CardState { note: seen.note.clone(), question: seen.question.clone(), ..state },
+            None => state,
+        });
         match &to {
             Some(state) => store.file.cards.insert(id.clone(), state.clone()),
             None => store.file.cards.remove(&id),
         };
-        back.push((id, to, from));
+        back.push((id, to, now));
     }
     drop(store);
     if !back.is_empty() {
         save();
     }
     Some(back)
+}
+
+fn progress(state: Option<&CardState>) -> Option<CardState> {
+    state.map(|s| CardState { note: String::new(), question: String::new(), ..s.clone() })
 }
 
 /// The swaps that take cards back to a snapshot from before a change.
@@ -1397,6 +1406,16 @@ mod first_open {
         assert_eq!(back.len(), 1, "only what was taken back comes again");
         swap(Some(&root), back).unwrap();
         assert_eq!(phase_of("Zwei?"), Phase::Review);
+        let zwei = all_cards().iter().find(|c| c.raw.front == "Zwei?").map(|c| c.id().to_string()).unwrap();
+        let saved = snapshot(std::slice::from_ref(&zwei));
+        let card = all_cards().iter().find(|c| c.raw.front == "Zwei?").cloned().unwrap();
+        reset(&card);
+        let back = since(saved);
+        STORE.write().unwrap().file.cards.get_mut(&zwei).unwrap().note = "Verschoben/A.md".into();
+        swap(Some(&root), back).unwrap();
+        let again = state_of("Zwei?").unwrap();
+        assert_eq!(again.phase, Phase::Review, "undoing a reset brings the progress back after the note moved");
+        assert_eq!(again.note, "Verschoben/A.md");
     }
 
     #[test]
@@ -1569,10 +1588,11 @@ mod first_open {
         assert_eq!(phase_of("Eins?"), Phase::New);
         assert_eq!(state_of("Eins?"), None);
         assert_eq!(fresh_count(""), 2);
-        let saved = snapshot(&["x".to_string()]);
+        let eins = all_cards().iter().find(|c| c.raw.front == "Eins?").map(|c| c.id().to_string()).unwrap();
+        let saved = snapshot(std::slice::from_ref(&eins));
         swap(store_root().as_deref(), back).unwrap();
         assert_eq!(phase_of("Eins?"), Phase::Review, "redo takes them as known again");
-        assert!(since(saved).is_empty());
+        assert_eq!(since(saved).len(), 1);
         close();
     }
 

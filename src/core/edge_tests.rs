@@ -1007,6 +1007,16 @@ fn cards_taken_as_known_undo_and_redo_in_order_with_the_rest() {
     assert!(!lib.state.overrides.contains_key(&id));
     assert_eq!(phase("Neu?"), super::cards::Phase::New);
 
+    let done = super::cards::adopt_new_as_known("", super::cards::now()).unwrap();
+    lib.cards_known(done);
+    assert!(lib.edit_note(&root.join("Alt.md"), "note", "Getippt".into(), |t| format!("{t}Text\n")));
+    lib.perform_toast_action();
+    assert_eq!(phase("Neu?"), super::cards::Phase::Review, "a toast does not take back a later edit");
+    assert!(std::fs::read_to_string(root.join("Alt.md")).unwrap().ends_with("Text\n"));
+    lib.undo();
+    lib.undo();
+    assert_eq!(phase("Neu?"), super::cards::Phase::New);
+
     let neu = super::cards::all_cards().iter().find(|c| c.raw.front == "Neu?").cloned().unwrap();
     let saved = super::cards::snapshot(&[neu.id().to_string()]);
     super::cards::set_suspended(&neu, true);

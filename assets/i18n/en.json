@@ -1538,6 +1538,6 @@
   "1 neue Karte als bekannt übernehmen?": "Mark 1 new card as known?",
   "%@ neue Karten als bekannt übernehmen?": "Mark %@ new cards as known?",
   "Als bekannt übernehmen": "Mark as Known",
-  "Die Karten gehören zu einem anderen Ordner": "These cards belong to another folder",
+  "Die Karten gehören zu einem anderen Ordner und bleiben, wie sie sind.": "These cards belong to another folder and stay as they are.",
   "Sie zählen nicht mehr als neu und kommen als Wiederholungen, verteilt auf die nächsten Wochen. Pausierte Karten bleiben, wie sie sind.": "They no longer count as new and come back as reviews, spread over the coming weeks. Paused cards stay as they are."
 }

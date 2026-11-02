@@ -49,7 +49,7 @@ pub mod control {
     /// The band with a pane's main actions at its bottom.
     pub const FOOTBAR: f32 = 60.;
     /// A button that shows a count, wide enough for two digits so its row does not move.
-    pub const COUNTED: f32 = 100.;
+    pub const COUNTED: f32 = 104.;
 }
 
 /// Corner radii used across the app.
