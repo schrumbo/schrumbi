@@ -17,7 +17,7 @@ use crate::core::day;
 use crate::core::filing::FileRole;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library};
-use crate::core::model::{Assignment, Kind, Status};
+use crate::core::model::{Assignment, Kind, ManualAssignment, Status};
 
 /// Details of the selected assignment: status actions, files, drop zone, note and the editor for manual entries.
 pub struct Inspector {
@@ -29,6 +29,8 @@ pub struct Inspector {
     kind: Option<library::InspectorKind>,
     /// Title and due as loaded into the fields; only what the user changed since is written back.
     loaded: Option<(String, Option<chrono::DateTime<chrono::Utc>>)>,
+    /// The entry's title and due in the library when the fields were filled, to notice changes made elsewhere.
+    source: Option<(String, chrono::DateTime<chrono::Utc>)>,
     note: Entity<TextareaState>,
     title: Entity<InputState>,
     due: Entity<DatePickerState>,
@@ -73,7 +75,7 @@ impl Inspector {
             cx.subscribe(&due, |this, _, _: &DatePickerEvent, cx| this.save_manual(cx)),
         ];
         let doc_side = cx.new(|cx| super::doc_side::DocSide::new(window, cx));
-        Self { graph_preview: None, shown: None, seen: None, kind: None, loaded: None, note, title, due, syncing: false, doc_side, _subs: subs }
+        Self { graph_preview: None, shown: None, seen: None, kind: None, loaded: None, source: None, note, title, due, syncing: false, doc_side, _subs: subs }
     }
 
     fn save_manual(&mut self, cx: &mut Context<Self>) {
@@ -94,6 +96,7 @@ impl Inspector {
         }
         self.loaded = Some((title, due));
         if m != original {
+            self.source = Some((m.title.clone(), m.due));
             act(cx, |l| l.update_manual(m));
         }
     }
@@ -101,6 +104,9 @@ impl Inspector {
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected = state::read(cx, |l| l.selection().map(String::from));
         if selected == self.seen {
+            if selected.is_some() {
+                self.follow_library(window, cx);
+            }
             return;
         }
         if self.seen.is_some() {
@@ -118,13 +124,33 @@ impl Inspector {
         });
         self.note.update(cx, |s, cx| s.set_value(note, window, cx));
         self.loaded = None;
+        self.source = None;
         if let Some(m) = manual {
-            self.title.update(cx, |s, cx| s.set_value(m.title.clone(), window, cx));
-            let local = day::wall(m.due.with_timezone(&Local));
-            self.due.update(cx, |s, cx| s.set_date_time(local, window, cx));
-            self.loaded = Some((m.title.trim().to_string(), picked(&self.due, cx)));
+            self.load_manual(&m, window, cx);
         }
         self.syncing = false;
+    }
+
+    fn load_manual(&mut self, m: &ManualAssignment, window: &mut Window, cx: &mut Context<Self>) {
+        self.title.update(cx, |s, cx| s.set_value(m.title.clone(), window, cx));
+        let local = day::wall(m.due.with_timezone(&Local));
+        self.due.update(cx, |s, cx| s.set_date_time(local, window, cx));
+        self.loaded = Some((m.title.trim().to_string(), picked(&self.due, cx)));
+        self.source = Some((m.title.clone(), m.due));
+    }
+
+    fn follow_library(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(id), Some(source), Some((title, due))) = (self.shown.clone(), self.source.clone(), self.loaded.clone()) else { return };
+        let Some(m) = state::read(cx, |l| l.assignment(&id).and_then(|a| l.manual_for(a)).cloned()) else { return };
+        if (m.title.clone(), m.due) == source {
+            return;
+        }
+        let untouched = self.title.read(cx).value().trim() == title && picked(&self.due, cx) == due;
+        if untouched {
+            self.syncing = true;
+            self.load_manual(&m, window, cx);
+            self.syncing = false;
+        }
     }
 }
 
@@ -224,7 +250,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
     }
     let mut links = div().flex().flex_wrap().items_center().gap(px(space::S));
     if let Some(m) = module.filter(|m| m.name != m.code && !m.name.is_empty()) {
-        links = links.child(div().max_w_full().truncate().text_color(t.secondary).child(m.name.clone()));
+        links = links.child(div().id("module-name").max_w_full().truncate().text_color(t.secondary).tooltip(tip(m.name.clone())).child(m.name.clone()));
     }
     for (i, link) in module.map(|m| m.links.clone()).unwrap_or_default().into_iter().filter(|k| k.url().is_some()).enumerate() {
         let url = link.url().map(|u| u.to_string()).unwrap_or_default();

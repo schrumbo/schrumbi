@@ -129,8 +129,8 @@ impl GraphView {
         self.layout = Arc::new(Mutex::new(layout));
         let picked = state::read(cx, |l| l.graph_selection.clone());
         self.selected = picked.as_ref().and_then(|p| self.graph.nodes.iter().position(|n| matches!(&n.kind, NodeKind::Note(q) if q == p))).map(|i| i as u32);
-        if picked.is_some() && self.selected.is_none() {
-            act(cx, |l| l.graph_selection = None);
+        if self.selected.is_none() && picked.as_ref().is_some_and(|p| !vault.notes.contains_key(p)) {
+            cx.defer(|cx| act(cx, |l| l.graph_selection = None));
         }
         self.hover = None;
         self.fitted = false;
@@ -572,7 +572,7 @@ impl Render for GraphView {
             .on_mouse_up(MouseButton::Left, cx.listener(|v, e: &MouseUpEvent, _, cx| {
                 if let Some((start, _)) = v.drag.take()
                     && (f32::from(e.position.x - start.x).abs() + f32::from(e.position.y - start.y).abs()) < 6.
-                    && v.selected.is_some()
+                    && (v.selected.is_some() || state::read(cx, |l| l.graph_selection.is_some()))
                 {
                     v.deselect(cx);
                 }
@@ -612,7 +612,7 @@ impl Render for GraphView {
                         v.hand_moved = false;
                         v.fit();
                     }
-                    "escape" if v.selected.is_some() => v.deselect(cx),
+                    "escape" if v.selected.is_some() || state::read(cx, |l| l.graph_selection.is_some()) => v.deselect(cx),
                     _ => return,
                 }
                 if let Some(i) = v.selected.filter(|i| before != Some(*i)) {
