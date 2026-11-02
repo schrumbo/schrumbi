@@ -310,7 +310,7 @@ fn take_schedules(line: &str) -> (String, Vec<SrProgress>, bool) {
     let mut at = 0;
     for comment in comments.captures_iter(line) {
         let Some(whole) = comment.get(0) else { continue };
-        if code.iter().any(|s| s.contains(&whole.start()) || s.contains(&(whole.end() - 1))) {
+        if code.iter().any(|s| s.contains(&whole.start())) {
             continue;
         }
         kept.push_str(line.get(at..whole.start()).unwrap_or_default());
@@ -336,7 +336,7 @@ pub fn schedule_comments(lines: &[String]) -> String {
         .iter()
         .flat_map(|line| {
             let code = code_spans(line);
-            comments.find_iter(line).filter(move |m| !code.iter().any(|s| s.contains(&m.start()) || s.contains(&(m.end() - 1)))).map(|m| m.as_str().to_string()).collect::<Vec<_>>()
+            comments.find_iter(line).filter(move |m| !code.iter().any(|s| s.contains(&m.start()))).map(|m| m.as_str().to_string()).collect::<Vec<_>>()
         })
         .collect()
 }

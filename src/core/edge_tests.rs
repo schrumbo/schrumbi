@@ -967,3 +967,78 @@ fn kept_open_details_survive_esc_and_are_per_kind() {
     assert!(!lib.show_inspector() && lib.selection().is_none(), "closing lets go of the selection");
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn cards_taken_as_known_undo_and_redo_in_order_with_the_rest() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (root, mut lib) = workspace("known-history", &config(1, 1));
+    std::fs::write(root.join("Alt.md"), "Alt? :: a\n").unwrap();
+    let index = |lib: &mut Library| {
+        let (count, catalog) = lib.index_job().unwrap().run();
+        lib.apply_index(count, catalog);
+    };
+    let phase = |front: &str| super::cards::all_cards().iter().find(|c| c.raw.front == front).map(super::cards::Card::phase).unwrap();
+    let message = |lib: &Library| lib.toast.as_ref().map(|t| t.message.clone()).unwrap_or_default();
+    index(&mut lib);
+    assert_eq!(phase("Alt?"), super::cards::Phase::Review);
+    assert!(message(&lib).starts_with("1 Karte als bekannt übernommen"));
+    lib.undo();
+    assert_eq!(phase("Alt?"), super::cards::Phase::New, "the first open's baseline can be taken back");
+    assert_eq!(message(&lib), "Rückgängig: 1 Karte als bekannt übernommen");
+    lib.redo();
+    assert_eq!(phase("Alt?"), super::cards::Phase::Review);
+    assert_eq!(message(&lib), "Wiederholt: 1 Karte als bekannt übernommen");
+
+    let id = lib.assignments[0].id.clone();
+    lib.toggle_done(&id);
+    std::fs::write(root.join("Neu.md"), "Neu? :: n\n").unwrap();
+    index(&mut lib);
+    assert_eq!(phase("Neu?"), super::cards::Phase::New, "cards written after the first open are new");
+    let done = super::cards::adopt_new_as_known("", super::cards::now()).unwrap();
+    lib.cards_known(done);
+    assert_eq!(phase("Neu?"), super::cards::Phase::Review);
+    lib.undo();
+    assert_eq!(phase("Neu?"), super::cards::Phase::New);
+    assert!(lib.state.overrides.contains_key(&id), "undo takes back the latest step, not the one before");
+    lib.redo();
+    assert_eq!(phase("Neu?"), super::cards::Phase::Review);
+    lib.undo();
+    lib.undo();
+    assert!(!lib.state.overrides.contains_key(&id));
+    assert_eq!(phase("Neu?"), super::cards::Phase::New);
+
+    let neu = super::cards::all_cards().iter().find(|c| c.raw.front == "Neu?").cloned().unwrap();
+    let saved = super::cards::snapshot(&[neu.id().to_string()]);
+    super::cards::set_suspended(&neu, true);
+    lib.cards_changed("Karte pausiert".into(), "pause", super::cards::since(saved));
+    lib.undo();
+    assert!(!super::cards::all_cards().iter().any(|c| c.raw.front == "Neu?" && c.suspended()));
+    lib.redo();
+    assert!(super::cards::all_cards().iter().any(|c| c.raw.front == "Neu?" && c.suspended()));
+    super::cards::close();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn taking_back_a_cards_import_removes_its_notes_and_what_was_taken_as_known() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (root, mut lib) = workspace("import-history", &config(1, 1));
+    let (count, catalog) = lib.index_job().unwrap().run();
+    lib.apply_index(count, catalog);
+    let note = root.join("Anki/Deck.md");
+    std::fs::create_dir_all(note.parent().unwrap()).unwrap();
+    std::fs::write(&note, "F1 :: B1\n").unwrap();
+    let fresh = vec![("n1".to_string(), "Anki/Deck.md".to_string(), "F1".to_string())];
+    let spread = super::cards::adopt_import(Vec::new(), Vec::new(), fresh, super::cards::now());
+    assert!(super::cards::snapshot(&["n1".to_string()])[0].1.is_some());
+    lib.cards_imported(vec![note.clone()], 1, 0, spread);
+    assert!(lib.toast.as_ref().unwrap().message.starts_with("1 Karte importiert · "));
+    lib.undo();
+    assert!(!note.exists());
+    assert_eq!(super::cards::snapshot(&["n1".to_string()])[0].1, None);
+    lib.redo();
+    assert!(note.exists());
+    assert!(super::cards::snapshot(&["n1".to_string()])[0].1.is_some());
+    super::cards::close();
+    let _ = std::fs::remove_dir_all(root);
+}

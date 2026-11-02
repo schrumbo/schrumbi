@@ -431,8 +431,8 @@ pub struct Adopted {
     pub spread: usize,
     /// The last of those days, counted from today.
     pub days: i64,
-    /// How the spread cards stood before, and how they stand now.
-    pub changes: Vec<(String, Option<CardState>, CardState)>,
+    /// What takes the cards back to how they stood.
+    pub changes: Vec<Swap>,
     /// The vault this happened in.
     pub root: Option<PathBuf>,
 }
@@ -448,32 +448,59 @@ impl Adopted {
         }
     }
 
-    /// One calm sentence for a toast, about the cards that can be taken back.
-    pub fn message(&self) -> String {
+    /// What happened, short enough for the undo history.
+    pub fn label(&self) -> String {
         use crate::core::i18n::{tr, trf};
         let shown = if self.spread == 0 { self.count } else { self.spread };
-        let head = if shown == 1 { tr("1 Karte als bekannt übernommen") } else { trf("%@ Karten als bekannt übernommen", &[&shown.to_string()]) };
-        if self.spread == 0 { head } else { format!("{head}, {}", self.spread_words()) }
+        if shown == 1 { tr("1 Karte als bekannt übernommen") } else { trf("%@ Karten als bekannt übernommen", &[&shown.to_string()]) }
     }
 
-    /// Takes the spread cards back to how they stood, leaving any that changed since or belong to another vault.
-    pub fn take_back(self) {
-        let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if store.root != self.root {
-            return;
+    /// One calm sentence for a toast, about the cards that can be taken back.
+    pub fn message(&self) -> String {
+        if self.spread == 0 { self.label() } else { format!("{}, {}", self.label(), self.spread_words()) }
+    }
+}
+
+/// A card to put from one state to another, if it still stands as the first; `None` is no progress.
+pub type Swap = (String, Option<CardState>, Option<CardState>);
+
+/// Puts every card that still stands as its swap's first state to the second, leaving those changed since.
+/// `None` when another vault is open; otherwise the swaps that take this back.
+pub fn swap(root: Option<&Path>, swaps: Vec<Swap>) -> Option<Vec<Swap>> {
+    let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if store.root.as_deref() != root {
+        return None;
+    }
+    let mut back = Vec::new();
+    for (id, from, to) in swaps {
+        if store.file.cards.get(&id) != from.as_ref() {
+            continue;
         }
-        for (id, before, after) in self.changes {
-            if store.file.cards.get(&id) != Some(&after) {
-                continue;
-            }
-            match before {
-                Some(state) => store.file.cards.insert(id, state),
-                None => store.file.cards.remove(&id),
-            };
-        }
-        drop(store);
+        match &to {
+            Some(state) => store.file.cards.insert(id.clone(), state.clone()),
+            None => store.file.cards.remove(&id),
+        };
+        back.push((id, to, from));
+    }
+    drop(store);
+    if !back.is_empty() {
         save();
     }
+    Some(back)
+}
+
+/// The swaps that take cards back to a snapshot from before a change.
+pub fn since(saved: Vec<(String, Option<CardState>)>) -> Vec<Swap> {
+    let store = STORE.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+    saved.into_iter().filter_map(|(id, then)| {
+        let now = store.file.cards.get(&id).cloned();
+        (now != then).then_some((id, now, then))
+    }).collect()
+}
+
+/// The vault whose cards are open.
+pub fn store_root() -> Option<PathBuf> {
+    STORE.read().unwrap_or_else(std::sync::PoisonError::into_inner).root.clone()
 }
 
 fn weight(state: &CardState) -> (bool, Option<i64>) {
@@ -554,7 +581,7 @@ fn settle_file(file: &mut StoreFile, cards: &[Card], first_open: bool, at: i64, 
         adopted.count += states.len();
         adopted.days = days;
         for (id, state) in states {
-            adopted.changes.push((id.clone(), None, state.clone()));
+            adopted.changes.push((id.clone(), Some(state.clone()), None));
             file.cards.insert(id, state);
         }
         file.baseline = Some(at);
@@ -593,7 +620,7 @@ pub fn fresh_count(deck: &str) -> usize {
     all_cards().iter().filter(|c| c.in_deck(deck) && c.phase() == Phase::New && !c.suspended()).count()
 }
 
-/// Takes the new cards of a deck as already known, spread as reviews over the coming weeks. `restore(before)` takes it back.
+/// Takes the new cards of a deck as already known, spread as reviews over the coming weeks; `swap` with its changes takes it back.
 pub fn adopt_new_as_known(deck: &str, at: i64) -> Option<Adopted> {
     let cards = all_cards();
     let fresh: Vec<(String, String, String)> = cards.iter().filter(|c| c.in_deck(deck) && c.phase() == Phase::New && !c.suspended()).map(|c| (c.raw.id.clone(), c.note_rel.to_string(), c.raw.front.clone())).collect();
@@ -610,7 +637,7 @@ pub fn adopt_new_as_known(deck: &str, at: i64) -> Option<Adopted> {
     let mut adopted = Adopted { count: states.len(), spread: states.len(), days, changes: Vec::new(), root: store.root.clone() };
     for (id, state) in states {
         let before = store.file.cards.insert(id.clone(), state.clone());
-        adopted.changes.push((id, before, state));
+        adopted.changes.push((id, Some(state), before));
     }
     drop(store);
     save();
@@ -844,23 +871,6 @@ pub fn set_suspended(card: &Card, suspended: bool) {
 pub fn snapshot(ids: &[String]) -> Vec<(String, Option<CardState>)> {
     let store = STORE.read().unwrap();
     ids.iter().map(|id| (id.clone(), store.file.cards.get(id).cloned())).collect()
-}
-
-/// Brings cards back to how a snapshot found them.
-pub fn restore(saved: Vec<(String, Option<CardState>)>) {
-    let mut store = STORE.write().unwrap();
-    for (id, state) in saved {
-        match state {
-            Some(state) => {
-                store.file.cards.insert(id, state);
-            }
-            None => {
-                store.file.cards.remove(&id);
-            }
-        }
-    }
-    drop(store);
-    save();
 }
 
 /// Pauses or resumes many cards in one step.
@@ -1142,7 +1152,7 @@ pub fn adopt_import(states: Vec<(String, CardState)>, log: Vec<ReviewLog>, fresh
     }
     let fresh: Vec<(String, String, String)> = fresh.into_iter().filter(|(id, ..)| !store.file.cards.contains_key(id)).collect();
     let (spread_states, days) = spread(&fresh, &store.file.cards, at, p.card_reviews_per_day as usize, p.card_retention.clamp(0.7, 0.99));
-    let adopted = (!spread_states.is_empty()).then(|| Adopted { count: spread_states.len(), spread: spread_states.len(), days, changes: spread_states.iter().map(|(id, state)| (id.clone(), None, state.clone())).collect(), root: store.root.clone() });
+    let adopted = (!spread_states.is_empty()).then(|| Adopted { count: spread_states.len(), spread: spread_states.len(), days, changes: spread_states.iter().map(|(id, state)| (id.clone(), Some(state.clone()), None)).collect(), root: store.root.clone() });
     for (id, state) in spread_states {
         store.file.cards.insert(id, state);
     }
@@ -1378,12 +1388,15 @@ mod first_open {
         let told = take_notice().unwrap();
         let eins = all_cards().iter().find(|c| c.raw.front == "Eins?").cloned().unwrap();
         set_suspended(&eins, true);
-        Adopted { root: Some(PathBuf::from("/anderswo")), ..told.clone() }.take_back();
+        assert_eq!(swap(Some(Path::new("/anderswo")), told.changes.clone()), None);
         assert_eq!(phase_of("Zwei?"), Phase::Review, "another vault's undo changes nothing here");
-        told.take_back();
+        let back = swap(told.root.as_deref(), told.changes).unwrap();
         assert_eq!(phase_of("Zwei?"), Phase::New);
         let kept = state_of("Eins?").unwrap();
         assert!(kept.phase == Phase::Review && kept.suspended);
+        assert_eq!(back.len(), 1, "only what was taken back comes again");
+        swap(Some(&root), back).unwrap();
+        assert_eq!(phase_of("Zwei?"), Phase::Review);
     }
 
     #[test]
@@ -1552,10 +1565,14 @@ mod first_open {
         assert_eq!(phase_of("Zwei?"), Phase::New, "paused cards stay as they are");
         assert_eq!(counts("", at).new, 0);
         assert!(adopt_new_as_known("", at).is_none());
-        done.take_back();
+        let back = swap(done.root.as_deref(), done.changes).unwrap();
         assert_eq!(phase_of("Eins?"), Phase::New);
         assert_eq!(state_of("Eins?"), None);
         assert_eq!(fresh_count(""), 2);
+        let saved = snapshot(&["x".to_string()]);
+        swap(store_root().as_deref(), back).unwrap();
+        assert_eq!(phase_of("Eins?"), Phase::Review, "redo takes them as known again");
+        assert!(since(saved).is_empty());
         close();
     }
 
