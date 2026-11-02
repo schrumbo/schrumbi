@@ -1491,8 +1491,9 @@ impl NoteView {
                     .flex()
                     .items_center()
                     .gap(px(space::XS))
-                    .when(labeled, |d| d.px(px(space::S)).py(px(space::XXS)))
-                    .when(!labeled, |d| d.w(px(control::S)).py(px(space::XXS)).justify_center())
+                    .h(px(control::S - 2. * space::XXS))
+                    .when(labeled, |d| d.px(px(space::S)))
+                    .when(!labeled, |d| d.w(px(control::S)).justify_center())
                     .rounded(px(radius::SMALL))
                     .cursor_pointer().key_nav()
                     .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
@@ -2693,7 +2694,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
             .border_color(t.separator)
             .child(fit.measure_bar())
             .child(div().flex_none().child(file_icon(current, iconsize::M)))
-            .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(px(font::CALLOUT)).child(title))
+            .child(div().id("split-title").flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(px(font::CALLOUT)).tooltip(tip(title.clone())).child(title))
             .child(div().flex_none().child(actions))
             .child(Button::new("split-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Geteilte Ansicht schließen")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))));
     }
@@ -2748,6 +2749,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
             .flex()
             .items_center()
             .justify_center()
+            .cursor_pointer()
             .soft(t.ink.opacity(0.1), radius::FULL)
             .child(if is_dirty {
                 div().relative().size(px(iconsize::M)).flex().items_center().justify_center().child(div().size(px(space::S)).rounded_full().bg(t.secondary).group_hover("doc-tab", Styled::invisible)).child(div().absolute().invisible().group_hover("doc-tab", Styled::visible).child(icon("x", iconsize::XS, t.secondary))).into_any_element()
