@@ -107,6 +107,8 @@ pub enum Change {
     Note { path: PathBuf, text: String },
     /// Puts a file's bytes back, for restoring an earlier version.
     Bytes { path: PathBuf, bytes: Vec<u8> },
+    /// Puts cards' progress back, in the vault whose cards they are.
+    Cards { root: Option<PathBuf>, swaps: Vec<super::cards::Swap> },
 }
 
 /// What one undo or redo reverts.
@@ -358,6 +360,8 @@ pub struct Library {
     pub sync_undo_requested: bool,
     /// A file was put where it belongs; automatic sync takes it up right away.
     pub sync_soon: bool,
+    /// Undo or redo changed files; the index catches up right away.
+    pub notes_touched: bool,
     /// A sync is rewriting the workspace; writes wait until `finish_sync`.
     sync_gate: bool,
     deferred_config: bool,
@@ -484,6 +488,7 @@ impl Library {
             show_conflicts: false,
             sync_undo_requested: false,
             sync_soon: false,
+            notes_touched: false,
             sync_gate: false,
             deferred_config: false,
             deferred_state: false,
@@ -1386,8 +1391,7 @@ impl Library {
         self.is_indexing = false;
         self.follow_outside_moves();
         if let Some(adopted) = super::cards::take_notice() {
-            let message = adopted.message();
-            self.notify(message, "calendar-check", None, Some(Box::new(move |_: &mut Library| adopted.take_back())));
+            self.cards_known(adopted);
         }
         self.changed();
     }
@@ -2142,7 +2146,18 @@ impl Library {
     /// Records a step and shows it as a toast that offers to take it back.
     fn commit(&mut self, message: String, icon: &'static str, changes: Vec<Change>) {
         self.record(message.clone(), changes);
-        self.notify(message, icon, None, Some(Box::new(|lib: &mut Library| lib.undo())));
+        let undo = self.undo_latest();
+        self.notify(message, icon, None, Some(undo));
+    }
+
+    /// Takes back the latest step, but only while it still is the latest; a toast must not undo a later edit.
+    fn undo_latest(&self) -> Undo {
+        let (count, label) = (self.undo_steps.len(), self.undo_steps.last().map(|s| s.label.clone()));
+        Box::new(move |lib: &mut Library| {
+            if lib.undo_steps.len() == count && lib.undo_steps.last().map(|s| s.label.clone()) == label {
+                lib.undo();
+            }
+        })
     }
 
     /// Records an edit made by continuous input; edits of the same `kind` in quick succession become one step.
@@ -2206,7 +2221,8 @@ impl Library {
             self.redo_steps.push(Step { label, changes: failed });
             return;
         }
-        self.notify(trf("Wiederholt: %@", &[&label]), "redo-2", None, Some(Box::new(|lib: &mut Library| lib.undo())));
+        let undo = self.undo_latest();
+        self.notify(trf("Wiederholt: %@", &[&label]), "redo-2", None, Some(undo));
     }
 
     /// Applies a step; returns its reverse and the changes that failed, so they can be tried again.
@@ -2214,6 +2230,9 @@ impl Library {
         self.rows_moved = true;
         let (mut inverse, mut failed) = (Vec::new(), Vec::new());
         for change in step.changes.into_iter().rev() {
+            if !matches!(change, Change::State(_) | Change::Config(_) | Change::Highlights { .. } | Change::Cards { .. }) {
+                self.notes_touched = true;
+            }
             match self.apply_change(change.clone()) {
                 Some(done) => inverse.push(done),
                 None => failed.push(change),
@@ -2281,6 +2300,13 @@ impl Library {
                     let before = buffer.text.clone();
                     buffer.restore(text)?;
                     Change::Note { path, text: before }
+                }
+                Change::Cards { root, swaps } => {
+                    let back = super::cards::swap(root.as_deref(), swaps).unwrap_or_else(|| {
+                        self.last_error = Some(tr("Die Karten gehören zu einem anderen Ordner und bleiben, wie sie sind."));
+                        Vec::new()
+                    });
+                    Change::Cards { root, swaps: back }
                 }
             })
         })();
@@ -2445,19 +2471,40 @@ impl Library {
         Naming::with_author(m, c.semester(&m.semester), BRIEF_TAG, "", CoauthorStyle::Initial).parse(file_name)
     }
 
-    /// Reports an import of flashcards; taking it back removes the new files.
-    pub fn cards_imported(&mut self, created: Vec<PathBuf>, added: usize, duplicates: usize, spread: Option<String>) {
+    /// Records cards taken as known and offers to take that back.
+    pub fn cards_known(&mut self, adopted: super::cards::Adopted) {
+        let message = adopted.message();
+        self.record(adopted.label(), vec![Change::Cards { root: adopted.root, swaps: adopted.changes }]);
+        let undo = self.undo_latest();
+        self.notify(message, "calendar-check", None, Some(undo));
+    }
+
+    /// Records a change to cards' progress; `back` are the swaps that take it back. Without any, it only tells.
+    pub fn cards_changed(&mut self, message: String, icon: &'static str, back: Vec<super::cards::Swap>) {
+        if back.is_empty() {
+            self.notify(message, icon, None, None);
+            return;
+        }
+        self.commit(message, icon, vec![Change::Cards { root: super::cards::store_root(), swaps: back }]);
+    }
+
+    /// Reports an import of flashcards; taking it back removes the new files and what was taken as known.
+    pub fn cards_imported(&mut self, created: Vec<PathBuf>, added: usize, duplicates: usize, spread: Option<super::cards::Adopted>) {
         self.refresh();
         let message = match (added, duplicates) {
             (1, 0) => tr("1 Karte importiert"),
             (n, 0) => trf("%@ Karten importiert", &[&n.to_string()]),
             (n, d) => trf("%@ Karten importiert, %@ waren schon da", &[&n.to_string(), &d.to_string()]),
         };
-        let message = match spread {
-            Some(words) => format!("{message} · {words}"),
+        let message = match &spread {
+            Some(adopted) => format!("{message} · {}", adopted.spread_words()),
             None => message,
         };
-        self.commit(message, "layers", created.into_iter().map(Change::Trash).collect());
+        let mut changes: Vec<Change> = created.into_iter().map(Change::Trash).collect();
+        if let Some(adopted) = spread {
+            changes.push(Change::Cards { root: adopted.root, swaps: adopted.changes });
+        }
+        self.commit(message, "layers", changes);
     }
 
     /// Remembers the open tabs under a name.

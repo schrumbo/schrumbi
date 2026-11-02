@@ -20,7 +20,6 @@ use crate::core::cards::fsrs::{self, Rating};
 use crate::core::cards::{self, Card, CardKind, Counts, Phase};
 use crate::core::cards::parse;
 use crate::core::i18n::{tr, trf};
-use crate::core::library::Library;
 use crate::core::prefs;
 use crate::core::text::fold;
 use crate::core::vault::index;
@@ -253,7 +252,7 @@ fn deck_pause_all(deck: &str, pause: bool, cx: &mut App) {
     let saved = cards::snapshot(&chosen.iter().map(|c| c.id().to_string()).collect::<Vec<_>>());
     cards::set_many_suspended(&chosen, pause);
     let message = if pause { trf("%@ Karten pausiert", &[&chosen.len().to_string()]) } else { trf("%@ Karten fortgesetzt", &[&chosen.len().to_string()]) };
-    act(cx, |l| l.notify(message, "pause", None, Some(Box::new(move |_: &mut Library| cards::restore(saved)))));
+    act(cx, |l| l.cards_changed(message, "pause", cards::since(saved)));
 }
 
 fn state_sidebar_open(_: &App) -> bool {
@@ -516,7 +515,7 @@ impl CardsPage {
             (false, 1) => tr("Karte fortgesetzt"),
             (false, n) => trf("%@ Karten fortgesetzt", &[&n.to_string()]),
         };
-        act(cx, |l| l.notify(message, "pause", None, Some(Box::new(move |_: &mut Library| cards::restore(saved)))));
+        act(cx, |l| l.cards_changed(message, "pause", cards::since(saved)));
         cx.notify();
     }
 
@@ -528,7 +527,7 @@ impl CardsPage {
         let saved = cards::snapshot(&chosen.iter().map(|c| c.id().to_string()).collect::<Vec<_>>());
         cards::reset_many(&chosen);
         let message = if chosen.len() == 1 { tr("Fortschritt zurückgesetzt") } else { trf("Fortschritt von %@ Karten zurückgesetzt", &[&chosen.len().to_string()]) };
-        act(cx, |l| l.notify(message, "rotate-ccw", None, Some(Box::new(move |_: &mut Library| cards::restore(saved)))));
+        act(cx, |l| l.cards_changed(message, "rotate-ccw", cards::since(saved)));
         cx.notify();
     }
 
@@ -553,8 +552,7 @@ impl CardsPage {
 
     fn adopt_known_now(&mut self, deck: &str, cx: &mut Context<Self>) {
         let Some(done) = cards::adopt_new_as_known(deck, cards::now()) else { return };
-        let message = done.message();
-        act(cx, |l| l.notify(message, "calendar-check", None, Some(Box::new(move |_: &mut Library| done.take_back()))));
+        act(cx, |l| l.cards_known(done));
         cx.notify();
     }
 
@@ -993,10 +991,10 @@ impl CardsPage {
                                 let deck = deck_cram.clone();
                                 cram.update(cx, |p, cx| p.start_cram(deck, window, cx));
                             }))
-                            .item(PopupMenuItem::new(tr("Neue Karten als bekannt übernehmen…")).icon(menu_icon("calendar-check")).disabled(fresh == 0).on_click(move |_, window, cx| {
+                            .when(fresh > 0, |m| m.item(PopupMenuItem::new(tr("Neue Karten als bekannt übernehmen…")).icon(menu_icon("calendar-check")).on_click(move |_, window, cx| {
                                 let deck = deck_known.clone();
                                 known.update(cx, |p, cx| p.adopt_known(deck, window, cx));
-                            }))
+                            })))
                             .item(PopupMenuItem::new(tr("Alle pausieren")).icon(menu_icon("pause")).on_click(move |_, _, cx| {
                                 deck_pause_all(&deck_pause, true, cx);
                                 pause.update(cx, |_, cx| cx.notify());
@@ -1326,7 +1324,7 @@ impl CardsPage {
                         let deck = deck.clone();
                         e.update(cx, |p, cx| p.start_cram(deck, window, cx));
                     }))
-                    .item(PopupMenuItem::new(tr("Neue Karten als bekannt übernehmen…")).icon(menu_icon("calendar-check")).disabled(fresh == 0).on_click(move |_, window, cx| known_me.update(cx, |p, cx| p.adopt_known(known_deck.clone(), window, cx))))
+                    .when(fresh > 0, |m| m.item(PopupMenuItem::new(tr("Neue Karten als bekannt übernehmen…")).icon(menu_icon("calendar-check")).on_click(move |_, window, cx| known_me.update(cx, |p, cx| p.adopt_known(known_deck.clone(), window, cx)))))
                     .separator()
                     .item(PopupMenuItem::new(tr("Aus Anki importieren…")).icon(menu_icon("download")).on_click(|_, window, cx| choose_import(window, cx)))
                 }
@@ -1339,7 +1337,7 @@ impl CardsPage {
                 })))
             })
             .child(Button::new("cards-new").icon(menu_icon("plus")).label(tr("Neue Karte")).tooltip(tr("Neue Karte (N)")).on_click(cx.listener(|p, _, window, cx| p.compose(None, window, cx))))
-            .child(Button::new("cards-learn").primary().icon(menu_icon("graduation-cap")).label(if total > 0 { trf("Lernen (%@)", &[&total.to_string()]) } else { tr("Lernen") }).tooltip(tr("Lernen (Leertaste)")).disabled(total == 0).on_click(cx.listener(move |p, _, window, cx| p.start(start_deck.clone(), window, cx))));
+            .child(Button::new("cards-learn").primary().min_w(px(control::COUNTED)).icon(menu_icon("graduation-cap")).label(if total > 0 { trf("Lernen (%@)", &[&total.to_string()]) } else { tr("Lernen") }).tooltip(tr("Lernen (Leertaste)")).disabled(total == 0).on_click(cx.listener(move |p, _, window, cx| p.start(start_deck.clone(), window, cx))));
         let retention = stats.true_retention.map_or_else(|| "–".to_string(), |r| format!("{:.0} %", r * 100.));
         let tiles = div()
             .flex_none()
@@ -1778,9 +1776,6 @@ impl Render for CardsPage {
                     if p.can_undo() {
                         p.undo(cx);
                     }
-                } else if state::read(cx, |l| l.toast.as_ref().is_some_and(|t| matches!(t.icon, "pause" | "rotate-ccw" | "calendar-check") && t.undo.is_some())) {
-                    cx.stop_propagation();
-                    act(cx, |l| l.perform_toast_action());
                 }
             }))
             .capture_key_down(cx.listener(|p, e: &KeyDownEvent, window, cx| {
@@ -2307,7 +2302,7 @@ impl CardImport {
             let result = task.await;
             let failed = match result {
                 Ok(done) => {
-                    let spread = cards::adopt_import(done.states, done.log, done.fresh, cards::now()).map(|a| a.spread_words());
+                    let spread = cards::adopt_import(done.states, done.log, done.fresh, cards::now());
                     cx.update(|cx| {
                         act(cx, |l| l.cards_imported(done.created, done.added, done.duplicates, spread));
                         state::reindex(cx);

@@ -81,7 +81,10 @@ pub fn act<R>(cx: &mut App, f: impl FnOnce(&mut Library) -> R) -> R {
     if lib.update(cx, |l, _| l.take_rows_moved()) {
         super::motion::arm_rows(cx);
     }
-    let (undo_resolution, soon) = lib.update(cx, |l, _| (std::mem::take(&mut l.sync_undo_requested), std::mem::take(&mut l.sync_soon)));
+    let (undo_resolution, soon, touched) = lib.update(cx, |l, _| (std::mem::take(&mut l.sync_undo_requested), std::mem::take(&mut l.sync_soon), std::mem::take(&mut l.notes_touched)));
+    if touched {
+        reindex(cx);
+    }
     if undo_resolution {
         super::sync::undo_resolution(cx);
     }
