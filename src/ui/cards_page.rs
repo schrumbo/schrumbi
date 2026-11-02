@@ -1528,7 +1528,7 @@ impl CardsPage {
             let cramming = self.session.as_ref().is_some_and(|s| s.cram.is_some());
             let colors = [t.red, t.orange, t.green, t.blue];
             let line = (font::BODY * font::LINE).round();
-            let drop = baseline_gap(window, font::BODY, FontWeight::SEMIBOLD, font::CAPTION2, line);
+            let drop = baseline_gap(window, font::BODY, FontWeight::SEMIBOLD, font::CAPTION2);
             div()
                 .flex_none()
                 .p(px(space::M))
@@ -1603,12 +1603,12 @@ impl CardsPage {
     }
 }
 
-fn baseline_gap(window: &Window, large: f32, weight: FontWeight, small: f32, line: f32) -> f32 {
+fn baseline_gap(window: &Window, large: f32, weight: FontWeight, small: f32) -> f32 {
     let system = window.text_system();
     let family: SharedString = Theme::font_family().into();
     let id = |weight: FontWeight| system.resolve_font(&Font { weight, ..font(family.clone()) });
     let (large_id, small_id) = (id(weight), id(FontWeight::NORMAL));
-    let at = |id: FontId, size: f32| f32::from(system.baseline_offset(id, px(size), px(line)));
+    let at = |id: FontId, size: f32| (f32::from(system.ascent(id, px(size))) - f32::from(system.descent(id, px(size))).abs()) / 2.;
     (at(large_id, large) - at(small_id, small)).max(0.)
 }
 

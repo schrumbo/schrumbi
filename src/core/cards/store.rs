@@ -243,37 +243,15 @@ pub fn flush() {
         (root, json, store.unread)
     };
     let path = root.join(STORE_NAME);
-    let json = if unread && path.exists() {
-        match std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<StoreFile>(&b).ok()) {
-            Some(theirs) => {
-                let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-                join(&mut store.file, theirs);
-                store.unread = false;
-                store.revision += 1;
-                store.cache = None;
-                store.counts.clear();
-                store.stats.clear();
-                let Ok(json) = serde_json::to_vec_pretty(&store.file) else { return };
-                json
-            }
-            None if std::fs::copy(&path, root.join(format!("{STORE_NAME}.unread-{}", now()))).is_ok() => json,
-            None => {
-                STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner).dirty = true;
-                if !cfg!(test) {
-                    std::thread::spawn(|| {
-                        std::thread::sleep(std::time::Duration::from_secs(30));
-                        flush();
-                    });
-                }
-                return;
-            }
-        }
-    } else {
-        json
-    };
     crate::core::workspace::backup(&path);
     let tmp = root.join(format!("{STORE_NAME}.tmp"));
-    if std::fs::write(&tmp, json).is_ok() && std::fs::rename(tmp, &path).is_ok() {
+    if std::fs::write(&tmp, json).is_err() {
+        return;
+    }
+    if unread && path.exists() {
+        let _ = std::fs::rename(&path, root.join(format!("{STORE_NAME}.unread-{}", now())));
+    }
+    if std::fs::rename(tmp, &path).is_ok() {
         let stamp = stamp_of(&path);
         let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         store.stamps[0] = stamp;
@@ -1375,9 +1353,10 @@ mod first_open {
         let neu = all_cards().iter().find(|c| c.raw.front == "Neu?").cloned().unwrap();
         set_suspended(&neu, true);
         flush();
-        let saved: StoreFile = serde_json::from_slice(&std::fs::read(late.join(STORE_NAME)).unwrap()).unwrap();
-        assert_eq!(saved.cards.len(), 2, "a store that became readable meanwhile is joined, not replaced");
-        assert_eq!(state_of("Alt?"), Some(real));
+        let aside: Vec<PathBuf> = std::fs::read_dir(&late).unwrap().flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().contains(".unread-")).collect();
+        assert_eq!(aside.len(), 1);
+        let kept: StoreFile = serde_json::from_slice(&std::fs::read(&aside[0]).unwrap()).unwrap();
+        assert_eq!(kept.cards.values().next(), Some(&real), "a store that became readable meanwhile is kept, never overwritten");
         let cloud = vault("cloud", &[("A.md", "Plugin? :: ja <!--SR:!2030-01-15,40,290-->\n")]);
         std::fs::write(cloud.join(".schrumbi-cards.json.icloud"), "").unwrap();
         reopen(&cloud);
