@@ -643,9 +643,9 @@ fn module_view(module: &str, t: &Theme, cx: &App) -> AnyElement {
             .soft(hover, 0.)
             .on_click(move |_, _, cx| {
                 act(cx, |l| {
-                    l.select(Some(open.clone()));
                     l.set_route(crate::core::library::Route::Module(module.clone()));
-                })
+                    l.select(Some(open.clone()));
+                });
             })
             .child(div().id(("deadline-done", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).soft(t.ink.opacity(0.08), radius::SMALL).border_1().border_color(t.secondary).cursor_pointer().key_nav().aria_label(tr("Erledigt")).tooltip(tip(tr("Erledigt"))).on_click(move |_, _, cx| {
                 cx.stop_propagation();

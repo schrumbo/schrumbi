@@ -203,6 +203,8 @@ pub struct Prefs {
     /// Calendar addresses to fetch deadlines from, by workspace.
     pub calendar_sources: BTreeMap<String, String>,
     pub sidebar_open: bool,
+    /// Kinds of pages whose details column the user keeps open: `document`, `assignments`, `graph`.
+    pub inspector_pinned: BTreeSet<String>,
     /// Sidebar entries the user hid; they stay reachable by shortcut and palette.
     pub hidden_tabs: Vec<String>,
     /// Last position and size of the main window: x, y, width, height.
@@ -267,6 +269,7 @@ impl Default for Prefs {
             calendar_token: String::new(),
             calendar_sources: BTreeMap::new(),
             sidebar_open: true,
+            inspector_pinned: BTreeSet::new(),
             hidden_tabs: Vec::new(),
             main_window: None,
             upload_window: None,

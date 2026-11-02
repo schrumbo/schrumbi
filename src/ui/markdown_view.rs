@@ -1947,7 +1947,7 @@ impl RenderOnce for Properties {
                 .tooltip(super::widgets::tip(tr("In den Details bearbeiten")))
                 .on_click(|_, _, cx| super::state::act(cx, |l| {
                     l.show_properties = true;
-                    l.show_inspector = true;
+                    l.peek_inspector();
                 }))
                 .child(div().flex_none().w(px(140.)).truncate().text_color(secondary).child(name))
                 .child(div().flex_1().min_w_0().flex().flex_wrap().gap(px(space::S)).children(values.into_iter().enumerate().map(move |(n, value)| {

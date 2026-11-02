@@ -208,7 +208,7 @@ impl Pages {
                         .child(div().size(px(space::S)).rounded_full().bg(color))
                         .child(div().truncate().max_w(px(220.)).child(a.title.clone()))
                         .child(div().text_color(t.secondary).child(day::day_label(a.due, lib.now)))
-                        .on_click(move |_, _, cx| act(cx, |l| l.select(Some(id.clone()))))
+                        .on_click(move |_, _, cx| act(cx, |l| l.reveal(&id)))
                 }))
         });
         div()
@@ -304,10 +304,7 @@ impl Pages {
                 let focused = dismiss_view.read(cx).module.focus.as_ref().is_some_and(|f| f.is_focused(window));
                 if focused {
                     cx.stop_propagation();
-                    act(cx, |l| {
-                        l.show_inspector = false;
-                        l.select(None);
-                    });
+                    act(cx, Library::dismiss_inspector);
                 }
             })
             .size_full()

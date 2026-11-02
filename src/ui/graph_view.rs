@@ -127,7 +127,11 @@ impl GraphView {
         self.positions = layout.positions.clone();
         self.graph = graph.clone();
         self.layout = Arc::new(Mutex::new(layout));
-        self.selected = None;
+        let picked = state::read(cx, |l| l.graph_selection.clone());
+        self.selected = picked.as_ref().and_then(|p| self.graph.nodes.iter().position(|n| matches!(&n.kind, NodeKind::Note(q) if q == p))).map(|i| i as u32);
+        if self.selected.is_none() && picked.as_ref().is_some_and(|p| !vault.notes.contains_key(p)) {
+            cx.defer(|cx| act(cx, |l| l.graph_selection = None));
+        }
         self.hover = None;
         self.fitted = false;
         self.hand_moved = false;
@@ -271,6 +275,11 @@ impl GraphView {
         }))
     }
 
+    fn deselect(&mut self, cx: &mut Context<Self>) {
+        self.selected = None;
+        act(cx, |l| l.graph_selection = None);
+    }
+
     /// Selecting shows the note beside the graph; the graph stays where it is.
     fn select(&mut self, index: u32, cx: &mut Context<Self>) {
         self.selected = Some(index);
@@ -280,9 +289,6 @@ impl GraphView {
                 Some(NodeKind::Note(path)) => Some(path),
                 _ => None,
             };
-            if l.graph_selection.is_some() {
-                l.show_inspector = true;
-            }
         });
     }
 }
@@ -290,6 +296,12 @@ impl GraphView {
 impl Render for GraphView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.rebuild_if_needed(cx);
+        if let Some(i) = self.selected
+            && matches!(self.graph.nodes.get(i as usize).map(|n| &n.kind), Some(NodeKind::Note(_)))
+            && state::read(cx, |l| l.graph_selection.is_none())
+        {
+            self.selected = None;
+        }
         let t = Theme::get(cx);
         let count = self.graph.nodes.len();
         let local = self.focus_note.clone();
@@ -558,7 +570,12 @@ impl Render for GraphView {
                 }
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|v, e: &MouseUpEvent, _, cx| {
-                v.drag = None;
+                if let Some((start, _)) = v.drag.take()
+                    && (f32::from(e.position.x - start.x).abs() + f32::from(e.position.y - start.y).abs()) < 6.
+                    && (v.selected.is_some() || state::read(cx, |l| l.graph_selection.is_some()))
+                {
+                    v.deselect(cx);
+                }
                 let carried = v.carried.take().is_some();
                 if carried {
                     v.remember(cx);
@@ -580,6 +597,7 @@ impl Render for GraphView {
                 v.carried = None;
             }))
             .on_key_down(cx.listener(|v, e: &KeyDownEvent, _, cx| {
+                let before = v.selected;
                 match e.keystroke.key.as_str() {
                     "left" => v.step_to_neighbor(-1., 0.),
                     "right" => v.step_to_neighbor(1., 0.),
@@ -594,8 +612,11 @@ impl Render for GraphView {
                         v.hand_moved = false;
                         v.fit();
                     }
-                    "escape" => v.selected = None,
+                    "escape" if v.selected.is_some() || state::read(cx, |l| l.graph_selection.is_some()) => v.deselect(cx),
                     _ => return,
+                }
+                if let Some(i) = v.selected.filter(|i| before != Some(*i)) {
+                    v.select(i, cx);
                 }
                 cx.stop_propagation();
                 cx.notify();

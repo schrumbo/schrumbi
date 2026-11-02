@@ -44,6 +44,38 @@ pub enum Route {
     Cards,
 }
 
+/// What the details column beside a page is about. Each kind remembers on its own whether it is kept open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InspectorKind {
+    Document,
+    Assignments,
+    Graph,
+}
+
+impl InspectorKind {
+    const ALL: [Self; 3] = [Self::Document, Self::Assignments, Self::Graph];
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Document => "document",
+            Self::Assignments => "assignments",
+            Self::Graph => "graph",
+        }
+    }
+}
+
+impl Route {
+    /// The details this page offers beside it; `None` for pages without any.
+    pub fn inspector_kind(&self) -> Option<InspectorKind> {
+        match self {
+            Route::Doc(_) => Some(InspectorKind::Document),
+            Route::Graph => Some(InspectorKind::Graph),
+            Route::Today | Route::Grid | Route::Module(_) | Route::Checks => Some(InspectorKind::Assignments),
+            Route::Inbox | Route::Search | Route::Record | Route::Notes | Route::Cards => None,
+        }
+    }
+}
+
 /// How many pages Back remembers.
 const ROUTE_HISTORY: usize = 50;
 
@@ -224,7 +256,14 @@ pub struct Library {
     pub now: DateTime<Local>,
     pub selected_semester_id: Option<String>,
     selection: Option<String>,
-    pub show_inspector: bool,
+    /// Bumped whenever something is selected, so a click can tell whether it selected anything.
+    selection_stamp: u64,
+    /// The selection left behind on a page, given back when coming back to it.
+    parked_selection: Option<(Route, String)>,
+    /// Details kept open by the user, per kind.
+    pinned_inspectors: HashSet<InspectorKind>,
+    /// The document details were opened for one look, e.g. at its versions; leaving the page closes them.
+    inspector_peek: bool,
     pub show_quick_add: bool,
     pub show_quick_open: bool,
     /// A PDF about to open and the text to look for in it, set when coming from the file search.
@@ -327,6 +366,11 @@ pub struct Library {
     pub revision: u64,
 }
 
+fn pinned_from_prefs() -> HashSet<InspectorKind> {
+    let keys = prefs::get().inspector_pinned;
+    InspectorKind::ALL.into_iter().filter(|k| keys.contains(k.key())).collect()
+}
+
 fn name_of(p: &Path) -> String {
     p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
 }
@@ -368,7 +412,10 @@ impl Library {
             now: Local::now(),
             selected_semester_id: None,
             selection: None,
-            show_inspector: false,
+            selection_stamp: 0,
+            parked_selection: None,
+            pinned_inspectors: if cfg!(test) { HashSet::new() } else { pinned_from_prefs() },
+            inspector_peek: false,
             show_quick_add: false,
             show_quick_open: false,
             find_in_file: None,
@@ -498,6 +545,9 @@ impl Library {
         self.open_documents.clear();
         self.active_document = None;
         self.selection = None;
+        self.parked_selection = None;
+        self.inspector_peek = false;
+        self.graph_selection = None;
         self.route = Route::Today;
         self.back_routes.clear();
         self.forward_routes.clear();
@@ -827,7 +877,8 @@ impl Library {
         }
         self.follow_outside_moves();
         self.active_document = Some(new.to_path_buf());
-        self.route = Route::Doc(new.to_path_buf());
+        let from = std::mem::replace(&mut self.route, Route::Doc(new.to_path_buf()));
+        self.arrived(&from);
         self.save_documents();
         self.changed();
     }
@@ -1347,7 +1398,9 @@ impl Library {
             if let Route::Doc(left) = self.route.clone() {
                 self.follow_heading(&left);
             }
-            self.back_routes.push(std::mem::replace(&mut self.route, r));
+            let from = std::mem::replace(&mut self.route, r);
+            self.arrived(&from);
+            self.back_routes.push(from);
             if self.back_routes.len() > ROUTE_HISTORY {
                 self.back_routes.remove(0);
             }
@@ -1379,7 +1432,9 @@ impl Library {
         }
         while let Some(r) = self.forward_routes.pop() {
             if self.route_exists(&r) {
-                self.back_routes.push(std::mem::replace(&mut self.route, r));
+                let from = std::mem::replace(&mut self.route, r);
+                self.arrived(&from);
+                self.back_routes.push(from);
                 self.changed();
                 return;
             }
@@ -1392,10 +1447,88 @@ impl Library {
 
     pub fn select(&mut self, id: Option<String>) {
         if id.is_some() {
-            self.show_inspector = true;
+            self.selection_stamp += 1;
         }
         self.selection = id;
         self.changed();
+    }
+
+    /// Changes with every selection, so a click can tell whether something inside it selected anything.
+    pub fn selection_stamp(&self) -> u64 {
+        self.selection_stamp
+    }
+
+    /// Shows an assignment selected on its module page.
+    pub fn reveal(&mut self, id: &str) {
+        let Some(module) = self.assignment(id).map(|a| a.module_id.clone()) else { return };
+        self.set_route(Route::Module(module));
+        self.select(Some(id.to_string()));
+    }
+
+    /// A new page lets go of what was selected on the old one and gets back what was left on it.
+    fn arrived(&mut self, from: &Route) {
+        if *from == self.route {
+            return;
+        }
+        self.inspector_peek = false;
+        let back = self.parked_selection.take_if(|(r, _)| *r == self.route).map(|(_, id)| id).filter(|id| self.assignment(id).is_some());
+        if let Some(id) = self.selection.take() {
+            self.parked_selection = Some((from.clone(), id));
+        }
+        self.selection = back;
+    }
+
+    /// The details the shown page offers.
+    pub fn inspector_kind(&self) -> Option<InspectorKind> {
+        self.route.inspector_kind()
+    }
+
+    /// Whether the details column is shown: kept open for this kind of page, or opened by what is selected.
+    pub fn show_inspector(&self) -> bool {
+        let Some(kind) = self.inspector_kind() else { return false };
+        self.pinned_inspectors.contains(&kind)
+            || match kind {
+                InspectorKind::Document => self.inspector_peek,
+                InspectorKind::Assignments => self.selected().is_some(),
+                InspectorKind::Graph => self.graph_selection.is_some(),
+            }
+    }
+
+    /// Opens or closes the details for this kind of page and remembers it. Closing also lets go of the selection.
+    pub fn toggle_inspector(&mut self) {
+        let Some(kind) = self.inspector_kind() else { return };
+        let open = !self.show_inspector();
+        if open {
+            self.pinned_inspectors.insert(kind);
+        } else {
+            self.pinned_inspectors.remove(&kind);
+            self.release_inspector(kind);
+        }
+        let keys: std::collections::BTreeSet<String> = InspectorKind::ALL.into_iter().filter(|k| self.pinned_inspectors.contains(k)).map(|k| k.key().to_string()).collect();
+        prefs::update(|p| p.inspector_pinned = keys);
+        self.changed();
+    }
+
+    /// Opens the document details for this visit only, e.g. to show the versions.
+    pub fn peek_inspector(&mut self) {
+        self.inspector_peek = true;
+        self.changed();
+    }
+
+    /// Lets go of what opened the details, as Esc does. Details the user keeps open stay.
+    pub fn dismiss_inspector(&mut self) {
+        if let Some(kind) = self.inspector_kind() {
+            self.release_inspector(kind);
+        }
+        self.changed();
+    }
+
+    fn release_inspector(&mut self, kind: InspectorKind) {
+        match kind {
+            InspectorKind::Document => self.inspector_peek = false,
+            InspectorKind::Assignments => self.selection = None,
+            InspectorKind::Graph => self.graph_selection = None,
+        }
     }
 
     pub fn semester(&self) -> Option<&Semester> {
@@ -1442,7 +1575,7 @@ impl Library {
     }
 
     pub fn is_selected(&self, id: &str) -> bool {
-        self.show_inspector && self.selection.as_deref() == Some(id)
+        self.selection.as_deref() == Some(id) && self.inspector_kind() == Some(InspectorKind::Assignments)
     }
 
     pub fn today(&self) -> NaiveDate {
@@ -2750,11 +2883,6 @@ impl Library {
 
     // MARK: Documents
 
-    pub fn toggle_inspector(&mut self) {
-        self.show_inspector = !self.show_inspector;
-        self.changed();
-    }
-
     pub fn ics(&self) -> Option<String> {
         let c = self.config.as_ref()?;
         let items: Vec<&Assignment> = self.semester_assignments().into_iter().filter(|a| self.status(a) != Status::Skipped).collect();
@@ -2957,7 +3085,10 @@ impl Library {
         }
         if was_shown {
             match self.active_document.clone() {
-                Some(next) => self.route = Route::Doc(next),
+                Some(next) => {
+                    let from = std::mem::replace(&mut self.route, Route::Doc(next));
+                    self.arrived(&from);
+                }
                 None => self.go_back(),
             }
         }
@@ -3033,13 +3164,16 @@ impl Library {
         }
         while let Some(r) = self.back_routes.pop() {
             if self.route_exists(&r) {
-                self.forward_routes.push(std::mem::replace(&mut self.route, r));
+                let from = std::mem::replace(&mut self.route, r);
+                self.arrived(&from);
+                self.forward_routes.push(from);
                 self.changed();
                 return;
             }
         }
         if !self.route_exists(&self.route) {
-            self.route = Route::Today;
+            let from = std::mem::replace(&mut self.route, Route::Today);
+            self.arrived(&from);
             self.changed();
         }
     }

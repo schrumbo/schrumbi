@@ -38,8 +38,12 @@ pub struct MainWindow {
     shown_route: Option<Route>,
     slides: Option<(std::path::PathBuf, Entity<super::vault_tools::Slides>)>,
     error_shown: bool,
+    /// The selection count and place when a press on the page began, if nothing inside claimed it.
+    press_stamp: Option<(u64, Point<Pixels>)>,
     _subs: Vec<Subscription>,
 }
+
+const INSPECTOR_WIDTH: f32 = 340.;
 
 fn main_view(window: &Window, cx: &App) -> Option<Entity<MainWindow>> {
     let root = window.root::<gpui_kit::base::Root>()??;
@@ -112,6 +116,7 @@ impl MainWindow {
             sidebar_open: p.sidebar_open,
             save_bounds: None,
             sidebar_auto_closed: false,
+            press_stamp: None,
             error_shown: false,
             syncing_search: false,
             focus: cx.focus_handle(),
@@ -243,9 +248,9 @@ impl MainWindow {
                     .tooltip(tip(next.title.clone()))
                     .on_click(move |_, _, cx| {
                         act(cx, |l| {
-                            l.select(Some(id.clone()));
                             l.set_route(Route::Module(module.clone()));
-                        })
+                            l.select(Some(id.clone()));
+                        });
                     })
                     .child(icon("calendar-clock", iconsize::XS, t.secondary))
                     .child(div().max_w(px(120.)).truncate().child(next.short.clone()))
@@ -256,7 +261,8 @@ impl MainWindow {
     }
 
     fn toolbar(&self, lib: &Library, left: f32, page_width: f32, t: &Theme) -> Div {
-        let show = lib.show_inspector;
+        let show = lib.show_inspector();
+        let offered = lib.inspector_kind().is_some();
         let module = if let Route::Module(id) = lib.route() { Some(id.clone()) } else { None };
         let module2 = module.clone();
         div()
@@ -289,11 +295,10 @@ impl MainWindow {
                     .ghost()
                     .size(px(control::M))
                     .rounded_full()
-                    .bg(t.ink.opacity(if show { 0.14 } else { 0.06 }))
-                    .border_1()
-                    .border_color(t.ink.opacity(0.1))
+                    .when(offered, |b| b.bg(t.ink.opacity(if show { 0.14 } else { 0.06 })).border_1().border_color(t.ink.opacity(0.1)))
                     .icon(menu_icon("panel-right"))
-                    .tooltip(format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()))
+                    .disabled(!offered)
+                    .tooltip(if offered { format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()) } else { tr("Diese Seite hat keine Details") })
                     .on_click(|_, _, cx| act(cx, |l| l.toggle_inspector())),
             )
             .child(div().w(px(if page_width < 760. { 200. } else { 325. })).flex_none().key_context("SearchField").child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true)))
@@ -336,7 +341,8 @@ impl Render for MainWindow {
         }
         let l = lib.read(cx);
         let width = f32::from(window.viewport_size().width);
-        let crowded = l.show_inspector && width < if self.sidebar_auto_closed { 1280. } else { 1240. };
+        let inspector_open = l.show_inspector();
+        let crowded = inspector_open && width < if self.sidebar_auto_closed { 1280. } else { 1240. };
         if crowded && self.sidebar_open {
             self.sidebar_open = false;
             self.sidebar_auto_closed = true;
@@ -348,11 +354,12 @@ impl Render for MainWindow {
         let base = div()
             .child(gpui_kit::base::TextSelectionLayer)
             .id("main")
-            .capture_any_mouse_down(|e, _, cx| {
+            .capture_any_mouse_down(cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                this.press_stamp = None;
                 if e.button == MouseButton::Right {
                     pause_tooltips(cx);
                 }
-            })
+            }))
             .track_focus(&self.focus)
             .key_context("MainWindow")
             .size_full()
@@ -368,10 +375,7 @@ impl Render for MainWindow {
                 }
                 let typing = window.context_stack().iter().any(|c| c.contains("Input"));
                 if !typing {
-                    act(cx, |l| {
-                        l.show_inspector = false;
-                        l.select(None);
-                    });
+                    act(cx, Library::dismiss_inspector);
                 }
                 window.focus(&this.focus, cx);
             }))
@@ -417,10 +421,11 @@ impl Render for MainWindow {
 
         let update = super::updates::available(cx);
         let target = if self.sidebar_open { sidebar::WIDTH } else { sidebar::RAIL };
-        let inspector_w = if l.show_inspector { 340. } else { 0. };
-        let page_width = width - target - inspector_w;
+        let inspector_target = if inspector_open { INSPECTOR_WIDTH } else { 0. };
+        let page_width = width - target - inspector_target;
         self.pages.update(cx, |p, _| p.width = page_width);
         let left = motion::follow("sidebar-width", target, motion::MEDIUM, window, cx);
+        let inspector_w = motion::follow("inspector-width", inspector_target, motion::MEDIUM, window, cx);
         let l = lib.read(cx);
         let page = match l.route() {
             Route::Today => div().id("today-scroll").size_full().overflow_y_scrollbar().child(today::render(l, page_width, &t)).into_any_element(),
@@ -462,11 +467,22 @@ impl Render for MainWindow {
                     .border_color(t.separator)
                     .flex()
                     .flex_col()
-                    .child(self.toolbar(l, left, page_width + inspector_w, &t))
-                    .child(div().flex_1().min_h_0().mr(px(inspector_w)).child(page).with_animation(("page", page_key), Animation::new(page_motion).with_easing(ease_out_quint()), |d, p| d.opacity(0.4 + 0.6 * p))),
+                    .child(self.toolbar(l, left, page_width + inspector_target, &t))
+                    .child(div().id("page-area").flex_1().min_h_0().mr(px(inspector_target))
+                        .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                            this.press_stamp = (!window.default_prevented()).then(|| (state::read(cx, Library::selection_stamp), e.position));
+                        }))
+                        .on_mouse_up(MouseButton::Left, cx.listener(|this, e: &MouseUpEvent, _, cx| {
+                            let Some((stamp, at)) = this.press_stamp.take() else { return };
+                            let still = f32::from((e.position.x - at.x).abs() + (e.position.y - at.y).abs()) < 6.;
+                            if still && state::read(cx, |l| l.selection_stamp() == stamp && l.selection().is_some()) {
+                                act(cx, |l| l.select(None));
+                            }
+                        }))
+                        .child(page).with_animation(("page", page_key), Animation::new(page_motion).with_easing(ease_out_quint()), |d, p| d.opacity(0.4 + 0.6 * p))),
             )
-            .when(l.show_inspector, |d| {
-                d.child(div().absolute().top(px(control::BAR)).bottom_0().right_0().w(px(inspector_w)).border_l_1().border_color(t.separator).bg(t.content).child(self.inspector.clone()))
+            .when(inspector_w > 0.5, |d| {
+                d.child(div().absolute().top(px(control::BAR)).bottom_0().right(px(inspector_w - INSPECTOR_WIDTH)).w(px(INSPECTOR_WIDTH)).border_l_1().border_color(t.separator).bg(t.content).child(self.inspector.clone()))
             })
             .children(super::link_card::overlay(cx))
             .children(slides)

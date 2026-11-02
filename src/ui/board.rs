@@ -222,6 +222,7 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .gap(px(space::XS))
                 .text_size(px(font::CAPTION))
