@@ -468,7 +468,7 @@ impl Render for MainWindow {
                     .flex()
                     .flex_col()
                     .child(self.toolbar(l, left, page_width + inspector_target, &t))
-                    .child(div().id("page-area").flex_1().min_h_0().mr(px(inspector_w))
+                    .child(div().id("page-area").flex_1().min_h_0().mr(px(inspector_target))
                         .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, window, cx| {
                             this.press_stamp = (!window.default_prevented()).then(|| (state::read(cx, Library::selection_stamp), e.position));
                         }))
@@ -482,7 +482,7 @@ impl Render for MainWindow {
                         .child(page).with_animation(("page", page_key), Animation::new(page_motion).with_easing(ease_out_quint()), |d, p| d.opacity(0.4 + 0.6 * p))),
             )
             .when(inspector_w > 0.5, |d| {
-                d.child(div().absolute().top(px(control::BAR)).bottom_0().right_0().w(px(inspector_w)).overflow_hidden().border_l_1().border_color(t.separator).bg(t.content).child(div().h_full().w(px(INSPECTOR_WIDTH)).child(self.inspector.clone())))
+                d.child(div().absolute().top(px(control::BAR)).bottom_0().right(px(inspector_w - INSPECTOR_WIDTH)).w(px(INSPECTOR_WIDTH)).border_l_1().border_color(t.separator).bg(t.content).child(self.inspector.clone()))
             })
             .children(super::link_card::overlay(cx))
             .children(slides)
