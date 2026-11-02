@@ -201,6 +201,7 @@ pub struct NoteView {
     link_focus: markdown_view::LinkFocus,
     place_restored: bool,
     fit: BarFit,
+    toc: Rc<Vec<(String, usize)>>,
     path: PathBuf,
     mode: Mode,
     editor: Entity<EditorState>,
@@ -339,7 +340,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -1449,20 +1450,33 @@ impl NoteView {
         set_font_size(size, cx);
     }
 
+    fn toc_entries(&self) -> Option<Vec<(String, usize)>> {
+        let (_, p) = self.parsed.as_ref()?;
+        if matches!(self.mode, Mode::Source) {
+            return Some(Vec::new());
+        }
+        let headings = p.headings();
+        let anchors: Vec<usize> = p.heading_blocks().into_iter().filter_map(|b| p.sources().get(b).map(|s| self.item_of_line(s.line))).collect();
+        if headings.len() < 2 || anchors.len() != headings.len() {
+            return Some(Vec::new());
+        }
+        let top = headings.iter().map(|(level, _)| *level).min().unwrap_or(1);
+        Some(headings.iter().zip(&anchors).map(|((level, text), block)| (format!("{}{text}", "    ".repeat((level - top) as usize)), *block)).collect())
+    }
+
     fn header(&self, exporting: bool, room: Room, t: &Theme, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let me = cx.entity();
         let help = ShortcutAction::TogglePreview.shortcut().map_or_else(|| tr("Lesen oder Bearbeiten"), |s| trf("Lesen oder Bearbeiten (%@ wechselt)", &[&s.display()]));
         let edit_mode = if self.editor_kind == prefs::NoteEditor::Live { Mode::Live } else { Mode::Source };
         let mode_list: Vec<(Mode, String, &'static str)> = [(Mode::Read, tr("Lesen"), "eye"), (edit_mode, tr("Bearbeiten"), "pencil"), (Mode::Split, tr("Geteilt"), "columns-2")].into_iter().filter(|(m, ..)| *m != Mode::Split || self.editor_kind == prefs::NoteEditor::Code).collect();
-        let headings = self.parsed.as_ref().filter(|_| !matches!(self.mode, Mode::Source)).map(|(_, p)| p.headings()).unwrap_or_default();
-        let anchors: Vec<usize> = self.parsed.as_ref().map(|(_, p)| p.heading_blocks().into_iter().filter_map(|b| p.sources().get(b).map(|s| self.item_of_line(s.line))).collect()).unwrap_or_default();
-        let has_toc = headings.len() >= 2 && anchors.len() == headings.len();
+        let entries = self.toc.clone();
+        let has_toc = !entries.is_empty();
         let count = mode_list.len() as f32;
         let labels: f32 = mode_list.iter().map(|(_, l, _)| bar_fit::text_width(l, font::CALLOUT, FontWeight::MEDIUM, window)).sum();
-        let segment = 2. * space::XXS + count * (2. * (space::XS + space::XXS) + iconsize::XS);
+        let segment = 2. * space::XXS + count * control::S;
         let modes_full = 2. * space::XXS + count * (2. * space::S + space::XS + iconsize::XS) + labels;
         let toc_w = if has_toc { control::S } else { 0. };
-        let pdf_w = 2. * space::S + iconsize::S + space::XS + bar_fit::text_width("PDF", font::TITLE3 - 1., FontWeight::NORMAL, window) + 2.;
+        let pdf_w = bar_fit::button_width(&tr("PDF"), window);
         let more = control::S;
         let fold = bar_fit::fold_room(room, &[bar_fit::row(&[modes_full, toc_w, pdf_w, more], space::S), bar_fit::row(&[segment, toc_w, pdf_w, more], space::S), bar_fit::row(&[segment, toc_w, more], space::S), bar_fit::row(&[segment, more], space::S), bar_fit::row(&[control::S, more], space::S), more], 3);
         let (labeled, pdf_out, toc_out, picker, modes_out) = (fold == 0, fold >= 2, fold >= 3, fold == 4, fold >= 5);
@@ -1477,8 +1491,8 @@ impl NoteView {
                     .flex()
                     .items_center()
                     .gap(px(space::XS))
-                    .px(px(if labeled { space::S } else { space::XS + space::XXS }))
-                    .py(px(space::XXS))
+                    .when(labeled, |d| d.px(px(space::S)).py(px(space::XXS)))
+                    .when(!labeled, |d| d.w(px(control::S)).py(px(space::XXS)).justify_center())
                     .rounded(px(radius::SMALL))
                     .cursor_pointer().key_nav()
                     .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
@@ -1498,12 +1512,6 @@ impl NoteView {
         let embedded = self.embedded;
         let in_vault = super::vault_tools::in_vault(&self.path, cx);
         let list = self.reader_list.clone();
-        let entries: Rc<Vec<(String, usize)>> = Rc::new(if has_toc {
-            let top = headings.iter().map(|(level, _)| *level).min().unwrap_or(1);
-            headings.iter().zip(&anchors).map(|((level, text), block)| (format!("{}{text}", "    ".repeat((level - top) as usize)), *block)).collect()
-        } else {
-            Vec::new()
-        });
         let toc_menu = {
             move |mut menu: gpui_kit::component::menu::PopupMenu| {
                 for (text, block) in entries.iter() {
@@ -1521,7 +1529,7 @@ impl NoteView {
         let shown_mode = mode_list.iter().find(|(m, ..)| *m == current_mode || (*m == edit_mode && current_mode == Mode::Source)).cloned();
         let mode_picker = picker.then(|| {
             let (list, e) = (mode_list.clone(), me.clone());
-            let (label, icon_name) = shown_mode.as_ref().map_or_else(|| (tr("Ansicht"), "eye"), |(_, l, i)| (l.clone(), *i));
+            let (label, icon_name) = shown_mode.as_ref().or_else(|| mode_list.first()).map_or_else(|| (String::new(), "eye"), |(_, l, i)| (l.clone(), *i));
             Button::new("note-mode").ghost().small().icon(menu_icon(icon_name)).tooltip(trf("%@ – %@", &[&label, &help])).dropdown_menu(move |mut menu, _, _| {
                 for (m, label, _) in list.iter().cloned() {
                     let e = e.clone();
@@ -1555,7 +1563,7 @@ impl NoteView {
                 }
                 if pdf_out {
                     let e = e2.clone();
-                    menu = menu.item(PopupMenuItem::new(tr("Als PDF sichern (⇧⌘E)")).icon(menu_icon("share")).disabled(exporting).on_click(move |_, _, cx| e.update(cx, NoteView::export)));
+                    menu = menu.item(PopupMenuItem::new(pdf_tip.clone()).icon(menu_icon("share")).disabled(exporting).on_click(move |_, _, cx| e.update(cx, NoteView::export)));
                 }
                 if modes_out || toc_out || pdf_out {
                     menu = menu.separator();
@@ -2358,7 +2366,12 @@ impl Render for NoteView {
                 self.window_title = full;
             }
         }
-        let room = if self.embedded { actions_room(&self.path, &self.fit, window, cx) } else { self.fit.bar().map_or(Room::OPEN, |w| Room { comfortable: w - 2. * space::M, tight: w - 2. * space::M }) };
+        let room = if self.embedded { actions_room(&self.path, window, cx) } else { self.fit.bar().map_or(Room::OPEN, |w| Room::exact(w - 2. * space::M)) };
+        if let Some(toc) = self.toc_entries()
+            && *self.toc != toc
+        {
+            self.toc = Rc::new(toc);
+        }
         let header = self.header(exporting, room, &t, window, cx);
         if self.mode == Mode::Split && !missing {
             self.sync_split(&text, cx);
@@ -2377,7 +2390,7 @@ impl Render for NoteView {
             }
         };
         let top = if self.embedded {
-            document_bar(&self.path, &self.fit, header, &t, window, cx)
+            document_bar(&self.path, header, &t, window, cx)
         } else {
             div().relative().overflow_hidden().h(px(control::SUBBAR)).flex_none().flex().items_center().justify_center().border_b_1().border_color(t.separator).child(self.fit.measure_bar()).child(header)
         };
@@ -2604,17 +2617,21 @@ impl Render for DraggedTab {
 
 const SPLIT_TITLE_MIN: f32 = 120.;
 const SPLIT_TITLE_TIGHT: f32 = 64.;
-const BAR_BUTTON: f32 = 24.;
 
 struct TabPlan {
     docs: Vec<PathBuf>,
     titles: Vec<String>,
     dirty: Vec<bool>,
+    natural: Vec<f32>,
     widths: Vec<f32>,
     active: Option<usize>,
     show_files: bool,
     list_all: bool,
     reserved_list: bool,
+}
+
+fn is_split(current: &Path, cx: &App) -> bool {
+    state::read(cx, |l| l.split_document.as_deref() == Some(current))
 }
 
 fn tab_plan(current: &Path, fit: &BarFit, window: &Window, cx: &App) -> TabPlan {
@@ -2626,34 +2643,43 @@ fn tab_plan(current: &Path, fit: &BarFit, window: &Window, cx: &App) -> TabPlan 
     });
     let active = docs.iter().position(|d| d == current);
     let natural: Vec<f32> = titles.iter().map(|t| bar_fit::tab_natural(t, window)).collect();
+    let widths = fit.strip().map_or_else(|| natural.clone(), |strip| bar_fit::tab_widths(&natural, active, strip, space::XXS, space::XL));
+    let roomy = fit.bar().is_none_or(|bar| bar >= bar_fit::LIST_MIN_BAR);
+    let reserved_list = roomy && docs.len() > 4;
+    let list_room = if fit.listed() && !reserved_list { bar_fit::ICON_BUTTON + space::S } else { 0. };
     let gaps = space::XXS * docs.len().saturating_sub(1) as f32;
-    let widths = fit.strip().map_or_else(|| natural.clone(), |room| bar_fit::tab_widths(&natural, active, room - gaps));
-    let overflowing = fit.strip().is_some_and(|room| widths.iter().sum::<f32>() + gaps > room + 0.5);
-    let reserved_list = docs.len() > 4;
-    TabPlan { docs, titles, dirty, widths, active, show_files: prefs::get().notes_explorer_hidden, list_all: reserved_list || overflowing, reserved_list }
+    let overflowing = fit.strip().is_some_and(|strip| {
+        let wider = strip + list_room;
+        bar_fit::tab_widths(&natural, active, wider, space::XXS, space::XL).iter().sum::<f32>() + gaps > wider + 0.5
+    });
+    TabPlan { docs, titles, dirty, natural, widths, active, show_files: prefs::get().notes_explorer_hidden, list_all: roomy && (reserved_list || overflowing), reserved_list }
 }
 
 /// How much of the document row is left for the shown document's actions,
 /// after the shown tab or title keeps a readable width.
-pub fn actions_room(current: &Path, fit: &BarFit, window: &Window, cx: &App) -> Room {
+pub fn actions_room(current: &Path, window: &Window, cx: &App) -> Room {
+    let split = is_split(current, cx);
+    let fit = bar_fit::slot(split);
     let Some(bar) = fit.bar() else { return Room::OPEN };
-    if state::read(cx, |l| l.split_document.as_deref() == Some(current)) {
+    if split {
         let title = state::read(cx, |l| l.note_title(current));
         let natural = bar_fit::text_width(&title, font::CALLOUT, FontWeight::NORMAL, window);
-        let rest = bar - 2. * space::M - iconsize::M - BAR_BUTTON - 3. * space::S;
+        let rest = bar - 2. * space::M - iconsize::M - bar_fit::ICON_BUTTON - 3. * space::S;
         return Room { comfortable: rest - natural.min(SPLIT_TITLE_MIN), tight: rest - natural.min(SPLIT_TITLE_TIGHT) };
     }
-    let plan = tab_plan(current, fit, window, cx);
-    let natural = plan.active.map_or(0., |i| bar_fit::tab_natural(&plan.titles[i], window));
-    let extra = |on: bool| if on { BAR_BUTTON + space::S } else { 0. };
+    let plan = tab_plan(current, &fit, window, cx);
+    let natural = plan.active.map_or(0., |i| plan.natural[i]);
+    let extra = |on: bool| if on { bar_fit::ICON_BUTTON + space::S } else { 0. };
     let rest = bar - space::S - space::M - extra(plan.show_files) - extra(plan.reserved_list) - space::S;
     Room { comfortable: rest - natural.min(bar_fit::ACTIVE_MIN), tight: rest - natural.min(bar_fit::TAB_MIN) }
 }
 
 /// One row: open tabs on the left, the shown document's actions on the right.
 /// Tabs shrink and then scroll; the row never draws past its own edges.
-pub fn document_bar(current: &Path, fit: &BarFit, actions: AnyElement, t: &Theme, window: &Window, cx: &App) -> Div {
-    if state::read(cx, |l| l.split_document.as_deref() == Some(current)) {
+pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Window, cx: &App) -> Div {
+    let split = is_split(current, cx);
+    let fit = bar_fit::slot(split);
+    if split {
         let title = state::read(cx, |l| l.note_title(current));
         return div()
             .relative()
@@ -2667,12 +2693,13 @@ pub fn document_bar(current: &Path, fit: &BarFit, actions: AnyElement, t: &Theme
             .border_color(t.separator)
             .child(fit.measure_bar())
             .child(div().flex_none().child(file_icon(current, iconsize::M)))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).child(title))
+            .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(px(font::CALLOUT)).child(title))
             .child(div().flex_none().child(actions))
             .child(Button::new("split-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Geteilte Ansicht schließen")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))));
     }
     let preview = state::read(cx, |l| l.preview_document.clone());
-    let TabPlan { docs, titles, dirty, widths, active: shown_index, show_files, list_all, .. } = tab_plan(current, fit, window, cx);
+    let TabPlan { docs, titles, dirty, natural, widths, active: shown_index, show_files, list_all, .. } = tab_plan(current, &fit, window, cx);
+    fit.set_listed(list_all);
     let overflow = list_all.then(|| {
         let (all, names, shown) = (docs.clone(), titles.clone(), current.to_path_buf());
         Button::new("doc-tabs-all").ghost().small().icon(menu_icon("chevron-down")).tooltip(trf("Alle %lld Tabs", &[&docs.len()])).dropdown_menu(move |mut menu, _, _| {
@@ -2684,19 +2711,60 @@ pub fn document_bar(current: &Path, fit: &BarFit, actions: AnyElement, t: &Theme
         })
     });
     let show_files = show_files.then(|| Button::new("explorer-show").ghost().small().icon(menu_icon("panel-left")).tooltip(tr("Dateien einblenden")).on_click(|_, _, cx| super::notes_page::set_hidden(false, cx)));
+    let index = shown_index.unwrap_or(0);
+    let scroll = state::tab_scroll(current, index, cx);
+    let strip = fit.strip();
+    let total = widths.iter().sum::<f32>() + space::XXS * widths.len().saturating_sub(1) as f32;
+    let mut offset = f32::from(scroll.offset().x);
+    if let (Some(strip), Some(shown)) = (strip, shown_index) {
+        let wanted = if fit.needs_reveal(current) { bar_fit::reveal(&widths, space::XXS, shown, strip, offset, space::XL) } else { offset.clamp(-(total - strip).max(0.), 0.) };
+        if wanted != offset {
+            offset = wanted;
+            scroll.set_offset(point(px(wanted), px(0.)));
+        }
+    }
+    let mut left = 0.;
     let mut tabs = div().flex().gap(px(space::XXS)).py(px(space::S));
     for (i, doc) in docs.iter().enumerate() {
         let active = doc.as_path() == current;
+        let (start, end) = (left + offset, left + offset + widths[i]);
+        left += widths[i] + space::XXS;
+        if !active && strip.is_some_and(|strip| end < -strip || start > 2. * strip) {
+            tabs = tabs.child(div().flex_none().w(px(widths[i])));
+            continue;
+        }
         let (open, close, menu, middle, target) = (doc.clone(), doc.clone(), doc.clone(), doc.clone(), doc.clone());
         let accent = t.accent;
         let is_dirty = dirty[i];
         let hover = t.ink.opacity(0.05);
         let rel = state::read(cx, |l| l.relative_path(doc));
         let is_preview = preview.as_ref() == Some(doc);
+        let squeezed = widths[i] + 0.5 < natural[i] && !is_dirty;
+        let close_button = div()
+            .id(SharedString::from(format!("tab-close-{}", doc.display())))
+            .flex_none()
+            .size(px(iconsize::M))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .soft(t.ink.opacity(0.1), radius::FULL)
+            .child(if is_dirty {
+                div().relative().size(px(iconsize::M)).flex().items_center().justify_center().child(div().size(px(space::S)).rounded_full().bg(t.secondary).group_hover("doc-tab", Styled::invisible)).child(div().absolute().invisible().group_hover("doc-tab", Styled::visible).child(icon("x", iconsize::XS, t.secondary))).into_any_element()
+            } else {
+                icon("x", iconsize::XS, t.secondary).into_any_element()
+            })
+            .tooltip(tip(if is_dirty { tr("Ungesicherte Änderungen – Tab schließen") } else { tr("Tab schließen") }))
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                close_tab(&close, cx);
+            });
+        let under = t.content.blend(t.ink.opacity(if active { 0.1 } else { 0.05 }));
         tabs = tabs.child(
             div()
                 .id(SharedString::from(format!("tab-{}", doc.display())))
                 .group("doc-tab")
+                .relative()
                 .flex()
                 .flex_none()
                 .w(px(widths[i]))
@@ -2726,29 +2794,12 @@ pub fn document_bar(current: &Path, fit: &BarFit, actions: AnyElement, t: &Theme
                     act(cx, |l| l.move_document(&path, &target));
                 })
                 .child(div().flex_none().child(file_icon(doc, iconsize::M)))
-                .child(div().flex_1().min_w_0().truncate().when(is_preview, Styled::italic).text_size(px(font::CALLOUT)).text_color(if active { t.primary } else { t.secondary }).child(titles[i].clone()))
-                .child(
-                    div()
-                        .id(SharedString::from(format!("tab-close-{}", doc.display())))
-                        .flex_none()
-                        .size(px(16.))
-                        .rounded_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .soft(t.ink.opacity(0.1), radius::FULL)
-                        .when(!active && !is_dirty, |d| d.invisible().group_hover("doc-tab", |s| s.visible()))
-                        .child(if is_dirty {
-                            div().relative().size(px(16.)).flex().items_center().justify_center().child(div().size(px(space::S)).rounded_full().bg(t.secondary).group_hover("doc-tab", |s| s.invisible())).child(div().absolute().invisible().group_hover("doc-tab", |s| s.visible()).child(icon("x", iconsize::XS, t.secondary))).into_any_element()
-                        } else {
-                            icon("x", iconsize::XS, t.secondary).into_any_element()
-                        })
-                        .tooltip(tip(if is_dirty { tr("Ungesicherte Änderungen – Tab schließen") } else { tr("Tab schließen") }))
-                        .on_click(move |_, _, cx| {
-                            cx.stop_propagation();
-                            close_tab(&close, cx)
-                        }),
-                )
+                .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis_middle().when(is_preview, Styled::italic).text_size(px(font::CALLOUT)).text_color(if active { t.primary } else { t.secondary }).child(titles[i].clone()))
+                .child(if squeezed {
+                    div().absolute().top_0().bottom_0().right_0().pl(px(space::XS)).pr(px(space::S)).rounded_r(px(radius::INNER)).flex().items_center().bg(under).invisible().group_hover("doc-tab", Styled::visible).child(close_button).into_any_element()
+                } else {
+                    close_button.when(!active && !is_dirty, |d| d.invisible().group_hover("doc-tab", Styled::visible)).into_any_element()
+                })
                 .context_menu(move |m, _, _| {
                     let (a, b, c, d, beside) = (menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone());
                     m.when(!active, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.set_split(Some(beside.clone()))))))
@@ -2761,14 +2812,8 @@ pub fn document_bar(current: &Path, fit: &BarFit, actions: AnyElement, t: &Theme
                 }),
         );
     }
-    let index = shown_index.unwrap_or(0);
-    let scroll = state::tab_scroll(current, index, cx);
-    if fit.strip_moved() && shown_index.is_some() {
-        scroll.scroll_to_item(index);
-    }
-    let (offset, max) = (f32::from(scroll.offset().x), f32::from(scroll.max_offset().x));
     let fade = |left: bool| div().absolute().top_0().bottom_0().w(px(space::XL)).when(left, Styled::left_0).when(!left, Styled::right_0).bg(linear_gradient(if left { 270. } else { 90. }, linear_color_stop(t.content.opacity(0.), 0.), linear_color_stop(t.content, 1.)));
-    let fades = [(offset < -0.5).then(|| fade(true)), (max > 0.5 && offset > 0.5 - max).then(|| fade(false))];
+    let fades = strip.filter(|strip| shown_index.is_none_or(|i| widths[i] + 2. * space::XL <= *strip)).map(|strip| [(offset < -0.5).then(|| fade(true)), (total + offset > strip + 0.5).then(|| fade(false))]);
     div()
         .relative()
         .overflow_hidden()
@@ -2782,7 +2827,7 @@ pub fn document_bar(current: &Path, fit: &BarFit, actions: AnyElement, t: &Theme
         .border_color(t.separator)
         .child(fit.measure_bar())
         .children(show_files)
-        .child(div().flex_1().min_w_0().relative().child(tabs.id("doc-tabs").w_full().overflow_x_scroll().track_scroll(&scroll)).children(fades.into_iter().flatten()).child(fit.measure_strip()))
+        .child(div().flex_1().min_w_0().relative().child(tabs.id("doc-tabs").w_full().overflow_x_scroll().track_scroll(&scroll)).children(fades.into_iter().flatten().flatten()).child(fit.measure_strip()))
         .children(overflow)
         .child(div().flex_none().child(actions))
 }
@@ -2793,7 +2838,6 @@ pub struct FileViewer {
     pdf: Option<Entity<PdfView>>,
     preview: Entity<FilePreview>,
     app: Option<String>,
-    fit: BarFit,
 }
 
 impl FileViewer {
@@ -2808,7 +2852,7 @@ impl FileViewer {
             p
         });
                 let app = super::platform::default_app_name(&path);
-        Self { path, pdf, preview, app, fit: BarFit::default() }
+        Self { path, pdf, preview, app }
     }
 }
 
@@ -2833,8 +2877,8 @@ impl Render for FileViewer {
         }
         let (p1, p2, p3, p4, p5) = (self.path.clone(), self.path.clone(), self.path.clone(), self.path.clone(), self.path.clone());
         let open_label = self.app.as_ref().map_or_else(|| tr("Mit Standard-App öffnen"), |a| trf("In %@ öffnen", &[a]));
-        let room = actions_room(&self.path, &self.fit, window, cx);
-        let labeled = 2. * space::S + iconsize::S + space::XS + bar_fit::text_width(&open_label, font::TITLE3 - 1., FontWeight::NORMAL, window) + 2.;
+        let room = actions_room(&self.path, window, cx);
+        let labeled = bar_fit::button_width(&open_label, window);
         let fold = bar_fit::fold_room(room, &[bar_fit::row(&[labeled, control::S], space::S), bar_fit::row(&[control::S, control::S], space::S), control::S], 2);
         let open_tip = tr("Zum Bearbeiten in der Standard-App öffnen");
         let open_button = Button::new("open-default").small().icon(menu_icon("square-arrow-out-up-right")).tooltip(if fold == 0 { open_tip } else { open_label.clone() }).on_click(move |_, _, _| library::open_path(&p1));
@@ -2857,7 +2901,7 @@ impl Render for FileViewer {
         } else {
             self.preview.clone().into_any_element()
         };
-        div().size_full().flex().flex_col().child(document_bar(&self.path, &self.fit, actions.into_any_element(), &t, window, cx)).child(div().flex_1().min_h_0().child(body))
+        div().size_full().flex().flex_col().child(document_bar(&self.path, actions.into_any_element(), &t, window, cx)).child(div().flex_1().min_h_0().child(body))
     }
 }
 

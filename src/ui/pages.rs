@@ -424,6 +424,7 @@ impl Pages {
                 let (accent, me) = (t.accent, cx.entity());
                 let area = div()
                     .size_full()
+                    .relative()
                     .flex()
                     .on_drag_move::<module_page::SplitDrag>(move |e, _, cx| {
                         let share = f32::from(e.event.position.x - e.bounds.left()) / f32::from(e.bounds.size.width);
@@ -437,8 +438,9 @@ impl Pages {
                         crate::core::prefs::update(|prefs| prefs.split_share = share);
                     }))
                     .child(div().flex_none().min_w_0().h_full().overflow_hidden().w(relative(self.split_share)).child(view))
-                    .child(div().id("doc-split").h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator).soft(accent.opacity(0.3), 0.).cursor_col_resize().on_drag(module_page::SplitDrag, |d, _, _, cx| cx.new(|_| d.clone())))
+                    .child(div().h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator))
                     .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(right))
+                    .child(div().id("doc-split").group("doc-split").absolute().top_0().bottom_0().left(relative(self.split_share)).ml(px((space::XS - space::M) / 2.)).w(px(space::M)).flex().justify_center().cursor_col_resize().child(div().h_full().w(px(space::XS)).group_hover("doc-split", |s| s.bg(accent.opacity(0.3)))).on_drag(module_page::SplitDrag, |d, _, _, cx| cx.new(|_| d.clone())))
                     .into_any_element();
                 (area, right_canvas)
             }

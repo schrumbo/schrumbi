@@ -58,7 +58,6 @@ fn color_of(node_color: Option<&String>) -> Option<Hsla> {
 /// A `.canvas` file as its own document. Coordinates are stored as in the file, the view only pans and zooms.
 pub struct CanvasView {
     path: PathBuf,
-    fit: super::bar_fit::BarFit,
     doc: Option<Canvas>,
     source: String,
     pan: (f32, f32),
@@ -87,7 +86,7 @@ impl CanvasView {
     pub fn new(path: PathBuf, _: &mut Window, cx: &mut Context<Self>) -> Self {
         let source = std::fs::read_to_string(&path).unwrap_or_default();
         let doc = Canvas::parse(&source);
-        Self { path, doc, source, pan: (0., 0.), zoom: 1., fitted: false, selection: BTreeSet::new(), selected_edge: None, gesture: None, guides: Vec::new(), edge_mode: false, space_down: false, editing: None, bounds: Default::default(), undo: Vec::new(), redo: Vec::new(), last_edit: None, save_task: None, seen_generation: index::current().generation, card_texts: Default::default(), focus: cx.focus_handle(), fit: Default::default(), _subs: Vec::new() }
+        Self { path, doc, source, pan: (0., 0.), zoom: 1., fitted: false, selection: BTreeSet::new(), selected_edge: None, gesture: None, guides: Vec::new(), edge_mode: false, space_down: false, editing: None, bounds: Default::default(), undo: Vec::new(), redo: Vec::new(), last_edit: None, save_task: None, seen_generation: index::current().generation, card_texts: Default::default(), focus: cx.focus_handle(), _subs: Vec::new() }
     }
 
     /// Gives the keyboard to the canvas.
@@ -1054,7 +1053,7 @@ impl Render for CanvasView {
         let edge_hint = self.edge_mode.then(|| div().absolute().top(px(space::M)).right(px(space::M)).px(px(space::S)).py(px(space::XS)).rounded(px(radius::CONTROL)).bg(t.column).border_1().border_color(accent).text_size(px(font::CALLOUT)).child(tr("Kante: Tab wählt das Ziel")));
         let empty = doc.nodes.is_empty();
         let hand_over = super::vault_tools::in_vault(&self.path, cx).then(|| super::vault_tools::obsidian_button("canvas-obsidian", self.path.clone()));
-        let bar = super::documents::document_bar(&self.path, &self.fit, div().children(hand_over).into_any_element(), &t, window, cx);
+        let bar = super::documents::document_bar(&self.path, div().children(hand_over).into_any_element(), &t, window, cx);
         let surface = div()
             .id("canvas-page")
             .track_focus(&self.focus)
