@@ -192,6 +192,7 @@ pub fn status_toggle(a: &Assignment, lib: &Library, size: f32, t: &Theme) -> Sta
         .relative()
         .rounded_full()
         .cursor_pointer().key_nav()
+        .soft(t.ink.opacity(0.08), radius::FULL)
         .child(status_glyph(status, a.kind, a.optional, tint, size, t))
         .child(motion::done_pulse("done", status.is_closed() && status != Status::Skipped, size))
         .tooltip(tip(help))
@@ -452,6 +453,11 @@ pub fn due_label(lib: &Library, a: &Assignment, t: &Theme) -> Div {
 
 /// One assignment as a list row: status, title, module, week, date and file hints.
 pub fn assignment_row(lib: &Library, a: &Assignment, show_module: bool, show_date: bool, show_week: bool, t: &Theme) -> impl IntoElement + use<> {
+    assignment_row_with(lib, a, show_module, show_date, show_week, None, t)
+}
+
+/// Like `assignment_row`, with `trailing` inside the row so the hover covers it.
+pub fn assignment_row_with(lib: &Library, a: &Assignment, show_module: bool, show_date: bool, show_week: bool, trailing: Option<AnyElement>, t: &Theme) -> impl IntoElement + use<> {
     let e = lib.evaluation(a);
     let module = lib.module(a);
     let tint = t.palette(module.map_or("blue", |m| m.color.as_str()));
@@ -474,6 +480,7 @@ pub fn assignment_row(lib: &Library, a: &Assignment, show_module: bool, show_dat
         meta = meta.child(div().id(SharedString::from(format!("mis-{}", a.id))).child(icon("triangle-alert", iconsize::XS, t.orange)).tooltip(tip(tr("Dateiname entspricht nicht der Konvention"))));
     }
     let tracks = a.tracks_files();
+    let selected = lib.is_selected(&a.id);
     div()
         .id(SharedString::from(format!("row-{}", a.id)))
         .relative()
@@ -481,7 +488,12 @@ pub fn assignment_row(lib: &Library, a: &Assignment, show_module: bool, show_dat
         .items_center()
         .gap(px(space::M))
         .py(px(space::XS))
+        .mx(px(-space::S))
+        .px(px(space::S))
+        .rounded(px(radius::INNER))
         .cursor_pointer().key_nav()
+        .when(selected, |d| d.bg(t.ink.opacity(0.09)))
+        .when(!selected, |d| d.soft(t.ink.opacity(0.045), radius::INNER))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(sel.clone()))))
         .child(status_toggle(a, lib, iconsize::M, t))
         .child(
@@ -503,6 +515,7 @@ pub fn assignment_row(lib: &Library, a: &Assignment, show_module: bool, show_dat
                 .child(meta),
         )
         .child(due_label(lib, a, t))
+        .children(trailing.map(|e| div().id(SharedString::from(format!("trail-{}", a.id))).on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).flex().items_center().gap(px(space::S)).on_click(|_, _, cx| cx.stop_propagation()).child(e)))
         .when(tracks, |c| file_target(c, a, t))
         .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx))
 }

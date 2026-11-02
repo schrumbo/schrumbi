@@ -423,7 +423,7 @@ pub fn apply(kind: Kind, window: Option<&mut Window>, cx: &mut App) {
     k.switch = t.ink.opacity(if dark { 0.22 } else { 0.15 });
     k.switch_thumb = gpui_kit::white();
     k.list_active = t.accent.opacity(0.15);
-    k.list_hover = t.ink.opacity(0.05);
+    k.list_hover = t.ink.opacity(0.06);
     k.tab_bar = t.secondary_bg;
     k.tab_active = t.content;
     k.danger = t.red;

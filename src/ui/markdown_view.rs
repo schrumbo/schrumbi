@@ -8,6 +8,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
+use super::motion::Soft;
 use super::selectable::{InlineKind, InlineSlot, LinkAction, selectable};
 use super::theme::{Theme, font, note_size, radius, space, iconsize};
 use crate::core::i18n::{tr, trf};
@@ -1300,7 +1301,7 @@ fn file_card(path: PathBuf, detail: Option<String>, action: String, cx: &Ctx) ->
         .border_1()
         .border_color(t.separator)
         .cursor_pointer()
-        .hover(|s| s.bg(t.ink.opacity(0.04)))
+        .soft(t.ink.opacity(0.04), radius::CONTROL)
         .on_click(move |_, _, cx| super::state::act(cx, |l| l.open_file(&open)))
         .child(super::widgets::file_icon(&path, iconsize::L))
         .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(name)).when_some(detail, |d, text| d.child(super::widgets::caption(text, t))))
@@ -1381,6 +1382,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
                 .gap(px(space::XS))
                 .bg(t.secondary_bg)
                 .cursor_pointer()
+                .soft(t.ink.opacity(0.04), 0.)
                 .text_size(px(font::CAPTION))
                 .text_color(t.secondary)
                 .on_click(move |_, _, cx| super::state::act(cx, |l| l.open_file(&open)))
@@ -1509,6 +1511,7 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
                 .rounded(px(radius::SMALL))
                 .bg(t.secondary_bg)
                 .cursor_pointer()
+                .soft(t.ink.opacity(0.06), radius::SMALL)
                 .invisible()
                 .group_hover(group, |s| s.visible())
                 .tooltip(super::widgets::tip(tr("Code kopieren")))
@@ -1585,6 +1588,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                             .items_center()
                             .gap(px(space::XS))
                             .cursor_pointer()
+                            .soft(t.ink.opacity(0.04), radius::INNER)
                             .capture_any_mouse_down(|_, _, _| press_control())
                             .font_weight(FontWeight::MEDIUM)
                             .child(super::motion::chevron(("md-details-chevron", order), is_open, t.secondary))
@@ -1619,6 +1623,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                                 .size(px(14.))
                                 .flex_none()
                                 .rounded(px(radius::SMALL))
+                                .soft(if done { t.on_accent.opacity(0.2) } else { t.ink.opacity(0.1) }, radius::SMALL)
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -1665,6 +1670,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
+                            .soft(t.ink.opacity(0.06), radius::SMALL)
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
                                 if let Some(f) = &folds {
@@ -1934,7 +1940,10 @@ impl RenderOnce for Properties {
                 .items_start()
                 .gap(px(space::M))
                 .py(px(space::XXS))
+                .mx(px(-space::S))
+                .px(px(space::S))
                 .cursor_pointer()
+                .soft(secondary.opacity(0.1), radius::INNER)
                 .tooltip(super::widgets::tip(tr("In den Details bearbeiten")))
                 .on_click(|_, _, cx| super::state::act(cx, |l| {
                     l.show_properties = true;
@@ -2062,6 +2071,8 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
             let group = SharedString::from(format!("md-fold-{i}"));
             div()
                 .relative()
+                .ml(px(-20.))
+                .pl(px(20.))
                 .group(group.clone())
                 .child(element)
                 .child(
@@ -2070,12 +2081,13 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
                 .capture_any_mouse_down(|_, _, _| press_control())
                         .absolute()
                         .top(px(space::S))
-                        .left(px(-20.))
+                        .left(px(0.))
                         .size(px(18.))
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
+                        .soft(t.ink.opacity(0.06), radius::SMALL)
                         .when(is_open, |d| d.invisible().group_hover(group, |s| s.visible()))
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();

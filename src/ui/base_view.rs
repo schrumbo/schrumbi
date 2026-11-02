@@ -623,6 +623,7 @@ impl BaseView {
                                 .gap(px(space::XS))
                                 .cursor_pointer()
                                 .key_nav()
+                                .soft(t.ink.opacity(0.045), 0.)
                                 .bg(t.secondary_bg)
                                 .text_size(px(font::CALLOUT))
                                 .font_weight(FontWeight::SEMIBOLD)

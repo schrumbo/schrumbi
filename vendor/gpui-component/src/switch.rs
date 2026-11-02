@@ -3,7 +3,8 @@ use crate::{
     ThemeStyled as _, text::Text, tooltip::ComponentTooltip,
 };
 use gpui::{
-    App, Background, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement as _,
+    App, Background, ElementId, Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement as _,
+    StatefulInteractiveElement as _,
     RenderOnce, SharedString, StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _,
     px,
 };
@@ -178,11 +179,23 @@ impl RenderOnce for Switch {
             .clone();
         let is_focused = focus_handle.is_focused(window);
 
+        let (hover_state, hover) = crate::hover::hover_level(&self.id, !self.disabled, window, cx);
+        let foreground = cx.theme().foreground;
         let checked_bg = self
             .color
             .map(Background::from)
             .unwrap_or(cx.theme().tokens.primary.into());
         let unchecked_bg: Background = cx.theme().tokens.switch.into();
+        let (checked_bg, unchecked_bg) = if hover > 0. {
+            let lift = |bg: Background| {
+                bg.as_solid()
+                    .map(|c| Background::from(crate::hover::lift(c, foreground, hover, 0.08)))
+                    .unwrap_or(bg)
+            };
+            (lift(checked_bg), lift(unchecked_bg))
+        } else {
+            (checked_bg, unchecked_bg)
+        };
         // GPUI's element opacity multiplies each primitive's alpha instead of
         // compositing the subtree as one group, so fading the whole control
         // would let the track show through the thumb. Fading the track alone
@@ -243,6 +256,22 @@ impl RenderOnce for Switch {
                 .tab_stop(self.tab_stop)
                 .tab_index(self.tab_index)
                 .track_focus(&focus_handle)
+                .on_hover({
+                    let state = hover_state.clone();
+                    move |hovered, _, cx| crate::hover::set_hover(&state, *hovered, cx)
+                })
+                .on_mouse_down(MouseButton::Left, {
+                    let state = hover_state.clone();
+                    move |_, _, cx| crate::hover::set_pressed(&state, true, cx)
+                })
+                .on_mouse_up(MouseButton::Left, {
+                    let state = hover_state.clone();
+                    move |_, _, cx| crate::hover::set_pressed(&state, false, cx)
+                })
+                .on_mouse_up_out(MouseButton::Left, {
+                    let state = hover_state.clone();
+                    move |_, _, cx| crate::hover::set_pressed(&state, false, cx)
+                })
                 .h_flex()
                 .gap_2()
                 .items_start()

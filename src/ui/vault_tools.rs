@@ -9,6 +9,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::markdown_view;
+use super::motion::Soft;
 use super::quick::{Dismissed, QuickDown, QuickUp};
 use super::state::{self, act};
 use super::theme::{Theme, font, iconsize, radius, space};
@@ -145,6 +146,7 @@ impl Render for NotePicker {
                 .flex_col()
                 .cursor_pointer()
                 .key_nav()
+                .when(!selected, |d| d.soft(t.ink.opacity(0.06), radius::INNER))
                 .when(selected, |d| d.bg(t.accent).text_color(t.on_accent))
                 .child(div().truncate().child(name))
                 .when(!folder.is_empty(), |d| d.child(div().truncate().text_size(px(font::CAPTION)).text_color(if selected { t.on_accent.opacity(0.85) } else { t.secondary }).child(folder)))

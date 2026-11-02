@@ -209,7 +209,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                         .bg(color)
                         .tooltip(tip(help))
                         .when(s.lecture.is_some(), |d| {
-                            d.cursor_pointer().on_click(move |_, window, cx| view.update(cx, |p, cx| {
+                            d.cursor_pointer().hover(|s| s.opacity(0.7)).on_click(move |_, window, cx| view.update(cx, |p, cx| {
                                 p.grid.jump_to(monday, current, window);
                                 cx.notify();
                             }))

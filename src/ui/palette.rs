@@ -6,6 +6,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::app;
+use super::motion::Soft;
 use super::quick::{Dismissed, QuickDown, QuickUp};
 use super::state::{self, act};
 use super::theme::{Theme, font, iconsize, radius, space};
@@ -354,6 +355,7 @@ impl Render for Palette {
                 .cursor_pointer()
                 .text_color(fg)
                 .when(selected, |d| d.bg(t.accent))
+                .when(!selected, |d| d.soft(t.ink.opacity(0.05), radius::INNER))
                 .child(icon(c.icon, iconsize::M, sub))
                 .child(div().flex_1().min_w_0().truncate().child(c.label.clone()))
                 .child(div().text_size(px(font::CAPTION)).text_color(sub).child(c.group.clone()))

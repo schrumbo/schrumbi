@@ -681,23 +681,26 @@ impl RenderOnce for Button {
             let active_bg = style.active(self.outline, cx).bg;
             let (on_hover, on_down, on_up, on_up_out) =
                 (state.clone(), state.clone(), state.clone(), state);
-            div()
+            let corners = self.border_corners;
+            let mut caller_corners = StyleRefinement::default();
+            caller_corners.corner_radii = instance_style.corner_radii.clone();
+            let shaped = move |layer: gpui::Div| {
+                layer
+                    .absolute()
+                    .inset_0()
+                    .when(corners.top_left, |this| this.rounded_tl(rounding))
+                    .when(corners.top_right, |this| this.rounded_tr(rounding))
+                    .when(corners.bottom_left, |this| this.rounded_bl(rounding))
+                    .when(corners.bottom_right, |this| this.rounded_br(rounding))
+                    .refine_style(&caller_corners)
+            };
+            shaped(div())
                 .id("soft")
-                .absolute()
-                .inset_0()
-                .rounded(rounding)
                 .when(level > 0., |this| {
                     this.bg(hover_bg).opacity(level.min(1.))
                 })
                 .when(level > 1., |this| {
-                    this.child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .rounded(rounding)
-                            .bg(active_bg)
-                            .opacity(level - 1.),
-                    )
+                    this.child(shaped(div()).bg(active_bg).opacity(level - 1.))
                 })
                 .on_hover(move |hovered, _, cx| {
                     on_hover.update(cx, |s, cx| {
@@ -906,7 +909,7 @@ impl RenderOnce for Button {
         .track_focus(&focus_handle)
         .tab_index(self.tab_index)
         .tab_stop(self.tab_stop)
-        .relative()
+        .when(instance_style.position.is_none(), |this| this.relative())
         .when_some(soft_layer, |this, layer| this.child(layer))
         .child(content)
         // Fade the whole button while loading, so every variant is dimmed by
@@ -1263,14 +1266,7 @@ impl ButtonVariant {
                 }
             }
             Self::Custom(colors) => colors.hover.into(),
-            Self::Ghost => {
-                let accent: Background = cx.theme().tokens.accent.into();
-                if cx.theme().mode.is_dark() {
-                    accent.opacity(0.5)
-                } else {
-                    accent
-                }
-            }
+            Self::Ghost => cx.theme().list_hover.into(),
             Self::Link => cx.theme().transparent.into(),
             Self::Text => cx.theme().transparent.into(),
         };
@@ -1318,7 +1314,14 @@ impl ButtonVariant {
                     cx.theme().tokens.button_secondary_active.into()
                 }
             }
-            Self::Ghost => cx.theme().tokens.button_active.into(),
+            Self::Ghost => {
+                let hover = cx.theme().list_hover;
+                Hsla {
+                    a: (hover.a * 2.).min(1.),
+                    ..hover
+                }
+                .into()
+            }
             Self::Danger => {
                 if outline {
                     self.outline_background(ButtonStyleState::Active, cx)

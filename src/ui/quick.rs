@@ -159,9 +159,10 @@ impl Render for QuickAdd {
                     .justify_center()
                     .gap(px(space::XS))
                     .py(px(space::XS))
-                    .rounded(px(radius::INNER))
+                    .rounded(px(radius::SMALL))
                     .cursor_pointer().key_nav()
                     .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
+                    .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
                     .child(icon(k.icon(), iconsize::S, if active { t.primary } else { t.secondary }))
                     .child(k.label())
                     .on_click(move |_, window, cx| e.update(cx, |q, cx| q.set_kind(k, window, cx))),
@@ -426,7 +427,8 @@ impl Render for QuickOpen {
                     .cursor_pointer().key_nav()
                     .text_color(fg)
                     .when(selected, |d| d.bg(t.accent))
-                    .child(file_icon(f.path(), iconsize::M))
+                    .when(!selected, |d| d.soft(t.ink.opacity(0.05), radius::INNER))
+                    .child(div().flex_none().size(px(iconsize::M + space::XS)).mx(px(-space::XXS)).flex().items_center().justify_center().rounded(px(radius::SMALL)).when(selected, |d| d.bg(white().opacity(0.92))).child(file_icon(f.path(), iconsize::M)))
                     .child(
                         div()
                             .flex_1()
@@ -441,7 +443,7 @@ impl Render for QuickOpen {
                                     .gap(px(space::S))
                                     .text_size(px(font::CAPTION))
                                     .text_color(sub)
-                                    .when_some(module, |d, (code, color)| d.child(module_tag(&code, t.palette(&color))))
+                                    .when_some(module, |d, (code, color)| d.child(module_tag(&code, if selected { white() } else { t.palette(&color) })))
                                     .when_some(f.week, |d, w| d.child(format!("W{w:02}")))
                                     .when(!f.place.is_empty(), |d| d.child(div().truncate().child(f.place.join(" › ")))),
                             ),
@@ -469,6 +471,7 @@ impl Render for QuickOpen {
                     .cursor_pointer().key_nav()
                     .text_color(if selected { white() } else { t.primary })
                     .when(selected, |d| d.bg(t.accent))
+                    .when(!selected, |d| d.soft(t.ink.opacity(0.05), radius::INNER))
                     .child(icon(hit.icon, iconsize::M, if selected { white() } else { t.secondary }))
                     .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().truncate().child(hit.label.clone())).when(!hit.detail.is_empty(), |d| d.child(div().truncate().text_size(px(font::CAPTION)).text_color(if selected { white().opacity(0.85) } else { t.secondary }).child(hit.detail.clone()))))
                     .on_click(move |_, _, cx| e.update(cx, |q, cx| {
@@ -600,9 +603,10 @@ impl Render for NewNote {
                     .gap(px(space::XS))
                     .px(px(space::M))
                     .py(px(space::XS))
-                    .rounded(px(radius::INNER))
+                    .rounded(px(radius::SMALL))
                     .cursor_pointer().key_nav()
                     .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
+                    .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
                     .child(icon(icon_name, iconsize::XS, if active { t.primary } else { t.secondary }))
                     .child(label)
                     .on_click(move |_, window, cx| e.update(cx, |n, cx| {

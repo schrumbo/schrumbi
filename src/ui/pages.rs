@@ -395,7 +395,7 @@ impl Pages {
                         crate::core::prefs::update(|prefs| prefs.split_share = share);
                     }))
                     .child(div().flex_none().min_w_0().h_full().w(relative(self.split_share)).child(view))
-                    .child(div().id("doc-split").h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator).cursor_col_resize().hover(move |s| s.bg(accent.opacity(0.3))).on_drag(module_page::SplitDrag, |d, _, _, cx| cx.new(|_| d.clone())))
+                    .child(div().id("doc-split").h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator).soft(accent.opacity(0.3), 0.).cursor_col_resize().on_drag(module_page::SplitDrag, |d, _, _, cx| cx.new(|_| d.clone())))
                     .child(div().flex_1().min_w_0().h_full().child(right))
                     .into_any_element()
             }

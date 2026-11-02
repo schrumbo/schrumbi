@@ -6,6 +6,7 @@ use gpui_kit::component::Sizable;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use super::motion::Soft;
 use super::theme::{Theme, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::tr;
@@ -216,7 +217,7 @@ impl Render for ImageView {
                     .border_color(t.separator)
                     .shadow_md()
                     .child(Button::new("image-out").ghost().small().icon(menu_icon("zoom-out")).tooltip(tr("Verkleinern")).on_click(move |_, _, cx| m1.update(cx, |v, cx| v.zoom_to(scale * 0.8, None, natural, cx))))
-                    .child(div().id("image-percent").w(px(52.)).text_center().text_size(px(font::CALLOUT)).font_features(tabular()).cursor_pointer().tooltip(tip(tr("Einpassen"))).child(format!("{:.0} %", scale * 100.)).on_click(move |_, _, cx| m2.update(cx, |v, cx| v.reset(cx))))
+                    .child(div().id("image-percent").w(px(52.)).text_center().text_size(px(font::CALLOUT)).font_features(tabular()).rounded(px(radius::INNER)).cursor_pointer().soft(t.ink.opacity(0.06), radius::INNER).tooltip(tip(tr("Einpassen"))).child(format!("{:.0} %", scale * 100.)).on_click(move |_, _, cx| m2.update(cx, |v, cx| v.reset(cx))))
                     .child(Button::new("image-in").ghost().small().icon(menu_icon("zoom-in")).tooltip(tr("Vergrößern")).on_click(move |_, _, cx| m3.update(cx, |v, cx| v.zoom_to(scale * 1.25, None, natural, cx))))
                     .child(Button::new("image-fit").ghost().small().icon(menu_icon("maximize")).tooltip(tr("Einpassen")).on_click(move |_, _, cx| m4.update(cx, |v, cx| v.reset(cx)))),
             );

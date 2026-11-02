@@ -337,6 +337,8 @@ impl Render for UploadPanel {
                         .flex()
                         .items_center()
                         .gap(px(space::XS))
+                        .rounded(px(radius::INNER))
+                        .soft(t.ink.opacity(0.05), radius::INNER)
                         .cursor_pointer().key_nav()
                         .on_click(move |_, _, cx| me.update(cx, |p, cx| {
                             p.notes_open = !p.notes_open;

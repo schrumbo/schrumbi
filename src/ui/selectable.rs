@@ -134,6 +134,7 @@ impl SelectableStyled {
         for (room, ..) in &rooms {
             highlights.push((room.clone(), HighlightStyle { fade_out: Some(1.), ..Default::default() }));
         }
+        self.highlights = highlights.clone();
         highlights.sort_by_key(|(r, _)| r.start);
         for r in &mut self.pills {
             *r = moved(r.start)..shift_end(r.end);
@@ -250,6 +251,48 @@ impl Element for SelectableStyled {
         self.styled.paint(global_id, inspector_id, bounds, &mut (), &mut (), window, cx);
         for placed in &mut self.placed {
             placed.element.paint(window, cx);
+        }
+        if !self.links.is_empty() {
+            let ranges: Vec<Range<usize>> = self.links.iter().map(|(r, _)| r.clone()).collect();
+            let hovered_link = {
+                let (ranges, layout, hitbox) = (ranges.clone(), layout.clone(), hitbox.clone());
+                move |position: Point<Pixels>, window: &Window| {
+                    if !hitbox.is_hovered(window) {
+                        return None;
+                    }
+                    let at = layout.index_for_position(position).ok()?;
+                    ranges.iter().position(|r| r.contains(&at))
+                }
+            };
+            let painted = hovered_link(window.mouse_position(), window);
+            if let Some(range) = painted.and_then(|i| ranges.get(i)).cloned() {
+                let color = self.highlights.iter().find_map(|(r, h)| if r.contains(&range.start) { h.color } else { None }).unwrap_or_else(|| window.text_style().color);
+                let mut lines: Vec<(Pixels, Pixels, Pixels)> = Vec::new();
+                let boundaries = self.text.get(range.clone()).into_iter().flat_map(|t| t.char_indices().map(|(i, _)| range.start + i)).chain(std::iter::once(range.end));
+                for position in boundaries.filter_map(|i| layout.position_for_index(i)) {
+                    match lines.last_mut() {
+                        Some((y, min, max)) if *y == position.y => {
+                            *min = (*min).min(position.x);
+                            *max = (*max).max(position.x);
+                        }
+                        _ => lines.push((position.y, position.x, position.x)),
+                    }
+                }
+                for (y, min, max) in lines {
+                    let tint = Bounds::from_corners(point(min - px(2.), y + px(1.)), point(max + px(2.), y + line - px(1.)));
+                    window.paint_quad(fill(tint, color.opacity(0.14)).corner_radii(px(super::theme::radius::SMALL)));
+                }
+            }
+            window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, _| {
+                if phase.bubble() && hovered_link(e.position, window) != painted {
+                    window.refresh();
+                }
+            });
+            window.on_mouse_event(move |_: &MouseExitEvent, phase, window, _| {
+                if phase.bubble() && painted.is_some() {
+                    window.refresh();
+                }
+            });
         }
         let link_at = |links: &[(Range<usize>, LinkAction)], position: Point<Pixels>| layout.index_for_position(position).ok().and_then(|i| links.iter().find(|(r, _)| r.contains(&i)).map(|(_, a)| a.clone()));
         if hitbox.is_hovered(window) && link_at(&self.links, window.mouse_position()).is_some() {

@@ -447,6 +447,7 @@ impl FilingForm {
                 .bg(t.secondary_bg)
                 .border_1()
                 .border_color(t.separator)
+                .hover({ let c = t.accent.opacity(0.5); move |s| s.border_color(c) })
                 .flex()
                 .items_center()
                 .justify_center()
@@ -511,7 +512,11 @@ impl FilingForm {
                 let (name, tint, context) = self.describe(&target, l, t);
                 let e = me.clone();
                 rows = rows.child(
-                    row_button(SharedString::from(format!("filing-other-{i}")), t)
+                    div()
+                        .id(SharedString::from(format!("filing-other-{i}")))
+                        .w_full()
+                        .soft(t.ink.opacity(0.06), radius::INNER)
+                        .cursor_pointer().key_nav()
                         .flex()
                         .items_center()
                         .gap(px(space::S))
@@ -707,6 +712,7 @@ impl Render for FilingForm {
                     .bg(t.secondary_bg)
                     .border_1()
                     .border_color(t.separator)
+                    .hover({ let c = t.accent.opacity(0.5); move |s| s.border_color(c) })
                     .flex()
                     .items_center()
                     .justify_center()
@@ -751,7 +757,8 @@ impl Render for FilingForm {
                     .gap(px(space::XS))
                     .px(px(space::M))
                     .py(px(space::XS))
-                    .rounded(px(radius::INNER))
+                    .rounded(px(radius::SMALL))
+                    .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
                     .cursor_pointer().key_nav()
                     .text_size(px(font::CALLOUT))
                     .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
@@ -932,7 +939,7 @@ impl Render for FilingForm {
                                     .bg(t.accent.opacity(0.15))
                                     .text_size(px(font::CAPTION))
                                     .child(n.clone())
-                                    .child(div().id(("rm-co", i)).cursor_pointer().key_nav().child(icon("circle-x", iconsize::XS, t.secondary)).tooltip(tip(trf("%@ entfernen", &[&n]))).on_click(move |_, _, cx| e.update(cx, |f, cx| {
+                                    .child(div().id(("rm-co", i)).rounded_full().soft(t.ink.opacity(0.1), radius::FULL).cursor_pointer().key_nav().child(icon("circle-x", iconsize::XS, t.secondary)).tooltip(tip(trf("%@ entfernen", &[&n]))).on_click(move |_, _, cx| e.update(cx, |f, cx| {
                                         f.coauthors.retain(|c| *c != n2);
                                         cx.notify();
                                     }))),

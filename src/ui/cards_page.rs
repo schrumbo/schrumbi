@@ -932,6 +932,9 @@ impl CardsPage {
                                 .flex()
                                 .items_center()
                                 .justify_center()
+                                .cursor_pointer()
+                                .rounded(px(radius::SMALL))
+                                .soft(t.ink.opacity(0.08), radius::SMALL)
                                 .child(chevron(("deck-chevron", i), row.open, t.secondary))
                                 .on_click(move |_, _, cx| {
                                     cx.stop_propagation();
@@ -1517,8 +1520,7 @@ impl CardsPage {
                         .bg(color.opacity(if rating == Rating::Good { 0.16 } else { 0.07 }))
                         .cursor_pointer()
                         .key_nav()
-                        .hover(move |d| d.bg(hover))
-                        .active(move |d| d.bg(color.opacity(0.26)))
+                        .soft(hover, radius::CONTROL)
                         .when(!cramming, |d| d.child(div().text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child({ cards::wait_label(now, choices[i].due) })))
                         .child(div().flex().items_baseline().gap(px(space::XS)).child(div().font_weight(FontWeight::SEMIBOLD).text_color(t.readable(color)).child(if cramming && rating == Rating::Good { tr("Gewusst") } else { rating_name(rating) })).child(div().text_size(px(font::CAPTION2)).text_color(t.tertiary).child(if rating == Rating::Good { format!("{} · {}", i + 1, tr("Leertaste")) } else { (i + 1).to_string() })))
                         .on_click(cx.listener(move |p, e: &ClickEvent, _, cx| {
@@ -1553,7 +1555,7 @@ impl CardsPage {
                         .font_weight(FontWeight::SEMIBOLD)
                         .cursor_pointer()
                         .key_nav()
-                        .hover(|d| d.opacity(0.9))
+                        .soft(t.on_accent.opacity(0.14), radius::CONTROL)
                         .child(tr("Antwort zeigen"))
                         .child(div().text_size(px(font::CAPTION)).opacity(0.75).child(tr("Leertaste")))
                         .on_click(cx.listener(|p, _, _, cx| p.reveal(cx))),
@@ -2032,7 +2034,7 @@ impl Render for CardComposer {
         let kinds = [(ComposeKind::Basic, tr("Einfach"), "file-question"), (ComposeKind::Both, tr("Beide Richtungen"), "repeat-2"), (ComposeKind::Cloze, tr("Lückentext"), "scan")];
         let switch = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS)).children(kinds.into_iter().map(|(k, label, name)| {
             let on = k == kind;
-            div().id(SharedString::from(format!("kind-{name}"))).h(px(control::S)).px(px(space::S)).flex().items_center().gap(px(space::XS)).rounded(px(radius::SMALL)).cursor_pointer().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.12))).child(icon(name, iconsize::S, if on { t.primary } else { t.secondary })).child(label).on_click(cx.listener(move |c, _, _, cx| {
+            div().id(SharedString::from(format!("kind-{name}"))).h(px(control::S)).px(px(space::S)).flex().items_center().gap(px(space::XS)).rounded(px(radius::SMALL)).when(!on, |d| d.soft(t.ink.opacity(0.06), radius::SMALL)).cursor_pointer().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.12))).child(icon(name, iconsize::S, if on { t.primary } else { t.secondary })).child(label).on_click(cx.listener(move |c, _, _, cx| {
                 c.kind = k;
                 c.refresh_preview(cx);
             }))

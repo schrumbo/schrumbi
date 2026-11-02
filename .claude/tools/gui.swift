@@ -32,7 +32,7 @@ case "click":
 case "move":
     let pid = Int32(a[2])!; let w = wins(pid).first!; let b = w[kCGWindowBounds as String] as! [String: Any]
     let p = CGPoint(x: (b["X"] as! CGFloat) + CGFloat(Double(a[3])!), y: (b["Y"] as! CGFloat) + CGFloat(Double(a[4])!))
-    CGEvent(mouseEventSource: src(), mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+    for _ in 0..<3 { CGEvent(mouseEventSource: src(), mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap); usleep(16000) }
 case "key":
     let pid = Int32(a[2])!; activate(pid)
     let code = CGKeyCode(a[3])!; let f = a.count > 4 ? flags(a[4]) : []

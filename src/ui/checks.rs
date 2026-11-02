@@ -140,13 +140,13 @@ pub fn render(lib_entity: &Entity<Library>, st: &ChecksState, fields: &mut Field
     if !overdue.is_empty() {
         let rows = div().flex().flex_col().children(overdue.iter().map(|a| {
             let (u, s) = (a.id.clone(), a.id.clone());
-            div()
+            let buttons = div()
                 .flex()
                 .items_center()
                 .gap(px(space::S))
-                .child(div().flex_1().child(assignment_row(lib, a, true, true, true, t)))
                 .child(Button::new(SharedString::from(format!("up-{}", a.id))).small().label(tr("Abgegeben")).on_click(move |_, _, cx| act(cx, |l| l.set_status(Some(Status::Uploaded), &u, true))))
-                .child(Button::new(SharedString::from(format!("skip-{}", a.id))).small().label(tr("Entfällt")).on_click(move |_, _, cx| act(cx, |l| l.set_status(Some(Status::Skipped), &s, true))))
+                .child(Button::new(SharedString::from(format!("skip-{}", a.id))).small().label(tr("Entfällt")).on_click(move |_, _, cx| act(cx, |l| l.set_status(Some(Status::Skipped), &s, true))));
+            assignment_row_with(lib, a, true, true, true, Some(buttons.into_any_element()), t)
         }));
         col = col.child(card(tr("Überfällig"), tr("Keine Datei gefunden. Abgegeben, entfallen oder noch offen?"), "circle-alert", t.red, None, rows, t));
     }

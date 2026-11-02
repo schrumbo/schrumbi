@@ -231,11 +231,11 @@ pub fn deadlines(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     }
     if !later.is_empty() {
         col = col.child(motion::flip("later", disclosure("later", trf("Später (%lld)", &[&later.len()]), st.show_later, view.clone(), |s| s.show_later = !s.show_later, t)));
-        col = col.child(motion::reveal("later-rows", st.show_later, div().flex().flex_col().children(later.iter().map(|a| entry(lib, a, st, view.clone(), t)))));
+        col = col.child(div().mx(px(-space::S)).child(motion::reveal("later-rows", st.show_later, div().px(px(space::S)).flex().flex_col().children(later.iter().map(|a| entry(lib, a, st, view.clone(), t))))));
     }
     if !past.is_empty() {
         col = col.child(motion::flip("past", disclosure("past", trf("Erledigt (%lld)", &[&past.len()]), st.show_past, view.clone(), |s| s.show_past = !s.show_past, t)));
-        col = col.child(motion::reveal("past-rows", st.show_past, div().flex().flex_col().children(past.iter().rev().map(|a| entry(lib, a, st, view.clone(), t)))));
+        col = col.child(div().mx(px(-space::S)).child(motion::reveal("past-rows", st.show_past, div().px(px(space::S)).flex().flex_col().children(past.iter().rev().map(|a| entry(lib, a, st, view.clone(), t))))));
     }
     col
 }
@@ -283,11 +283,9 @@ pub fn header(lib: &Library, m: &Module, width: f32, st: &ModuleState, view: Ent
         div()
             .id(id)
             .h(px(super::theme::control::M))
-            .px(px(space::S))
             .mb(px(-1.))
             .flex()
             .items_center()
-            .gap(px(space::XS))
             .cursor_pointer()
             .key_nav()
             .border_b_2()
@@ -295,8 +293,19 @@ pub fn header(lib: &Library, m: &Module, width: f32, st: &ModuleState, view: Ent
             .text_size(px(font::CALLOUT))
             .text_color(if on { t.primary } else { t.secondary })
             .when(on, |d| d.font_weight(FontWeight::SEMIBOLD))
-            .child(label)
-            .when(count > 0, |d| d.child(div().px(px(space::XS)).rounded_full().bg(t.red.opacity(0.16)).text_color(t.red).text_size(px(font::CAPTION)).font_features(tabular()).child(count.to_string())))
+            .child(
+                div()
+                    .id(SharedString::from(format!("{id}-hover")))
+                    .h(px(super::theme::control::M - space::S))
+                    .px(px(space::S))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::XS))
+                    .rounded(px(radius::INNER))
+                    .when(!on, |d| d.soft(t.ink.opacity(0.05), radius::INNER))
+                    .child(label)
+                    .when(count > 0, |d| d.child(div().px(px(space::XS)).rounded_full().bg(t.red.opacity(0.16)).text_color(t.red).text_size(px(font::CAPTION)).font_features(tabular()).child(count.to_string()))),
+            )
             .on_click(move |_, _, cx| v.update(cx, |p, cx| p.show_module_tab(which, cx)))
     };
     div()
@@ -343,7 +352,7 @@ pub fn next_up<'a>(lib: &'a Library, m: &Module) -> Vec<&'a Assignment> {
 }
 
 fn more_link(id: &'static str, label: String, which: ModuleTab, view: Entity<Pages>, t: &Theme) -> Stateful<Div> {
-    div().id(id).flex_none().cursor_pointer().key_nav().text_size(px(font::CALLOUT)).text_color(t.accent_text).child(label).on_click(move |_, _, cx| view.update(cx, |p, cx| p.show_module_tab(which, cx)))
+    div().id(id).flex_none().cursor_pointer().key_nav().text_size(px(font::CALLOUT)).text_color(t.accent_text).hover({ let c = t.accent_text.opacity(0.8); move |s| s.text_color(c) }).child(label).on_click(move |_, _, cx| view.update(cx, |p, cx| p.show_module_tab(which, cx)))
 }
 
 fn section(title: String, link: Option<Stateful<Div>>) -> Div {
@@ -496,7 +505,7 @@ fn overview_rail(lib: &Library, m: &Module, t: &Theme) -> Option<Div> {
                 .h(px(super::theme::control::M))
                 .cursor_pointer()
                 .key_nav()
-                .soft(hover, radius::INNER)
+                .soft(hover, 0.)
                 .tooltip(tip(link.address.clone()))
                 .child(icon("external-link", iconsize::S, t.secondary))
                 .child(div().flex_1().min_w_0().truncate().child(if link.title.is_empty() { link.address.clone() } else { link.title.clone() }))
@@ -516,7 +525,7 @@ pub fn overview(lib: &Library, m: &Module, width: f32, st: &ModuleState, view: E
     let wide = width >= 900.;
     let edit_id = m.id.clone();
     let hint = rail.is_none().then(|| {
-        div().id("module-add-details").cursor_pointer().key_nav().text_size(px(font::CALLOUT)).text_color(t.secondary).child(tr("Termine, Links und Noten in den Moduleinstellungen ergänzen")).on_click(move |_, _, cx| super::settings::open_module(&edit_id, cx))
+        div().id("module-add-details").cursor_pointer().key_nav().text_size(px(font::CALLOUT)).text_color(t.secondary).hover({ let c = t.primary; move |s| s.text_color(c) }).child(tr("Termine, Links und Noten in den Moduleinstellungen ergänzen")).on_click(move |_, _, cx| super::settings::open_module(&edit_id, cx))
     });
     let body = if wide {
         div().flex().items_start().gap(px(space::XXL)).child(div().flex_1().min_w_0().child(main)).children(rail.map(|r| div().w(px(300.)).flex_none().child(r)))
@@ -527,5 +536,5 @@ pub fn overview(lib: &Library, m: &Module, width: f32, st: &ModuleState, view: E
 }
 
 pub fn segment(id: &'static str, label: String, active: bool, t: &Theme) -> Stateful<Div> {
-    div().id(id).px(px(space::M)).py(px(space::XXS)).rounded(px(radius::INNER)).text_size(px(font::CALLOUT)).cursor_pointer().key_nav().when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM)).child(label)
+    div().id(id).px(px(space::M)).py(px(space::XXS)).rounded(px(radius::INNER)).text_size(px(font::CALLOUT)).cursor_pointer().key_nav().when(!active, |d| d.soft(t.ink.opacity(0.05), radius::INNER)).when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM)).child(label)
 }

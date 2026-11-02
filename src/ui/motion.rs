@@ -39,8 +39,11 @@ pub trait Soft {
 }
 
 impl Soft for Stateful<Div> {
-    fn soft(self, color: Hsla, radius: f32) -> Self {
-        self.relative().child(HoverLayer { color, radius })
+    fn soft(mut self, color: Hsla, radius: f32) -> Self {
+        if self.style().position.is_none() {
+            self = self.relative();
+        }
+        self.child(HoverLayer { color, radius })
     }
 }
 
@@ -62,7 +65,7 @@ impl RenderOnce for HoverLayer {
             .absolute()
             .inset_0()
             .rounded(px(self.radius))
-            .when(level > 0., |d| d.bg(self.color.opacity(level)))
+            .when(level > 0., |d| d.bg(Hsla { a: (self.color.a * level).min(1.), ..self.color }))
             .on_hover(move |hovered, _, cx| on_hover.update(cx, |s, cx| {
                 s.0 = *hovered;
                 s.1 &= *hovered;
@@ -72,7 +75,7 @@ impl RenderOnce for HoverLayer {
                 s.1 = true;
                 cx.notify();
             }))
-            .on_mouse_up(MouseButton::Left, move |_, _, cx| on_up.update(cx, |s, cx| {
+            .capture_any_mouse_up(move |_, _, cx| on_up.update(cx, |s, cx| {
                 s.1 = false;
                 cx.notify();
             }))

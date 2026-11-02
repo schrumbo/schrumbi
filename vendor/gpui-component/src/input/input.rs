@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
+use gpui::StatefulInteractiveElement as _;
 use gpui::{
     AnyElement, App, DefiniteLength, Edges, ElementId, Entity, Hsla, InteractiveElement as _,
     IntoElement, MouseButton, ParentElement as _, Rems, RenderOnce, Role, SharedString,
@@ -730,7 +731,18 @@ impl RenderOnce for Input {
         let id = self
             .id
             .unwrap_or_else(|| ("input", state.entity_id()).into());
+        let (hover_state, hover) = crate::hover::hover_level(
+            &id,
+            !presentation.is_disabled() && !focused,
+            window,
+            cx,
+        );
+        let border = crate::hover::lift(cx.theme().input, cx.theme().foreground, hover, 0.22);
         BaseInput::new(id)
+            .on_hover({
+                let state = hover_state;
+                move |hovered, _, cx| crate::hover::set_hover(&state, *hovered, cx)
+            })
             .semantic_owner(state.entity_id())
             .focused(focused)
             .disabled(disabled)
@@ -776,7 +788,7 @@ impl RenderOnce for Input {
                 this.bg(bg)
                     .rounded(cx.theme().radius)
                     .when(self.bordered, |this| {
-                        this.border_1().border_color(cx.theme().input)
+                        this.border_1().border_color(border)
                     })
             })
             .items_center()

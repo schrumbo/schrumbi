@@ -1005,6 +1005,7 @@ impl Render for CanvasView {
         let has_selection = !self.selection.is_empty() || self.selected_edge.is_some();
         let colors = has_selection.then(|| {
             let t2 = t.clone();
+            let ring = t.primary;
             div()
                 .absolute()
                 .top(px(space::M))
@@ -1016,10 +1017,10 @@ impl Render for CanvasView {
                 .bg(t.column)
                 .border_1()
                 .border_color(t.separator)
-                .child(div().id("canvas-color-none").size(px(18.)).rounded_full().border_1().border_color(t2.secondary).cursor_pointer().key_nav().tooltip(tip(tr("Standardfarbe"))).on_click(cx.listener(|v, _, _, cx| v.set_color(None, cx))))
+                .child(div().id("canvas-color-none").size(px(18.)).rounded_full().border_1().border_color(t2.secondary).cursor_pointer().hover(move |s| s.border_color(ring)).key_nav().tooltip(tip(tr("Standardfarbe"))).on_click(cx.listener(|v, _, _, cx| v.set_color(None, cx))))
                 .children(PRESETS.iter().enumerate().map(|(i, (key, value))| {
                     let key = key.to_string();
-                    div().id(("canvas-color", i)).size(px(18.)).rounded_full().bg(rgb(*value)).cursor_pointer().key_nav().tooltip(tip(tr("Farbe"))).on_click(cx.listener(move |v, _, _, cx| v.set_color(Some(key.clone()), cx)))
+                    div().id(("canvas-color", i)).size(px(18.)).rounded_full().bg(rgb(*value)).cursor_pointer().hover(move |s| s.border_2().border_color(ring)).key_nav().tooltip(tip(tr("Farbe"))).on_click(cx.listener(move |v, _, _, cx| v.set_color(Some(key.clone()), cx)))
                 }))
         });
         let zoom_label = format!("{}%", (zoom * 100.).round());

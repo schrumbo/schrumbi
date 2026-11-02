@@ -610,7 +610,7 @@ impl Render for GraphView {
                 .child(div().size(px(space::S)).rounded_full().bg(self.cluster_tints.get(*c).copied().unwrap_or(t.secondary)))
                 .child(div().max_w(px(140.)).truncate().child(format!("{} · {n}", self.graph.clusters[*c])))
         });
-        let legend = div().absolute().left(px(space::M)).bottom(px(space::M)).flex().flex_col().gap(px(space::XXS)).p(px(space::S)).rounded(px(super::theme::radius::INNER)).bg(t.content.opacity(0.85)).text_size(px(font::CAPTION)).text_color(t.secondary).children(legend.collect::<Vec<_>>());
+        let legend = div().absolute().left(px(space::M)).bottom(px(space::M)).flex().flex_col().gap(px(space::XXS)).p(px(space::S)).rounded(px(super::theme::radius::CONTROL)).bg(t.content.opacity(0.85)).text_size(px(font::CAPTION)).text_color(t.secondary).children(legend.collect::<Vec<_>>());
         div().size_full().flex().flex_col().child(bar).child(surface.when(self.graph.clusters.len() > 1, |d| d.child(legend)))
     }
 }

@@ -84,6 +84,7 @@ impl DocSide {
                     .gap(px(space::XS))
                     .cursor_pointer()
                     .key_nav()
+                    .soft(t.ink.opacity(0.045), 0.)
                     .text_size(px(font::CAPTION))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(t.secondary)
@@ -461,6 +462,7 @@ impl PropertyEditor {
                     .text_size(px(font::CAPTION))
                     .cursor_pointer()
                     .key_nav()
+                    .soft(t.ink.opacity(0.08), radius::FULL)
                     .child(value.clone())
                     .child(icon("x", iconsize::XS, t.secondary))
                     .tooltip(tip(tr("Entfernen")))
@@ -645,7 +647,7 @@ fn module_view(module: &str, t: &Theme, cx: &App) -> AnyElement {
                     l.set_route(crate::core::library::Route::Module(module.clone()));
                 })
             })
-            .child(div().id(("deadline-done", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).border_1().border_color(t.secondary).cursor_pointer().key_nav().aria_label(tr("Erledigt")).tooltip(tip(tr("Erledigt"))).on_click(move |_, _, cx| {
+            .child(div().id(("deadline-done", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).soft(t.ink.opacity(0.08), radius::SMALL).border_1().border_color(t.secondary).cursor_pointer().key_nav().aria_label(tr("Erledigt")).tooltip(tip(tr("Erledigt"))).on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 act(cx, |l| l.toggle_done(&done));
             }))

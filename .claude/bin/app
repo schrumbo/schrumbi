@@ -1,6 +1,6 @@
 #!/bin/bash
 set -u
-ROOT=$(git rev-parse --show-toplevel) || exit 1
+ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel) || exit 1
 COMMON=$(cd "$ROOT" && cd "$(git rev-parse --git-common-dir)" && pwd)
 GUI="$COMMON/agent-tools/gui"
 WORK="${TMPDIR:-/tmp}/schrumbi-agent/$(printf '%s' "$ROOT" | shasum | cut -c1-10)"

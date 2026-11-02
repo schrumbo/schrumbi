@@ -187,6 +187,9 @@ impl Render for FolderPicker {
                                     .flex()
                                     .items_center()
                                     .justify_center()
+                                    .rounded(px(radius::SMALL))
+                                    .cursor_pointer()
+                                    .soft(t.ink.opacity(0.08), radius::SMALL)
                                     .child(chevron(("folder-chevron", i), line.open, t.secondary))
                                     .on_click(move |_, _, cx| {
                                         cx.stop_propagation();

@@ -245,8 +245,10 @@ impl RenderOnce for Checkbox {
             .clone();
         let is_focused = focus_handle.is_focused(window);
 
-        let unchecked_border = cx.theme().input;
-        let checked_color = cx.theme().primary;
+        let (hover_state, hover) = crate::hover::hover_level(&self.id, !self.disabled, window, cx);
+        let foreground = cx.theme().foreground;
+        let unchecked_border = crate::hover::lift(cx.theme().input, foreground, hover, 0.2);
+        let checked_color = crate::hover::lift(cx.theme().primary, foreground, hover, 0.1);
         let disabled_indicator_color = if checked {
             checked_color.opacity(0.5)
         } else {
@@ -268,6 +270,18 @@ impl RenderOnce for Checkbox {
             .tab_stop(self.tab_stop)
             .tab_index(self.tab_index)
             .track_focus(&focus_handle)
+            .on_hover({
+                let state = hover_state.clone();
+                move |hovered, _, cx| crate::hover::set_hover(&state, *hovered, cx)
+            })
+            .on_mouse_up(MouseButton::Left, {
+                let state = hover_state.clone();
+                move |_, _, cx| crate::hover::set_pressed(&state, false, cx)
+            })
+            .on_mouse_up_out(MouseButton::Left, {
+                let state = hover_state.clone();
+                move |_, _, cx| crate::hover::set_pressed(&state, false, cx)
+            })
             .when_some(accessibility_label, |this, label| {
                 this.accessibility_label(label)
             })
@@ -311,7 +325,7 @@ impl RenderOnce for Checkbox {
                             .checked(|style| {
                                 style
                                     .border_color(checked_color)
-                                    .bg(cx.theme().tokens.primary)
+                                    .bg(checked_color)
                             })
                             .disabled(|style| {
                                 style
@@ -353,7 +367,8 @@ impl RenderOnce for Checkbox {
                         .children(children),
                 )
             })
-            .on_mouse_down(MouseButton::Left, |_, window, _| {
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                crate::hover::set_pressed(&hover_state, true, cx);
                 // Preserve the legacy Checkbox behavior: pointer presses do
                 // not move focus, including while disabled.
                 window.prevent_default();

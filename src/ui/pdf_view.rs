@@ -72,7 +72,7 @@ struct Anchor {
 }
 
 fn bar_action(id: &'static str, icon_name: &'static str, help: String, t: &Theme) -> Stateful<Div> {
-    div().id(id).flex().items_center().justify_center().tooltip(tip(help)).child(icon(icon_name, iconsize::S, t.secondary))
+    div().id(id).p(px(space::XXS)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().soft(t.ink.opacity(0.08), radius::SMALL).tooltip(tip(help)).child(icon(icon_name, iconsize::S, t.secondary))
 }
 
 #[derive(Default)]
@@ -720,6 +720,7 @@ impl PdfView {
         let me = cx.entity();
         let current = editing.map(|h| h.color.clone());
         let editing_id = editing.map(|h| h.id);
+        let ring = t.secondary;
         let action: Stateful<Div> = match editing_id {
             Some(id) => {
                 let e = me.clone();
@@ -757,7 +758,9 @@ impl PdfView {
                         .size(px(iconsize::M))
                         .rounded_full()
                         .bg(t.palette(color))
+                        .cursor_pointer()
                         .when(selected, |d| d.border_2().border_color(t.primary))
+                        .when(!selected, |d| d.hover(move |s| s.border_2().border_color(ring)))
                         .tooltip(tip(tr("Markieren (H)")))
                         .on_click(move |_, _, cx| {
                             e.update(cx, |v, cx| match editing_id {
@@ -814,6 +817,9 @@ impl PdfView {
                         .absolute()
                         .top(px(space::XS))
                         .right(px(space::XS))
+                        .rounded(px(radius::SMALL))
+                        .cursor_pointer()
+                        .soft(t.ink.opacity(0.08), radius::SMALL)
                         .invisible()
                         .group_hover("pdf-mark-row", |s| s.visible())
                         .tooltip(tip(tr("Markierung entfernen")))

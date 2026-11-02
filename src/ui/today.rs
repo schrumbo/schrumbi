@@ -98,8 +98,10 @@ fn top_row(lib: &Library, narrow: bool, t: &Theme) -> Div {
     }
 }
 
-fn next_action(lib: &Library, t: &Theme) -> Div {
-    let card = |tint: Hsla| banner(tint).flex().items_center().gap(px(space::L)).min_h(px(112.));
+fn next_action(lib: &Library, t: &Theme) -> Stateful<Div> {
+    let card = |tint: Hsla| banner(tint).id("next-card").flex().items_center().gap(px(space::L)).min_h(px(112.));
+    let hover = t.ink.opacity(0.05);
+    let open = |tint: Hsla, a: &Assignment| card(tint).soft(hover, radius::CARD).cursor_pointer().on_click(select(a.id.clone()));
     let label = |tint: Hsla| div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(tint).child(tr("Jetzt dran"));
     let assignment = |a: &Assignment, tint: Hsla, when: String| {
         let m = lib.module(a);
@@ -113,7 +115,13 @@ fn next_action(lib: &Library, t: &Theme) -> Div {
             .gap(px(space::XS))
             .cursor_pointer()
             .key_nav()
-            .on_click(select(a.id.clone()))
+            .on_click({
+                let id = a.id.clone();
+                move |_, _, cx| {
+                    cx.stop_propagation();
+                    act(cx, |l| l.select(Some(id.clone())));
+                }
+            })
             .child(label(tint))
             .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).truncate().child(a.title.clone()))
             .child(div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(div().font_weight(FontWeight::SEMIBOLD).child(module_tag(&m.map_or("?".to_string(), |m| m.badge()), module_tint))).child(when))
@@ -131,14 +139,14 @@ fn next_action(lib: &Library, t: &Theme) -> Div {
         })
     };
     match lib.next_action() {
-        NextAction::Overdue(a) => card(t.red).child(status_toggle(a, lib, iconsize::L, t)).child(assignment(a, t.red, day::due(a.due, lib.now))).children(file_button(a)),
-        NextAction::Due(a) => card(t.accent).child(status_toggle(a, lib, iconsize::L, t)).child(assignment(a, t.accent_text, format!("{} · {}", day::countdown(a.due, lib.now), day::due(a.due, lib.now)))).children(file_button(a)),
+        NextAction::Overdue(a) => open(t.red, a).child(status_toggle(a, lib, iconsize::L, t)).child(assignment(a, t.red, day::due(a.due, lib.now))).children(file_button(a).map(|b| div().id("next-file-wrap").on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).on_click(|_, _, cx| cx.stop_propagation()).child(b))),
+        NextAction::Due(a) => open(t.accent, a).child(status_toggle(a, lib, iconsize::L, t)).child(assignment(a, t.accent_text, format!("{} · {}", day::countdown(a.due, lib.now), day::due(a.due, lib.now)))).children(file_button(a).map(|b| div().id("next-file-wrap").on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).on_click(|_, _, cx| cx.stop_propagation()).child(b))),
         NextAction::Unconfirmed(a) => {
             let id = a.id.clone();
-            card(t.blue)
+            open(t.blue, a)
                 .child(status_toggle(a, lib, iconsize::L, t))
                 .child(assignment(a, t.blue, tr("Fertig, aber Upload nicht bestätigt")))
-                .child(Button::new("next-confirm").primary().label(tr("Als hochgeladen markieren")).on_click(move |_, _, cx| act(cx, |l| l.confirm_all(std::slice::from_ref(&id)))))
+                .child(div().id("next-confirm-wrap").on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).on_click(|_, _, cx| cx.stop_propagation()).child(Button::new("next-confirm").primary().label(tr("Als hochgeladen markieren")).on_click(move |_, _, cx| act(cx, |l| l.confirm_all(std::slice::from_ref(&id))))))
         }
         NextAction::Inbox(count) => card(t.accent)
             .child(icon("inbox", iconsize::L, t.accent))
@@ -255,8 +263,9 @@ fn bundle(id: &'static str, title: String, icon_name: &str, tint: Hsla, open: bo
                         .flex()
                         .items_center()
                         .gap(px(space::S))
+                        .when(!fixed, |d| d.mx(px(-space::S)).px(px(space::S)).my(px(-space::XS)).py(px(space::XS)).rounded(px(radius::CONTROL)))
                         .when(!fixed, |d| {
-                            d.cursor_pointer().key_nav().on_click(move |_, _, cx| {
+                            d.soft(t.ink.opacity(0.05), radius::CONTROL).cursor_pointer().key_nav().on_click(move |_, _, cx| {
                                 super::state::lib(cx).update(cx, |l, cx| {
                                     toggle(l);
                                     cx.notify();

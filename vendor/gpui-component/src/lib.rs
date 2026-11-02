@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 mod component_traits;
 mod element_ext;
 pub mod global_state;
+mod hover;
 mod icon;
 mod index_path;
 #[cfg(any(feature = "inspector", debug_assertions))]

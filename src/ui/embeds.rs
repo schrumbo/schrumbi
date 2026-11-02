@@ -8,7 +8,7 @@ use std::time::Duration;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::motion::loading;
+use super::motion::{Soft, loading};
 use super::state::act;
 use super::theme::{Theme, font, iconsize, radius, space};
 use super::widgets::*;
@@ -268,7 +268,7 @@ impl RenderOnce for QueryBlock {
                     let open = f.clone();
                     let name = f.file_stem().unwrap_or_default().to_string_lossy().to_string();
                     let hover = t.ink.opacity(0.05);
-                    div().id(("query-hit", (self.id as usize) * 1000 + i)).px(px(space::M)).py(px(space::XS)).flex().items_center().gap(px(space::S)).cursor_pointer().hover(move |s| s.bg(hover)).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).child(file_icon(&f, iconsize::S)).child(div().truncate().child(name))
+                    div().id(("query-hit", (self.id as usize) * 1000 + i)).px(px(space::M)).py(px(space::XS)).flex().items_center().gap(px(space::S)).cursor_pointer().soft(hover, 0.).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).child(file_icon(&f, iconsize::S)).child(div().truncate().child(name))
                 }))
                 .into_any_element(),
         };
@@ -341,7 +341,7 @@ impl RenderOnce for BaseBlock {
                 let lines = rows.iter().take(100).enumerate().map(|(i, row)| {
                     let open = row.path.clone();
                     let hover = t.ink.opacity(0.05);
-                    div().id(("base-row", (self.id as usize) * 1000 + i)).flex().border_t_1().border_color(t.separator).cursor_pointer().hover(move |s| s.bg(hover)).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).children(row.cells.iter().map(|(_, v)| div().flex_1().min_w_0().truncate().px(px(space::S)).py(px(space::XS)).text_size(px(font::CALLOUT)).child(v.display())))
+                    div().id(("base-row", (self.id as usize) * 1000 + i)).flex().border_t_1().border_color(t.separator).cursor_pointer().soft(hover, 0.).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).children(row.cells.iter().map(|(_, v)| div().flex_1().min_w_0().truncate().px(px(space::S)).py(px(space::XS)).text_size(px(font::CALLOUT)).child(v.display())))
                 });
                 div().id(("base-scroll", self.id)).max_h(px(400.)).overflow_y_scroll().child(head).children(lines).into_any_element()
             }
@@ -512,6 +512,7 @@ impl RenderOnce for AudioLine {
                     .justify_center()
                     .bg(t.ink.opacity(0.08))
                     .cursor_pointer()
+                    .soft(t.ink.opacity(0.06), radius::FULL)
                     .key_nav()
                     .child(icon(if playing { "pause" } else { "play" }, iconsize::S, t.primary))
                     .tooltip(tip(if playing { tr("Pause") } else { tr("Abspielen") }))

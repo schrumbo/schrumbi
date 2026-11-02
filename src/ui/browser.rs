@@ -719,8 +719,8 @@ impl FileBrowser {
                         div()
                             .id(("spot", i))
                             .px(px(space::XS))
-                            .rounded(px(radius::INNER))
-                            .soft(hover, radius::INNER)
+                            .rounded(px(radius::SMALL))
+                            .soft(hover, radius::SMALL)
                             .cursor_pointer()
                             .truncate()
                             .text_size(px(font::CAPTION))
@@ -861,9 +861,10 @@ impl FileBrowser {
                 .id(SharedString::from(format!("kind-{}", k.key())))
                 .px(px(space::S))
                 .py(px(space::XXS))
-                .rounded(px(radius::INNER))
+                .rounded(px(radius::SMALL))
                 .text_size(px(font::CALLOUT))
                 .cursor_pointer().key_nav()
+                .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
                 .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
                 .child(match k {
                     FileKind::Documents => tr("Dokumente"),

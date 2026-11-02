@@ -128,7 +128,7 @@ fn block_menu(menu: gpui_kit::component::menu::PopupMenu, me: Entity<NoteView>, 
 /// Buttons that show on a table to make it bigger.
 fn table_tools(me: &Entity<NoteView>, i: usize, line: usize, count: usize, group: SharedString, t: &Theme) -> AnyElement {
     let (row_me, column_me) = (me.clone(), me.clone());
-    let tool = |id: (&'static str, usize), label: String| div().id(id).h(px(control::S)).px(px(space::S)).flex().items_center().rounded(px(radius::SMALL)).bg(t.secondary_bg).border_1().border_color(t.separator).text_size(px(font::CAPTION)).text_color(t.secondary).cursor_pointer().child(label);
+    let tool = |id: (&'static str, usize), label: String| div().id(id).h(px(control::S)).px(px(space::S)).flex().items_center().rounded(px(radius::SMALL)).bg(t.secondary_bg).border_1().border_color(t.separator).text_size(px(font::CAPTION)).text_color(t.secondary).cursor_pointer().soft(t.ink.opacity(0.06), radius::SMALL).child(label);
     div()
         .flex()
         .gap(px(space::XS))
@@ -1017,7 +1017,7 @@ impl NoteView {
                 .justify_center()
                 .rounded(px(radius::SMALL))
                 .cursor_pointer()
-                .hover(move |d| d.bg(hover))
+                .soft(hover, radius::SMALL)
                 .tooltip(tip(help))
                 .on_mouse_down(MouseButton::Left, |_, window, cx| {
                     window.prevent_default();
@@ -1153,7 +1153,7 @@ impl NoteView {
     fn gutter(me: &Entity<Self>, i: usize, line: usize, count: usize, is_table: bool, label: String, group: SharedString, t: &Theme) -> AnyElement {
         let (add_me, menu_me) = (me.clone(), me.clone());
         let hover = t.ink.opacity(0.1);
-        let handle = |id: (&'static str, usize), name: &'static str| div().id(id).size(px(iconsize::L)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().hover(move |d| d.bg(hover)).child(icon(name, iconsize::S, t.tertiary));
+        let handle = |id: (&'static str, usize), name: &'static str| div().id(id).size(px(iconsize::L)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().soft(hover, radius::SMALL).child(icon(name, iconsize::S, t.tertiary));
         div()
             .absolute()
             .top_0()
@@ -1460,8 +1460,9 @@ impl NoteView {
                     .gap(px(space::XS))
                     .px(px(space::S))
                     .py(px(space::XXS))
-                    .rounded(px(radius::INNER))
+                    .rounded(px(radius::SMALL))
                     .cursor_pointer().key_nav()
+                    .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
                     .text_size(px(font::CALLOUT))
                     .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
                     .child(icon(icon_name, iconsize::XS, if active { t.primary } else { t.secondary }))
@@ -1752,6 +1753,7 @@ impl NoteView {
                                         .rounded(px(radius::SMALL))
                                         .bg(t.secondary_bg)
                                         .cursor_pointer()
+                                        .soft(t.ink.opacity(0.06), radius::SMALL)
                                         .invisible()
                                         .group_hover(group, |s| s.visible())
                                         .tooltip(tip(tr("Quelltext bearbeiten")))

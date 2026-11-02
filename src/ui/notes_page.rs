@@ -618,7 +618,7 @@ impl NotesPage {
                 .id(id)
                 .w_full()
                 .h(px(control::M))
-                .pr(px(space::S))
+                .pr(px(space::S + space::XS))
                 .flex()
                 .items_center()
                 .gap(px(space::XS))
@@ -751,7 +751,7 @@ impl NotesPage {
                 base(("tree-task", i))
                     .pl(px(space::M))
                     .gap(px(space::S))
-                    .child(div().id(("task-box", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).border_1().border_color(t.secondary).cursor_pointer().aria_label(tr("Abhaken")).tooltip(tip(tr("Abhaken"))).on_click(move |_, _, cx| {
+                    .child(div().id(("task-box", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).soft(t.ink.opacity(0.08), radius::SMALL).border_1().border_color(t.secondary).cursor_pointer().aria_label(tr("Abhaken")).tooltip(tip(tr("Abhaken"))).on_click(move |_, _, cx| {
                         cx.stop_propagation();
                         finish(&tick, line, &label, cx);
                     }))
@@ -906,7 +906,7 @@ impl Render for NotesPage {
         let _ = active;
         let width = self.width;
         let accent = t.accent;
-        let handle = div().id("explorer-split").w(px(space::XS)).h_full().flex_none().cursor_col_resize().border_r_1().border_color(t.separator).hover(move |s| s.bg(accent.opacity(0.3))).on_drag(ExplorerSplit, |d, _, _, cx| cx.new(|_| d.clone()));
+        let handle = div().id("explorer-split").occlude().absolute().top_0().bottom_0().right_0().w(px(space::XS)).flex_none().cursor_col_resize().border_r_1().border_color(t.separator).soft(accent.opacity(0.3), 0.).on_drag(ExplorerSplit, |d, _, _, cx| cx.new(|_| d.clone()));
         if self.resizing && !cx.has_active_drag() {
             self.resizing = false;
             let width = self.width;
@@ -914,6 +914,7 @@ impl Render for NotesPage {
         }
         div()
             .id("explorer")
+            .relative()
             .track_focus(&self.focus)
             .key_context("Explorer")
             .h_full()
@@ -929,7 +930,7 @@ impl Render for NotesPage {
                     cx.notify();
                 }
             }))
-            .child(div().w(px(width)).h_full().flex().flex_col().bg(t.column).child(header).child(filter).child(div().flex_1().min_h_0().child(body)))
+            .child(div().w(px(width + space::XS)).h_full().flex().flex_col().bg(t.column).child(header).child(filter).child(div().flex_1().min_h_0().child(body)))
             .child(handle)
     }
 }
