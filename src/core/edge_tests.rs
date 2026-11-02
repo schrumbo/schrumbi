@@ -1025,6 +1025,32 @@ fn cards_taken_as_known_undo_and_redo_in_order_with_the_rest() {
     assert!(!super::cards::all_cards().iter().any(|c| c.raw.front == "Neu?" && c.suspended()));
     lib.redo();
     assert!(super::cards::all_cards().iter().any(|c| c.raw.front == "Neu?" && c.suspended()));
+    super::cards::set_suspended(&neu, false);
+    lib.last_error = None;
+    lib.undo();
+    assert!(lib.last_error.is_some(), "an undo that changes nothing says so");
+    assert!(!message(&lib).starts_with("Rückgängig"));
+    assert!(!lib.can_redo(), "nothing to repeat when nothing was taken back");
+    super::cards::close();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn first_open_baseline_stays_out_of_a_history_already_in_use() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (root, mut lib) = workspace("known-late", &config(1, 1));
+    std::fs::write(root.join("Alt.md"), "Alt? :: a\n").unwrap();
+    let id = lib.assignments[0].id.clone();
+    lib.toggle_done(&id);
+    let (count, catalog) = lib.index_job().unwrap().run();
+    lib.apply_index(count, catalog);
+    let phase = || super::cards::all_cards().iter().find(|c| c.raw.front == "Alt?").map(super::cards::Card::phase).unwrap();
+    assert_eq!(phase(), super::cards::Phase::Review);
+    assert!(lib.toast.as_ref().is_some_and(|t| t.message.starts_with("1 Karte als bekannt übernommen")));
+    lib.undo();
+    assert!(!lib.state.overrides.contains_key(&id), "Cmd+Z still takes back what the user did");
+    assert_eq!(phase(), super::cards::Phase::Review);
+    assert!(lib.can_redo());
     super::cards::close();
     let _ = std::fs::remove_dir_all(root);
 }

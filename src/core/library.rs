@@ -1391,7 +1391,15 @@ impl Library {
         self.is_indexing = false;
         self.follow_outside_moves();
         if let Some(adopted) = super::cards::take_notice() {
-            self.cards_known(adopted);
+            if self.undo_steps.is_empty() && self.redo_steps.is_empty() {
+                self.cards_known(adopted);
+            } else {
+                let message = adopted.message();
+                let (root, swaps) = (adopted.root, adopted.changes);
+                self.notify(message, "calendar-check", None, Some(Box::new(move |_: &mut Library| {
+                    super::cards::swap(root.as_deref(), swaps);
+                })));
+            }
         }
         self.changed();
     }
@@ -2197,12 +2205,16 @@ impl Library {
         let Some(step) = self.undo_steps.pop() else { return };
         let label = step.label.clone();
         let (inverse, failed) = self.apply_step(step);
-        if !inverse.changes.is_empty() {
+        let changed = !inverse.changes.is_empty();
+        if changed {
             self.redo_steps.push(inverse);
         }
         self.coalescing = None;
         if !failed.is_empty() {
             self.undo_steps.push(Step { label, changes: failed });
+            return;
+        }
+        if !changed {
             return;
         }
         self.notify(trf("Rückgängig: %@", &[&label]), "undo-2", Some(tr("Wiederholen")), Some(Box::new(|lib: &mut Library| lib.redo())));
@@ -2213,12 +2225,16 @@ impl Library {
         let Some(step) = self.redo_steps.pop() else { return };
         let label = step.label.clone();
         let (inverse, failed) = self.apply_step(step);
-        if !inverse.changes.is_empty() {
+        let changed = !inverse.changes.is_empty();
+        if changed {
             self.undo_steps.push(inverse);
         }
         self.coalescing = None;
         if !failed.is_empty() {
             self.redo_steps.push(Step { label, changes: failed });
+            return;
+        }
+        if !changed {
             return;
         }
         let undo = self.undo_latest();
@@ -2238,6 +2254,7 @@ impl Library {
                 None => failed.push(change),
             }
         }
+        inverse.retain(|c| !matches!(c, Change::Cards { swaps, .. } if swaps.is_empty()));
         inverse.reverse();
         failed.reverse();
         self.refresh();
@@ -2306,6 +2323,9 @@ impl Library {
                         self.last_error = Some(tr("Die Karten gehören zu einem anderen Ordner und bleiben, wie sie sind."));
                         Vec::new()
                     });
+                    if back.is_empty() && self.last_error.is_none() {
+                        self.last_error = Some(tr("Die Karten wurden seither geändert und bleiben, wie sie sind."));
+                    }
                     Change::Cards { root, swaps: back }
                 }
             })
