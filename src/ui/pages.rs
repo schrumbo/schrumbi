@@ -103,6 +103,22 @@ impl Pages {
                 }
                 cx.notify();
             }),
+            {
+                let me = cx.weak_entity();
+                cx.intercept_keystrokes(move |e, window, cx| {
+                    let dragging = me.upgrade().is_some_and(|p| p.read(cx).doc_dragging);
+                    if dragging && e.keystroke.key == "escape" && cx.stop_active_drag(window) {
+                        cx.stop_propagation();
+                        if let Some(p) = me.upgrade() {
+                            p.update(cx, |p, cx| {
+                                p.doc_dragging = false;
+                                p.doc_drop = None;
+                                cx.notify();
+                            });
+                        }
+                    }
+                })
+            },
             cx.observe(&search, |this, b, cx| {
                 let selected = b.read(cx).selected.clone();
                 this.preview.update(cx, |p, cx| p.set_path(selected, cx));
@@ -369,20 +385,7 @@ impl Pages {
         }
         let page = self.notes_page.get_or_insert_with(|| cx.new(|cx| super::notes_page::NotesPage::new(window, cx))).clone();
         let shown = !crate::core::prefs::get().notes_explorer_hidden && width >= 620.;
-        div()
-            .size_full()
-            .flex()
-            .capture_key_down(cx.listener(|p, e: &KeyDownEvent, window, cx| {
-                if p.doc_dragging && e.keystroke.key == "escape" && cx.stop_active_drag(window) {
-                    p.doc_dragging = false;
-                    p.doc_drop = None;
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-            }))
-            .when(shown, |d| d.child(page))
-            .child(div().flex_1().min_w_0().h_full().child(body))
-            .into_any_element()
+        div().size_full().flex().when(shown, |d| d.child(page)).child(div().flex_1().min_w_0().h_full().child(body)).into_any_element()
     }
 
     fn document(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -450,10 +453,6 @@ impl Pages {
     }
 
     fn drop_area(&mut self, area: AnyElement, panes: DropPanes, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        if !cx.has_active_drag() {
-            self.doc_dragging = false;
-            self.doc_drop = None;
-        }
         let t = Theme::get(cx);
         let rect = self.doc_drop.as_ref().map(|h| panes.rect(h));
         if let Some(r) = rect {
@@ -473,6 +472,10 @@ impl Pages {
                 let path = e.drag(cx).0.clone();
                 file_me.update(cx, |p, cx| p.hover_drop(path, true, e.event.position, e.bounds, &file_panes, cx));
             })
+            .when(rect.is_some(), |d| {
+                d.on_drop(cx.listener(|p, d: &super::documents::DraggedTab, _, cx| p.drop_here(&d.path, cx)))
+                    .on_drop(cx.listener(|p, d: &super::browser::DraggedFile, _, cx| p.drop_here(&d.0, cx)))
+            })
             .child(area);
         if alpha > 0.01 {
             let target = rect.unwrap_or(self.drop_rect);
@@ -491,11 +494,7 @@ impl Pages {
                 .w(relative((right - left).max(0.)))
                 .p(px(space::S))
                 .opacity(alpha)
-                .when(rect.is_some(), |d| {
-                    d.on_drop(cx.listener(|p, d: &super::documents::DraggedTab, _, cx| p.drop_here(&d.path, cx)))
-                        .on_drop(cx.listener(|p, d: &super::browser::DraggedFile, _, cx| p.drop_here(&d.0, cx)))
-                })
-                .child(div().size_full().rounded(px(radius::CARD)).bg(t.accent.opacity(0.1)).border_1().border_color(t.accent.opacity(0.5)).flex().items_center().justify_center().child(pill));
+                .child(div().size_full().rounded(px(radius::CARD)).bg(t.accent.opacity(0.12)).border_1().border_color(t.accent.opacity(0.5)).flex().justify_center().pt(px(space::XL)).child(div().child(pill)));
             container = container.child(overlay);
         }
         container.into_any_element()
@@ -566,6 +565,10 @@ impl DropPanes {
 
 impl Render for Pages {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !cx.has_active_drag() {
+            self.doc_dragging = false;
+            self.doc_drop = None;
+        }
         let open = state::read(cx, |l| l.open_documents.clone());
         if !matches!(state::read(cx, |l| l.route().clone()), Route::Doc(_)) {
             self.shown_doc = None;

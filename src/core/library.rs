@@ -2738,9 +2738,10 @@ impl Library {
     fn load_documents(&mut self) {
         let Some(root) = self.root.clone() else { return };
         let rels = prefs::get().open_documents.get(&self.documents_key()).cloned().unwrap_or_default();
-        self.open_documents = rels.iter().map(|r| root.join(r)).filter(|p| p.exists()).collect();
+        let canonical = |p: PathBuf| dunce::canonicalize(&p).unwrap_or(p);
+        self.open_documents = rels.iter().map(|r| root.join(r)).filter(|p| p.exists()).map(canonical).collect();
         self.active_document = self.open_documents.first().cloned();
-        let split = prefs::get().split_documents.get(&self.documents_key()).map(|r| root.join(r));
+        let split = prefs::get().split_documents.get(&self.documents_key()).map(|r| canonical(root.join(r)));
         self.split_document = split.filter(|p| self.open_documents.contains(p) && self.active_document.as_ref() != Some(p));
     }
 
@@ -2788,20 +2789,38 @@ impl Library {
         self.changed();
     }
 
+    fn shown_document(&self) -> Option<&PathBuf> {
+        match &self.route {
+            Route::Doc(p) => Some(p),
+            _ => self.active_document.as_ref(),
+        }
+    }
+
+    fn dropped_path(&self, path: &Path) -> PathBuf {
+        if self.open_documents.iter().any(|d| d == path) {
+            return path.to_path_buf();
+        }
+        dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
     fn left_after_move(&self, path: &Path, fallback: Option<&Path>) -> Option<PathBuf> {
-        self.split_document.clone().filter(|s| s != path).or_else(|| fallback.filter(|f| *f != path && self.open_documents.iter().any(|d| d == f)).map(Path::to_path_buf))
+        let open = |f: &Path| f != path && self.open_documents.iter().any(|d| d == f);
+        self.split_document.clone().filter(|s| s != path).or_else(|| fallback.filter(|f| open(f)).map(Path::to_path_buf)).or_else(|| {
+            let i = self.open_documents.iter().position(|d| d == path)?;
+            self.open_documents.get(i + 1).or_else(|| i.checked_sub(1).and_then(|j| self.open_documents.get(j))).cloned()
+        })
     }
 
     /// Whether dropping a dragged document there changes anything. `fallback` takes the shown pane when the shown document itself moves beside.
     pub fn can_drop_document(&self, path: &Path, to: DocDrop, fallback: Option<&Path>) -> bool {
-        let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let path = self.dropped_path(path);
         if !self.open_documents.contains(&path) && !(path.exists() && Self::opens_in_app(&path)) {
             return false;
         }
-        let shown = self.active_document.as_ref() == Some(&path);
+        let shown = self.shown_document() == Some(&path);
         match to {
             DocDrop::Here => !shown,
-            DocDrop::Beside => self.active_document.is_some() && self.split_document.as_ref() != Some(&path) && (!shown || self.left_after_move(&path, fallback).is_some()),
+            DocDrop::Beside => self.shown_document().is_some() && self.split_document.as_ref() != Some(&path) && (!shown || self.left_after_move(&path, fallback).is_some()),
         }
     }
 
@@ -2810,16 +2829,20 @@ impl Library {
         if !self.can_drop_document(path, to, fallback) {
             return;
         }
-        let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let path = self.dropped_path(path);
+        let shown = self.shown_document().cloned();
         match to {
             DocDrop::Here => {
                 if self.split_document.as_ref() == Some(&path)
-                    && let Some(shown) = self.active_document.clone()
+                    && let Some(shown) = shown
                 {
                     self.split_document = Some(shown);
                     self.active_document = Some(path.clone());
                     self.save_documents();
                     self.set_route(Route::Doc(path));
+                } else if self.open_documents.contains(&path) {
+                    self.open_document(&path);
+                    self.pin_document(&path);
                 } else {
                     self.open_file(&path);
                     self.pin_document(&path);
@@ -2827,11 +2850,15 @@ impl Library {
             }
             DocDrop::Beside => {
                 if !self.open_documents.contains(&path) {
-                    let at = self.active_document.as_ref().and_then(|a| self.open_documents.iter().position(|d| d == a)).map_or(self.open_documents.len(), |i| i + 1);
+                    let at = shown.as_ref().and_then(|a| self.open_documents.iter().position(|d| d == a)).map_or(self.open_documents.len(), |i| i + 1);
                     self.open_documents.insert(at, path.clone());
                 }
                 self.pin_document(&path);
-                let left = (self.active_document.as_ref() == Some(&path)).then(|| self.left_after_move(&path, fallback)).flatten();
+                let left = match shown {
+                    Some(s) if s == path => self.left_after_move(&path, fallback),
+                    Some(s) if self.active_document.as_ref() != Some(&s) => Some(s),
+                    _ => None,
+                };
                 self.split_document = Some(path);
                 self.follow_outside_moves();
                 self.save_documents();

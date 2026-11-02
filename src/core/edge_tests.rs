@@ -495,6 +495,34 @@ fn dropped_documents_open_here_or_beside() {
 }
 
 #[test]
+fn drops_follow_the_document_on_screen() {
+    use super::library::DocDrop::{Beside, Here};
+    let root = dunce::canonicalize(folder("split-drop-route")).unwrap();
+    let (a, b, c) = (root.join("a.md"), root.join("b.md"), root.join("c.md"));
+    for p in [&a, &b, &c] {
+        std::fs::write(p, "x").unwrap();
+    }
+    let mut lib = Library::new();
+    for p in [&a, &b, &c] {
+        lib.open_document(p);
+    }
+    lib.open_document(&a);
+    lib.drop_document(&a, Beside, None);
+    assert_eq!((lib.active_document.clone(), lib.split_document.clone()), (Some(b.clone()), Some(a.clone())), "the neighbouring tab takes the left side");
+    lib.set_split(None);
+    lib.set_route(Route::Doc(c.clone()));
+    assert!(lib.can_drop_document(&b, Here, None), "the routed pane counts, not the last active tab");
+    assert!(!lib.can_drop_document(&c, Here, None));
+    lib.drop_document(&b, Beside, None);
+    assert_eq!(*lib.route(), Route::Doc(c.clone()));
+    assert_eq!((lib.active_document.clone(), lib.split_document.clone()), (Some(c.clone()), Some(b.clone())));
+    lib.set_split(None);
+    std::fs::remove_file(&a).unwrap();
+    lib.drop_document(&a, Here, None);
+    assert_eq!((lib.route().clone(), lib.open_documents.len()), (Route::Doc(a.clone()), 3), "a vanished tab still comes to the front");
+}
+
+#[test]
 fn sync_gate_holds_writes_and_reloads_pulled_files() {
     let root = folder("sync-gate");
     std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();

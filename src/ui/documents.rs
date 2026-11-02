@@ -1516,7 +1516,7 @@ impl NoteView {
                 let is_source = current_mode == Mode::Source;
                 menu = menu.when(live_editor, |menu| menu.item(PopupMenuItem::new(tr("Quelltext")).icon(menu_icon("code")).checked(is_source).on_click(move |_, window, cx| source_view.update(cx, |n, cx| n.set_mode(if is_source { Mode::Live } else { Mode::Source }, window, cx)))));
                 let full = prefs::get().reader_full_width;
-                menu = menu.item(PopupMenuItem::new(tr("Text in voller Breite")).icon(menu_icon("move-horizontal")).checked(full).on_click(move |_, _, cx| set_reader_full_width(!full, cx)));
+                menu = menu.item(PopupMenuItem::new(tr("Text in voller Breite")).checked(full).on_click(move |_, _, cx| set_reader_full_width(!full, cx)));
                 let g = d.clone();
                 menu = menu.item(PopupMenuItem::new(tr("Graph um diese Notiz")).icon(menu_icon("waypoints")).on_click(move |_, _, cx| {
                             let p = g.clone();
@@ -2258,13 +2258,14 @@ impl Render for NoteView {
         if std::mem::take(&mut self.needs_focus) {
             self.activate(window, cx);
         }
-        let full = prefs::get().reader_full_width;
+        let settings = prefs::get();
+        let full = settings.reader_full_width;
         if self.measured_scale != note_scale() || self.measured_full != full {
             self.measured_scale = note_scale();
             self.measured_full = full;
             self.reader_list.remeasure();
         }
-        let wanted = prefs::get().note_editor;
+        let wanted = settings.note_editor;
         if wanted != self.editor_kind {
             self.editor_kind = wanted;
             let next = match (self.mode, wanted) {
@@ -2392,7 +2393,6 @@ pub fn scale_font(factor: f32, cx: &mut App) {
     }
 }
 
-/// Sets the editor font size everywhere.
 /// The widest a reading column gets while notes are not shown in full width.
 pub const READER_COLUMN: f32 = 720.;
 
@@ -2411,6 +2411,7 @@ pub fn reader_column(full: bool, inner: AnyElement) -> AnyElement {
     div().w_full().flex().justify_center().child(column.max_w(px(READER_COLUMN))).into_any_element()
 }
 
+/// Sets the editor font size everywhere.
 pub fn set_font_size(size: f32, cx: &mut App) {
     prefs::update(|p| p.editor_font_size = size);
     gpui_kit::component::Theme::global_mut(cx).mono_font_size = px(size);
