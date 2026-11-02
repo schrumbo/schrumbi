@@ -1501,5 +1501,22 @@
   "Modul, das noch keinen Ordner hat": "Module without a folder yet",
   "Hake links einen Ordner an oder lege unten einen an. Geht auch später: Rechtsklick auf einen Ordner in den Notizen.": "Tick a folder on the left or create one below. Also possible later: right-click a folder in Notes.",
   "Los geht's": "Let's go",
-  "Einstellungen → Kalender abonnieren, Adresse eintragen.": "Settings → Subscribe to a calendar, enter the address."
+  "Einstellungen → Kalender abonnieren, Adresse eintragen.": "Settings → Subscribe to a calendar, enter the address.",
+  "Ablegen und Ordner": "Filing and folders",
+  "Ordnung": "Organization",
+  "Schrumbi hilft beim Ordnen": "Schrumbi helps keep order",
+  "Meine eigene Struktur": "My own structure",
+  "Eigene Auswahl": "Custom",
+  "Beim Ablegen umbenennen": "Rename when filing",
+  "Dateinamen prüfen": "Check file names",
+  "Fehlende Ordner melden": "Report missing folders",
+  "Ordner anlegen": "Create folders",
+  "Schrumbi benennt und verschiebt nie etwas von selbst. Ohne „Ordner anlegen“ landen Dateien nur in Ordnern, die es schon gibt.": "Schrumbi never renames or moves anything on its own. Without “Create folders”, files only go into folders that already exist.",
+  "Benennt abgelegte Dateien nach einem Muster, legt Abgabeordner an und meldet, was fehlt.": "Names filed files after a pattern, creates submission folders and reports what is missing.",
+  "Schrumbi liest nur. Dateien landen dort, wo du sie hinlegst, mit ihrem Namen.": "Schrumbi only reads. Files go where you put them, with their own names.",
+  "Lässt sich jederzeit in den Einstellungen ändern, auch einzeln.": "Can be changed any time in Settings, also one by one.",
+  "Hake links einen Ordner an. Geht auch später: Rechtsklick auf einen Ordner in den Notizen.": "Tick a folder on the left. Also possible later: right-click a folder in Notes.",
+  "Ziehe Dateien ins Fenster. Die App schlägt Modul und Abgabe vor, Enter legt ab.": "Drag files into the window. The app suggests module and deadline, Enter files them.",
+  "Uploads sind bestätigt, nichts ist überfällig.": "Uploads are confirmed, nothing is overdue.",
+  "Der Ordner dieser Abgabe fehlt. Wähle einen Ordner.": "This deadline's folder does not exist. Choose a folder."
 }

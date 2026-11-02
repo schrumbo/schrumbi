@@ -127,7 +127,7 @@ impl FilingForm {
             draft,
             date,
             date_value: Local::now().date_naive(),
-            rename: true,
+            rename: renames_by_default(cx),
             grab_focus,
             details: false,
             width: 560.,
@@ -251,7 +251,7 @@ impl FilingForm {
             self.set_date(d, window, cx);
         }
         self.facts = Some(facts);
-        self.details = self.target.is_none() || (self.rename && self.title.read(cx).value().trim().is_empty());
+        self.details = state::read(cx, |l| self.folder(l).is_none()) || (self.rename && self.title.read(cx).value().trim().is_empty());
         if self.grab_focus {
             self.refocus(window, cx);
         }
@@ -272,7 +272,7 @@ impl FilingForm {
 
     fn folder(&self, l: &Library) -> Option<PathBuf> {
         match &self.target {
-            Some(Target::Assignment(_)) => self.target_assignment(l).map(|a| a.folder),
+            Some(Target::Assignment(_)) => self.target_assignment(l).and_then(|a| l.filing_folder(&a)),
             Some(Target::Folder(f)) => Some(f.clone()),
             None => None,
         }
@@ -305,7 +305,7 @@ impl FilingForm {
         self.role = r;
         let keep = r != FileRole::Material && matches!(self.target, Some(Target::Assignment(_)));
         if keep {
-            self.rename = true;
+            self.rename = renames_by_default(cx);
         } else {
             self.select_default(window, cx);
         }
@@ -323,7 +323,7 @@ impl FilingForm {
     fn select(&mut self, t: Target, window: &mut Window, cx: &mut Context<Self>) {
         match &t {
             Target::Assignment(id) => {
-                self.rename = true;
+                self.rename = renames_by_default(cx);
                 if self.role == FileRole::Work
                     && let Some(a) = state::read(cx, |l| l.assignment(id).cloned())
                 {
@@ -332,7 +332,7 @@ impl FilingForm {
             }
             Target::Folder(f) => {
                 let (in_module, near) = state::read(cx, |l| (l.module_containing(f).is_some(), l.bylines_near(f)));
-                self.rename = in_module;
+                self.rename = in_module && renames_by_default(cx);
                 if self.role == FileRole::Material {
                     let from_pdf = byline_from(self.facts.as_ref().and_then(|f| f.pdf_author.as_deref()));
                     let b = if from_pdf.is_empty() { near.first().cloned().unwrap_or_default() } else { from_pdf };
@@ -668,6 +668,10 @@ fn suggestion(id: SharedString, label: String, selected: bool, t: &Theme) -> Sta
     div().id(id).px(px(space::S)).py(px(space::XS)).rounded_full().bg(fill).soft(hover, radius::FULL).cursor_pointer().key_nav().text_size(px(font::CAPTION)).text_color(if selected { t.accent } else { t.primary }).child(label)
 }
 
+fn renames_by_default(cx: &App) -> bool {
+    state::read(cx, |l| l.config.as_ref().is_none_or(|c| c.rename_on_filing))
+}
+
 impl Render for FilingForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
@@ -887,6 +891,7 @@ impl Render for FilingForm {
             .child(chips)
             .child(match &folder {
                 Some(f) => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", iconsize::XS, t.secondary)).child(div().truncate().child(l.relative_path(f))),
+                None if matches!(self.target, Some(Target::Assignment(_))) => caption(tr("Der Ordner dieser Abgabe fehlt. Wähle einen Ordner."), &t),
                 None => caption(if material { tr("Wähle einen Ordner.") } else { tr("Wähle eine Abgabe oder einen Ordner.") }, &t),
             });
 

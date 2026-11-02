@@ -609,8 +609,14 @@ impl Library {
         if self.config.as_ref() == Some(&c) {
             return false;
         }
+        let checks = |c: &StudyConfig| (c.check_names, c.check_folders);
+        let recheck = self.config.as_ref().map(checks) != Some(checks(&c));
         self.config = Some(c);
-        self.changed();
+        if recheck {
+            self.reevaluate();
+        } else {
+            self.changed();
+        }
         true
     }
 
@@ -1725,6 +1731,9 @@ impl Library {
                 }
             }
         }
+        if self.config.as_ref().is_some_and(|c| !c.create_folders) {
+            out.retain(|t| t.path.is_dir());
+        }
         out
     }
 
@@ -1934,7 +1943,26 @@ impl Library {
 
     pub fn missing_folders(&self) -> Vec<PathBuf> {
         let (Some(root), Some(c), Some(s)) = (self.root.as_ref(), self.config.as_ref(), self.semester()) else { return Vec::new() };
+        if !c.check_folders {
+            return Vec::new();
+        }
         schedule::expected_folders(c, s, root).into_iter().filter(|p| !p.exists()).collect()
+    }
+
+    /// Whether Aufräumen should show that folders are missing.
+    pub fn reports_missing_folders(&self) -> bool {
+        self.missing_folder_count > 0 && self.config.as_ref().is_some_and(|c| c.check_folders)
+    }
+
+    /// Where filing into an assignment puts the file: its folder, or when Schrumbi may not create folders,
+    /// the nearest existing folder inside the module; `None` when not even the module folder exists.
+    pub fn filing_folder(&self, a: &Assignment) -> Option<PathBuf> {
+        let (Some(root), Some(c)) = (self.root.as_ref(), self.config.as_ref()) else { return Some(a.folder.clone()) };
+        if c.create_folders || a.folder.is_dir() {
+            return Some(a.folder.clone());
+        }
+        let module = root.join(&c.module(&a.module_id)?.folder);
+        a.folder.ancestors().take_while(|p| p.starts_with(&module)).find(|p| p.is_dir()).map(Path::to_path_buf)
     }
 
     // MARK: Feedback

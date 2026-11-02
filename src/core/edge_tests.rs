@@ -285,7 +285,7 @@ fn survives_random_text_everywhere() {
         let _ = markdown::highlight(&a, Some("rust"));
         let _ = markdown::toggle_task(&a, (f.next() % 5) as usize);
         let _ = filing::task_titles(&a);
-        let _ = filing::clean_file_name(&a);
+        let _ = filing::default_title(&a, &[]);
         let _ = filing::headline(&a, &[b.clone()]);
         let _ = text::middle_ellipsis(&a, (f.next() % 30) as usize);
         let _ = text::fold(&a);
@@ -742,4 +742,57 @@ fn a_note_made_here_takes_the_name_of_its_heading() {
     assert_eq!(with_first_heading("Alt\n===\n\nText", "Neu"), "# Neu\n\nText");
     assert_eq!(with_first_heading("Text", "Neu"), "# Neu\n\nText");
     assert_eq!(crate::core::text::safe_file_stem(" a/b: c? . "), "a b c");
+}
+
+#[test]
+fn existing_configs_keep_organizing() {
+    let (root, lib) = workspace("organize-default", &config(1, 1));
+    let c = lib.config.unwrap();
+    assert_eq!(c.organizes(), Some(true));
+    assert!(c.rename_on_filing && c.check_names && c.check_folders && c.create_folders);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn own_structure_hides_name_and_folder_findings_until_switched_back() {
+    let (root, mut lib) = workspace("organize-checks", &config(1, 1));
+    let a = lib.assignments.first().cloned().unwrap();
+    std::fs::create_dir_all(&a.folder).unwrap();
+    std::fs::write(a.folder.join("Mein Entwurf.pdf"), "x").unwrap();
+    if let Some(job) = lib.scan_job() {
+        lib.apply_scan(job.run());
+    }
+    assert!(!lib.misnamed().is_empty());
+    assert!(lib.reports_missing_folders() && !lib.missing_folders().is_empty());
+    let mut c = lib.config.clone().unwrap();
+    c.set_organizes(false);
+    lib.update_config(c.clone());
+    assert!(lib.misnamed().is_empty());
+    assert!(!lib.reports_missing_folders() && lib.missing_folders().is_empty());
+    c.check_names = true;
+    lib.update_config(c.clone());
+    assert!(!lib.misnamed().is_empty());
+    c.check_folders = true;
+    lib.update_config(c);
+    assert!(lib.reports_missing_folders() && !lib.missing_folders().is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn own_structure_files_only_into_existing_folders() {
+    let (root, mut lib) = workspace("organize-filing", &config(1, 1));
+    let a = lib.assignments.first().cloned().unwrap();
+    assert_eq!(lib.filing_folder(&a), Some(a.folder.clone()));
+    let mut c = lib.config.clone().unwrap();
+    c.create_folders = false;
+    lib.update_config(c);
+    assert_eq!(lib.filing_folder(&a), None);
+    std::fs::create_dir_all(root.join("M0")).unwrap();
+    assert_eq!(lib.filing_folder(&a), Some(root.join("M0")));
+    let week = a.folder.parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(&week).unwrap();
+    assert_eq!(lib.filing_folder(&a), Some(week));
+    std::fs::create_dir_all(&a.folder).unwrap();
+    assert_eq!(lib.filing_folder(&a), Some(a.folder.clone()));
+    let _ = std::fs::remove_dir_all(root);
 }

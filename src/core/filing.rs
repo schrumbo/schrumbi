@@ -151,31 +151,26 @@ pub struct Suggestion {
     pub source: &'static str,
 }
 
-static NOISE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    [
-        r"(?i)\b(img|dsc|pxl|scan(ned)?|screenshot|bildschirmfoto|dokument|document|untitled|unbenannt|kopie|copy|final|neu|new)\b",
-        r"\d{4}-\d{2}-\d{2}",
-        r"\b\d{1,2}\.\d{1,2}\.(\d{2,4})?\b",
-        r"\b\d{1,2}[.:]\d{2}([.:]\d{2})?\b",
-        r"(?i)\b(um|at|von)\b",
-        r"\(\d+\)",
-        r"\b\d{4,}\b",
-    ]
-    .iter()
-    .map(|p| Regex::new(p).unwrap())
-    .collect()
-});
-
-/// Ordered, de-duplicated candidates: existing convention title, worksheet title, PDF metadata, headline, cleaned file name.
-/// `ignore` holds words that never make a title on their own (course name, module codes, the author's name).
 /// Removes what Office adds to document titles, e.g. "Folien - Compatibility Mode".
 fn strip_office_suffix(title: &str) -> String {
     static SUFFIX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)[\s\-_–\[(]*(compatibility[\s_-]*mode|kompatibilit(ä|ae)tsmodus)[\])]*\s*$").unwrap());
     SUFFIX.replace(title, "").into_owned()
 }
 
+/// The title a file keeps unless the user picks another: the title of a convention name, else the file's own name with every word kept.
+pub fn default_title(file_name: &str, namings: &[Naming]) -> Option<Suggestion> {
+    if let Some(p) = namings.iter().find_map(|n| n.parse(file_name)).filter(|p| !Naming::clean(&p.title).is_empty()) {
+        return Some(Suggestion { title: Naming::clean(&p.title), source: "Bisheriger Titel" });
+    }
+    let own = Naming::clean(stem(file_name));
+    (!own.is_empty()).then_some(Suggestion { title: own, source: "Dateiname" })
+}
+
+/// Ordered, de-duplicated candidates: the default title first, then worksheet title, PDF metadata and headline.
+/// `ignore` holds words that never make a detected title on their own (course name, module codes, the author's name).
 pub fn title_suggestions(facts: &FileFacts, namings: &[Naming], ignore: &[String]) -> Vec<Suggestion> {
-    let mut out: Vec<Suggestion> = Vec::new();
+    let name = facts.name();
+    let mut out: Vec<Suggestion> = default_title(name, namings).into_iter().collect();
     let mut add = |raw: Option<String>, source: &'static str| {
         let Some(raw) = raw else { return };
         let t = Naming::clean(&strip_office_suffix(&raw));
@@ -184,19 +179,12 @@ pub fn title_suggestions(facts: &FileFacts, namings: &[Naming], ignore: &[String
         }
         out.push(Suggestion { title: t, source });
     };
-    let name = facts.name();
-    for n in namings {
-        if let Some(p) = n.parse(name) {
-            add(Some(p.title), "Bisheriger Titel");
-        }
-    }
     add(facts.note_title.clone(), "Überschrift in Notiz");
     for t in task_titles(&facts.text) {
         add(Some(t), "Aufgabentitel im PDF");
     }
     add(facts.pdf_title.clone(), "PDF-Titel");
     add(headline(&facts.text, ignore), "Überschrift im PDF");
-    add(clean_file_name(name), "Dateiname");
     out.truncate(5);
     out
 }
@@ -221,15 +209,6 @@ pub fn task_titles(text: &str) -> Vec<String> {
             ((1..=6).contains(&words) && !t.to_lowercase().starts_with("montag") && (!t.chars().any(|c| c.is_ascii_digit()) || words > 1)).then_some(t)
         })
         .collect()
-}
-
-pub fn clean_file_name(name: &str) -> Option<String> {
-    let mut base = stem(name).replace('_', " ");
-    for re in NOISE.iter() {
-        base = re.replace_all(&base, " ").into_owned();
-    }
-    let words: Vec<&str> = base.split([' ', '-']).filter(|w| !w.is_empty() && !w.chars().all(|c| c.is_ascii_digit())).collect();
-    (!words.is_empty()).then(|| words.join(" "))
 }
 
 pub fn clean_metadata_title(raw: &str) -> Option<String> {
@@ -385,9 +364,51 @@ mod tests {
         assert_eq!(task_titles("Arbeitszettel 2: Beobachtungsprobe\nfoo"), ["Beobachtungsprobe"]);
     }
 
+    fn facts(name: &str) -> FileFacts {
+        FileFacts { path: PathBuf::from(name), created: Local::now(), name_date: None, pdf_title: None, pdf_author: None, page_count: 1, text: String::new(), note_title: None }
+    }
+
+    fn naming() -> Naming {
+        let module = Module { code: "P1".into(), naming: crate::core::model::DEFAULT_NAMING.into(), ..Default::default() };
+        Naming::with_author(&module, None, "Muster-M", "", crate::core::model::CoauthorStyle::Initial)
+    }
+
     #[test]
-    fn cleans_file_names() {
-        assert_eq!(clean_file_name("Scan 2026-10-12 um 14.33.pdf").as_deref(), None);
-        assert_eq!(clean_file_name("IMG_Poster_Entwurf.png").as_deref(), Some("Poster Entwurf"));
+    fn default_title_keeps_every_word_of_the_file_name() {
+        assert_eq!(default_title("Scan 2026-10-12 um 14.33.pdf", &[]).unwrap().title, "Scan-2026-10-12-um-14-33");
+        assert_eq!(default_title("IMG_Poster_Entwurf final.png", &[]).unwrap().title, "IMG-Poster-Entwurf-final");
+        assert_eq!(default_title("Übung (2) für Müller.pdf", &[]).unwrap().title, "Uebung-2-fuer-Mueller");
+        assert_eq!(default_title("A1.pdf", &[]).unwrap().title, "A1");
+        assert_eq!(default_title("Kopie.pdf", &[]).unwrap().source, "Dateiname");
+        assert!(default_title("___.pdf", &[]).is_none());
+    }
+
+    #[test]
+    fn default_title_reads_back_a_convention_name() {
+        let d = default_title("P1_26_Radar-Chart_Muster-M_261028.pdf", &[naming()]).unwrap();
+        assert_eq!((d.title.as_str(), d.source), ("Radar-Chart", "Bisheriger Titel"));
+    }
+
+    #[test]
+    fn detected_titles_follow_the_file_name() {
+        let mut f = facts("Scan_0042.pdf");
+        f.pdf_title = Some("Infografik Analyse".into());
+        f.text = "Arbeitszettel 2: Beobachtungsprobe\n".into();
+        let s = title_suggestions(&f, &[], &[]);
+        assert_eq!(s.iter().map(|s| (s.title.as_str(), s.source)).collect::<Vec<_>>(), [("Scan-0042", "Dateiname"), ("Beobachtungsprobe", "Aufgabentitel im PDF"), ("Infografik-Analyse", "PDF-Titel"), ("Arbeitszettel-2-Beobachtungsprobe", "Überschrift im PDF")]);
+    }
+
+    #[test]
+    fn file_name_is_not_dropped_for_ignored_words() {
+        let s = title_suggestions(&facts("P1.pdf"), &[], &["P1".into()]);
+        assert_eq!(s.first().map(|s| s.title.as_str()), Some("P1"));
+    }
+
+    #[test]
+    fn note_heading_is_an_alternative() {
+        let mut f = facts("notiz.md");
+        f.note_title = Some("Radar Chart".into());
+        let s = title_suggestions(&f, &[], &[]);
+        assert_eq!(s.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["Notiz", "Radar-Chart"]);
     }
 }
