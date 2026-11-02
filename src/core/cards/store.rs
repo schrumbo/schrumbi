@@ -249,7 +249,10 @@ pub fn flush() {
         return;
     }
     if unread && path.exists() {
-        let _ = std::fs::rename(&path, root.join(format!("{STORE_NAME}.unread-{}", now())));
+        let aside = root.join(format!("{STORE_NAME}.unread-{}", now()));
+        if std::fs::hard_link(&path, &aside).is_err() {
+            let _ = std::fs::rename(&path, &aside);
+        }
     }
     if std::fs::rename(tmp, &path).is_ok() {
         let stamp = stamp_of(&path);
