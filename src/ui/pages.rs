@@ -257,7 +257,7 @@ impl Pages {
         }
     }
 
-    fn module_key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn module_key(&mut self, e: &KeyDownEvent, own: bool, cx: &mut Context<Self>) {
         let m = &e.keystroke.modifiers;
         if m.platform || m.control || m.alt {
             return;
@@ -288,7 +288,7 @@ impl Pages {
                 self.module.reveal.set(true);
                 act(cx, |l| l.select(Some(picked)));
             }
-            "space" => {
+            "space" if own => {
                 let Some(picked) = state::read(cx, |l| l.selected().filter(|a| a.module_id == id).map(|a| a.id.clone())) else { return };
                 act(cx, |l| l.toggle_done(&picked));
             }
@@ -315,10 +315,11 @@ impl Pages {
             .group("module-page")
             .when_some(focus, |d, f| d.track_focus(&f))
             .key_context("ModulePage")
-            .on_key_down(move |e: &KeyDownEvent, _, cx| key_view.update(cx, |p, cx| p.module_key(e, cx)))
-            .when_some(self.module.focus.clone(), |d, f| d.on_mouse_down(MouseButton::Left, move |_, window, cx| if !f.contains_focused(window, cx) {
-                window.focus(&f, cx);
-            }))
+            .on_key_down(move |e: &KeyDownEvent, window, cx| {
+                let own = key_view.read(cx).module.focus.as_ref().is_some_and(|f| f.is_focused(window));
+                key_view.update(cx, |p, cx| p.module_key(e, own, cx))
+            })
+            .when_some(self.module.focus.clone(), |d, f| d.on_mouse_down(MouseButton::Left, move |_, window, cx| window.focus(&f, cx)))
             .capture_action(move |_: &super::main_window::Dismiss, window, cx| {
                 let Some(page) = dismiss_view.read(cx).module.focus.clone().filter(|f| f.contains_focused(window, cx) && state::read(cx, |l| l.module_query.is_empty())) else { return };
                 cx.stop_propagation();

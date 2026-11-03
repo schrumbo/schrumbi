@@ -1584,13 +1584,13 @@ impl Library {
         self.changed();
     }
 
-    /// Lets go of what opened the details, as Esc does. Details the user keeps open stay.
     /// Takes the module page's search to all files.
     pub fn widen_module_search(&mut self) {
         self.search_query = std::mem::take(&mut self.module_query);
         self.set_route(Route::Search);
     }
 
+    /// Lets go of what opened the details, as Esc does. Details the user keeps open stay.
     pub fn dismiss_inspector(&mut self) {
         if let Some(kind) = self.inspector_kind() {
             self.release_inspector(kind);

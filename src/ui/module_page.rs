@@ -32,6 +32,10 @@ const DONE_TINT: f32 = 0.1;
 const TWO_COLUMNS: f32 = 740.;
 /// From this page width the side column gets its full width.
 const WIDE_RAIL: f32 = 1000.;
+/// Side column width from `WIDE_RAIL` on.
+const RAIL: f32 = 300.;
+/// Side column width between `TWO_COLUMNS` and `WIDE_RAIL`.
+const NARROW_RAIL: f32 = 248.;
 
 /// View state of a module page.
 #[derive(Default)]
@@ -247,6 +251,11 @@ fn show_all(id: &'static str, total: usize, all: bool, view: Entity<Pages>, togg
 pub fn follow(lib: &Library, m: &Module, st: &mut ModuleState, now: Instant, reduce_motion: bool) -> Option<String> {
     let ids: Vec<String> = buckets(lib, m).attention.iter().map(|a| a.id.clone()).collect();
     let mut done: Vec<String> = Vec::new();
+    if st.attention.as_ref().is_some_and(|(module, _)| *module != m.id) {
+        st.cursor = None;
+        st.leaving.clear();
+        st.done_at = None;
+    }
     if let Some((module, before)) = &st.attention
         && *module == m.id
     {
@@ -263,14 +272,16 @@ pub fn follow(lib: &Library, m: &Module, st: &mut ModuleState, now: Instant, red
     let rows = deadline_order(lib, m, st);
     let selected = lib.selected().filter(|a| a.module_id == m.id)?.id.clone();
     let at = rows.iter().position(|r| *r == selected);
-    let left = done.contains(&selected) || (at.is_none() && lib.assignment(&selected).is_some_and(|a| lib.is_done(a)));
+    let left = done.contains(&selected);
     match (at, &st.cursor) {
         (Some(i), _) if !left => {
             st.cursor = Some((selected, i));
             None
         }
         (_, Some((id, i))) if left && *id == selected && !rows.is_empty() => {
-            let i = (*i).min(rows.len() - 1);
+            let last = rows.len() - 1;
+            let i = (*i).min(last);
+            let i = if rows[i] != selected { i } else if i < last { i + 1 } else { i.saturating_sub(1) };
             st.cursor = Some((rows[i].clone(), i));
             st.reveal.set(true);
             Some(rows[i].clone())
@@ -316,7 +327,7 @@ pub fn deadlines(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     if !attention.is_empty() {
         col = col.child(div().flex().items_center().gap(px(space::S)).mt(px(space::S)).py(px(space::XS)).font_weight(FontWeight::SEMIBOLD).text_color(t.red).child(icon("circle-alert", iconsize::XS, t.red)).child(tr("Braucht Aufmerksamkeit")));
         for (a, leaving) in attention {
-            col = col.child(div().mx(px(-space::S)).child(motion::reveal(SharedString::from(format!("attention-{}", a.id)), !leaving, div().w_full().px(px(space::S)).child(entry(lib, a, st, view.clone(), t)))));
+            col = col.child(div().mx(px(-space::S)).child(motion::reveal(SharedString::from(format!("attention-{}", a.id)), !leaving, div().w_full().relative().px(px(space::S)).child(entry(lib, a, st, view.clone(), t)).when(leaving, |d| d.child(div().absolute().inset_0().occlude())))));
         }
     }
     for (week, entries) in b.weeks {
@@ -378,7 +389,10 @@ pub fn header(lib: &Library, m: &Module, width: f32, t: &Theme) -> Div {
         .child(Button::new("module-file").small().primary().icon(menu_icon("inbox")).when(!compact, |b| b.label(tr("Ablegen"))).tooltip(trf("Dateien in %@ ablegen (F)", &[&file_code])).on_click(move |_, _, cx| super::platform::pick_files_for_filing(next_entry.clone(), cx)))
         .child(Button::new("module-more").small().ghost().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, _, _| {
             let (reveal, edit_id) = (reveal.clone(), edit_id.clone());
-            menu.item(PopupMenuItem::new(tr("Neuer Eintrag…")).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)))
+            menu.item(PopupMenuItem::new(format!("{}{}", tr("Neuer Eintrag…"), crate::core::shortcuts::ShortcutAction::NewEntry.hint())).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| {
+                l.quick_add_kind = Some(Kind::Submission);
+                l.show_quick_add = true;
+            })))
                 .item(PopupMenuItem::new(tr("Modulordner öffnen")).icon(menu_icon("folder")).on_click(move |_, _, _| library::open_folder(&reveal)))
                 .separator()
                 .item(PopupMenuItem::new(tr("Modul bearbeiten")).icon(menu_icon("settings")).on_click(move |_, _, cx| super::settings::open_module(&edit_id, cx)))
@@ -445,7 +459,7 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
         grouped(t).child(deadlines(lib, m, st, view, t)).into_any_element()
     };
     let title = div().flex().items_center().gap(px(space::S)).child(section_title(tr("Abgaben"))).when(waiting > 0, |d| {
-        d.child(div().id("module-attention").flex_none().min_w(px(iconsize::M)).px(px(space::XS)).rounded_full().bg(t.red).flex().items_center().justify_center().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).font_features(tabular()).text_color(white()).child(waiting.to_string()).tooltip(tip(tr("Braucht Aufmerksamkeit"))))
+        d.child(div().id("module-attention").flex_none().min_w(px(iconsize::M)).px(px(space::XS)).rounded_full().bg(t.badge_fill(t.red)).flex().items_center().justify_center().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).font_features(tabular()).text_color(white()).child(waiting.to_string()).tooltip(tip(tr("Braucht Aufmerksamkeit"))))
     });
     let add = (all > 0).then(|| more_link("add-entry", tr("Neuer Eintrag…"), t).tooltip(tip(format!("{}{}", tr("Abgabe, Aufgabe oder Prüfung eintragen"), crate::core::shortcuts::ShortcutAction::NewEntry.hint()))).on_click(move |_, _, cx| add_submission(cx)));
     let folder = lib.root.as_ref().map(|r| r.join(&m.folder)).unwrap_or_default();
@@ -600,8 +614,8 @@ pub fn overview(lib: &Library, m: &Module, width: f32, st: &ModuleState, view: E
         div().id("module-add-details").cursor_pointer().key_nav().text_size(px(font::CALLOUT)).text_color(t.secondary).hover({ let c = t.primary; move |s| s.text_color(c) }).child(tr("Termine, Links und Noten in den Moduleinstellungen ergänzen")).on_click(move |_, _, cx| super::settings::open_module(&edit_id, cx))
     });
     let body = if wide {
-        let rail_width = if width >= WIDE_RAIL { 300. } else { 248. };
-        div().flex().items_start().gap(px(if width >= WIDE_RAIL { space::XXL } else { space::XL })).child(div().flex_1().min_w_0().child(main)).children(rail.map(|r| div().w(px(rail_width)).flex_none().child(r)))
+        let (rail_width, gap) = if width >= WIDE_RAIL { (RAIL, space::XXL) } else { (NARROW_RAIL, space::XL) };
+        div().flex().items_start().gap(px(gap)).child(div().flex_1().min_w_0().child(main)).children(rail.map(|r| div().w(px(rail_width)).flex_none().child(r)))
     } else {
         div().flex().flex_col().gap(px(space::XL)).child(main).children(rail)
     };
@@ -665,6 +679,23 @@ mod tests {
         lib.toggle_done(&rows[0]);
         assert_eq!(follow(&lib, &m, &mut st, now, true), Some(rows[1].clone()));
         assert!(st.leaving.is_empty());
+    }
+
+    #[test]
+    fn a_done_row_out_of_view_keeps_its_selection() {
+        let mut lib = module_lib("folded");
+        let m = lib.module_by_id("m0").cloned().unwrap();
+        let mut st = ModuleState { show_past: true, ..Default::default() };
+        let now = Instant::now();
+        let first = deadline_order(&lib, &m, &st)[0].clone();
+        lib.toggle_done(&first);
+        follow(&lib, &m, &mut st, now, true);
+        assert!(deadline_order(&lib, &m, &st).contains(&first));
+        lib.select(Some(first.clone()));
+        follow(&lib, &m, &mut st, now, true);
+        st.show_past = false;
+        assert_eq!(follow(&lib, &m, &mut st, now, true), None);
+        assert_eq!(lib.selected().map(|a| a.id.clone()), Some(first));
     }
 
     #[test]

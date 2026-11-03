@@ -80,10 +80,10 @@ pub fn menu_icon(name: &str) -> Icon {
     Icon::empty().path(SharedString::from(format!("icons/{name}.svg")))
 }
 
-/// How long after a right click tooltips stay away, so none covers the context menu that just opened.
 /// Accent strength behind a selected list row, clearly apart from the grey hover.
 pub const SELECTED_ROW: f32 = 0.2;
 
+/// How long after a right click tooltips stay away, so none covers the context menu that just opened.
 const TOOLTIP_PAUSE: std::time::Duration = std::time::Duration::from_secs(3);
 
 struct LastRightClick(std::time::Instant);
@@ -545,7 +545,7 @@ pub fn assignment_row_with(lib: &Library, a: &Assignment, show_module: bool, sho
         .rounded(px(radius::INNER))
         .cursor_pointer().key_nav()
         .when(selected, |d| d.bg(t.accent.opacity(SELECTED_ROW)))
-        .when(!selected, |d| d.soft(t.ink.opacity(0.045), radius::INNER))
+        .soft(t.ink.opacity(0.045), radius::INNER)
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(sel.clone()))))
         .on_mouse_down(MouseButton::Right, move |_, _, cx| if !state::read(cx, |l| l.is_selected(&pick)) {
             act(cx, |l| l.select(Some(pick.clone())));

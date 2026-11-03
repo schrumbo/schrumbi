@@ -166,7 +166,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
         };
         let route = e.route.clone();
         let is_inbox = e.route == Route::Inbox;
-        let count = (e.badge > 0).then_some((e.badge, if e.urgent { t.red } else { t.accent }));
+        let count = (e.badge > 0).then_some((e.badge, t.badge_fill(if e.urgent { t.red } else { t.accent })));
         let row = tab(SharedString::from(format!("tab-{:?}", e.route)), active, true, icon(e.icon, iconsize::L, fg).into_any_element(), e.label, count, wide, help, t).on_click(move |_, window, cx| tab_click(route.clone(), window, cx));
         let Some(key) = hide_key else {
             top = top.child(row);
@@ -211,7 +211,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
             .text_color(if active { t.on_fill(color) } else { t.readable(color) })
             .child(code)
             .into_any_element();
-        let count = by_module.get(m.id.as_str()).copied().filter(|n| *n > 0).map(|n| (n, t.red));
+        let count = by_module.get(m.id.as_str()).copied().filter(|n| *n > 0).map(|n| (n, t.badge_fill(t.red)));
         let links: Vec<(String, String)> = m.links.iter().filter_map(|k| k.url().map(|u| (if k.title.is_empty() { tr("Link") } else { k.title.clone() }, u.to_string()))).collect();
         let folder = lib.root.as_ref().map(|r| r.join(&m.folder));
         let (outside, inside, edit_id) = (m.id.clone(), m.id.clone(), m.id.clone());

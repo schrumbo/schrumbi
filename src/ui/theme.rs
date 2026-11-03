@@ -286,6 +286,18 @@ impl Theme {
         if luminance(over(color, color)) > 0.4 { black() } else { white() }
     }
 
+    /// A count badge's fill, deepened until white digits on it read.
+    pub fn badge_fill(&self, color: Hsla) -> Hsla {
+        let mut fill = color;
+        for step in 1..=10 {
+            if contrast(white(), fill) >= 4.5 {
+                break;
+            }
+            fill = color.blend(black().opacity(step as f32 * 0.05));
+        }
+        fill
+    }
+
     /// Module color by palette name, as in the Swift `Palette`.
     pub fn palette(&self, name: &str) -> Hsla {
         if let Some(color) = self.palette_of_theme(name) {
@@ -492,6 +504,16 @@ fn contrast(text: Hsla, background: Hsla) -> f32 {
 mod tests {
     use super::*;
     use gpui_kit::Rgba;
+
+    #[test]
+    fn badge_digits_read_on_every_theme() {
+        for kind in [Kind::Light, Kind::Dark, Kind::Nord, Kind::Dracula] {
+            let t = Theme::new(kind);
+            for color in [t.red, t.accent] {
+                assert!(contrast(white(), t.badge_fill(color)) >= 4.5, "{kind:?}");
+            }
+        }
+    }
 
     #[test]
     fn text_is_readable_on_every_background() {
