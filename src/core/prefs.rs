@@ -200,6 +200,8 @@ pub struct Prefs {
     pub calendar_feed: bool,
     /// Part of the local subscription address, so only who was given it reads the calendar.
     pub calendar_token: String,
+    /// Writes the semester into the calendar „Schrumbi“ in Apple Kalender (macOS).
+    pub apple_calendar: bool,
     /// Calendar addresses to fetch deadlines from, by workspace.
     pub calendar_sources: BTreeMap<String, String>,
     pub sidebar_open: bool,
@@ -267,6 +269,7 @@ impl Default for Prefs {
             pdf_replace_ask: true,
             calendar_feed: false,
             calendar_token: String::new(),
+            apple_calendar: false,
             calendar_sources: BTreeMap::new(),
             sidebar_open: true,
             inspector_pinned: BTreeSet::new(),

@@ -45,6 +45,7 @@ fn main() {
         ui::theme::apply(ui::theme::Kind::Light, None, cx);
         ui::state::init(cx);
         ui::notifications::init(cx);
+        ui::apple_calendar::init(cx);
         ui::updates::init(cx);
         ui::sync::init(cx);
         ui::history::init(cx);

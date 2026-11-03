@@ -87,6 +87,9 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("benachrichtigung", "Mitteilungen vor Deadlines"),
     ("notification", "Mitteilungen vor Deadlines"),
     ("ics", "Kalenderdatei aktuell halten"),
+    ("apple", "Mit Apple Kalender abgleichen"),
+    ("icloud", "Mit Apple Kalender abgleichen"),
+    ("iphone", "Mit Apple Kalender abgleichen"),
     ("outlook", "Im Kalender zeigen"),
     ("thunderbird", "Im Kalender zeigen"),
     ("google", "Im Kalender zeigen"),
@@ -145,6 +148,7 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Erinnern", Tab::General),
     ("Zusätzlich am Vortag (Pflichtabgaben)", Tab::General),
     ("Kalenderdatei aktuell halten", Tab::General),
+    ("Mit Apple Kalender abgleichen", Tab::General),
     ("Adresse", Tab::General),
     ("Kalender abonnieren", Tab::General),
     ("Im Kalender zeigen", Tab::General),
@@ -390,6 +394,39 @@ fn section(title: Option<String>, footer: Option<String>, rows: Vec<AnyElement>,
         .when_some(footer, |d, f| d.child(div().px(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(f)))
 }
 
+/// How the Apple calendar stands, with the one button that helps.
+fn apple_calendar_row(t: &Theme) -> AnyElement {
+    use super::apple_calendar::{self as apple, State};
+    let open = || Some(Button::new("apple-cal-open").small().label(tr("Kalender öffnen")).on_click(|_, _, _| apple::open_calendar_app()));
+    let settings = |id: &'static str| Some(Button::new(id).small().label(tr("Systemeinstellungen öffnen")).on_click(|_, _, _| apple::open_privacy_settings()));
+    let (mark, label, button) = match apple::state() {
+        State::Off => (Some(("circle-dashed", t.secondary)), tr("Wartet auf deinen Studienordner"), None),
+        State::Working => (None, tr("Gleicht ab …"), None),
+        State::Asking => (None, tr("Warte auf deine Erlaubnis …"), None),
+        State::Synced(0) => (Some(("circle-check", t.green)), tr("Noch keine Termine in diesem Semester"), None),
+        State::Synced(1) => (Some(("circle-check", t.green)), tr("1 Termin im Kalender „Schrumbi“"), open()),
+        State::Synced(n) => (Some(("circle-check", t.green)), trf("%lld Termine im Kalender „Schrumbi“", &[&n]), open()),
+        State::Denied => (Some(("circle-alert", t.orange)), tr("Kein Zugriff auf deine Kalender"), settings("apple-cal-allow")),
+        State::Restricted => (Some(("circle-alert", t.orange)), tr("Kalenderzugriff ist auf diesem Mac gesperrt"), settings("apple-cal-restricted")),
+        State::Unavailable => (Some(("circle-alert", t.secondary)), tr("Nur in der installierten Schrumbi-App"), None),
+        State::Failed(e) => (Some(("circle-alert", t.orange)), trf("Abgleich fehlgeschlagen: %@", &[&e]), Some(Button::new("apple-cal-retry").small().label(tr("Erneut versuchen")).on_click(|_, _, _| apple::recheck()))),
+    };
+    let indicator = match mark {
+        Some((name, color)) => icon(name, iconsize::S, color).into_any_element(),
+        None => motion::loading(iconsize::S, t.secondary).into_any_element(),
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(space::M))
+        .px(px(space::L))
+        .min_h(px(control::ROW))
+        .py(px(space::S))
+        .child(div().flex_1().min_w_0().flex().items_center().gap(px(space::S)).text_color(t.primary).child(div().flex_none().child(indicator)).child(div().id("apple-cal-state").min_w_0().truncate().child(label.clone()).tooltip(tip(label))))
+        .children(button.map(|b| div().flex_none().max_w(px(control::ROW_CONTROL)).child(b)))
+        .into_any_element()
+}
+
 fn row(label: impl Into<SharedString>, control: impl IntoElement, t: &Theme) -> AnyElement {
     let label: SharedString = label.into();
     let key = label.to_string();
@@ -585,6 +622,9 @@ impl Settings {
         let mut scored: Vec<(u8, Hit)> = Vec::new();
         let convention = state::read(cx, |l| l.config.as_ref().is_none_or(StudyConfig::naming_convention));
         for (key, tab) in SEARCHABLE {
+            if !super::apple_calendar::AVAILABLE && *key == "Mit Apple Kalender abgleichen" {
+                continue;
+            }
             let label = tr(key);
             let folded = fold(&label);
             let score = if folded.starts_with(&query) {
@@ -945,12 +985,29 @@ impl Settings {
         } else {
             tr("Thunderbird: Neuer Kalender → Im Netzwerk, Adresse einfügen. GNOME Kalender und Evolution: Neuer Kalender → Aus dem Web. KDE Merkuro: Kalender hinzufügen → iCal-Datei, dort die Datei wählen.")
         };
-        let mut outgoing_rows = vec![row(tr("Kalenderdatei aktuell halten"), Switch::new("g-cal").checked(feed_on).on_click(|v, _, cx| {
+        let mut outgoing_rows = Vec::new();
+        if super::apple_calendar::AVAILABLE {
+            let sync_on = p.apple_calendar;
+            outgoing_rows.push(row(tr("Mit Apple Kalender abgleichen"), Switch::new("g-apple-cal").checked(sync_on).on_click(|v, _, cx| {
+                let v = *v;
+                prefs::update(|p| p.apple_calendar = v);
+                if v {
+                    super::apple_calendar::push(cx);
+                } else {
+                    super::apple_calendar::turn_off();
+                }
+                cx.refresh_windows();
+            }), t));
+            if sync_on {
+                outgoing_rows.push(apple_calendar_row(t));
+            }
+        }
+        outgoing_rows.push(row(tr("Kalenderdatei aktuell halten"), Switch::new("g-cal").checked(feed_on).on_click(|v, _, cx| {
             let v = *v;
             prefs::update(|p| p.calendar_feed = v);
             state::sync_reminders(cx);
             cx.refresh_windows();
-        }), t)];
+        }), t));
         if feed_on {
             let (open_file, reveal_file) = (feed_file.clone(), feed_file.clone());
             outgoing_rows.push(row(tr("Abonnieren oder importieren"), div().flex().gap(px(space::S))
@@ -967,7 +1024,11 @@ impl Settings {
         }
         let calendar = section(
             Some(tr("Im Kalender zeigen")),
-            Some(format!("{} {} {}", tr("Abgaben, Prüfungen und Termine erscheinen in deiner Kalender-App."), how, tr("Die Adresse gilt auf diesem Computer, solange Schrumbi läuft; die App behält den letzten Stand. Fürs Handy oder Google Kalender braucht es eine Adresse im Netz, etwa den Freigabelink der Datei aus Dropbox."))),
+            Some(if super::apple_calendar::AVAILABLE {
+                format!("{} {} {} {}", tr("Abgaben, Prüfungen und Termine erscheinen in deiner Kalender-App."), tr("Der Abgleich trägt sie in den Kalender „Schrumbi“ ein, über iCloud auch auf dem iPhone; deine eigenen Termine bleiben unberührt."), how, tr("Die Adresse gilt auf diesem Computer, solange Schrumbi läuft."))
+            } else {
+                format!("{} {} {}", tr("Abgaben, Prüfungen und Termine erscheinen in deiner Kalender-App."), how, tr("Die Adresse gilt auf diesem Computer, solange Schrumbi läuft; die App behält den letzten Stand. Fürs Handy oder Google Kalender braucht es eine Adresse im Netz, etwa den Freigabelink der Datei aus Dropbox."))
+            }),
             outgoing_rows,
             t,
         );

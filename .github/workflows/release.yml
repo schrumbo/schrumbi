@@ -80,6 +80,7 @@ jobs:
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp target/release/schrumbi "$APP/Contents/MacOS/"
           cp packaging/icons/schrumbi.icns "$APP/Contents/Resources/"
+          cp -R packaging/macos/en.lproj "$APP/Contents/Resources/"
           sed "s/VERSION/$VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
           codesign --force --deep --sign - "$APP"
           ln -s /Applications dist/Applications

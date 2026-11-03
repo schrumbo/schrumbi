@@ -24,6 +24,10 @@
 	<string>public.app-category.education</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Schrumbi trägt Abgaben, Prüfungen und Stundenplan in den Kalender „Schrumbi“ ein und hält sie aktuell. Andere Kalender bleiben unberührt.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Schrumbi trägt Abgaben, Prüfungen und Stundenplan in den Kalender „Schrumbi“ ein und hält sie aktuell. Andere Kalender bleiben unberührt.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>de</string>
 	<key>CFBundleLocalizations</key>

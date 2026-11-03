@@ -45,6 +45,23 @@ Events land in the matching module if its code or name appears in the course. Ot
 - {key:OpenSettings} → {ui:Allgemein} → {ui:Kalenderdatei aktuell halten} maintains `Schrumbi-Kalender.ics` in your folder. Your calendar app can subscribe to it.
 - Under {ui:Kalender abonnieren} you paste the Moodle address. New deadlines then arrive by themselves.
 
+### Apple Calendar (Mac)
+
+{ui:Mit Apple Kalender abgleichen} puts the current semester's deadlines and timetable into the calendar Schrumbi. Through iCloud they also show up on your iPhone.
+
+| In Schrumbi | In the calendar |
+|---|---|
+| Deadline added or moved | Event appears or moves along |
+| Deadline done | ✓ before the title, no more alert |
+| Deadline deleted, rule changed | Event disappears or changes |
+| Lecture period ends | Timetable and past deadlines go, the next semester comes, open exams stay |
+| Sync turned off | Schrumbi's events go, the empty calendar stays |
+
+- Alerts in the calendar follow {ui:Erinnern}.
+- Events you add yourself, also in the calendar Schrumbi, and all other calendars stay untouched.
+- The first time you turn it on, macOS asks for access. Denied: {ui:Systemeinstellungen öffnen} leads to Privacy → Calendars.
+- If you already subscribed to the calendar file, remove that subscription, or everything shows up twice.
+
 ## Clean Up
 
 {key:GoChecks} collects what is wrong. The area only appears when there is something.

@@ -45,6 +45,23 @@ Termine landen beim passenden Modul, wenn Kürzel oder Name im Kurs stehen. Im F
 - {key:OpenSettings} → {ui:Allgemein} → {ui:Kalenderdatei aktuell halten} pflegt `Schrumbi-Kalender.ics` in deinem Ordner. Deine Kalender-App kann sie abonnieren.
 - Unter {ui:Kalender abonnieren} fügst du die Moodle-Adresse ein. Neue Fristen kommen dann von selbst.
 
+### Apple Kalender (Mac)
+
+{ui:Mit Apple Kalender abgleichen} trägt Abgaben und Stundenplan des laufenden Semesters in den Kalender Schrumbi ein. Über iCloud erscheinen sie auch auf dem iPhone.
+
+| In Schrumbi | Im Kalender |
+|---|---|
+| Abgabe angelegt oder verschoben | Termin kommt dazu oder wandert mit |
+| Abgabe erledigt | ✓ vor dem Titel, keine Erinnerung mehr |
+| Abgabe gelöscht, Regel geändert | Termin verschwindet oder ändert sich |
+| Vorlesungszeit endet | Stundenplan und vergangene Abgaben gehen, das nächste Semester kommt, offene Prüfungen bleiben |
+| Abgleich ausgeschaltet | Schrumbis Termine gehen, der leere Kalender bleibt |
+
+- Erinnerungen im Kalender folgen {ui:Erinnern}.
+- Termine, die du selbst anlegst, auch im Kalender Schrumbi, und alle anderen Kalender bleiben unberührt.
+- Beim ersten Einschalten fragt macOS nach dem Zugriff. Abgelehnt: {ui:Systemeinstellungen öffnen} führt zu Datenschutz → Kalender.
+- Hast du die Kalenderdatei schon abonniert, entferne das Abo, sonst steht alles doppelt da.
+
 ## Aufräumen
 
 {key:GoChecks} sammelt, was nicht stimmt. Der Bereich erscheint nur, wenn es etwas gibt.
