@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::cell::OnceCell;
 use std::rc::Rc;
 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -133,8 +134,8 @@ fn key_text(name: &str, cx: &App) -> Option<String> {
 
 enum Item {
     Head,
-    Text { note: Rc<ParsedNote>, section: usize },
-    Example { index: usize, title: String, source: String, note: Rc<ParsedNote>, folds: Folds },
+    Text { text: String, note: OnceCell<Rc<ParsedNote>>, section: usize },
+    Example { index: usize, title: String, source: String, note: OnceCell<Rc<ParsedNote>>, folds: Folds },
     Foot,
 }
 
@@ -143,6 +144,7 @@ pub struct Help {
     focus: FocusHandle,
     rows: Vec<FocusHandle>,
     pages: ScrollHandle,
+    results: ScrollHandle,
     search: Entity<InputState>,
     docs: Vec<Doc>,
     expanded: Vec<String>,
@@ -172,6 +174,7 @@ impl Help {
                 InputEvent::Change => {
                     h.hit = 0;
                     h.hits = docs::search(&h.docs, h.search.read(cx).value().trim());
+                    h.results.set_offset(point(px(0.), px(0.)));
                 }
                 InputEvent::PressEnter { .. } => h.open_hit(h.hit, window, cx),
                 _ => {}
@@ -189,6 +192,7 @@ impl Help {
             focus: cx.focus_handle(),
             rows: PAGES.iter().map(|_| cx.focus_handle().tab_index(0)).collect(),
             pages: ScrollHandle::new(),
+            results: ScrollHandle::new(),
             search,
             docs,
             expanded,
@@ -223,10 +227,10 @@ impl Help {
             starts.push(items.len());
             for piece in &section.pieces {
                 items.push(match piece {
-                    Piece::Text(text) => Item::Text { note: Rc::new(markdown_view::parse(text)), section: s },
+                    Piece::Text(text) => Item::Text { text: text.clone(), note: OnceCell::new(), section: s },
                     Piece::Example { title, source } => {
                         example += 1;
-                        Item::Example { index: example - 1, title: title.clone(), source: source.clone(), note: Rc::new(markdown_view::parse(&sample_links(source))), folds: Folds::default() }
+                        Item::Example { index: example - 1, title: title.clone(), source: source.clone(), note: OnceCell::new(), folds: Folds::default() }
                     }
                 });
             }
@@ -314,6 +318,7 @@ impl Help {
 
     fn step_hit(&mut self, by: isize, cx: &mut Context<Self>) -> bool {
         self.hit = self.hit.saturating_add_signed(by).min(self.hits.len().saturating_sub(1));
+        self.results.scroll_to_item(self.hit + 1);
         cx.notify();
         true
     }
@@ -359,9 +364,11 @@ impl Help {
             "down" | "up" if row.is_some() => {
                 let from = row.unwrap_or(self.page);
                 let to = if k.key == "down" { (from + 1).min(PAGES.len() - 1) } else { from.saturating_sub(1) };
-                self.clear_search(window, cx);
-                window.focus(&self.rows[to], cx);
-                self.go(to, None, cx);
+                if to != from {
+                    self.clear_search(window, cx);
+                    window.focus(&self.rows[to], cx);
+                    self.go(to, None, cx);
+                }
                 true
             }
             "f" if secondary => {
@@ -399,6 +406,7 @@ impl Help {
             }
             "down" => self.scroll(px(STEP)),
             "up" => self.scroll(px(-STEP)),
+            "home" | "end" if self.searching(cx) => self.step_hit(if k.key == "home" { isize::MIN } else { isize::MAX }, cx),
             "pagedown" => self.scroll(self.page_height()),
             "space" if !k.modifiers.shift => self.scroll(self.page_height()),
             "pageup" | "space" => self.scroll(-self.page_height()),
@@ -482,8 +490,8 @@ impl Help {
             return unavailable("search", tr("Keine Treffer"), trf("Nichts zu „%@“. Versuch ein anderes Wort, zum Beispiel Karten, Sync oder Tabelle.", &[&query]), t).into_any_element();
         }
         let selected = self.hit.min(self.hits.len() - 1);
-        let mut rows = div().w_full().max_w(px(MEASURE)).flex().flex_col().gap(px(space::XXS));
-        rows = rows.child(div().px(px(space::M)).pb(px(space::S)).child(caption(if self.hits.len() == 1 { tr("1 Treffer") } else { trf("%lld Treffer", &[&self.hits.len()]) }, t)));
+        let mut rows = div().id("help-results").track_scroll(&self.results).size_full().overflow_y_scrollbar().pt(px(if super::chrome::CUSTOM { space::XL } else { TOP })).px(px(space::XL)).pb(px(space::XL)).flex().flex_col().items_center().gap(px(space::XXS));
+        rows = rows.child(div().w_full().max_w(px(MEASURE)).px(px(space::M)).pb(px(space::S)).child(caption(if self.hits.len() == 1 { tr("1 Treffer") } else { trf("%lld Treffer", &[&self.hits.len()]) }, t)));
         for (i, hit) in self.hits.iter().enumerate() {
             let page = &PAGES[hit.page];
             let title = self.docs[hit.page].title.clone();
@@ -495,6 +503,8 @@ impl Help {
             rows = rows.child(
                 div()
                     .id(("help-hit", i))
+                    .w_full()
+                    .max_w(px(MEASURE))
                     .w_full()
                     .flex()
                     .gap(px(space::M))
@@ -520,7 +530,7 @@ impl Help {
                     .on_click(cx.listener(move |h, _, window, cx| h.open_hit(i, window, cx))),
             );
         }
-        div().id("help-results").size_full().overflow_y_scrollbar().pt(px(if super::chrome::CUSTOM { space::XL } else { TOP })).px(px(space::XL)).pb(px(space::XL)).flex().justify_center().child(rows).into_any_element()
+        rows.into_any_element()
     }
 
     fn head(&self, t: &Theme) -> AnyElement {
@@ -575,7 +585,8 @@ impl Help {
         let body = match &self.items[ix] {
             Item::Head => self.head(&t),
             Item::Foot => self.foot(&t, cx),
-            Item::Text { note, section } => {
+            Item::Text { text, note, section } => {
+                let note = note.get_or_init(|| Rc::new(markdown_view::parse(text)));
                 let lit = self.flash == Some((self.page, *section)) && self.starts.get(*section) == Some(&ix);
                 let starts_section = *section > 0 && self.starts.get(*section) == Some(&ix);
                 let shown = div().pb(px(space::M)).when(starts_section, |d| d.pt(px(space::L))).child(markdown_view::render(note, Some(&base), None, &t));
@@ -594,6 +605,7 @@ impl Help {
                 }
             }
             Item::Example { index, title, source, note, folds } => {
+                let note = note.get_or_init(|| Rc::new(markdown_view::parse(&sample_links(source))));
                 let key = (self.page, *index);
                 let (index, entity) = (*index, cx.entity().downgrade());
                 let copy_entity = entity.clone();
@@ -627,6 +639,7 @@ fn sample_links(source: &str) -> String {
 
 impl Render for Help {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        super::perf::frame_start();
         if window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
         }
@@ -657,7 +670,7 @@ impl Render for Help {
             }))
             .child(self.sidebar(&t, cx))
             .child(div().flex_1().min_w_0().h_full().child(body));
-        super::chrome::frame(tr("Schrumbi-Anleitung"), content, &t)
+        super::chrome::frame(tr("Schrumbi-Anleitung"), super::perf::frame_end(content), &t)
     }
 }
 

@@ -85,6 +85,26 @@ pub struct Section {
 pub struct Doc {
     pub title: String,
     pub sections: Vec<Section>,
+    title_forms: String,
+    index: Vec<Indexed>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Indexed {
+    heading: Option<String>,
+    body: String,
+    forms: String,
+}
+
+fn indexed(section: &Section) -> Indexed {
+    let prose = |piece: &Piece| match piece {
+        Piece::Text(t) => plain(&t.lines().filter(|l| !l.starts_with("## ")).collect::<Vec<_>>().join("\n")),
+        Piece::Example { title, .. } => title.clone(),
+    };
+    let body = section.pieces.iter().map(prose).filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" ");
+    let sources = section.pieces.iter().filter_map(|p| if let Piece::Example { source, .. } = p { Some(plain(source)) } else { None }).collect::<Vec<_>>().join(" ");
+    let forms = simple(&format!("{body} {sources}"));
+    Indexed { heading: section.heading.as_deref().map(simple), body, forms }
 }
 
 const FENCE: &str = "````example";
@@ -139,7 +159,8 @@ pub fn split(source: &str) -> Doc {
     if sections[0].pieces.is_empty() && sections.len() > 1 {
         sections.remove(0);
     }
-    Doc { title, sections }
+    let index = sections.iter().map(indexed).collect();
+    Doc { title_forms: simple(&title), title, sections, index }
 }
 
 static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{(key|ui):([^{}\n]+)\}").expect("placeholder pattern"));
@@ -303,22 +324,16 @@ pub fn search(docs: &[Doc], query: &str) -> Vec<Hit> {
     let wanted: Vec<Vec<String>> = words.iter().map(|w| variants(w)).collect();
     let mut hits: Vec<(u32, Hit)> = Vec::new();
     for (p, doc) in docs.iter().enumerate() {
-        let title = simple(&doc.title);
-        for (s, section) in doc.sections.iter().enumerate() {
-            let heading = section.heading.as_deref().map(simple);
-            let prose = |piece: &Piece| match piece {
-                Piece::Text(t) => plain(&t.lines().filter(|l| !l.starts_with("## ")).collect::<Vec<_>>().join("\n")),
-                Piece::Example { title, .. } => title.clone(),
-            };
-            let body = section.pieces.iter().map(prose).filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" ");
-            let sources = section.pieces.iter().filter_map(|p| if let Piece::Example { source, .. } = p { Some(plain(source)) } else { None }).collect::<Vec<_>>().join(" ");
-            let body_forms = simple(&format!("{body} {sources}"));
+        let title = &doc.title_forms;
+        for (s, (section, found)) in doc.sections.iter().zip(&doc.index).enumerate() {
+            let heading = found.heading.as_ref();
+            let body_forms = &found.forms;
             let mut score = 0;
             let mut all = true;
             for w in &wanted {
-                let in_title = contains(&title, w);
-                let in_heading = heading.as_ref().is_some_and(|h| contains(h, w));
-                let in_body = contains(&body_forms, w);
+                let in_title = contains(title, w);
+                let in_heading = heading.is_some_and(|h| contains(h, w));
+                let in_body = contains(body_forms, w);
                 if !(in_title || in_heading || in_body) {
                     all = false;
                     break;
@@ -328,11 +343,11 @@ pub fn search(docs: &[Doc], query: &str) -> Vec<Hit> {
             if !all {
                 continue;
             }
-            if s == 0 && wanted.iter().all(|w| contains(&title, w)) {
+            if s == 0 && wanted.iter().all(|w| contains(title, w)) {
                 score += 8;
             }
-            let text = if body.is_empty() { section.heading.clone().unwrap_or_default() } else { body };
-            let (snippet, marks) = snippet(&text, &words);
+            let text = if found.body.is_empty() { section.heading.as_deref().unwrap_or_default() } else { &found.body };
+            let (snippet, marks) = snippet(text, &words);
             hits.push((score, Hit { page: p, section: s, heading: section.heading.clone(), snippet, marks }));
         }
     }

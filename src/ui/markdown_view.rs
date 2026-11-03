@@ -1522,7 +1522,7 @@ fn embed(src: &str, alt: &str, cx: &Ctx) -> AnyElement {
     let vault = index::current();
     let from = from_note(cx.base);
     let beside = cx.base.map(|b| b.join(&target.path)).filter(|p| !target.path.is_empty() && p.is_file());
-    let Some(path) = beside.or_else(|| vault.resolver.resolve(&target, from.as_deref())) else { return missing_embed(&target.path, cx) };
+    let Some(path) = beside.or_else(|| vault.resolver.resolve(&target, from.as_deref()).filter(|_| !cx.base.is_some_and(super::help::is_sample))) else { return missing_embed(&target.path, cx) };
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     if IMAGE_TYPES.contains(&ext.as_str()) {
         return image_at(path, alt, &decoded, cx);
