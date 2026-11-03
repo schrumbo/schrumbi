@@ -1469,7 +1469,7 @@ impl Render for PdfView {
             self.restore_position();
             self.geo.tops.clear();
         }
-        let scale = self.geo.scale;
+        let scale = if self.geo.tops.is_empty() { 0. } else { self.geo.scale };
         self.update_geometry(view);
         if scale > 0. && (self.geo.scale - scale).abs() >= 0.0005 {
             self.hold_sharp(cx);

@@ -32,6 +32,8 @@ pub struct Pages {
     docs: std::collections::HashMap<std::path::PathBuf, AnyView>,
     version_pane: Option<Entity<super::history::VersionPane>>,
     notes_page: Option<Entity<super::notes_page::NotesPage>>,
+    /// The route shown last and when it came: while the page fades in, the explorer is drawn fresh each frame.
+    shown_route: Option<(Route, std::time::Instant)>,
     graph_page: Option<Entity<super::graph_view::GraphView>>,
     cards_page: Option<Entity<super::cards_page::CardsPage>>,
     cards_shown: bool,
@@ -92,6 +94,9 @@ impl Pages {
                     let l = lib.read(cx);
                     (l.search_query.clone(), l.module_query.clone(), l.route().clone())
                 };
+                if this.shown_route.as_ref().is_none_or(|(r, _)| *r != route) {
+                    this.shown_route = Some((route.clone(), std::time::Instant::now()));
+                }
                 this.search.update(cx, |b, cx| b.set_query(&query, cx));
                 if let Route::Module(id) = route {
                     this.module_files.update(cx, |b, cx| {
@@ -137,6 +142,7 @@ impl Pages {
             docs: Default::default(),
             version_pane: None,
             notes_page: None,
+            shown_route: Some((lib.read(cx).route().clone(), std::time::Instant::now())),
             graph_page: None,
             cards_page: None,
             cards_shown: false,
@@ -387,9 +393,11 @@ impl Pages {
         }
         let page = self.notes_page.get_or_insert_with(|| cx.new(|cx| super::notes_page::NotesPage::new(window, cx))).clone();
         let shown = Self::explorer_shown(width);
+        let fading = self.shown_route.as_ref().is_none_or(|(_, at)| at.elapsed() <= super::motion::timed(super::motion::FAST, cx) + super::motion::FAST);
         let mut slot = div().w(px(page.read(cx).outer_width())).h_full().flex_none();
         let slot = slot.style().clone();
-        div().size_full().flex().when(shown, |d| d.child(page.cached(slot))).child(div().flex_1().min_w_0().h_full().overflow_hidden().child(body)).into_any_element()
+        let explorer = if fading { page.into_any_element() } else { page.cached(slot).into_any_element() };
+        div().size_full().flex().when(shown, |d| d.child(explorer)).child(div().flex_1().min_w_0().h_full().overflow_hidden().child(body)).into_any_element()
     }
 
     fn document(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {

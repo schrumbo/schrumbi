@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -47,7 +47,7 @@ enum Row {
 }
 
 /// Folders and their contents, worked out once per vault state.
-#[derive(Default)]
+#[derive(Default, Clone, PartialEq, Debug)]
 struct Tree {
     folders: BTreeMap<String, BTreeSet<String>>,
     files: BTreeMap<String, Vec<PathBuf>>,
@@ -60,7 +60,7 @@ type Generation = (u64, u64);
 #[derive(PartialEq)]
 struct Key {
     generation: Generation,
-    tree: Option<Generation>,
+    tree: Option<u64>,
     filter: String,
     view: View,
     order: Order,
@@ -76,31 +76,99 @@ struct Cache {
     loading: bool,
 }
 
+/// A worked-out file tree and the vault list it came from.
+#[derive(Clone)]
+struct Ready {
+    generation: Generation,
+    source: Arc<index::VaultIndex>,
+    tree: Arc<Tree>,
+    serial: u64,
+}
+
 /// The file tree last worked out, and the one being worked out off the UI thread.
 #[derive(Default)]
 struct Trees {
-    ready: Option<(Generation, Arc<Tree>)>,
+    ready: Option<Ready>,
     building: Option<Generation>,
     job: Option<Task<()>>,
+    serial: u64,
 }
 
 impl Global for Trees {}
 
+/// Most changes of the vault list are a few moved files: those are applied to the last tree at once.
+const PATCHED_AT_MOST: usize = 64;
+
+/// The files that left and the files that came between two vault lists, when there are only a few.
+fn changed_files(before: &[PathBuf], after: &[PathBuf]) -> Option<(Vec<PathBuf>, Vec<PathBuf>)> {
+    let (mut gone, mut came) = (Vec::new(), Vec::new());
+    let (mut i, mut j) = (0, 0);
+    while i < before.len() && j < after.len() {
+        if before[i] == after[j] {
+            i += 1;
+            j += 1;
+        } else if before.get(i + 1) == Some(&after[j]) {
+            gone.push(before[i].clone());
+            i += 1;
+        } else if after.get(j + 1) == Some(&before[i]) {
+            came.push(after[j].clone());
+            j += 1;
+        } else {
+            gone.push(before[i].clone());
+            came.push(after[j].clone());
+            i += 1;
+            j += 1;
+        }
+        if gone.len() + came.len() > PATCHED_AT_MOST {
+            return None;
+        }
+    }
+    gone.extend(before[i..].iter().cloned());
+    came.extend(after[j..].iter().cloned());
+    let both: Vec<PathBuf> = gone.iter().filter(|p| came.contains(p)).cloned().collect();
+    gone.retain(|p| !both.contains(p));
+    came.retain(|p| !both.contains(p));
+    (gone.len() + came.len() <= PATCHED_AT_MOST).then_some((gone, came))
+}
+
 /// Works out the file tree for the current vault state in the background, so the notes room never waits for it.
+/// A few moved files are applied to the last tree right away, so a rename never shows the old name.
 pub fn prepare_tree(cx: &mut App) {
     let vault = index::current();
     let hidden = index::hidden();
     let generation = (vault.generation, hidden.generation);
-    if cx.try_global::<Trees>().is_some_and(|t| t.building == Some(generation) || t.building.is_none() && t.ready.as_ref().is_some_and(|(g, _)| *g == generation)) {
+    if cx.try_global::<Trees>().is_some_and(|t| t.building == Some(generation) || t.building.is_none() && t.ready.as_ref().is_some_and(|r| r.generation == generation)) {
         return;
     }
+    let trees = cx.default_global::<Trees>();
+    if let Some(ready) = trees.ready.as_mut()
+        && ready.generation.0 != vault.generation
+        && ready.source.root == vault.root
+        && let Some((gone, came)) = changed_files(&ready.source.files, &vault.files)
+    {
+        let tree = Arc::make_mut(&mut ready.tree);
+        for path in &gone {
+            tree.remove(&vault, path);
+        }
+        for path in &came {
+            if !hidden.hides(path) {
+                tree.add(&vault, path);
+            }
+        }
+        ready.generation.0 = vault.generation;
+        ready.source = vault.clone();
+        trees.serial += 1;
+        ready.serial = trees.serial;
+    }
+    let source = vault.clone();
     let work = cx.background_spawn(async move { build_tree(&vault, &hidden) });
     let job = cx.spawn(async move |cx| {
         let tree = Arc::new(work.await);
         cx.update(|cx| {
             cx.update_global::<Trees, _>(|t, _| {
                 if t.building == Some(generation) {
-                    t.ready = Some((generation, tree));
+                    t.serial += 1;
+                    t.ready = Some(Ready { generation, source, tree, serial: t.serial });
                     t.building = None;
                 }
             });
@@ -149,28 +217,103 @@ fn cancel_on_escape(me: &Entity<NotesPage>) -> impl Fn(&gpui_kit::component::inp
     }
 }
 
-/// The file tree, from the vault's own list; the workspace's settings file does not belong in it.
+/// The path inside the vault of a file the tree lists; the workspace's settings files do not belong in it.
+fn listed(vault: &index::VaultIndex, path: &Path) -> Option<String> {
+    let rel = path.strip_prefix(&vault.root).ok()?.to_string_lossy().replace('\\', "/");
+    (rel != crate::core::workspace::CONFIG_NAME && rel != crate::core::workspace::STATE_NAME && !vault.config.is_ignored(&rel)).then_some(rel)
+}
+
+fn folder_of(rel: &str) -> &str {
+    rel.rsplit_once('/').map_or("", |(up, _)| up)
+}
+
+impl Tree {
+    fn add_folders(&mut self, dir: &str) {
+        let mut parent = String::new();
+        for part in dir.split('/').filter(|p| !p.is_empty()) {
+            let full = if parent.is_empty() { part.to_string() } else { format!("{parent}/{part}") };
+            self.folders.entry(parent.clone()).or_default().insert(full.clone());
+            parent = full;
+        }
+    }
+
+    fn add(&mut self, vault: &index::VaultIndex, path: &Path) {
+        let Some(rel) = listed(vault, path) else { return };
+        let dir = folder_of(&rel);
+        self.add_folders(dir);
+        if is_folder(vault, path) {
+            self.folders.entry(dir.to_string()).or_default().insert(rel);
+            self.drop_gone_folders(&vault.root);
+            return;
+        }
+        let files = self.files.entry(dir.to_string()).or_default();
+        if files.iter().any(|p| p == path) {
+            return;
+        }
+        let key = shown_name(path).to_lowercase();
+        let at = files.partition_point(|p| shown_name(p).to_lowercase() <= key);
+        files.insert(at, path.to_path_buf());
+    }
+
+    fn remove_folder(&mut self, rel: &str) {
+        if let Some(up) = self.folders.get_mut(folder_of(rel)) {
+            up.remove(rel);
+        }
+        let below = format!("{rel}/");
+        self.folders.retain(|k, _| k != rel && !k.starts_with(&below));
+        self.files.retain(|k, _| k != rel && !k.starts_with(&below));
+    }
+
+    /// Drops the folders gone from disk: a moved folder leaves its old place before the next scan.
+    fn drop_gone_folders(&mut self, root: &Path) {
+        let gone: Vec<String> = self.folders.values().flatten().filter(|f| !root.join(f).is_dir()).cloned().collect();
+        for f in gone {
+            self.remove_folder(&f);
+        }
+    }
+
+    fn remove(&mut self, vault: &index::VaultIndex, path: &Path) {
+        let Ok(rel) = path.strip_prefix(&vault.root) else { return };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        if let Some(files) = self.files.get_mut(folder_of(&rel)) {
+            files.retain(|p| p != path);
+        }
+        if !path.is_dir()
+            && let Some(folders) = self.folders.get_mut(folder_of(&rel))
+        {
+            folders.remove(&rel);
+        }
+    }
+}
+
+/// A moved folder enters the vault's file list until the next scan.
+fn is_folder(vault: &index::VaultIndex, path: &Path) -> bool {
+    !vault.notes.contains_key(path) && path.is_dir()
+}
+
+/// The file tree, from the vault's own list.
 fn build_tree(vault: &index::VaultIndex, hidden: &index::Hidden) -> Tree {
     let mut tree = Tree::default();
+    let moved_folders = vault.files.iter().any(|p| is_folder(vault, p));
+    let mut exists: HashMap<String, bool> = HashMap::new();
+    let mut there = |dir: &str| !moved_folders || dir.is_empty() || *exists.entry(dir.to_string()).or_insert_with(|| vault.root.join(dir).is_dir());
     let mut last_dir: Option<String> = None;
     for path in &vault.files {
         if hidden.hides(path) {
             continue;
         }
-        let Ok(rel) = path.strip_prefix(&vault.root) else { continue };
-        let rel = rel.to_string_lossy().replace('\\', "/");
-        if rel == crate::core::workspace::CONFIG_NAME || rel == crate::core::workspace::STATE_NAME || vault.config.is_ignored(&rel) {
+        let Some(rel) = listed(vault, path) else { continue };
+        let dir = folder_of(&rel);
+        if !there(dir) {
             continue;
         }
-        let dir = rel.rsplit_once('/').map_or("", |(up, _)| up);
         if last_dir.as_deref() != Some(dir) {
-            let mut parent = String::new();
-            for part in dir.split('/').filter(|p| !p.is_empty()) {
-                let full = if parent.is_empty() { part.to_string() } else { format!("{parent}/{part}") };
-                tree.folders.entry(parent.clone()).or_default().insert(full.clone());
-                parent = full;
-            }
+            tree.add_folders(dir);
             last_dir = Some(dir.to_string());
+        }
+        if is_folder(vault, path) {
+            tree.folders.entry(dir.to_string()).or_default().insert(rel);
+            continue;
         }
         match tree.files.get_mut(dir) {
             Some(files) => files.push(path.clone()),
@@ -185,7 +328,7 @@ fn build_tree(vault: &index::VaultIndex, hidden: &index::Hidden) -> Tree {
         }
         let Ok(rel) = path.strip_prefix(&vault.root) else { continue };
         let rel = rel.to_string_lossy().replace('\\', "/");
-        if vault.config.is_ignored(&rel) {
+        if vault.config.is_ignored(&rel) || !there(&rel) {
             continue;
         }
         let parent = rel.rsplit_once('/').map_or(String::new(), |(up, _)| up.to_string());
@@ -295,10 +438,13 @@ impl NotesPage {
         Row::File { path: path.to_path_buf(), name: shown_name(path), depth, folder, ago }
     }
 
-    fn file_rows(&self, tree: &Tree, folder: &str, depth: usize, vault: &index::VaultIndex, out: &mut Vec<Row>) {
+    fn file_rows(&self, tree: &Tree, folder: &str, depth: usize, vault: &index::VaultIndex, hide: Option<&index::Hidden>, out: &mut Vec<Row>) {
         let pending = self.pending_folder.as_ref().and_then(|p| p.strip_prefix(&vault.root).ok()).map(|p| p.to_string_lossy().replace('\\', "/")).filter(|p| p.rsplit_once('/').map_or("", |(up, _)| up) == folder);
         if tree.folders.contains_key(folder) || pending.is_some() {
             let mut sorted: Vec<String> = tree.folders.get(folder).map(|s| s.iter().cloned().collect()).unwrap_or_default();
+            if let Some(h) = hide {
+                sorted.retain(|s| !h.hides(&vault.root.join(s)));
+            }
             if let Some(p) = pending.filter(|p| !sorted.contains(p)) {
                 sorted.push(p);
             }
@@ -307,7 +453,7 @@ impl NotesPage {
                 let open = self.open_folders.contains(sub);
                 out.push(Row::Folder { rel: sub.clone(), name: sub.rsplit('/').next().unwrap_or(sub).to_string(), depth, open });
                 if open {
-                    self.file_rows(tree, sub, depth + 1, vault, out);
+                    self.file_rows(tree, sub, depth + 1, vault, hide, out);
                 }
             }
         }
@@ -316,7 +462,7 @@ impl NotesPage {
             out.push(Self::file_row(path, depth, false, None, vault));
         }
         if let Some(files) = tree.files.get(folder) {
-            let mut sorted: Vec<&PathBuf> = files.iter().collect();
+            let mut sorted: Vec<&PathBuf> = files.iter().filter(|p| hide.is_none_or(|h| !h.hides(p))).collect();
             if self.order == Order::Changed {
                 let time = |p: &PathBuf| vault.notes.get(p.as_path()).map_or(0., |f| f.modified);
                 sorted.sort_by(|a, b| time(b).total_cmp(&time(a)));
@@ -385,24 +531,25 @@ impl NotesPage {
         let hidden = index::hidden();
         let generation = (vault.generation, hidden.generation);
         let ready = cx.try_global::<Trees>().and_then(|t| t.ready.clone());
+        let hide = ready.as_ref().is_some_and(|r| r.generation.1 != hidden.generation).then_some(hidden.as_ref());
         let filter = self.query.read(cx).value().to_lowercase();
-        let key = Key { generation, tree: ready.as_ref().map(|(g, _)| *g), filter: filter.clone(), view: self.view, order: self.order, tag: tag.clone(), open: self.open_folders.iter().cloned().collect(), renaming: self.renaming.as_ref().map(|(p, ..)| p.clone()) };
+        let key = Key { generation, tree: ready.as_ref().map(|r| r.serial), filter: filter.clone(), view: self.view, order: self.order, tag: tag.clone(), open: self.open_folders.iter().cloned().collect(), renaming: self.renaming.as_ref().map(|(p, ..)| p.clone()) };
         if self.cache.as_ref().is_some_and(|c| c.key == key) {
             return;
         }
         let loading = ready.is_none() && self.view == View::Files;
-        let tree = ready.map(|(_, t)| t).unwrap_or_default();
+        let tree = ready.map(|r| r.tree).unwrap_or_default();
         let open_tasks = Self::visible_tasks(&vault, "").len();
         let now = chrono::Local::now().timestamp() as f64;
         let rows = match self.view {
             View::Files if filter.is_empty() => {
                 let mut rows = Vec::new();
-                self.file_rows(&tree, "", 0, &vault, &mut rows);
+                self.file_rows(&tree, "", 0, &vault, hide, &mut rows);
                 rows
             }
             View::Files => {
                 let mut hits: Vec<(i64, Row)> = Vec::new();
-                for path in tree.files.values().flatten() {
+                for path in tree.files.values().flatten().filter(|p| hide.is_none_or(|h| !h.hides(p))) {
                     let name = shown_name(path);
                     let lower = name.to_lowercase();
                     let alias = vault.notes.get(path.as_path()).is_some_and(|f| f.aliases.iter().any(|a| a.to_lowercase().contains(&filter)));
@@ -1044,7 +1191,86 @@ impl Render for NotesPage {
 
 #[cfg(test)]
 mod tests {
-    use super::unlisted_rename;
+    use super::{build_tree, changed_files, unlisted_rename};
+    use crate::core::vault::index::{Hidden, VaultIndex};
+    use std::path::PathBuf;
+
+    fn vault(files: &[&str]) -> VaultIndex {
+        let root = PathBuf::from("/vault");
+        VaultIndex { files: files.iter().map(|f| root.join(f)).collect(), root, ..Default::default() }
+    }
+
+    #[test]
+    fn a_moved_file_is_patched_into_the_tree() {
+        let before = vault(&["A/a.md", "A/b.md", "B/c.md", "d.md"]);
+        let after = vault(&["A/a.md", "B/c.md", "d.md", "C/D/Beispiel.md"]);
+        let (gone, came) = changed_files(&before.files, &after.files).unwrap();
+        assert_eq!(gone, vec![PathBuf::from("/vault/A/b.md")]);
+        assert_eq!(came, vec![PathBuf::from("/vault/C/D/Beispiel.md")]);
+        let mut tree = build_tree(&before, &Hidden::default());
+        for p in &gone {
+            tree.remove(&after, p);
+        }
+        for p in &came {
+            tree.add(&after, p);
+        }
+        let mut fresh = build_tree(&after, &Hidden::default());
+        fresh.files.entry("A".into()).or_default();
+        assert_eq!(tree.files, fresh.files);
+        assert!(tree.folders.get("C").is_some_and(|s| s.contains("C/D")));
+        assert!(tree.folders.get("").is_some_and(|s| s.contains("C")));
+    }
+
+    #[test]
+    fn a_folder_moved_to_another_parent_leaves_its_old_place() {
+        let root = std::env::temp_dir().join(format!("schrumbi-tree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("B/Woche 1.2")).unwrap();
+        std::fs::create_dir_all(root.join("A")).unwrap();
+        let at = |f: &str| root.join(f);
+        let before = VaultIndex { root: root.clone(), files: vec![at("A/Woche 1.2/n.md"), at("B/m.md")], ..Default::default() };
+        let after = VaultIndex { root: root.clone(), files: vec![at("A/Woche 1.2/n.md"), at("B/m.md"), at("B/Woche 1.2")], ..Default::default() };
+        let mut tree = build_tree(&before, &Hidden::default());
+        let (gone, came) = changed_files(&before.files, &after.files).unwrap();
+        for p in &gone {
+            tree.remove(&after, p);
+        }
+        for p in &came {
+            tree.add(&after, p);
+        }
+        let fresh = build_tree(&after, &Hidden::default());
+        let _ = std::fs::remove_dir_all(&root);
+        for t in [&tree, &fresh] {
+            assert!(t.folders.get("B").is_some_and(|s| s.contains("B/Woche 1.2")));
+            assert!(!t.folders.get("A").is_some_and(|s| s.contains("A/Woche 1.2")));
+            assert!(!t.files.contains_key("A/Woche 1.2"));
+            assert!(!t.files.get("B").is_some_and(|f| f.iter().any(|p| p.ends_with("Woche 1.2"))));
+        }
+    }
+
+    #[test]
+    fn a_renamed_file_keeps_its_sorted_place() {
+        let before = vault(&["n/a.md", "n/c.md", "n/e.md"]);
+        let after = vault(&["n/a.md", "n/e.md", "n/d.md"]);
+        let (gone, came) = changed_files(&before.files, &after.files).unwrap();
+        let mut tree = build_tree(&before, &Hidden::default());
+        for p in &gone {
+            tree.remove(&after, p);
+        }
+        for p in &came {
+            tree.add(&after, p);
+        }
+        assert_eq!(tree, build_tree(&after, &Hidden::default()));
+    }
+
+    #[test]
+    fn many_changes_or_a_new_order_are_left_to_a_full_build() {
+        let a: Vec<PathBuf> = (0..200).map(|i| PathBuf::from(format!("/v/{i}.md"))).collect();
+        let b: Vec<PathBuf> = (0..200).map(|i| PathBuf::from(format!("/w/{i}.md"))).collect();
+        assert!(changed_files(&a, &b).is_none());
+        let swapped = vec![a[1].clone(), a[0].clone()];
+        assert_eq!(changed_files(&a[..2], &swapped), Some((vec![], vec![])));
+    }
 
     #[test]
     fn rename_row_goes_when_its_file_moves() {
