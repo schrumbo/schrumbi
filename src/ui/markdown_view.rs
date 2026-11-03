@@ -224,9 +224,15 @@ pub fn parse(src: &str) -> ParsedNote {
             },
             Event::End(end) => match end {
                 TagEnd::Paragraph => {
-                    let (_, inner, mut inl) = stack.pop().unwrap();
+                    let (_, mut inner, mut inl) = stack.pop().unwrap();
                     join_marks(&mut inl);
                     let had_blocks = !inner.is_empty();
+                    if had_blocks {
+                        trim_beside_math(&mut inner);
+                        if matches!(inner.last(), Some(Block::Math(_))) {
+                            trim_inlines(&mut inl, true);
+                        }
+                    }
                     stack.last_mut().unwrap().1.extend(inner);
                     if !(had_blocks && inl.is_empty()) {
                         let block = if strip_block_id(&mut inl) && plain_text(&inl).trim().is_empty() { Block::Nothing } else { Block::Paragraph(inl) };
@@ -411,6 +417,39 @@ pub fn parse(src: &str) -> ParsedNote {
         collect_links(std::slice::from_ref(block), i, &mut links);
     }
     ParsedNote { sources, links, blocks, footnotes, footnote_homes, footnote_order }
+}
+
+/// Drops the spaces and line breaks at the start or end of a paragraph's text.
+fn trim_inlines(inlines: &mut Vec<Inline>, start: bool) {
+    loop {
+        let at = if start { 0 } else { inlines.len().wrapping_sub(1) };
+        let Some(Inline::Text(text, style)) = inlines.get_mut(at) else { return };
+        if style.code {
+            return;
+        }
+        let trimmed = if start { text.trim_start() } else { text.trim_end() };
+        if !trimmed.is_empty() {
+            *text = trimmed.to_string();
+            return;
+        }
+        inlines.remove(at);
+    }
+}
+
+/// Text written around display math in one paragraph loses the space and break that join it to the formula.
+fn trim_beside_math(blocks: &mut Vec<Block>) {
+    for i in 0..blocks.len() {
+        let (before, after) = (i > 0 && matches!(blocks[i - 1], Block::Math(_)), matches!(blocks.get(i + 1), Some(Block::Math(_))));
+        if let Block::Paragraph(inl) = &mut blocks[i] {
+            if before {
+                trim_inlines(inl, true);
+            }
+            if after {
+                trim_inlines(inl, false);
+            }
+        }
+    }
+    blocks.retain(|b| !matches!(b, Block::Paragraph(inl) if inl.is_empty()));
 }
 
 /// A note's source of `^id` at a paragraph's end disappears from what is shown.
@@ -1705,6 +1744,7 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
                 .w_full()
                 .overflow_x_scroll()
                 .p(px(space::M))
+                .pr(px(space::S + control::S + space::XS))
                 .rounded(px(radius::CONTROL))
                 .bg(t.secondary_bg)
                 .border_1()
@@ -1740,20 +1780,28 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
         .into_any_element()
 }
 
+fn heading_size(level: u8) -> f32 {
+    match level {
+        1 => font::TITLE,
+        2 => font::TITLE2,
+        3 => font::TITLE3,
+        4 | 5 => font::BODY,
+        _ => font::CALLOUT,
+    }
+}
+
+fn heading_top(level: u8) -> f32 {
+    if level <= 2 { space::S } else { space::XS }
+}
+
 fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
     let t = cx.t;
     blocks
         .iter()
         .map(|b| match b {
             Block::Heading(level, inl) => {
-                let size = match level {
-                    1 => note_size(font::TITLE),
-                    2 => note_size(font::TITLE2),
-                    3 => note_size(font::TITLE3),
-                    4 | 5 => note_size(font::BODY),
-                    _ => note_size(font::CALLOUT),
-                };
-                div().pt(px(if *level <= 2 { space::S } else { space::XS })).font_weight(if *level == 1 { FontWeight::BOLD } else { FontWeight::SEMIBOLD }).when(*level >= 5, |d| d.text_color(t.secondary)).child(styled_text(inl, cx, size)).into_any_element()
+                let size = note_size(heading_size(*level));
+                div().pt(px(heading_top(*level))).font_weight(if *level == 1 { FontWeight::BOLD } else { FontWeight::SEMIBOLD }).when(*level >= 5, |d| d.text_color(t.secondary)).child(styled_text(inl, cx, size)).into_any_element()
             }
             Block::Paragraph(inl) => styled_text(inl, cx, note_size(font::BODY)),
             Block::Quote(inner) => div()
@@ -1995,6 +2043,38 @@ impl ParsedNote {
                 (source.line, source.end_line, shape)
             })
             .collect()
+    }
+
+    /// How many blocks the first source line makes, like text with display math in its middle.
+    pub fn line_blocks(&self) -> usize {
+        self.sources.iter().take(self.blocks.len()).take_while(|s| s.line == 0).count()
+    }
+
+    /// How far below a block's top the middle of its first line of text is; `None` when it has no text line to meet, like a formula.
+    pub fn first_line_middle(&self, i: usize) -> Option<f32> {
+        let line = |size: f32| note_size(size) * 1.5 / 2.;
+        let picture = |inl: &[Inline]| inl.iter().any(|x| matches!(x, Inline::Image(..))) && inl.iter().all(|x| matches!(x, Inline::Image(..)) || matches!(x, Inline::Text(s, _) if s.trim().is_empty()));
+        Some(match self.blocks.get(i)? {
+            Block::Heading(level, _) => heading_top(*level) + note_size(heading_size(*level)) * 1.5 / 2.,
+            Block::Paragraph(inl) if picture(inl) => space::M,
+            Block::Math(_) => return None,
+            Block::Code(Some(lang), _) if lang == "mermaid" => return None,
+            Block::Code(Some(lang), _) if lang == "query" || lang == "base" => space::M,
+            Block::Code(..) => 1. + space::M + line(font::CALLOUT),
+            Block::Rule => space::XS + 0.5,
+            Block::Table { .. } => 1. + space::XS + line(font::BODY),
+            Block::Callout(..) => 1. + space::S + line(font::CALLOUT),
+            _ => line(font::BODY),
+        })
+    }
+
+    /// Whether a block shows a fold control in the margin left of its first line.
+    pub fn has_margin_control(&self, i: usize) -> bool {
+        match self.blocks.get(i) {
+            Some(Block::Heading(..)) => true,
+            Some(Block::List { items, .. }) => items.first().is_some_and(|item| item.blocks.iter().any(|b| matches!(b, Block::List { .. }))),
+            _ => false,
+        }
     }
 
     /// The note's footnotes in the order they are numbered.
@@ -2259,6 +2339,8 @@ pub struct LiveDraw<'a> {
     pub footnotes: Option<&'a [String]>,
     /// The field of the table cell being written, with its row and column.
     pub open_cell: Option<(usize, usize, std::cell::RefCell<Option<AnyElement>>)>,
+    /// How many blocks from the first are drawn together, as one line can make several.
+    pub count: usize,
 }
 
 /// Renders one top-level block on its own, so long notes only build what is on screen.
@@ -2271,12 +2353,16 @@ pub fn render_block(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle:
 pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: Option<OnToggle>, found: Option<&Found>, focus: Option<&LinkFocus>, live: LiveDraw, t: &Theme) -> AnyElement {
     let Some(block) = note.blocks.get(i) else { return div().into_any_element() };
     let item = live.item.unwrap_or(i);
+    let together = note.blocks.get(i..(i + live.count).min(note.blocks.len())).filter(|b| b.len() > 1);
     let order = Cell::new((item as u64 + 1) * 100_000);
     let links_seen = Cell::new(note.links.iter().take_while(|(_, top)| *top < i).count());
     let cx = Ctx { t, base, on_toggle, footnote_order: live.footnotes.unwrap_or(&note.footnote_order), order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: item, head_text: Cell::new(false), cell: Cell::new(None), open_cell: live.open_cell };
-    let element = render_blocks(std::slice::from_ref(block), &cx).into_iter().next().unwrap_or_else(|| div().into_any_element());
+    let element = match together {
+        Some(blocks) => div().flex().flex_col().gap(px(space::S)).children(render_blocks(blocks, &cx)).into_any_element(),
+        None => render_blocks(std::slice::from_ref(block), &cx).into_iter().next().unwrap_or_else(|| div().into_any_element()),
+    };
     let element = match (block, focus) {
-        (Block::Heading(..), Some(focus)) => {
+        (Block::Heading(..), Some(focus)) if together.is_none() => {
             let key = format!("h{}", note.sources.get(i).map_or(0, |s| s.line) + live.line);
             let is_open = !focus.folds.borrow().contains(&key);
             let folds = focus.folds.clone();
@@ -2292,7 +2378,7 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
                         .id(("md-fold", i))
                 .capture_any_mouse_down(|_, _, _| press_control())
                         .absolute()
-                        .top(px(space::S))
+                        .top(px(note.first_line_middle(i).map_or(space::S, |middle| middle - 9.)))
                         .left(px(0.))
                         .size(px(18.))
                         .flex()
@@ -2471,6 +2557,35 @@ mod reader_tests {
         assert_eq!(kinds("$$\na^2\n$$\n"), ["math"]);
         assert_eq!(kinds("Text $$a$$ mehr\n"), ["paragraph", "math", "paragraph"]);
         assert_eq!(kinds("$$a$$\n\nDanach\n"), ["math", "paragraph"]);
+    }
+
+    #[test]
+    fn text_beside_display_math_has_no_stray_space_or_break() {
+        let texts = |src: &str| parse(src).blocks.iter().filter_map(|b| if let Block::Paragraph(inl) = b { Some(plain_text(inl)) } else { None }).collect::<Vec<_>>();
+        assert_eq!(texts("Text davor $$a$$ Text danach.\n"), ["Text davor", "Text danach."]);
+        assert_eq!(texts("A\n$$x$$\nB\n"), ["A", "B"]);
+        assert_eq!(kinds("$$x$$ danach\n"), ["math", "paragraph"]);
+    }
+
+    #[test]
+    fn a_line_draws_every_block_it_holds() {
+        assert_eq!(parse("Text davor $$a$$ Text danach.\n\n[x]: https://beispiel.de\n").line_blocks(), 3);
+        assert_eq!(parse("Nur Text\n\n[a] b ]: c\n").line_blocks(), 1);
+        assert_eq!(parse("").line_blocks(), 0);
+    }
+
+    #[test]
+    fn the_gutter_meets_the_first_line() {
+        let middle = |src: &str| parse(src).first_line_middle(0);
+        let body = middle("Text\n").unwrap();
+        assert!(middle("# Titel\n").unwrap() > body);
+        assert!(middle("> [!note] Titel\n> a\n").unwrap() > body);
+        assert!(middle("```\ncode\n```\n").unwrap() > body);
+        assert_eq!(middle("$$\nx\n$$\n"), None);
+        assert!(parse("# Titel\n").has_margin_control(0));
+        assert!(parse("- a\n  - b\n").has_margin_control(0));
+        assert!(!parse("- a\n- b\n").has_margin_control(0));
+        assert!(!parse("Text\n").has_margin_control(0));
     }
 
     #[test]

@@ -78,6 +78,10 @@ struct LiveCell {
 
 /// The room the handles beside a block take.
 const GUTTER_WIDTH: f32 = 48.;
+/// The room a fold chevron takes left of a heading or list, between its text and the handles.
+const FOLD_ROOM: f32 = iconsize::L;
+/// What the live view keeps free left of the text, so every handle stays inside the pane.
+const LIVE_ROOM: f32 = GUTTER_WIDTH + iconsize::L + space::XXS;
 
 /// Lines being dragged to another place in the note.
 #[derive(Clone)]
@@ -725,9 +729,18 @@ impl NoteView {
         f32::from(window.text_system().shape_line(prefix.to_string().into(), px(size), &[run], None).width)
     }
 
+    /// The column's room left of the text: the live view takes what its handles need beyond the space beside the column.
+    fn column_left(&self) -> f32 {
+        if self.mode != Mode::Live {
+            return space::XXL;
+        }
+        let beside = if self.measured_full { 0. } else { ((f32::from(self.reader_width) - READER_COLUMN) / 2.).max(0.) };
+        (LIVE_ROOM - beside).max(space::XXL)
+    }
+
     fn field_width(&self, value: &str, window: &mut Window) -> Pixels {
         let wide = if self.measured_full { self.reader_width } else { self.reader_width.min(px(READER_COLUMN)) };
-        let column = (wide - px(space::XXL * 2.)).max(px(120.));
+        let column = (wide - px(self.column_left() + space::XXL)).max(px(120.));
         let single = self.live.as_ref().is_some_and(|l| l.single && l.cell.is_none());
         if !single {
             return column;
@@ -1155,23 +1168,22 @@ impl NoteView {
         true
     }
 
-    /// The handle beside a block: + adds below, the grip can be dragged and opens the block's menu.
-    fn gutter(me: &Entity<Self>, i: usize, line: usize, count: usize, is_table: bool, label: String, group: SharedString, t: &Theme) -> AnyElement {
+    /// The handles beside a block, after `extra`: + adds below, the grip can be dragged and opens the block's menu.
+    #[allow(clippy::too_many_arguments)]
+    fn gutter(me: &Entity<Self>, i: usize, line: usize, count: usize, is_table: bool, label: String, group: SharedString, extra: Option<AnyElement>, t: &Theme) -> Div {
         let (add_me, menu_me) = (me.clone(), me.clone());
         let hover = t.ink.opacity(0.1);
         let handle = |id: (&'static str, usize), name: &'static str| div().id(id).size(px(iconsize::L)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().soft(hover, radius::SMALL).child(icon(name, iconsize::S, t.tertiary));
         div()
-            .absolute()
-            .top_0()
-            .left(px(-GUTTER_WIDTH))
-            .w(px(GUTTER_WIDTH))
             .flex()
             .justify_end()
+            .items_center()
             .gap(px(space::XXS))
             .pr(px(space::XS))
             .invisible()
             .group_hover(group, |s| s.visible())
             .capture_any_mouse_down(|_, _, _| markdown_view::press_control())
+            .children(extra)
             .child(handle(("live-add", i), "plus").tooltip(tip(tr("Darunter einfügen"))).on_click(move |_, window, cx| {
                 add_me.update(cx, |n, cx| n.edit_lines(line + count, 0, vec![String::new(), String::new()], None, window, cx));
                 let open_me = add_me.clone();
@@ -1185,7 +1197,6 @@ impl NoteView {
                     .on_drag(DraggedLines { line, count, label }, |d, _, _, cx| cx.new(|_| d.clone()))
                     .child(Button::new(("live-grip-menu", i)).ghost().xsmall().icon(menu_icon("grip-vertical")).tooltip(tr("Ziehen zum Verschieben, Klick für das Menü")).dropdown_menu(move |m, _, _| block_menu(m, menu_me.clone(), line, count, is_table))),
             )
-            .into_any_element()
     }
 
     /// Marks unknown words a moment after typing stops.
@@ -1713,7 +1724,8 @@ impl NoteView {
         }
         let footnote_list = self.reader_list.clone();
         let full = self.measured_full;
-        let content = move |inner: AnyElement| reader_column(full, inner);
+        let left = self.column_left();
+        let content = move |inner: AnyElement| reader_column(full, left, inner);
         let (fragments, definitions) = (self.fragments.clone(), self.definitions.clone());
         let open_me = me.clone();
         let opener = move |line: usize| {
@@ -1767,69 +1779,60 @@ impl NoteView {
                 return content(div().pt(px(top)).pb(px(gap)).child(field).into_any_element());
             }
             let line = segment.line;
-            let body: AnyElement = match segment.kind {
-                SegmentKind::Blank => div().h(px(note_size(font::BODY) * 1.5)).into_any_element(),
-                SegmentKind::Raw => div().text_size(px(note_size(font::CALLOUT))).line_height(relative(1.5)).text_color(t.tertiary).child(source_lines.get(line).cloned().unwrap_or_default()).into_any_element(),
+            let raw_middle = note_size(font::CALLOUT) * 0.75;
+            let (body, lead, middle, fold, extra): (AnyElement, f32, Option<f32>, bool, Option<AnyElement>) = match segment.kind {
+                SegmentKind::Blank => (div().h(px(note_size(font::BODY) * 1.5)).into_any_element(), 0., None, false, None),
+                SegmentKind::Raw => (div().text_size(px(note_size(font::CALLOUT))).line_height(relative(1.5)).text_color(t.tertiary).child(source_lines.get(line).cloned().unwrap_or_default()).into_any_element(), 0., Some(raw_middle), false, None),
                 SegmentKind::Line { depth } => {
                     let written = source_lines.get(line).map_or("", |s| s.as_str());
+                    let continues = source_lines.get(line + 1).is_some_and(|next| !next.trim().is_empty());
+                    let shown = live_text::drawn_line(written, continues);
                     let fragment = {
                         let mut known = fragments.borrow_mut();
                         if known.len() > 20_000 {
                             known.clear();
                         }
-                        known.entry(written.to_string()).or_insert_with(|| Rc::new(markdown_view::parse(&format!("{}\n\n{definitions}", written.trim_start())))).clone()
+                        known.entry(shown.to_string()).or_insert_with(|| Rc::new(markdown_view::parse(&format!("{shown}\n\n{definitions}")))).clone()
                     };
+                    let lead = depth as f32 * LIVE_INDENT;
                     if fragment.len() == 0 {
-                        div().text_size(px(note_size(font::CALLOUT))).line_height(relative(1.5)).text_color(t.tertiary).child(written.to_string()).into_any_element()
+                        (div().text_size(px(note_size(font::CALLOUT))).line_height(relative(1.5)).text_color(t.tertiary).child(written.to_string()).into_any_element(), 0., Some(raw_middle), false, None)
                     } else {
                         let offset_toggle: markdown_view::OnToggle = {
                             let inner = toggle.clone();
                             Rc::new(move |_, cx: &mut App| inner(line, cx))
                         };
-                        let draw = markdown_view::LiveDraw { item: Some(i - 1), line, footnotes: Some(parsed.footnote_order()), open_cell: None };
+                        let draw = markdown_view::LiveDraw { item: Some(i - 1), line, footnotes: Some(parsed.footnote_order()), open_cell: None, count: fragment.line_blocks() };
                         let drawn = markdown_view::render_live(&fragment, 0, base.as_deref(), Some(offset_toggle), None, Some(&focus), draw, &t);
                         let is_list = live_text::prefix_len(written) > 0 && !written.trim_start().starts_with('#') && !written.trim_start().starts_with('>');
-                        div().pl(px(depth as f32 * LIVE_INDENT)).when(is_list, |d| d.pb(px(space::XS))).child(drawn).into_any_element()
+                        (div().pl(px(lead)).when(is_list, |d| d.pb(px(space::XS))).child(drawn).into_any_element(), lead, fragment.first_line_middle(0), fragment.has_margin_control(0), None)
                     }
                 }
                 SegmentKind::Whole { block } => {
+                    let (middle, fold) = (parsed.first_line_middle(block), parsed.has_margin_control(block));
                     if live_item == Some(i - 1) {
-                        div().into_any_element()
+                        (div().into_any_element(), 0., middle, fold, None)
                     } else {
                         let drawn = markdown_view::render_live(&parsed, block, base.as_deref(), Some(toggle.clone()), found.as_ref(), Some(&focus), markdown_view::LiveDraw { item: Some(i - 1), ..Default::default() }, &t);
                         let fence = source_lines.get(line).map_or("", |l| l.trim_start().trim_start_matches('`').trim());
                         if ["mermaid", "query", "base"].contains(&fence) && source_lines.get(line).is_some_and(|l| l.trim_start().starts_with("```")) {
-                            let group = SharedString::from(format!("live-fence-{i}"));
                             let edit_me = me.clone();
-                            div()
-                                .relative()
-                                .pb(px(space::XS))
-                                .group(group.clone())
-                                .capture_any_mouse_down(|_, _, _| markdown_view::press_control())
-                                .child(drawn)
-                                .child(
-                                    div()
-                                        .id(("live-fence-edit", i))
-                                        .absolute()
-                                        .top(px(space::XS))
-                                        .right(px(space::XS))
-                                        .size(px(24.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(radius::SMALL))
-                                        .bg(t.secondary_bg)
-                                        .cursor_pointer()
-                                        .soft(t.ink.opacity(0.06), radius::SMALL)
-                                        .invisible()
-                                        .group_hover(group, |s| s.visible())
-                                        .tooltip(tip(tr("Quelltext bearbeiten")))
-                                        .on_click(move |_, window, cx| edit_me.update(cx, |n, cx| n.open_line(line, Some(0), window, cx)))
-                                        .child(icon("code-xml", iconsize::S, t.secondary)),
-                                )
-                                .into_any_element()
+                            let edit = div()
+                                .id(("live-fence-edit", i))
+                                .size(px(iconsize::L))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(radius::SMALL))
+                                .cursor_pointer()
+                                .soft(t.ink.opacity(0.1), radius::SMALL)
+                                .tooltip(tip(tr("Quelltext bearbeiten")))
+                                .on_click(move |_, window, cx| edit_me.update(cx, |n, cx| n.open_line(line, Some(0), window, cx)))
+                                .child(icon("code-xml", iconsize::S, t.tertiary))
+                                .into_any_element();
+                            (div().pb(px(space::XS)).capture_any_mouse_down(|_, _, _| markdown_view::press_control()).child(drawn).into_any_element(), 0., middle, fold, Some(edit))
                         } else {
-                            div().pb(px(space::XS)).child(drawn).into_any_element()
+                            (div().pb(px(space::XS)).child(drawn).into_any_element(), 0., middle, fold, None)
                         }
                     }
                 }
@@ -1838,7 +1841,8 @@ impl NoteView {
                         let field = me.update(cx, |n, cx| n.live_field(window, cx));
                         (row, column, std::cell::RefCell::new(Some(field)))
                     });
-                    div().pb(px(space::XS)).child(markdown_view::render_live(&parsed, block, base.as_deref(), Some(toggle.clone()), None, Some(&focus), markdown_view::LiveDraw { item: Some(i - 1), open_cell, ..Default::default() }, &t)).into_any_element()
+                    let drawn = markdown_view::render_live(&parsed, block, base.as_deref(), Some(toggle.clone()), None, Some(&focus), markdown_view::LiveDraw { item: Some(i - 1), open_cell, ..Default::default() }, &t);
+                    (div().pb(px(space::XS)).child(drawn).into_any_element(), 0., parsed.first_line_middle(block), false, None)
                 }
             };
             let group = SharedString::from(format!("live-row-{i}"));
@@ -1848,13 +1852,22 @@ impl NoteView {
             let label = source_lines.get(line).map_or(String::new(), |l| l.trim().chars().take(60).collect());
             let table_tools = is_table.then(|| table_tools(&gutter_me, i, line, count, group.clone(), &t));
             let drop_target = drop_me.clone();
-            let handle = (!matches!(segment.kind, SegmentKind::Blank)).then(|| Self::gutter(&gutter_me, i, line, count, is_table, label, group.clone(), &t));
+            let handle = (!matches!(segment.kind, SegmentKind::Blank)).then(|| {
+                let width = GUTTER_WIDTH + if extra.is_some() { iconsize::L + space::XXS } else { 0. };
+                let right = lead - if fold { FOLD_ROOM } else { 0. };
+                let gutter = Self::gutter(&gutter_me, i, line, count, is_table, label, group.clone(), extra, &t).absolute().left(px(right - width)).w(px(width));
+                match middle {
+                    Some(middle) => gutter.top(px(middle - iconsize::L / 2.)),
+                    None => gutter.top_0().bottom_0(),
+                }
+                .into_any_element()
+            });
             content(
                 div()
                     .id(("live-item", i))
                     .relative()
-                    .ml(px(-GUTTER_WIDTH))
-                    .pl(px(GUTTER_WIDTH))
+                    .ml(px(-LIVE_ROOM))
+                    .pl(px(LIVE_ROOM))
                     .group(group)
                     .cursor_text()
                     .on_mouse_up(MouseButton::Left, opener(line))
@@ -2477,9 +2490,9 @@ pub fn set_reader_full_width(on: bool, cx: &mut App) {
     cx.refresh_windows();
 }
 
-/// The reading column: the whole pane, or a centered column when full width is off.
-pub fn reader_column(full: bool, inner: AnyElement) -> AnyElement {
-    let column = div().w_full().px(px(space::XXL)).child(inner);
+/// The reading column: the whole pane, or a centered column when full width is off; `left` is its room before the text.
+pub fn reader_column(full: bool, left: f32, inner: AnyElement) -> AnyElement {
+    let column = div().w_full().pl(px(left)).pr(px(space::XXL)).child(inner);
     if full {
         return column.into_any_element();
     }

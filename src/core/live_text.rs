@@ -90,6 +90,13 @@ pub fn depth_while_writing(line: &str, drawn: usize) -> usize {
     if wide == 0 { 0 } else { (wide / 2).max(usize::from(drawn > 0) * drawn.min(wide)).min(wide / 2 + drawn) }
 }
 
+/// What of a line is drawn when it stands alone: no indent, and no backslash that only breaks it from the next line of its paragraph.
+pub fn drawn_line(line: &str, continues: bool) -> &str {
+    let bare = line.trim_start();
+    let slashes = bare.len() - bare.trim_end_matches('\\').len();
+    if continues && slashes % 2 == 1 { bare.strip_suffix('\\').unwrap_or(bare) } else { bare }
+}
+
 /// The marks a line starts with: indent, heading signs, list marker, task box, quote sign.
 pub fn prefix_len(line: &str) -> usize {
     static PREFIX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:#{1,6}\s+|[-*+]\s+(?:\[.\]\s+)?|\d{1,9}[.)]\s+(?:\[.\]\s+)?|>\s?)").unwrap());
@@ -508,6 +515,15 @@ mod tests {
         let table = ["| a | b |", "|---|---|", "| 1 | 2 |"];
         assert_eq!(table_with_row(&table).last().unwrap(), "|  |  |");
         assert_eq!(table_with_column(&table), vec!["| a | b |  |", "|---|---|---|", "| 1 | 2 |  |"]);
+    }
+
+    #[test]
+    fn a_line_drawn_alone_keeps_its_hard_break_hidden() {
+        assert_eq!(drawn_line("Umbruch\\", true), "Umbruch");
+        assert_eq!(drawn_line("Umbruch\\", false), "Umbruch\\");
+        assert_eq!(drawn_line("zwei \\\\", true), "zwei \\\\");
+        assert_eq!(drawn_line("  - eingerückt", false), "- eingerückt");
+        assert_eq!(drawn_line("    eingerückter Code", true), "eingerückter Code");
     }
 
     #[test]
