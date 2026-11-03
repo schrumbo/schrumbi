@@ -267,9 +267,12 @@ impl NotesPage {
             .notes
             .iter()
             .filter(|(p, facts)| {
+                if facts.tasks.is_empty() {
+                    return false;
+                }
                 let Ok(rel) = p.strip_prefix(&vault.root) else { return false };
                 let rel = rel.to_string_lossy().replace('\\', "/");
-                !facts.tasks.is_empty() && !vault.config.is_ignored(&rel) && !vault.is_template(p)
+                !vault.config.is_ignored(&rel) && !vault.is_template(p)
             })
             .collect();
         notes.sort_by(|a, b| b.1.modified.total_cmp(&a.1.modified).then_with(|| a.0.cmp(b.0)));
