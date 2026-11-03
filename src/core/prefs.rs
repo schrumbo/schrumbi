@@ -182,7 +182,6 @@ pub struct Prefs {
     pub note_folds: HashMap<String, Vec<String>>,
     /// Width of the deadlines column on module pages.
     pub module_column: Option<f32>,
-    /// The view last open on module pages.
     pub shortcuts: BTreeMap<String, Shortcut>,
     pub disabled_shortcuts: BTreeSet<String>,
     pub git: BTreeMap<String, GitPrefs>,

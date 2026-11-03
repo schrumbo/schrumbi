@@ -11,7 +11,7 @@ use super::browser::week_title;
 use super::pages::Pages;
 use super::state::act;
 use super::motion::{self, Soft};
-use super::theme::{Theme, font, radius, space, iconsize};
+use super::theme::{Theme, control, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::filing::FileRole;
@@ -171,8 +171,8 @@ pub fn deadlines(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     }
     let weeks = lib.weeks();
     let mut col = div().flex().flex_col().px(px(space::L)).py(px(space::S));
-    if items.is_empty() {
-        col = col.child(div().flex().items_center().gap(px(space::S)).py(px(space::S)).text_color(t.secondary).child(icon("inbox", iconsize::S, t.secondary)).child(tr("Noch keine Einträge. Wiederkehrende Abgaben unter Einstellungen → Module anlegen oder mit + einen Eintrag hinzufügen.")));
+    if open.is_empty() && soon.is_empty() {
+        col = col.child(div().flex().items_center().gap(px(space::S)).py(px(space::S)).text_color(t.secondary).child(icon("circle-check", iconsize::S, t.green)).child(tr("Nichts offen in den nächsten zwei Wochen")));
     }
     if !open.is_empty() {
         col = col.child(div().flex().items_center().gap(px(space::S)).mt(px(space::S)).py(px(space::XS)).font_weight(FontWeight::SEMIBOLD).text_color(t.red).child(icon("circle-alert", iconsize::XS, t.red)).child(tr("Braucht Aufmerksamkeit")));
@@ -265,11 +265,11 @@ pub fn header(lib: &Library, m: &Module, width: f32, t: &Theme) -> Div {
 }
 
 fn more_link(id: &'static str, label: String, t: &Theme) -> Stateful<Div> {
-    div().id(id).flex_none().cursor_pointer().key_nav().text_size(px(font::CALLOUT)).text_color(t.accent_text).hover({ let c = t.accent_text.opacity(0.8); move |s| s.text_color(c) }).child(label)
+    div().id(id).flex_none().flex().items_center().h(px(control::S)).px(px(space::S)).mr(px(-space::S)).cursor_pointer().key_nav().soft(t.ink.opacity(0.05), radius::INNER).text_size(px(font::CALLOUT)).text_color(t.accent_text).child(label)
 }
 
 fn section(title: impl IntoElement, link: Option<Stateful<Div>>) -> Div {
-    div().flex().items_baseline().justify_between().gap(px(space::M)).child(title).children(link)
+    div().flex().items_center().justify_between().gap(px(space::M)).child(title).children(link)
 }
 
 /// The main column: every deadline with what belongs to it, and what was worked on last.
@@ -305,9 +305,10 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     let module_folder = m.folder.clone();
     let all_files = more_link("to-files", tr("Alle Dateien"), t).tooltip(tip(tr("Im Dateibaum zeigen"))).on_click(move |_, _, cx| {
         let folder = module_folder.clone();
+        crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
         act(cx, |l| {
             l.reveal_folder = Some(folder);
-            l.set_route(library::Route::Notes);
+            l.show_notes();
         })
     });
     let files: AnyElement = if count == 0 {

@@ -547,7 +547,6 @@
   "Alles in Ordnung": "All good",
   "Allgemein": "General",
   "Als Notiz öffnen": "Open as note",
-  "Als Nächstes: %@, %@": "Next: %1$@, %2$@",
   "Als PDF exportieren": "Export as PDF",
   "Als PDF neben der Notiz sichern (⇧⌘E)": "Save as PDF next to the note (⇧⌘E)",
   "Als Tab öffnen (↩ in der Suche, Doppelklick in der Liste)": "Open as tab (↩ in search, double-click in the list)",
@@ -893,7 +892,6 @@
   "Nichts offen": "Nothing open",
   "Noch keine Datei abgelegt.": "No file filed yet.",
   "Noch keine Dokumente": "No documents yet",
-  "Noch keine Einträge. Wiederkehrende Abgaben unter Einstellungen → Module anlegen oder mit + einen Eintrag hinzufügen.": "No entries yet. Add recurring submissions under Settings → Modules or add an entry with +.",
   "Noch keine Noten eingetragen": "No grades entered yet",
   "Note": "Grade",
   "Notensystem": "Grading system",
@@ -1442,10 +1440,7 @@
   "Noch keine Abgaben": "No deadlines yet",
   "Lege eine einzelne Abgabe an, oder eine Regel, die sich jede Vorlesungswoche wiederholt.": "Add a single deadline, or a rule that repeats every lecture week.",
   "Regel anlegen": "Add rule",
-  "%@ Abgaben, keine offen.": "%@ deadlines, none open.",
-  "Alle %@": "All %@",
   "Schreibe die erste Notiz oder ziehe Dateien hierher.": "Write the first note or drop files here.",
-  "Als Nächstes": "Next up",
   "Alle Dateien": "All files",
   "%@ warten": "%@ waiting",
   "Alles gelernt": "All learned",
@@ -1605,5 +1600,6 @@
   "Nur wenn jede Woche einen eigenen Ordner hat, z. B. W{w}_KW{kw}/Hausuebung. Was darin liegt, zählt dann ohne Zuordnen.": "Only if every week has its own folder, e.g. W{w}_KW{kw}/Hausuebung. What lies in it then counts without linking.",
   "Legt in jedem Modul einen Abgabeordner an, sobald du etwas ablegst, und benennt nach Muster.": "Creates a submissions folder in each module once you file something, and names by pattern.",
   "Der Modulordner fehlt. Lege ihn an oder schalte „Ordner anlegen“ ein.": "The module folder is missing. Create it or turn on “Create folders”.",
-  "Im Dateibaum zeigen": "Show in the file tree"
+  "Im Dateibaum zeigen": "Show in the file tree",
+  "Nichts offen in den nächsten zwei Wochen": "Nothing open in the next two weeks"
 }
