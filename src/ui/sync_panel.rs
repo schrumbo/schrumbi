@@ -260,7 +260,7 @@ impl Render for SyncPanel {
                     }
                 })),
                 Some("guide") => buttons = buttons.child(Button::new("sync-guide").small().label(tr("Anleitung öffnen")).on_click(|_, _, _| {
-                    let _ = opener::open("https://git-scm.com/downloads");
+                    crate::core::library::open_path("https://git-scm.com/downloads");
                 })),
                 _ => {}
             }
@@ -758,7 +758,7 @@ impl Render for SyncSetup {
         let body: AnyElement = if self.found.is_none() {
             match self.error.clone() {
                 Some(e) => notice("cloud-alert", t.orange, e, None, Button::new("su-guide").small().label(tr("Anleitung öffnen")).on_click(|_, _, _| {
-                    let _ = opener::open("https://git-scm.com/downloads");
+                    crate::core::library::open_path("https://git-scm.com/downloads");
                 }), &t).into_any_element(),
                 None => div().flex().items_center().gap(px(space::S)).text_color(t.secondary).child(loading(iconsize::S, t.secondary)).child(tr("Ordner wird geprüft …")).into_any_element(),
             }

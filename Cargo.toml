@@ -56,6 +56,7 @@ ropey = "=2.0.0-beta.1"
 unicode-normalization = "0.1.26"
 url = "2.5.8"
 uuid = { version = "1.29.0", features = ["v4"] }
+raw-window-handle = "0.6"
 walkdir = "2"
 zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
 
@@ -94,7 +95,6 @@ winresource = "0.1.34"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 drag = "2.1.1"
-raw-window-handle = "0.6"
 tray-icon = "0.26"
 
 [target.'cfg(unix)'.dependencies]
@@ -107,4 +107,4 @@ objc2-foundation = "0.3"
 objc2-user-notifications = "0.3"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }

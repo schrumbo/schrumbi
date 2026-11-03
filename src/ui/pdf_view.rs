@@ -551,7 +551,7 @@ impl PdfView {
     fn follow_link(&mut self, target: LinkTarget, cx: &mut Context<Self>) {
         match target {
             LinkTarget::Uri(uri) => {
-                let _ = opener::open(uri);
+                crate::core::library::open_path(uri);
             }
             LinkTarget::Page(page) => {
                 if let Some(here) = self.anchor_at(0., 0.) {

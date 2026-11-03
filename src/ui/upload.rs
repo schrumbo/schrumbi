@@ -34,7 +34,7 @@ fn open(cx: &mut App) {
             && h.update(cx, |root, window, _| {
                 let found = root.view().clone().downcast::<UploadPanel>().is_ok();
                 if found {
-                    window.activate_window();
+                    super::drive::activate_window(window);
                 }
                 found
             })
@@ -104,6 +104,9 @@ fn size_label(path: &Path) -> String {
 fn start_native_drag(paths: Vec<PathBuf>, preview: Option<Vec<u8>>, window: &Window) {
     let item = drag::DragItem::Files(paths);
     let image = drag::Image::Raw(preview.unwrap_or_else(|| include_bytes!("../../assets/brand/tray.png").to_vec()));
+    if crate::core::drive::fenced("drag out", "files") {
+        return;
+    }
     let _ = drag::start_drag(window, item, image, |_, _| {}, drag::Options::default());
 }
 
@@ -245,6 +248,7 @@ impl UploadPanel {
 
 impl Render for UploadPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        super::perf::frame_start();
         if !std::mem::replace(&mut self.focused, true) {
             window.focus(&self.focus, cx);
         }
@@ -370,7 +374,7 @@ impl Render for UploadPanel {
                     .gap(px(space::XS))
                     .when_some(link, |d, (title, url)| {
                         d.child(Button::new("upload-link").ghost().small().icon(menu_icon("globe")).label(trf("%@ öffnen", &[&title])).on_click(move |_, _, _| {
-                            let _ = opener::open(url.as_str());
+                            crate::core::library::open_path(url.as_str());
                         }))
                     })
                     .child(Button::new("upload-reveal").ghost().small().icon(menu_icon("folder")).label(super::platform::reveal_label()).on_click(move |_, _, cx| {

@@ -247,7 +247,7 @@ fn show(module: Option<String>, cx: &mut App) {
         if let Some(h) = w.downcast::<gpui_kit::base::Root>()
             && h.update(cx, |root, window, cx| {
                 let Ok(view) = root.view().clone().downcast::<Settings>() else { return false };
-                window.activate_window();
+                super::drive::activate_window(window);
                 if let Some(id) = module.clone() {
                     view.update(cx, |s, cx| {
                         s.show_module(id);
@@ -302,6 +302,7 @@ struct About;
 
 impl Render for About {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        super::perf::frame_start();
         let t = Theme::get(cx);
         let content = div()
             .size_full()
@@ -317,7 +318,7 @@ impl Render for About {
             .child(div().text_color(t.secondary).child(trf("Version %@", &[&env!("CARGO_PKG_VERSION")])))
             .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).child("© 2026 Schrumbo · GNU AGPL-3.0"))
             .child(link_button("about-source", tr("Quellcode"), &t).text_size(px(font::CAPTION)).on_click(|_, _, _| {
-                let _ = opener::open(env!("CARGO_PKG_REPOSITORY"));
+                crate::core::library::open_path(env!("CARGO_PKG_REPOSITORY"));
             }))
             .child(div().text_size(px(font::CAPTION)).text_color(t.tertiary).child("Lucide (ISC) · Material Icon Theme (MIT)"));
         super::chrome::frame(tr("Über Schrumbi"), content, &t)
@@ -959,7 +960,7 @@ impl Settings {
                     }
                 }))
                 .child(Button::new("calendar-once").small().ghost().label(tr("Einmalig importieren")).on_click(move |_, _, _| {
-                    let _ = opener::open(&open_file);
+                    crate::core::library::open_path(&open_file);
                 }))
                 .child(Button::new("calendar-reveal").small().ghost().icon(menu_icon("folder")).tooltip(super::platform::reveal_label()).on_click(move |_, _, _| crate::core::library::reveal(&reveal_file))), t));
         }
@@ -1399,7 +1400,7 @@ impl Settings {
                     }))
                     .child(Button::new(("lo", i)).ghost().small().icon(menu_icon("square-arrow-out-up-right")).tooltip(tr("Öffnen")).disabled(!valid).on_click(move |_, _, _| {
                         if let Some(u) = &url {
-                            let _ = opener::open(u);
+                            crate::core::library::open_path(u);
                         }
                     }))
                     .child(minus(("lr", i), tr("Link entfernen"), move |cx| e2(Box::new(move |m| if i < m.links.len() { m.links.remove(i); }))(cx)))
@@ -2159,6 +2160,7 @@ impl Settings {
 
 impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        super::perf::frame_start();
         if window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
         }

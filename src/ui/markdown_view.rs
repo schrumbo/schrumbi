@@ -1510,14 +1510,14 @@ pub fn link_action(url: &str, base: Option<&Path>) -> LinkAction {
                     l.set_route(crate::core::library::Route::Search);
                 }),
                 None => {
-                    let _ = opener::open(&url);
+                    crate::core::library::open_path(&url);
                 }
             }
         });
     }
     if is_external(&url) {
         return Rc::new(move |_| {
-            let _ = opener::open(&url);
+            crate::core::library::open_path(&url);
         });
     }
     let from = from_note(base);

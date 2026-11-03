@@ -9,6 +9,7 @@ use gpui_kit::component::Sizable;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use super::drive::Mark;
 use super::history::VersionList;
 use super::motion::{Soft, chevron, reveal};
 use super::state::{self, act};
@@ -56,6 +57,7 @@ impl DocSide {
         let selected = self.side == side;
         div()
             .id(id)
+            .mark("tab", label.clone())
             .px(px(space::S))
             .py(px(space::XS))
             .rounded(px(radius::INNER))

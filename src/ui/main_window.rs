@@ -585,11 +585,11 @@ pub fn show(cx: &mut App) {
     let handle = cx.try_global::<MainHandle>().map(|m| m.0).filter(|h| cx.windows().contains(h));
     match handle {
         Some(h) => {
-            let _ = h.update(cx, |_, window, _| window.activate_window());
+            let _ = h.update(cx, |_, window, _| super::drive::activate_window(window));
         }
         None => open(cx),
     }
-    cx.activate(true);
+    super::drive::activate(cx);
 }
 
 /// Whether `id` is the main window, open or just closed.

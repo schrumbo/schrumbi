@@ -30,7 +30,12 @@ pub fn open_in_obsidian(path: &Path, cx: &mut App) {
     use crate::core::vault::config::{self, Reach};
     let root = index::current().root.clone();
     match config::reach(&root, &config::known_vaults(), config::obsidian_installed()) {
-        Reach::Known => cx.open_url(&config::open_uri(&dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))),
+        Reach::Known => {
+            let uri = config::open_uri(&dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+            if !crate::core::drive::fenced("open", &uri) {
+                cx.open_url(&uri);
+            }
+        }
         Reach::UnknownVault => act(cx, |l| l.notify(tr("Obsidian kennt diesen Ordner noch nicht. Öffne ihn dort einmal mit „Ordner als Vault öffnen“."), "info", None, None)),
         Reach::NotInstalled => act(cx, |l| l.notify(tr("Obsidian ist auf diesem Gerät nicht installiert."), "info", None, None)),
     }

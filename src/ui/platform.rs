@@ -18,6 +18,12 @@ pub fn reveal_label() -> String {
 
 /// Shows an open panel and hands the chosen paths to `then`.
 pub fn pick(options: PathPromptOptions, cx: &mut App, then: impl FnOnce(Vec<PathBuf>, &mut App) + 'static) {
+    if crate::core::drive::on() {
+        if let Some(paths) = crate::core::drive::answer("open") {
+            then(paths, cx);
+        }
+        return;
+    }
     let rx = cx.prompt_for_paths(options);
     cx.spawn(async move |cx| {
         if let Ok(Ok(Some(paths))) = rx.await {
@@ -29,6 +35,12 @@ pub fn pick(options: PathPromptOptions, cx: &mut App, then: impl FnOnce(Vec<Path
 
 /// Shows a save panel and hands the chosen path to `then`.
 pub fn save(directory: PathBuf, name: String, cx: &mut App, then: impl FnOnce(PathBuf, &mut App) + 'static) {
+    if crate::core::drive::on() {
+        if let Some(path) = crate::core::drive::answer("save").and_then(|mut p| p.pop()) {
+            then(path, cx);
+        }
+        return;
+    }
     let rx = cx.prompt_for_new_path(&directory, Some(&name));
     cx.spawn(async move |cx| {
         if let Ok(Ok(Some(path))) = rx.await {
@@ -106,6 +118,9 @@ pub fn export_archive(cx: &mut App) {
 
 /// Starts or stops launching at login.
 pub fn set_launch_at_login(on: bool) -> bool {
+    if crate::core::drive::fenced("launch at login", on) {
+        return false;
+    }
     let Ok(exe) = std::env::current_exe() else { return false };
     let Ok(auto) = auto_launch::AutoLaunchBuilder::new().set_app_name("Schrumbi").set_app_path(&exe.to_string_lossy()).build() else { return false };
     if on { auto.enable().is_ok() } else { auto.disable().is_ok() }
@@ -183,12 +198,17 @@ mod markdown_default {
     }
 
     pub fn set() -> bool {
-        let _ = opener::open("ms-settings:defaultapps");
+        crate::core::library::open_path("ms-settings:defaultapps");
         false
     }
 }
 
-pub use markdown_default::{get as markdown_is_default, set as set_markdown_default};
+pub use markdown_default::get as markdown_is_default;
+
+/// Makes Schrumbi the default app for Markdown files.
+pub fn set_markdown_default() -> bool {
+    !crate::core::drive::fenced("default app", "markdown") && markdown_default::set()
+}
 
 /// The app that opens this file by default, for labels like „In Preview öffnen“.
 #[cfg(target_os = "macos")]

@@ -1,5 +1,6 @@
 pub mod bar_fit;
 pub mod board;
+pub mod drive;
 pub mod inspector;
 pub mod main_window;
 pub mod onboarding;

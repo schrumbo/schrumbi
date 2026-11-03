@@ -177,7 +177,7 @@ impl Render for UpdateSheet {
         let automatic = self.release.installer.is_some();
         let page_button = |id: &'static str| {
             let page = page.clone();
-            Button::new(id).label(tr("Release-Seite öffnen")).on_click(move |_, _, _| drop(opener::open(page.as_str())))
+            Button::new(id).label(tr("Release-Seite öffnen")).on_click(move |_, _, _| crate::core::library::open_path(page.as_str()))
         };
         let footer: AnyElement = match &self.phase {
             Phase::Offer => div()
