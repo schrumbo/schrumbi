@@ -49,7 +49,7 @@ pub fn example(id: usize, title: String, source: String, note: Rc<ParsedNote>, f
 fn segment(id: (&'static str, usize), label: String, on: bool, t: &Theme) -> Stateful<Div> {
     div()
         .id(id)
-        .h(px(control::S - space::XXS * 2.))
+        .h(px(control::S))
         .px(px(space::S + space::XXS))
         .flex()
         .items_center()
@@ -57,7 +57,7 @@ fn segment(id: (&'static str, usize), label: String, on: bool, t: &Theme) -> Sta
         .text_size(px(font::CAPTION))
         .cursor_pointer()
         .key_nav()
-        .when(on, |d| d.bg(t.content).text_color(t.primary).font_weight(FontWeight::MEDIUM).shadow(vec![BoxShadow { color: t.ink.opacity(0.12), offset: point(px(0.), px(1.)), blur_radius: px(2.), spread_radius: px(0.), inset: false }]))
+        .when(on, |d| d.bg(t.content).text_color(t.primary).font_weight(FontWeight::MEDIUM).shadow_sm())
         .when(!on, |d| d.text_color(t.secondary).soft(t.ink.opacity(0.06), radius::SMALL))
         .child(label)
 }
@@ -66,10 +66,10 @@ fn highlighted(source: &str, t: &Theme) -> (String, Vec<(std::ops::Range<usize>,
     let colors = syntax_palette(t.kind);
     let mut text = String::new();
     let mut marks = Vec::new();
-    for (s, kind) in crate::core::markdown::highlight(source, Some("markdown")) {
+    for (s, kind) in markdown_view::coloured(Some("markdown"), source).iter() {
         let start = text.len();
-        text.push_str(&s);
-        if let Some(c) = colors.of(kind) {
+        text.push_str(s);
+        if let Some(c) = colors.of(*kind) {
             marks.push((start..text.len(), HighlightStyle { color: Some(c), ..Default::default() }));
         }
     }

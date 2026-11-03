@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::cell::OnceCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
@@ -46,7 +47,6 @@ pub fn open(slug: Option<&str>, cx: &mut App) {
         }
     }
     let page = page.or_else(|| cx.try_global::<LastPage>().map(|l| l.0)).unwrap_or(0);
-    write_samples();
     let bounds = Bounds::centered(None, size(px(980.), px(700.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -73,8 +73,13 @@ pub fn is_sample(path: &Path) -> bool {
 /// Room above the sidebar and results for the window buttons.
 const TOP: f32 = control::BAR - space::S;
 
-/// How long a section found by search stays lit.
-const FLASH: std::time::Duration = std::time::Duration::from_millis(1400);
+/// How strongly a section found by search is tinted.
+const FLASH_TINT: f32 = 0.12;
+
+/// Height of an example whose sample files are still being written.
+const PENDING: f32 = 120.;
+
+static WRITTEN: AtomicBool = AtomicBool::new(false);
 
 const SAMPLE_NOTE: &str = "# Beispiel\n\nEine Notiz, auf die die Beispiele verlinken.\n\n## Zweiter Teil\n\nDieser Abschnitt erscheint dort, wo er eingebettet wird.\n";
 
@@ -92,6 +97,13 @@ fn expanded(cx: &App) -> Vec<String> {
 }
 
 fn write_samples() {
+    if !WRITTEN.load(Ordering::Acquire) {
+        write_files();
+        WRITTEN.store(true, Ordering::Release);
+    }
+}
+
+fn write_files() {
     let dir = sample_dir();
     if std::fs::create_dir_all(&dir).is_err() {
         return;
@@ -150,6 +162,7 @@ pub struct Help {
     docs: Vec<Doc>,
     expanded: Vec<String>,
     page: usize,
+    ready: bool,
     items: Vec<Item>,
     starts: Vec<usize>,
     list: ListState,
@@ -199,6 +212,7 @@ impl Help {
             docs,
             expanded,
             page,
+            ready: WRITTEN.load(Ordering::Acquire),
             items: Vec::new(),
             starts: Vec::new(),
             list: ListState::new(0, ListAlignment::Top, px(800.)),
@@ -217,6 +231,17 @@ impl Help {
         };
         help.load();
         help.pages.scroll_to_item(group_of(page));
+        if !help.ready {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().spawn(async { write_samples() }).await;
+                let _ = this.update(cx, |h, cx| {
+                    h.ready = WRITTEN.load(Ordering::Acquire);
+                    h.list.remeasure_items(0..h.items.len());
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
         help
     }
 
@@ -268,7 +293,7 @@ impl Help {
         self.list.scroll_to(ListOffset { item_ix: item, offset_in_item: px(0.) });
         self.flash = section.filter(|s| *s > 0).map(|s| (self.page, s));
         self.flash_task = self.flash.map(|lit| cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(FLASH).await;
+            cx.background_executor().timer(motion::FLASH).await;
             let _ = this.update(cx, |h, _| if h.flash == Some(lit) { h.flash = None });
         }));
         cx.notify();
@@ -364,6 +389,7 @@ impl Help {
         let k = &e.keystroke;
         let secondary = k.modifiers.secondary(cx);
         let typing = window.context_stack().iter().any(|c| c.contains("Input"));
+        let on_control = window.focused(cx).is_some_and(|f| f != self.focus);
         let row = self.rows.iter().position(|h| h.is_focused(window)).filter(|_| !k.modifiers.modified());
         let handled = match k.key.as_str() {
             "down" | "up" if row.is_some() => {
@@ -413,6 +439,7 @@ impl Help {
             "up" => self.scroll(px(-STEP)),
             "home" | "end" if self.searching(cx) => self.step_hit(if k.key == "home" { isize::MIN } else { isize::MAX }, cx),
             "pagedown" => self.scroll(self.page_height()),
+            "space" if on_control => false,
             "space" if !k.modifiers.shift => self.scroll(self.page_height()),
             "pageup" | "space" => self.scroll(-self.page_height()),
             "home" => {
@@ -529,7 +556,7 @@ impl Help {
                             .flex_col()
                             .gap(px(space::XXS))
                             .child(div().truncate().font_weight(FontWeight::SEMIBOLD).child(place))
-                            .child(div().text_size(px(font::CALLOUT)).line_height(relative(1.45)).text_color(t.secondary).child(StyledText::new(hit.snippet.clone()).with_highlights(marks))),
+                            .child(div().text_size(px(font::CALLOUT)).line_height(relative(font::LINE_LOOSE)).text_color(t.secondary).child(StyledText::new(hit.snippet.clone()).with_highlights(marks))),
                     )
                     .when(i == selected, |d| d.child(div().pt(px(space::XXS)).child(kbd(Shortcut { key: "return".into(), command: false, shift: false, option: false, control: false }.display(), t))))
                     .on_click(cx.listener(move |h, _, window, cx| h.open_hit(i, window, cx))),
@@ -595,16 +622,8 @@ impl Help {
                 let lit = self.flash == Some((self.page, *section)) && self.starts.get(*section) == Some(&ix);
                 let starts_section = *section > 0 && self.starts.get(*section) == Some(&ix);
                 let shown = div().pb(px(space::M)).when(starts_section, |d| d.pt(px(space::L))).child(markdown_view::render(note, Some(&base), None, &t));
-                if lit {
-                    let tint = t.accent;
-                    div()
-                        .id(("help-flash", ix))
-                        .mx(px(-space::M))
-                        .px(px(space::M))
-                        .rounded(px(radius::CONTROL))
-                        .child(shown)
-                        .with_animation(("help-flash", ix), Animation::new(motion::timed(FLASH, cx)).with_easing(ease_in_out), move |d, p| d.bg(tint.opacity(0.12 * (1. - p))))
-                        .into_any_element()
+                if starts_section {
+                    motion::glow(("help-flash", ix), lit, t.accent.opacity(FLASH_TINT), shown).into_any_element()
                 } else {
                     shown.into_any_element()
                 }
@@ -622,6 +641,9 @@ impl Help {
                     let source = copy_source.clone();
                     let _ = copy_entity.update(cx, |h, cx| h.copy(index, source, cx));
                 });
+                if !self.ready {
+                    return div().w_full().flex().justify_center().px(px(space::XXL)).child(div().w_full().max_w(px(MEASURE)).pb(px(space::L)).child(div().h(px(PENDING)).rounded(px(radius::CARD)).border_1().border_color(t.separator))).into_any_element();
+                }
                 let id = self.page * 1000 + index;
                 div()
                     .pb(px(space::L))
@@ -665,7 +687,7 @@ impl Render for Help {
             .bg(t.content)
             .font_family(Theme::font_family())
             .text_size(px(font::BODY))
-            .line_height(relative(1.22))
+            .line_height(relative(font::LINE))
             .text_color(t.primary)
             .capture_key_down(cx.listener(Self::on_key))
             .on_action(cx.listener(|h, _: &super::app::GoBack, window, cx| {
@@ -688,13 +710,25 @@ mod tests {
     use crate::core::i18n::Lang;
     use crate::core::shortcuts::ShortcutAction;
 
+    fn binds(source: &str, name: &str) -> bool {
+        regex::Regex::new(&format!(r"(?:kb|KeyBinding::new)\([^\n]*\b{}\b", regex::escape(name))).is_ok_and(|r| r.is_match(source))
+    }
+
+    #[test]
+    fn a_declared_action_without_a_binding_is_not_bound() {
+        let declared = "actions!(\n    schrumbi,\n    [\n        Quit,\n        ShowGraph,\n    ]\n);\nfn keys() {\n    kb(cmd(\"q\"), Quit, None),\n}\n";
+        assert!(binds(declared, "Quit"));
+        assert!(!binds(declared, "ShowGraph"));
+        assert!(binds("KeyBinding::new(\"escape\", super::main_window::Dismiss, Some(\"MainWindow\"))", "Dismiss"));
+    }
+
     #[test]
     fn every_key_placeholder_names_a_real_key() {
         let app = include_str!("app.rs");
         let mut unknown = Vec::new();
         for page in PAGES {
             for (kind, name) in docs::placeholders(page.source(Lang::De)) {
-                let known = ShortcutAction::ALL.iter().any(|a| a.id() == name) || docs::plain_key(&name).is_some() || name.chars().next().is_some_and(char::is_uppercase) && regex::Regex::new(&format!(r"[\s(,:]{name}[\s),]")).unwrap().is_match(app);
+                let known = ShortcutAction::ALL.iter().any(|a| a.id() == name) || docs::plain_key(&name).is_some() || name.chars().next().is_some_and(char::is_uppercase) && binds(app, &name);
                 if kind == "key" && !known {
                     unknown.push(format!("{}: {name}", page.slug));
                 }

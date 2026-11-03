@@ -5,7 +5,7 @@ use gpui_kit::base::{MotionReveal, Transition, transition};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::theme::{Theme, iconsize};
+use super::theme::{Theme, iconsize, radius, space};
 use super::widgets::icon;
 
 /// Hover, press, small confirmations.
@@ -14,6 +14,9 @@ pub const FAST: Duration = Duration::from_millis(120);
 pub const MEDIUM: Duration = Duration::from_millis(180);
 /// Elements travelling across the window.
 pub const SLOW: Duration = Duration::from_millis(240);
+
+/// How long a section found by search stays lit.
+pub const FLASH: Duration = Duration::from_millis(1400);
 
 /// How long list rows keep sliding to new positions after a change; covers the rescan that follows it.
 const FLIP_ARMED: Duration = Duration::from_millis(500);
@@ -115,6 +118,33 @@ impl RenderOnce for Reveal {
             return div().into_any_element();
         }
         MotionReveal::new(self.id, progress, self.content).into_any_element()
+    }
+}
+
+/// A block that lights up in `color` while `lit` and fades in and out around it.
+#[derive(IntoElement)]
+pub struct Glow {
+    id: ElementId,
+    lit: bool,
+    color: Hsla,
+    content: AnyElement,
+}
+
+/// Wraps `content` in a tint that eases in when `lit` turns true and out when it turns false; `color` carries the strength.
+pub fn glow(id: impl Into<ElementId>, lit: bool, color: Hsla, content: impl IntoElement) -> Glow {
+    Glow { id: id.into(), lit, color, content: content.into_any_element() }
+}
+
+impl RenderOnce for Glow {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let level = follow(ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "glow".into()), if self.lit { 1. } else { 0. }, timed(MEDIUM, cx), window, cx);
+        div()
+            .id(self.id)
+            .mx(px(-space::M))
+            .px(px(space::M))
+            .rounded(px(radius::CONTROL))
+            .when(level > 0., |d| d.bg(Hsla { a: self.color.a * level, ..self.color }))
+            .child(self.content)
     }
 }
 

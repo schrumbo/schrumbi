@@ -103,6 +103,8 @@ pub mod font {
     pub const CAPTION: f32 = 11.;
     pub const CAPTION2: f32 = 10.;
     pub const LINE: f32 = 1.22;
+    /// Line height of small running text, like a search snippet.
+    pub const LINE_LOOSE: f32 = 1.45;
     /// The label of a kit small button, 0.875 rem.
     pub const BUTTON: f32 = 14.;
 }

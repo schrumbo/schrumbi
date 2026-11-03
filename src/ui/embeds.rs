@@ -120,6 +120,7 @@ pub fn math(source: &str, id: u64, _: &Theme) -> AnyElement {
 struct Diagram {
     code: String,
     id: u64,
+    sample: bool,
 }
 
 impl RenderOnce for Diagram {
@@ -140,6 +141,7 @@ impl RenderOnce for Diagram {
                 let shown = image.clone();
                 let place = Rc::new(std::cell::Cell::new(Bounds::<Pixels>::default()));
                 let measured = place.clone();
+                let sample = self.sample;
                 let spots = DIAGRAM_SPOTS.lock().unwrap().get(&(self.code.clone(), dark)).cloned().unwrap_or_default();
                 div()
                     .id(("md-diagram-open", self.id))
@@ -153,13 +155,13 @@ impl RenderOnce for Diagram {
                         let (x, y) = (f32::from(at.x - origin.x) / scale, f32::from(at.y - origin.y) / scale);
                         let near = spots.iter().map(|(name, sx, sy)| (name, (sx - x).powi(2) + (sy - y).powi(2))).filter(|(_, d)| *d < 70. * 70.).min_by(|a, b| a.1.total_cmp(&b.1));
                         match near {
-                            Some((name, _)) => {
+                            Some((name, _)) if !sample => {
                                 let destination = name.clone();
                                 act(cx, |l| {
                                     l.open_link(&destination, None);
                                 });
                             }
-                            None => open_large(shown.clone(), w, h, window, cx),
+                            _ => open_large(shown.clone(), w, h, window, cx),
                         }
                     })
                     .into_any_element()
@@ -176,12 +178,15 @@ impl RenderOnce for Diagram {
             .when(!links.is_empty(), |d| {
                 d.child(div().w_full().pt(px(space::S)).flex().flex_wrap().gap(px(space::S)).children(links.into_iter().enumerate().map(|(i, name)| {
                     let (label, target) = (name.clone(), name);
+                    if self.sample {
+                        return div().text_color(t.accent_text).text_size(px(font::CALLOUT)).child(label).into_any_element();
+                    }
                     link_button(("md-diagram-link", (self.id as usize) * 1000 + i), label, &t).text_size(px(font::CALLOUT)).on_click(move |_, _, cx| {
                         let destination = target.clone();
                         act(cx, |l| {
                             l.open_link(&destination, None);
                         });
-                    })
+                    }).into_any_element()
                 })))
             })
     }
@@ -198,11 +203,12 @@ fn open_large(image: Arc<Image>, w: f32, h: f32, window: &mut Window, cx: &mut A
 /// Code blocks that are really something else. `None` means ordinary code.
 pub fn special_block(lang: Option<&str>, code: &str, base: Option<&Path>, id: u64, t: &Theme) -> Option<AnyElement> {
     let lang = lang?.to_lowercase();
+    let sample = super::markdown_view::is_sample_base(base);
     match lang.as_str() {
-        "mermaid" => Some(Diagram { code: code.to_string(), id }.into_any_element()),
+        "mermaid" => Some(Diagram { code: code.to_string(), id, sample }.into_any_element()),
         "math" | "latex" if false => None,
-        "query" => Some(QueryBlock { query: code.trim().to_string(), id }.into_any_element()),
-        "base" => Some(BaseBlock { source: code.to_string(), this: base.map(|b| b.join(".")), id }.into_any_element()),
+        "query" => Some(QueryBlock { query: code.trim().to_string(), id, sample }.into_any_element()),
+        "base" => Some(BaseBlock { source: code.to_string(), this: base.map(|b| b.join(".")), id, sample }.into_any_element()),
         "dataview" | "dataviewjs" | "tasks" | "excalidraw" | "kanban" | "tracker" | "chart" | "ad-note" => Some(plugin_block(&lang, code, id, t)),
         _ => None,
     }
@@ -237,6 +243,7 @@ pub fn note_plugin(path: &Path, text: &str) -> Option<&'static str> {
 struct QueryBlock {
     query: String,
     id: u64,
+    sample: bool,
 }
 
 thread_local! {
@@ -274,7 +281,8 @@ impl RenderOnce for QueryBlock {
                     let open = f.clone();
                     let name = f.file_stem().unwrap_or_default().to_string_lossy().to_string();
                     let hover = t.ink.opacity(0.05);
-                    div().id(("query-hit", (self.id as usize) * 1000 + i)).px(px(space::M)).py(px(space::XS)).flex().items_center().gap(px(space::S)).cursor_pointer().soft(hover, 0.).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).child(file_icon(&f, iconsize::S)).child(div().truncate().child(name))
+                    let sample = self.sample;
+                    div().id(("query-hit", (self.id as usize) * 1000 + i)).px(px(space::M)).py(px(space::XS)).flex().items_center().gap(px(space::S)).when(!sample, |d| d.cursor_pointer().soft(hover, 0.)).on_click(move |_, _, cx| if !sample { act(cx, |l| l.open_file(&open)) }).child(file_icon(&f, iconsize::S)).child(div().truncate().child(name))
                 }))
                 .into_any_element(),
         };
@@ -287,6 +295,7 @@ struct BaseBlock {
     source: String,
     this: Option<PathBuf>,
     id: u64,
+    sample: bool,
 }
 
 type BaseTable = Result<(Vec<String>, Vec<bases::ResultRow>), String>;
@@ -347,7 +356,8 @@ impl RenderOnce for BaseBlock {
                 let lines = rows.iter().take(100).enumerate().map(|(i, row)| {
                     let open = row.path.clone();
                     let hover = t.ink.opacity(0.05);
-                    div().id(("base-row", (self.id as usize) * 1000 + i)).flex().border_t_1().border_color(t.separator).cursor_pointer().soft(hover, 0.).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).children(row.cells.iter().map(|(_, v)| div().flex_1().min_w_0().truncate().px(px(space::S)).py(px(space::XS)).text_size(px(font::CALLOUT)).child(v.display())))
+                    let sample = self.sample;
+                    div().id(("base-row", (self.id as usize) * 1000 + i)).flex().border_t_1().border_color(t.separator).when(!sample, |d| d.cursor_pointer().soft(hover, 0.)).on_click(move |_, _, cx| if !sample { act(cx, |l| l.open_file(&open)) }).children(row.cells.iter().map(|(_, v)| div().flex_1().min_w_0().truncate().px(px(space::S)).py(px(space::XS)).text_size(px(font::CALLOUT)).child(v.display())))
                 });
                 div().id(("base-scroll", self.id)).max_h(px(400.)).overflow_y_scroll().child(head).children(lines).into_any_element()
             }
@@ -361,12 +371,18 @@ pub fn base_file(path: PathBuf, id: u64, t: &Theme) -> AnyElement {
     let source = cached_text(&path).to_string();
     let open = path.clone();
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let sample = super::help::is_sample(&path);
+    let action = if sample {
+        div().text_color(t.accent_text).text_size(px(font::CAPTION)).child(tr("Öffnen")).into_any_element()
+    } else {
+        link_button(("base-open", id), tr("Öffnen"), t).text_size(px(font::CAPTION)).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).into_any_element()
+    };
     div()
         .flex()
         .flex_col()
         .gap(px(space::XS))
-        .child(div().flex().justify_between().items_center().child(caption(name, t)).child(link_button(("base-open", id), tr("Öffnen"), t).text_size(px(font::CAPTION)).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))))
-        .child(BaseBlock { source, this: Some(path), id })
+        .child(div().flex().justify_between().items_center().child(caption(name, t)).child(action))
+        .child(BaseBlock { source, this: Some(path), id, sample })
         .into_any_element()
 }
 
@@ -398,12 +414,12 @@ pub fn canvas_file(path: PathBuf, id: u64, t: &Theme) -> AnyElement {
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     let tint = t.ink.opacity(0.12);
     let border = t.ink.opacity(0.25);
+    let sample = super::help::is_sample(&path);
     grouped(t)
         .child(
             div()
                 .id(("canvas-embed", id))
-                .cursor_pointer()
-                .on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
+                .when(!sample, |d| d.cursor_pointer().on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))))
                 .child(div().px(px(space::M)).py(px(space::XS)).bg(t.secondary_bg).text_size(px(font::CAPTION)).text_color(t.secondary).child(name))
                 .child(div().p(px(space::M)).flex().justify_center().child(div().relative().w(px(width * scale)).h(px(height * scale)).children(doc.nodes.iter().map(|n| {
                     div().absolute().left(px((n.x - x0) as f32 * scale)).top(px((n.y - y0) as f32 * scale)).w(px(n.width as f32 * scale)).h(px(n.height as f32 * scale)).rounded(px(radius::SMALL)).bg(tint).border_1().border_color(border)

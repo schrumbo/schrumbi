@@ -1077,7 +1077,7 @@ fn linked_image(src: &str, alt: &str, target: Option<&str>, cx: &Ctx) -> AnyElem
     let order = cx.order.get();
     cx.order.set(order + 1);
     let action = link_action(target, cx.base);
-    div().id(("md-image-link", order)).cursor_pointer().capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| action(cx)).child(shown).into_any_element()
+    div().id(("md-image-link", order)).when(!is_sample_base(cx.base), |d| d.cursor_pointer().soft(cx.t.ink.opacity(0.04), radius::CONTROL)).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| action(cx)).child(shown).into_any_element()
 }
 
 /// What a plain click on text in this block should do.
@@ -1409,9 +1409,14 @@ fn link_exists(url: &str, base: Option<&Path>) -> bool {
     target.path.is_empty() || base.is_some_and(|b| b.join(&target.path).is_file()) || index::current().resolver.resolve(&target, from_note(base).as_deref()).is_some() || Path::new(&target.path).is_absolute()
 }
 
+/// Whether notes drawn from `base` are guide examples, which must not act on the user's data.
+pub(super) fn is_sample_base(base: Option<&Path>) -> bool {
+    base.is_some_and(super::help::is_sample)
+}
+
 /// Web links open in the browser; everything else is a link inside the vault, created if it is missing.
 pub fn link_action(url: &str, base: Option<&Path>) -> LinkAction {
-    if base.is_some_and(super::help::is_sample) {
+    if is_sample_base(base) {
         return Rc::new(|_| {});
     }
     let url = url.to_string();
@@ -1504,6 +1509,7 @@ fn file_card(path: PathBuf, detail: Option<String>, action: String, cx: &Ctx) ->
     cx.order.set(order + 1);
     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
     let open = path.clone();
+    let sample = super::help::is_sample(&path);
     div()
         .id(("md-file-card", order))
         .px(px(space::M))
@@ -1514,8 +1520,7 @@ fn file_card(path: PathBuf, detail: Option<String>, action: String, cx: &Ctx) ->
         .rounded(px(radius::CONTROL))
         .border_1()
         .border_color(t.separator)
-        .cursor_pointer()
-        .soft(t.ink.opacity(0.04), radius::CONTROL)
+        .when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(0.04), radius::CONTROL))
         .on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) })
         .child(super::widgets::file_icon(&path, iconsize::L))
         .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(name)).when_some(detail, |d, text| d.child(super::widgets::caption(text, t))))
@@ -1535,7 +1540,7 @@ fn embed(src: &str, alt: &str, cx: &Ctx) -> AnyElement {
     let vault = index::current();
     let from = from_note(cx.base);
     let beside = cx.base.map(|b| b.join(&target.path)).filter(|p| !target.path.is_empty() && p.is_file());
-    let Some(path) = beside.or_else(|| vault.resolver.resolve(&target, from.as_deref()).filter(|_| !cx.base.is_some_and(super::help::is_sample))) else { return missing_embed(&target.path, cx) };
+    let Some(path) = beside.or_else(|| vault.resolver.resolve(&target, from.as_deref()).filter(|_| !is_sample_base(cx.base))) else { return missing_embed(&target.path, cx) };
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     if IMAGE_TYPES.contains(&ext.as_str()) {
         return image_at(path, alt, &decoded, cx);
@@ -1571,8 +1576,9 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
     cx.order.set(order + 1);
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     let open = path.clone();
+    let sample = is_sample_base(cx.base);
     if cx.chain.len() >= 3 {
-        return div().id(("md-embed-link", order)).text_color(t.accent_text).cursor_pointer().soft(t.ink.opacity(0.04), radius::SMALL).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) }).child(name).into_any_element();
+        return div().id(("md-embed-link", order)).text_color(t.accent_text).when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(0.04), radius::SMALL)).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) }).child(name).into_any_element();
     }
     let note = embedded_note(&path, target);
     let mut chain = cx.chain.clone();
@@ -1595,8 +1601,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
                 .items_center()
                 .gap(px(space::XS))
                 .bg(t.secondary_bg)
-                .cursor_pointer()
-                .soft(t.ink.opacity(0.04), 0.)
+                .when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(0.04), 0.))
                 .text_size(px(font::CAPTION))
                 .text_color(t.secondary)
                 .on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) })
@@ -1628,7 +1633,8 @@ fn image_at(p: PathBuf, alt: &str, source_written: &str, cx: &Ctx) -> AnyElement
         let order = cx.order.get();
         cx.order.set(order + 1);
         let open = p.clone();
-        let drawn = div().id(("md-image", order)).cursor_pointer().soft(cx.t.ink.opacity(0.04), radius::CONTROL).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::preview::show(&open, cx) }).child(img(p).when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL)));
+        let sample = is_sample_base(cx.base);
+        let drawn = div().id(("md-image", order)).when(!sample, |d| d.cursor_pointer().soft(cx.t.ink.opacity(0.04), radius::CONTROL)).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::preview::show(&open, cx) }).child(img(p).when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL)));
         let source_name = source_written.to_string();
         match (cx.focus.and_then(|f| f.edit_item.clone()), cx.block) {
             (Some(edit), item) => drawn
@@ -1653,7 +1659,7 @@ thread_local! {
 }
 
 /// Colours code once; scrolling draws the same block again and again.
-fn coloured(lang: Option<&str>, code: &str) -> Rc<Vec<(String, TokenKind)>> {
+pub(super) fn coloured(lang: Option<&str>, code: &str) -> Rc<Vec<(String, TokenKind)>> {
     let key = (lang.map(str::to_string), code.to_string());
     COLOURED.with(|c| {
         let mut cache = c.borrow_mut();
@@ -1677,16 +1683,7 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
     for (s, kind) in coloured(lang, code).iter() {
         let start = text.len();
         text.push_str(s);
-        let color = match kind {
-            TokenKind::Plain => None,
-            TokenKind::Keyword => Some(rgb(colors.keyword).into()),
-            TokenKind::String => Some(rgb(colors.string).into()),
-            TokenKind::Comment => Some(rgb(colors.comment).into()),
-            TokenKind::Number => Some(rgb(colors.number).into()),
-            TokenKind::Type => Some(rgb(colors.kind).into()),
-            TokenKind::Attribute => Some(rgb(colors.function).into()),
-        };
-        if let Some(c) = color {
+        if let Some(c) = colors.of(*kind) {
             highlights.push((start..text.len(), HighlightStyle { color: Some(c), ..Default::default() }));
         }
     }
@@ -2137,6 +2134,7 @@ impl RenderOnce for Properties {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let (secondary, separator, accent) = (self.secondary, self.separator, self.accent);
         let base = self.base.clone();
+        let sample = is_sample_base(base.as_deref());
         let id = self.id.clone();
         div().flex().flex_col().pb(px(space::S)).border_b_1().border_color(separator).text_size(px(note_size(font::CALLOUT))).children(self.items.into_iter().enumerate().map(move |(i, (name, values))| {
             let base = base.clone();
@@ -2149,13 +2147,15 @@ impl RenderOnce for Properties {
                 .py(px(space::XXS))
                 .mx(px(-space::S))
                 .px(px(space::S))
-                .cursor_pointer()
-                .soft(secondary.opacity(0.1), radius::INNER)
-                .tooltip(super::widgets::tip(tr("In den Details bearbeiten")))
-                .on_click(|_, _, cx| super::state::act(cx, |l| {
-                    l.show_properties = true;
-                    l.peek_inspector();
-                }))
+                .when(!sample, |d| {
+                    d.cursor_pointer()
+                        .soft(secondary.opacity(0.1), radius::INNER)
+                        .tooltip(super::widgets::tip(tr("In den Details bearbeiten")))
+                        .on_click(|_, _, cx| super::state::act(cx, |l| {
+                            l.show_properties = true;
+                            l.peek_inspector();
+                        }))
+                })
                 .child(div().flex_none().w(px(140.)).truncate().text_color(secondary).child(name))
                 .child(div().flex_1().min_w_0().flex().flex_wrap().gap(px(space::S)).children(values.into_iter().enumerate().map(move |(n, value)| {
                     let target = value.strip_prefix("[[").and_then(|v| v.strip_suffix("]]")).map(str::to_string);
@@ -2166,7 +2166,7 @@ impl RenderOnce for Properties {
                             div()
                                 .id(SharedString::from(format!("md-prop-link-{i}-{n}")))
                                 .text_color(accent)
-                                .cursor_pointer()
+                                .when(!sample, Styled::cursor_pointer)
                                 .on_click(move |_, _, cx| {
                                     cx.stop_propagation();
                                     action(cx);
