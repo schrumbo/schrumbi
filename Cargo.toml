@@ -3,7 +3,7 @@ description = "Study planner: deadlines, files and notes"
 license = "AGPL-3.0-only"
 repository = "https://github.com/schrumbo/schrumbi"
 name = "schrumbi"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 publish = false
 
