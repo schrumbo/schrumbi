@@ -301,6 +301,7 @@ pub fn came_back(cx: &mut App) {
     reload_buffers(cx);
     cx.global_mut::<Store>().pending_index = None;
     reindex(cx);
+    super::apple_calendar::recheck();
 }
 
 fn changed(c: Change, cx: &mut App) {
@@ -488,6 +489,7 @@ pub fn sync_reminders(cx: &mut App) {
             let _ = std::fs::write(&path, ics);
         }
     }
+    super::apple_calendar::push(cx);
     let reminders = read(cx, |l| l.reminders());
     if reminders == cx.global::<Store>().reminders {
         return;

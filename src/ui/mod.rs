@@ -28,6 +28,7 @@ pub mod today;
 pub mod upload;
 pub mod widgets;
 pub mod app;
+pub mod apple_calendar;
 pub mod documents;
 pub mod editor;
 pub mod settings;

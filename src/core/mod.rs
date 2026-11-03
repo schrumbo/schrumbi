@@ -1,4 +1,5 @@
 pub mod calendar_server;
+pub mod calendar_sync;
 pub mod catalog;
 pub mod clock;
 pub mod crash;
