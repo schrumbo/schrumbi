@@ -599,7 +599,9 @@ async fn next_frame(handle: AnyWindowHandle, refresh: bool, limit: Duration, cx:
                 WINDOWS.with_borrow_mut(|w| w.entry(handle.window_id().as_u64()).or_default().forced = true);
                 window.refresh();
             }
-            window.on_next_frame(move |window, _| window.on_next_frame(move |_, _| drop(tx.try_send(()))));
+            window.on_next_frame(move |window, _| window.on_next_frame(move |_, _| {
+                let _ = tx.try_send(());
+            }));
         })
         .is_ok();
     if !asked {
