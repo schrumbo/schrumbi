@@ -316,17 +316,18 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
         "click" | "move" | "down" | "up" | "wheel" | "drop" | "drag" => pointer(cmd, b, cx).await,
         "key" => {
             let handle = one_window(b, cx)?;
-            let keys: Vec<String> = b["keys"].as_array().map(|k| k.iter().filter_map(|k| k.as_str()).map(key_name).collect()).unwrap_or_default();
-            for k in keys {
-                if !b["clipboard"].as_bool().unwrap_or(false) && touches_clipboard(&k) {
+            let names: Vec<String> = b["keys"].as_array().map(|k| k.iter().filter_map(|k| k.as_str()).map(key_name).collect()).unwrap_or_default();
+            let os = cx.update(|cx| cx.platform_info().os);
+            let mut keys = Vec::new();
+            for k in names {
+                let keystroke = Keystroke::parse_with_os(&k, os).map_err(|e| format!("{k}: {e}"))?;
+                if !b["clipboard"].as_bool().unwrap_or(false) && touches_clipboard(&keystroke) {
                     return Err(format!("{k} would use the owner's clipboard; pass --clipboard if that is intended"));
                 }
-                let handled = handle
-                    .update(cx, |_, window, cx| {
-                        let keystroke = Keystroke::parse_with_os(&k, cx.platform_info().os).map_err(|e| format!("{k}: {e}"))?;
-                        Ok::<bool, String>(window.dispatch_keystroke(keystroke, cx))
-                    })
-                    .map_err(|e| e.to_string())??;
+                keys.push((k, keystroke));
+            }
+            for (k, keystroke) in keys {
+                let handled = handle.update(cx, |_, window, cx| window.dispatch_keystroke(keystroke, cx)).map_err(|e| e.to_string())?;
                 if !handled {
                     drive::note(format!("key {k} not handled"));
                 }
@@ -394,11 +395,9 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
     }
 }
 
-fn touches_clipboard(key: &str) -> bool {
-    let parts: Vec<&str> = key.split('-').collect();
-    let (last, mods) = parts.split_last().map_or(("", &[][..]), |(l, m)| (*l, m));
-    let command = mods.iter().any(|m| matches!(*m, "secondary" | "ctrl" | "cmd"));
-    (command && matches!(last, "c" | "x" | "v" | "insert")) || (mods.contains(&"shift") && matches!(last, "insert" | "delete"))
+fn touches_clipboard(k: &Keystroke) -> bool {
+    let key = k.key.to_lowercase();
+    ((k.modifiers.platform || k.modifiers.control) && matches!(key.as_str(), "c" | "x" | "v" | "insert")) || (k.modifiers.shift && matches!(key.as_str(), "insert" | "delete"))
 }
 
 fn key_name(k: &str) -> String {
@@ -614,12 +613,15 @@ async fn next_frame(handle: AnyWindowHandle, refresh: bool, limit: Duration, cx:
             let _ = late.try_send(());
         })
         .detach();
-    for _ in 0..3 {
-        if rx.try_recv().is_ok() || !pump(handle, cx) {
-            break;
-        }
+    let until = Instant::now() + limit;
+    let mut got = rx.try_recv().is_ok();
+    while !got && Instant::now() < until && pump(handle, cx) {
+        cx.background_executor().timer(Duration::from_millis(35)).await;
+        got = rx.try_recv().is_ok();
     }
-    let _ = rx.recv().await;
+    if !got {
+        let _ = rx.recv().await;
+    }
 }
 
 #[cfg(target_os = "macos")]

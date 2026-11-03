@@ -464,11 +464,15 @@ def shot(inst, name, window, full):
 
 
 def inst_capture(inst, win, out, full):
+    stderr, sys.stderr = sys.stderr, open(os.devnull, "w")
     try:
         inst.call("capture", path=str(out), full=full, window=win["id"])
         return out.exists()
     except SystemExit:
         return False
+    finally:
+        sys.stderr.close()
+        sys.stderr = stderr
 
 
 def gui_exe():
@@ -697,12 +701,13 @@ def main(argv):
     elif cmd == "key":
         if not args:
             die("app key <key>... [mods]")
-        keys = list(args)
+        clip = "--clipboard" in args
+        keys = [k for k in args if k != "--clipboard"]
+        if not keys:
+            die("app key <key>... [mods]")
         if len(keys) >= 2 and is_mods(keys[-1]) and not is_mods(keys[0]):
             mods = keys.pop().replace("+", "-")
             keys = [f"{mods}-{k}" for k in keys]
-        clip = "--clipboard" in keys
-        keys = [k for k in keys if k != "--clipboard"]
         inst.call("key", keys=keys, clipboard=clip, **win_arg)
     elif cmd == "type":
         paste = "--paste" in args
