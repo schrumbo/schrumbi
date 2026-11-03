@@ -152,6 +152,8 @@ pub struct Theme {
     pub accent: Hsla,
     /// The accent for text, which needs more contrast than fills do.
     pub accent_text: Hsla,
+    /// Green that is readable as text on the content background.
+    pub green_text: Hsla,
     /// Text and icons on a solid accent fill.
     pub on_accent: Hsla,
     pub selection: Hsla,
@@ -195,6 +197,7 @@ impl Theme {
             separator: ink.opacity(if dark { 0.12 } else { 0.1 }),
             accent: if dark { c(0x0A84FF) } else { c(0x007AFF) },
             accent_text: if dark { c(0x409CFF) } else { c(0x0062CC) },
+            green_text: if dark { c(0x30D158) } else { c(0x248A3D) },
             on_accent: c(0xFFFFFF),
             selection: if dark { c(0x3172D4) } else { c(0x0A6CF0) },
             green: if dark { c(0x30D158) } else { c(0x34C759) },
@@ -224,6 +227,7 @@ impl Theme {
             separator: ink.opacity(0.11),
             accent: c(0x5E81AC),
             accent_text: c(0x88C0D0),
+            green_text: c(0xA3BE8C),
             on_accent: c(0xECEFF4),
             selection: c(0x4C6A92),
             green: c(0xA3BE8C),
@@ -253,6 +257,7 @@ impl Theme {
             separator: ink.opacity(0.11),
             accent: c(0xBD93F9),
             accent_text: c(0xBD93F9),
+            green_text: c(0x50FA7B),
             on_accent: c(0x21222C),
             selection: c(0x6A5A9C),
             green: c(0x50FA7B),

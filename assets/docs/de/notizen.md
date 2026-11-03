@@ -71,3 +71,9 @@ Rechtsklick auf einen anderen Tab → {ui:Daneben öffnen} zeigt ihn neben der a
 | {ui:Als PDF exportieren} {key:exportPDF} | PDF neben die Notiz |
 | {ui:Verlauf} | Ältere Stände vergleichen und wiederherstellen, wenn Sync eingerichtet ist |
 | {ui:Als Folien zeigen} | Teile mit `---` werden Folien |
+
+Liegt neben der Notiz schon ein früherer Export, fragt Schrumbi vor dem Ersetzen. {ui:Rückgängig} in der Meldung danach holt das alte PDF zurück.
+
+- {ui:Nicht mehr fragen} ersetzt künftig ohne Frage.
+- Die Frage schaltest du wieder ein unter {key:OpenSettings} → {ui:Notizen} → {ui:Vor dem Ersetzen eines früheren Exports fragen}.
+- Eine andere Datei mit diesem Namen bleibt unangetastet, das PDF bekommt eine Nummer. Der nächste Export ersetzt dieses nummerierte PDF.

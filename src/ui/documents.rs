@@ -1432,10 +1432,10 @@ impl NoteView {
         cx.notify();
     }
 
-    fn export(&mut self, cx: &mut Context<Self>) {
+    fn export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.editor.read(cx).value().to_string();
         self.save(cx);
-        super::pdf::export(&self.path, Some(text), cx);
+        super::pdf::export(&self.path, Some(text), window, cx);
     }
 
     fn apply(&mut self, edit: Edit, window: &mut Window, cx: &mut Context<Self>) {
@@ -1554,7 +1554,7 @@ impl NoteView {
             .when(!picker && !modes_out, |d| d.child(modes))
             .children(mode_picker)
             .children(toc)
-            .when(!pdf_out, |d| d.child(Button::new("note-pdf").small().icon(menu_icon("share")).label(tr("PDF")).tooltip(pdf_tip.clone()).disabled(exporting).on_click(move |_, _, cx| e1.update(cx, NoteView::export))))
+            .when(!pdf_out, |d| d.child(Button::new("note-pdf").small().icon(menu_icon("share")).label(tr("PDF")).tooltip(pdf_tip.clone()).disabled(exporting).on_click(move |_, window, cx| e1.update(cx, |n, cx| n.export(window, cx)))))
             .child(Button::new("note-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, window, cx| {
                 let (a, b, c, d) = (path.clone(), p2.clone(), p3.clone(), path.clone());
                 let mut menu = menu;
@@ -1571,7 +1571,7 @@ impl NoteView {
                 }
                 if pdf_out {
                     let e = e2.clone();
-                    menu = menu.item(PopupMenuItem::new(pdf_tip.clone()).icon(menu_icon("share")).disabled(exporting).on_click(move |_, _, cx| e.update(cx, NoteView::export)));
+                    menu = menu.item(PopupMenuItem::new(pdf_tip.clone()).icon(menu_icon("share")).disabled(exporting).on_click(move |_, window, cx| e.update(cx, |n, cx| n.export(window, cx))));
                 }
                 if modes_out || toc_out || pdf_out {
                     menu = menu.separator();
@@ -1585,6 +1585,10 @@ impl NoteView {
                 menu = menu
                     .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| library::reveal(&b)))
                     .item(PopupMenuItem::new(tr("Mit Standard-App öffnen")).icon(menu_icon("square-arrow-out-up-right")).on_click(move |_, _, _| library::open_path(&c)));
+                if super::convention_rename::available(&d, cx) {
+                    let n = d.clone();
+                    menu = menu.item(PopupMenuItem::new(tr("Nach Konvention benennen…")).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| super::convention_rename::open(n.clone(), window, cx)));
+                }
                 let source_view = source_me.clone();
                 let is_source = current_mode == Mode::Source;
                 menu = menu.when(live_editor, |menu| menu.item(PopupMenuItem::new(tr("Quelltext")).icon(menu_icon("code")).checked(is_source).on_click(move |_, window, cx| source_view.update(cx, |n, cx| n.set_mode(if is_source { Mode::Live } else { Mode::Source }, window, cx)))));
@@ -2443,7 +2447,7 @@ impl Render for NoteView {
                     n.set_mode(m, w, cx)
                 }
             }))
-            .on_action(cx.listener(|n, _: &super::app::ExportPdf, _, cx| n.export(cx)))
+            .on_action(cx.listener(|n, _: &super::app::ExportPdf, window, cx| n.export(window, cx)))
             .on_action(cx.listener(|n, _: &super::app::Save, _, cx| n.save(cx)))
             .on_key_down(cx.listener(|n, e: &KeyDownEvent, window, cx| n.link_keys(e, window, cx)))
             .when(!matches!(self.mode, Mode::Source) && self.live.is_none(), |d| d.key_context("WalkItems"))
@@ -2871,7 +2875,7 @@ impl FileViewer {
             }
             p
         });
-                let app = super::platform::default_app_name(&path);
+        let app = super::platform::default_app_name(&path);
         Self { path, pdf, preview, app }
     }
 }
@@ -2895,24 +2899,18 @@ impl Render for FileViewer {
                 pdf.update(cx, |v, cx| v.search_for(&term, nth, window, cx));
             }
         }
-        let (p1, p2, p3, p4, p5) = (self.path.clone(), self.path.clone(), self.path.clone(), self.path.clone(), self.path.clone());
+        let (p1, p2, p3, p4) = (self.path.clone(), self.path.clone(), self.path.clone(), self.path.clone());
         let open_label = self.app.as_ref().map_or_else(|| tr("Mit Standard-App öffnen"), |a| trf("In %@ öffnen", &[a]));
-        let labeled = bar_fit::button_width(&open_label, window);
-        let fold = actions_fold(&self.path, &[bar_fit::row(&[labeled, control::S], space::S), bar_fit::row(&[control::S, control::S], space::S), control::S], 2, window, cx);
-        let open_tip = tr("Zum Bearbeiten in der Standard-App öffnen");
-        let open_button = Button::new("open-default").small().icon(menu_icon("square-arrow-out-up-right")).tooltip(if fold == 0 { open_tip } else { open_label.clone() }).on_click(move |_, _, _| library::open_path(&p1));
-        let open_out = fold >= 2;
-        let mut actions = div().flex().flex_none().items_center().gap(px(space::S));
-        actions = actions
-            .when(!open_out, |d| d.child(if fold == 0 { open_button.label(open_label.clone()) } else { open_button.ghost() }))
-            .child(Button::new("viewer-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |m, _, _| {
-                let (a, b, c, o) = (p2.clone(), p3.clone(), p4.clone(), p5.clone());
-                m.when(open_out, |m| m.item(PopupMenuItem::new(open_label.clone()).icon(menu_icon("square-arrow-out-up-right")).on_click(move |_, _, _| library::open_path(&o))).separator())
-                    .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| library::reveal(&a)))
-                    .item(PopupMenuItem::new(tr("Vorschau-Fenster (Leertaste)")).icon(menu_icon("eye")).on_click(move |_, _, cx| super::preview::show(&b, cx)))
-                    .separator()
-                    .item(PopupMenuItem::new(tr("Tab schließen")).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&c, cx)))
-            }));
+        let actions = Button::new("viewer-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |m, _, cx| {
+            let (a, b, c, o, n) = (p1.clone(), p2.clone(), p3.clone(), p4.clone(), p4.clone());
+            let named = super::convention_rename::available(&n, cx);
+            m.item(PopupMenuItem::new(open_label.clone()).icon(menu_icon("square-arrow-out-up-right")).on_click(move |_, _, _| library::open_path(&o)))
+                .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| library::reveal(&a)))
+                .item(PopupMenuItem::new(tr("Vorschau-Fenster (Leertaste)")).icon(menu_icon("eye")).on_click(move |_, _, cx| super::preview::show(&b, cx)))
+                .when(named, |m| m.item(PopupMenuItem::new(tr("Nach Konvention benennen…")).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| super::convention_rename::open(n.clone(), window, cx))))
+                .separator()
+                .item(PopupMenuItem::new(tr("Tab schließen")).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&c, cx)))
+        });
         let body: AnyElement = if !self.path.exists() {
             unavailable("file-question", tr("Datei nicht gefunden"), self.path.file_name().unwrap_or_default().to_string_lossy().to_string(), &t).into_any_element()
         } else if let Some(pdf) = &self.pdf {

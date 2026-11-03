@@ -208,6 +208,7 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Akzentfarbe", Tab::Notes),
     ("Kopfzeile mit Modul, Woche, Name und Datum", Tab::Notes),
     ("Seitenzahlen", Tab::Notes),
+    ("Vor dem Ersetzen eines früheren Exports fragen", Tab::Notes),
     ("Eigenschaften über dem Text", Tab::Notes),
 ];
 
@@ -1981,6 +1982,10 @@ impl Settings {
                 row(tr("Seitenzahlen"), Switch::new("n-pages").checked(p.pdf_page_numbers).on_click(|v, _, _| {
                     let v = *v;
                     prefs::update(|p| p.pdf_page_numbers = v);
+                }), t),
+                row(tr("Vor dem Ersetzen eines früheren Exports fragen"), Switch::new("n-replace-ask").checked(p.pdf_replace_ask).on_click(|v, _, _| {
+                    let v = *v;
+                    prefs::update(|p| p.pdf_replace_ask = v);
                 }), t),
                 div()
                     .flex()

@@ -825,7 +825,7 @@ impl FileBrowser {
                     let (n, e) = (p.clone(), p.clone());
                     menu = menu
                         .item(PopupMenuItem::new(tr("Als Notiz öffnen")).on_click(move |_, _, cx| super::note_window::open(&n, cx)))
-                        .item(PopupMenuItem::new(tr("Als PDF exportieren")).on_click(move |_, _, cx| super::pdf::export(&e, None, cx)));
+                        .item(PopupMenuItem::new(tr("Als PDF exportieren")).on_click(move |_, window, cx| super::pdf::export(&e, None, window, cx)));
                 }
                 if let Some(w) = f2.week.filter(|w| week_filter != Some(*w) && same_semester) {
                     let e = entity.clone();
@@ -846,6 +846,10 @@ impl FileBrowser {
                 deadline_submenu(menu.separator(), &p, window, cx)
                     .separator()
                     .item(PopupMenuItem::new(tr("Umbenennen…")).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
+                    .when(super::convention_rename::available(&p, cx), |m| {
+                        let n = p.clone();
+                        m.item(PopupMenuItem::new(tr("Nach Konvention benennen…")).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| super::convention_rename::open(n.clone(), window, cx)))
+                    })
                     .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| state::trash(vec![trash_path.clone()], cx)))
             })
             .into_any_element()

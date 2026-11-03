@@ -22,6 +22,7 @@ enum Run {
     /// Handled by the open note, which gets the keyboard back first.
     NoteAction(Box<dyn Action>),
     Call(Rc<dyn Fn(&mut App)>),
+    WindowCall(Rc<dyn Fn(&mut Window, &mut App)>),
 }
 
 /// One entry of the command palette.
@@ -151,6 +152,9 @@ fn commands(cx: &App) -> Vec<Command> {
     }
     if in_document {
         add(&view, S::CloseTab.label(), "x", keys(S::CloseTab), Run::Action(Box::new(app::CloseTab)));
+    }
+    if let Some(doc) = state::read(cx, |l| l.active_document.clone()).filter(|p| in_document && super::convention_rename::available(p, cx)) {
+        add(&file, tr("Nach Konvention benennen…"), "wand-sparkles", None, Run::WindowCall(Rc::new(move |window, cx| super::convention_rename::open(doc.clone(), window, cx))));
     }
     if in_document && state::read(cx, |l| l.split_document.is_some()) {
         add(&view, tr("Geteilte Ansicht schließen"), "columns-2", None, Run::Call(Rc::new(|cx| act(cx, |l| l.set_split(None)))));
@@ -332,6 +336,10 @@ impl Palette {
             Run::Call(call) => {
                 let call = call.clone();
                 window.defer(cx, move |_, cx| call(cx));
+            }
+            Run::WindowCall(call) => {
+                let call = call.clone();
+                window.defer(cx, move |window, cx| call(window, cx));
             }
         }
     }

@@ -71,3 +71,9 @@ Right-click another tab → {ui:Daneben öffnen} shows it next to the current no
 | {ui:Als PDF exportieren} {key:exportPDF} | PDF next to the note |
 | {ui:Verlauf} | Compare and restore older versions, when sync is set up |
 | {ui:Als Folien zeigen} | Parts split by `---` become slides |
+
+If an earlier export already lies next to the note, Schrumbi asks before replacing it. {ui:Rückgängig} in the message afterwards brings the old PDF back.
+
+- {ui:Nicht mehr fragen} replaces without asking from then on.
+- Turn the question back on under {key:OpenSettings} → {ui:Notizen} → {ui:Vor dem Ersetzen eines früheren Exports fragen}.
+- Another file with that name stays untouched, the PDF gets a number. The next export replaces that numbered PDF.

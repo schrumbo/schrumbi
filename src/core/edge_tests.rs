@@ -1085,36 +1085,67 @@ fn taking_back_a_cards_import_removes_its_notes_and_what_was_taken_as_known() {
 }
 
 #[test]
-fn notes_in_a_checked_folder_follow_the_convention_and_keep_their_heading() {
+fn names_stay_as_typed_and_take_the_convention_only_when_asked() {
     let (root, mut lib) = workspace("convention-heading", &config(1, 1));
     let today = chrono::Local::now().date_naive();
     let a = lib.assignments.iter().filter(|a| a.upload && crate::core::day::local_date(a.due) >= today).min_by_key(|a| a.due).cloned().unwrap();
     std::fs::create_dir_all(&a.folder).unwrap();
     let naming = lib.naming(&a.module_id).unwrap();
-    let wanted = naming.render("TEST", today, "md", &[], a.week, a.iso_week, None);
     let read = |p: &Path| std::fs::read_to_string(p).unwrap();
 
     let made = lib.create_note("TEST", &a.folder, "md").unwrap();
-    assert_eq!(made.file_name().unwrap().to_string_lossy(), wanted);
-    assert!(read(&made).starts_with("# TEST\n"), "{}", read(&made));
+    assert_eq!(name_of(&made), "TEST.md", "a new note in a checked folder keeps the name typed");
+    std::fs::write(&made, "# Neuer Titel
+
+Text
+").unwrap();
     lib.follow_heading(&made);
-    assert!(made.exists(), "an unchanged heading keeps the convention name");
-    assert!(read(&made).starts_with("# TEST\n"));
+    let titled = a.folder.join("Neuer Titel.md");
+    assert!(titled.exists(), "it still takes the name of its heading");
+    lib.rename(&titled, "Anders.md");
+    let typed = a.folder.join("Anders.md");
+    assert!(typed.exists(), "a typed name stays as typed");
+    assert!(read(&typed).starts_with("# Anders
+"), "{}", read(&typed));
 
-    std::fs::write(&made, "# Neuer Titel\n\nText\n").unwrap();
-    lib.follow_heading(&made);
-    let renamed = a.folder.join(naming.render("Neuer Titel", today, "md", &[], a.week, a.iso_week, None));
-    assert!(renamed.exists(), "a new heading gives a new convention name");
-    assert_eq!(read(&renamed), "# Neuer Titel\n\nText\n", "the heading stays as typed");
+    let plan = lib.convention_plan(&typed).expect("the folder has a convention");
+    let wanted = naming.render("Anders", today, "md", &[], a.week, a.iso_week, None);
+    assert_eq!(plan.name(&typed), wanted, "the suggestion takes the heading as title");
+    assert!(plan.fits(&wanted) && !plan.fits("Anders.md"));
+    assert_eq!(plan.module, lib.config.as_ref().unwrap().module(&a.module_id).unwrap().code);
+    lib.rename(&typed, &wanted);
+    let conventional = a.folder.join(&wanted);
+    assert!(conventional.exists() && !typed.exists());
+    assert!(read(&conventional).starts_with("# Anders
+"), "the heading stays");
 
-    let typed = renamed.with_file_name("Anders.md");
-    lib.rename(&renamed, &name_of(&typed));
-    let conventional = a.folder.join(naming.render("Anders", today, "md", &[], a.week, a.iso_week, None));
-    assert!(conventional.exists() && !typed.exists(), "a typed name in a checked folder becomes a convention name");
-    assert!(read(&conventional).starts_with("# Anders\n"), "{}", read(&conventional));
+    std::fs::write(&conventional, "# Dritter
+").unwrap();
+    lib.follow_heading(&conventional);
+    assert!(conventional.exists(), "a convention name no longer follows the heading");
+    lib.undo();
+    assert!(typed.exists() && !conventional.exists(), "undo brings the typed name back");
 
-    let elsewhere = lib.create_note("TEST", &root, "md").unwrap();
-    assert_eq!(elsewhere.file_name().unwrap(), "TEST.md", "folders without a convention keep the plain name");
+    let off = format!("{}_Beispiel.md", crate::core::naming::stem(&wanted));
+    assert!(!plan.fits(&off));
+    let before = read(&typed);
+    lib.rename_keeping_heading(&typed, &off);
+    let picked = a.folder.join(&off);
+    assert_eq!(read(&picked), before, "a name picked by hand leaves the heading alone");
+    let upper = off.to_uppercase();
+    lib.rename_keeping_heading(&picked, &upper);
+    let names: Vec<String> = std::fs::read_dir(&a.folder).unwrap().map(|e| name_of(&e.unwrap().path())).collect();
+    assert!(names.contains(&upper) && names.len() == 1, "a case-only rename keeps the name: {names:?}");
+
+    let sheet = a.folder.join(lib.brief_naming(&a.module_id).unwrap().render("Blatt 3", today, "pdf", &[], a.week, a.iso_week, Some(crate::core::filing::BRIEF_TAG)));
+    std::fs::write(&sheet, b"pdf").unwrap();
+    let brief = lib.convention_plan(&sheet).unwrap();
+    assert!(brief.fits(&brief.name(&sheet)), "a task sheet fits its own suggestion");
+
+    let elsewhere = lib.create_note("Lose", &root, "md").unwrap();
+    assert!(lib.convention_plan(&elsewhere).is_none(), "outside a module there is nothing to suggest");
+    lib.config.as_mut().unwrap().set_naming_convention(false);
+    assert!(lib.convention_plan(&typed).is_none(), "without a convention neither");
 }
 
 fn name_of(p: &Path) -> String {
@@ -1259,9 +1290,9 @@ fn without_a_convention_nothing_is_flagged_and_new_files_keep_plain_names() {
 
     let made = lib.create_note("TEST", &a.folder, "md").unwrap();
     assert_eq!(name_of(&made), "TEST.md", "a note in a checked folder keeps the plain name");
-    assert_eq!(lib.note_name("Liste", &root.join("M0"), "txt"), "Liste.txt", "other new files too");
-    assert_eq!(lib.note_name("meine Übung", &root.join("M0"), "txt"), "meine Übung.txt", "typed as typed");
-    assert_eq!(lib.note_name("Frage? Was ist \"X\".", &root.join("M0"), "txt"), "Frage Was ist X.txt", "nothing Windows refuses");
+    assert_eq!(lib.note_name("Liste", "txt"), "Liste.txt", "other new files too");
+    assert_eq!(lib.note_name("meine Übung", "txt"), "meine Übung.txt", "typed as typed");
+    assert_eq!(lib.note_name("Frage? Was ist \"X\".", "txt"), "Frage Was ist X.txt", "nothing Windows refuses");
 
     std::fs::write(&made, "# Neuer Titel\n\nText\n").unwrap();
     lib.follow_heading(&made);

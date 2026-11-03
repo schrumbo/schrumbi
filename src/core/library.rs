@@ -1993,24 +1993,16 @@ impl Library {
         title.trim().chars().filter(|c| !"*?\"<>|".contains(*c)).map(|c| if "\\/:".contains(c) { '-' } else { c }).collect::<String>().trim_end_matches(['.', ' ']).to_string()
     }
 
-    /// The file name of something new in `folder`: notes are called what you call them unless the folder checks names, other files follow the module's convention while there is one.
-    pub fn note_name(&self, title: &str, folder: &Path, ext: &str) -> String {
-        if ext == "md" {
-            let plain = format!("{}.md", Self::typed_name(title));
-            return match self.convention_at(&folder.join(&plain)) {
-                Some((naming, a)) => naming.render(title, self.today(), ext, &[], a.week, a.iso_week, None),
-                None => plain,
-            };
-        }
-        let Some(naming) = self.module_containing(folder).filter(|_| self.config.as_ref().is_some_and(StudyConfig::naming_convention)).and_then(|m| self.naming(&m.id)) else { return format!("{}.{ext}", Self::typed_name(title)) };
-        naming.render(title, self.today(), ext, &[], self.lecture_week_containing(self.today()).map(|w| w.index), None, None)
+    /// The file name of something new: what you call it. A convention is applied only when asked for, see `convention_plan`.
+    pub fn note_name(&self, title: &str, ext: &str) -> String {
+        format!("{}.{ext}", Self::typed_name(title))
     }
 
     /// Writes an empty note with the title as heading; returns its path.
     pub fn create_note(&mut self, title: &str, folder: &Path, ext: &str) -> Option<PathBuf> {
         let result: Result<PathBuf> = (|| {
             std::fs::create_dir_all(folder)?;
-            let path = unique_path(&folder.join(self.note_name(title, folder, ext)));
+            let path = unique_path(&folder.join(self.note_name(title, ext)));
             std::fs::write(&path, if ext == "md" { self.new_note_text(title) } else { String::new() })?;
             Ok(path)
         })();
@@ -2059,21 +2051,10 @@ impl Library {
             None => std::fs::read_to_string(path).unwrap_or_default(),
         };
         let Some(title) = super::markdown::first_heading(&text) else { return };
-        let name = match self.convention_at(path) {
-            Some((naming, a)) => {
-                let brief = self.parse_brief(&name_of(path), &a.module_id);
-                let old = naming.parse(&name_of(path)).or_else(|| brief.clone());
-                if old.as_ref().is_some_and(|p| p.title == Naming::clean(&title)) {
-                    return;
-                }
-                let date = old.as_ref().and_then(|p| p.date).unwrap_or_else(|| self.today());
-                match brief {
-                    Some(_) => naming.render(&title, date, "md", &[], a.week, a.iso_week, Some(BRIEF_TAG)),
-                    None => naming.render(&title, date, "md", &old.map(|p| p.coauthors).unwrap_or_default(), a.week, a.iso_week, None),
-                }
-            }
-            None => format!("{}.md", super::text::safe_file_stem(&title)),
-        };
+        if self.has_convention_name(path) {
+            return;
+        }
+        let name = format!("{}.md", super::text::safe_file_stem(&title));
         if name == name_of(path) || name == ".md" {
             return;
         }
@@ -2230,7 +2211,7 @@ impl Library {
     }
 
     /// Takes back the latest step, but only while it still is the latest; a toast must not undo a later edit.
-    fn undo_latest(&self) -> Undo {
+    pub fn undo_latest(&self) -> Undo {
         let (count, label) = (self.undo_steps.len(), self.undo_steps.last().map(|s| s.label.clone()));
         Box::new(move |lib: &mut Library| {
             if lib.undo_steps.len() == count && lib.undo_steps.last().map(|s| s.label.clone()) == label {
@@ -2577,9 +2558,18 @@ impl Library {
     }
 
     fn parse_brief(&self, file_name: &str, module_id: &str) -> Option<Parsed> {
+        self.brief_naming(module_id)?.parse(file_name)
+    }
+
+    pub(crate) fn brief_naming(&self, module_id: &str) -> Option<Naming> {
         let c = self.config.as_ref()?;
         let m = c.module(module_id)?;
-        Naming::with_author(m, c.semester(&m.semester), BRIEF_TAG, "", CoauthorStyle::Initial).parse(file_name)
+        Some(Naming::with_author(m, c.semester(&m.semester), BRIEF_TAG, "", CoauthorStyle::Initial))
+    }
+
+    /// Renames a file to a name picked by hand; the note's heading stays as it is.
+    pub fn rename_keeping_heading(&mut self, file: &Path, name: &str) {
+        self.rename_file(file, name);
     }
 
     /// Records cards taken as known and offers to take that back.
@@ -2673,26 +2663,67 @@ impl Library {
         config.current_semester(self.now).or(config.semesters.last()).map(|s| s.id.clone())
     }
 
-    /// A note named after its heading keeps that heading; where a convention applies, the name follows it and the heading stays as typed.
+    /// Gives a file the name typed. A note named after its heading keeps that heading; a convention name only has to say the same title.
     pub fn rename(&mut self, file: &Path, name: &str) {
-        let titled = heading_titled(file);
-        let (name, title, convention) = match titled.then(|| self.convention_for(file, &file.with_file_name(name))).flatten() {
-            Some((naming, a)) => match naming.parse(name).or_else(|| self.parse_brief(name, &a.module_id)) {
-                Some(p) => (name.to_string(), p.title.replace('-', " "), true),
-                None => {
-                    let old = naming.parse(&name_of(file));
-                    let date = old.as_ref().and_then(|p| p.date).unwrap_or_else(|| self.today());
-                    let title = super::naming::stem(name).to_string();
-                    (naming.render(&title, date, extension(name), &old.map(|p| p.coauthors).unwrap_or_default(), a.week, a.iso_week, None), title, true)
-                }
-            },
-            None => (name.to_string(), super::naming::stem(name).to_string(), false),
-        };
-        if titled {
-            self.rename_titled(file, &name, &title, convention);
-        } else {
-            self.rename_file(file, &name);
+        if !heading_titled(file) {
+            self.rename_file(file, name);
+            return;
         }
+        match self.convention_title(file, name) {
+            Some(title) => self.rename_titled(file, name, &title, true),
+            None => self.rename_titled(file, name, super::naming::stem(name), false),
+        }
+    }
+
+    /// The title a convention name says, for a file of this module; also as a task sheet.
+    fn convention_title(&self, file: &Path, name: &str) -> Option<String> {
+        let module = self.deadlines_of(file).into_iter().next().map(|a| a.module_id).or_else(|| self.module_containing(file).map(|m| m.id.clone()));
+        let own = module.as_deref().and_then(|m| self.naming(m)).and_then(|n| n.parse(name));
+        let parsed = own.or_else(|| self.namings().iter().find_map(|n| n.parse(name))).or_else(|| module.and_then(|m| self.parse_brief(name, &m)));
+        parsed.map(|p| p.title.replace('-', " "))
+    }
+
+    /// Whether the file already carries a convention name of its module, also as a task sheet.
+    fn has_convention_name(&self, file: &Path) -> bool {
+        self.convention_title(file, &name_of(file)).is_some()
+    }
+
+    /// What renaming `file` by its module's convention needs, or `None` when no convention applies. Cheap; `ConventionPlan::name` reads the file.
+    pub fn convention_plan(&self, file: &Path) -> Option<ConventionPlan> {
+        let (deadline, module_id) = self.convention_target(file)?;
+        let naming = self.naming(&module_id)?;
+        let module = self.config.as_ref()?.module(&module_id)?;
+        let name = name_of(file);
+        let brief = self.parse_brief(&name, &module_id);
+        let parsed = brief.clone().or_else(|| self.namings().iter().find_map(|n| n.parse(&name)));
+        let heading = self.buffers.get(file).and_then(|b| super::markdown::first_heading(&b.text));
+        Some(ConventionPlan {
+            naming,
+            namings: self.namings(),
+            ignore: self.title_ignore_words(),
+            weeks: self.weeks(),
+            module: module.code.clone(),
+            deadline: deadline.as_ref().map(deadline_label),
+            due: deadline.as_ref().map(|a| a.due),
+            week: deadline.as_ref().and_then(|a| a.week),
+            iso_week: deadline.as_ref().and_then(|a| a.iso_week),
+            brief: brief.is_some().then(|| self.brief_naming(&module_id)).flatten(),
+            parsed,
+            heading,
+        })
+    }
+
+    /// Whether a file can be named by its module's convention; cheap enough for opening a menu.
+    pub fn can_name_by_convention(&self, file: &Path) -> bool {
+        self.convention_target(file).is_some_and(|(_, m)| self.naming(&m).is_some())
+    }
+
+    fn convention_target(&self, file: &Path) -> Option<(Option<Assignment>, String)> {
+        self.config.as_ref().filter(|c| c.naming_convention())?;
+        let linked = self.deadlines_of(file);
+        let deadline = linked.iter().find(|a| a.upload).or(linked.first()).cloned().or_else(|| self.fitting_deadline(file));
+        let module_id = deadline.as_ref().map(|a| a.module_id.clone()).or_else(|| self.module_containing(file).map(|m| m.id.clone()))?;
+        Some((deadline, module_id))
     }
 
     /// Renames a note named after its heading and brings the heading along; a convention name only has to say the same title.
@@ -2712,11 +2743,16 @@ impl Library {
 
     /// Like `convention_at`, for a file that is about to be at `place`: its links still sit on `file`.
     fn convention_for(&self, file: &Path, place: &Path) -> Option<(Naming, Assignment)> {
-        let path = place;
         self.config.as_ref().filter(|c| c.check_names)?;
         if let Some(a) = self.deadlines_of(file).into_iter().find(|a| a.upload) {
             return Some((self.naming(&a.module_id)?, a));
         }
+        let a = self.fitting_deadline(place)?;
+        Some((self.naming(&a.module_id)?, a))
+    }
+
+    /// The upload whose folder holds `path` and whose pattern fits its name, the next one due first.
+    fn fitting_deadline(&self, path: &Path) -> Option<Assignment> {
         let name = name_of(path);
         let raw = path.parent()?.to_path_buf();
         let settled = dunce::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
@@ -2728,8 +2764,7 @@ impl Library {
         };
         let fitting: Vec<&Assignment> = self.assignments.iter().filter(|a| a.upload && a.tracks_files() && scanner::matches(&name, &a.file_pattern) && holds(a)).collect();
         let today = self.today();
-        let a = fitting.iter().filter(|a| day::local_date(a.due) >= today).min_by_key(|a| a.due).or_else(|| fitting.iter().max_by_key(|a| a.due))?;
-        Some((self.naming(&a.module_id)?, (*a).clone()))
+        fitting.iter().filter(|a| day::local_date(a.due) >= today).min_by_key(|a| a.due).or_else(|| fitting.iter().max_by_key(|a| a.due)).map(|a| (*a).clone())
     }
 
     fn rename_file(&mut self, file: &Path, name: &str) {
@@ -3140,10 +3175,7 @@ impl Library {
             (true, Some(w)) => format!("{} W{w:02}", a.title),
             _ => a.title.clone(),
         };
-        let name = match self.naming(&a.module_id).filter(|_| self.config.as_ref().is_some_and(|c| c.check_names && c.naming_convention())) {
-            Some(naming) => naming.render(&a.title, self.today(), "md", &[], a.week, a.iso_week, None),
-            None => format!("{}.md", Self::typed_name(&plain)),
-        };
+        let name = format!("{}.md", Self::typed_name(&plain));
         let result: Result<PathBuf> = (|| {
             std::fs::create_dir_all(&folder)?;
             let path = unique_path(&folder.join(name));
@@ -3766,15 +3798,17 @@ fn rename_target(file: &Path, name: &str) -> PathBuf {
     if same_file(file, &wanted) { wanted } else { unique_path(&wanted) }
 }
 
+/// Whether two different spellings name one file, as a case-only rename does on a case-insensitive disk.
 #[cfg(unix)]
-fn same_file(a: &Path, b: &Path) -> bool {
+pub fn same_file(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     a != b && std::fs::metadata(a).ok().zip(std::fs::metadata(b).ok()).is_some_and(|(x, y)| x.ino() == y.ino() && x.dev() == y.dev())
 }
 
+/// Whether two different spellings name one file, as a case-only rename does on a case-insensitive disk.
 #[cfg(not(unix))]
-fn same_file(_: &Path, _: &Path) -> bool {
-    false
+pub fn same_file(a: &Path, b: &Path) -> bool {
+    a != b && dunce::canonicalize(a).ok().zip(dunce::canonicalize(b).ok()).is_some_and(|(x, y)| x == y)
 }
 
 fn move_path(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -3817,6 +3851,45 @@ pub fn reveal(path: &Path) {
 
 /// What takes back filing `original` as `target`: moving it back, or trashing the copy of an outside file.
 /// How a deadline is named in short messages, e.g. "ÜB W03".
+/// What renaming one file by convention knows before reading the file.
+#[derive(Clone)]
+pub struct ConventionPlan {
+    naming: Naming,
+    namings: Arc<Vec<Naming>>,
+    ignore: Vec<String>,
+    weeks: Vec<LectureWeek>,
+    pub module: String,
+    pub deadline: Option<String>,
+    due: Option<DateTime<Local>>,
+    week: Option<u32>,
+    iso_week: Option<u32>,
+    brief: Option<Naming>,
+    parsed: Option<Parsed>,
+    heading: Option<String>,
+}
+
+impl ConventionPlan {
+    /// The suggested name: the note's heading, else the title its name or contents give; its date and co-authors are kept. Reads the file, so call it off the UI thread.
+    pub fn name(&self, file: &Path) -> String {
+        let facts = FileFacts::read(file);
+        let heading = self.heading.clone().or_else(|| super::markdown::is_markdown(file).then(|| std::fs::read_to_string(file).ok()).flatten().and_then(|t| super::markdown::first_heading(&t)));
+        let title = heading.or_else(|| self.parsed.as_ref().map(|p| p.title.replace('-', " "))).or_else(|| filing::title_suggestions(&facts, &self.namings, &self.ignore).first().map(|s| s.title.clone())).unwrap_or_else(|| super::naming::stem(&name_of(file)).to_string());
+        let created = self.due.map_or(facts.created, |due| facts.created.min(due));
+        let date = self.parsed.as_ref().and_then(|p| p.date).or(facts.name_date).unwrap_or_else(|| created.date_naive());
+        let ext = extension(&name_of(file)).to_string();
+        let week = self.week.or_else(|| self.weeks.iter().find(|w| w.monday == day::monday(date)).map(|w| w.index));
+        if self.brief.is_some() {
+            return self.naming.render(&title, date, &ext, &[], week, self.iso_week, Some(BRIEF_TAG));
+        }
+        self.naming.render(&title, date, &ext, &self.parsed.as_ref().map(|p| p.coauthors.clone()).unwrap_or_default(), week, self.iso_week, None)
+    }
+
+    /// Whether `name` follows the convention.
+    pub fn fits(&self, name: &str) -> bool {
+        self.naming.is_valid(name) || self.naming.parse(name).is_some() || self.brief.as_ref().is_some_and(|b| b.parse(name).is_some())
+    }
+}
+
 pub fn deadline_label(a: &Assignment) -> String {
     match (a.rule_id.is_some(), a.week) {
         (true, Some(w)) => format!("{} W{w:02}", a.short),

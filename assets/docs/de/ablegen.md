@@ -45,6 +45,14 @@ P1_26_Stakeholder-Radar_Muster-M_Mueller-C_261028.pdf
 
 Eine Aufgabenstellung heißt dann `P1_26_Infografik_Aufgabe_261028.pdf`.
 
+Was du anlegst oder umbenennst, heißt so, wie du es tippst. Nach dem Muster benennst du eine Datei nur auf Wunsch:
+
+1. {ui:Mehr} oder Rechtsklick auf die Datei → {ui:Nach Konvention benennen…}, oder {key:CommandPalette} und denselben Befehl
+2. Den Vorschlag prüfen, bei Bedarf ändern. Darunter steht, ob er zum Muster passt.
+3. {key:return} oder {ui:Umbenennen}. {key:escape} bricht ab.
+
+Der Vorschlag nimmt die Überschrift einer Notiz als Titel und behält Datum und Mitautoren aus dem alten Namen. Eine Notiz mit Musternamen ändert ihren Namen nicht mehr, wenn du die Überschrift änderst.
+
 ## Inbox
 
 Die Inbox ist der Ordner `_Inbox` in deinem Studienordner, den Namen änderst du unter {ui:Inbox-Ordner}. Was dort liegt, wartet auf einen Platz. {key:GoInbox} öffnet sie.

@@ -194,6 +194,8 @@ pub struct Prefs {
     pub update_check: bool,
     /// A version the user chose not to install.
     pub update_skip: String,
+    /// Asks before a PDF export replaces an earlier export of the same note.
+    pub pdf_replace_ask: bool,
     /// Keeps `Schrumbi-Kalender.ics` in the workspace up to date for calendar subscriptions.
     pub calendar_feed: bool,
     /// Part of the local subscription address, so only who was given it reads the calendar.
@@ -262,6 +264,7 @@ impl Default for Prefs {
             tray: true,
             update_check: true,
             update_skip: String::new(),
+            pdf_replace_ask: true,
             calendar_feed: false,
             calendar_token: String::new(),
             calendar_sources: BTreeMap::new(),

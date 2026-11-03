@@ -690,7 +690,7 @@ impl Render for NewNote {
         let title = self.title.read(cx).value().trim().to_string();
         let name = (valid).then(|| match (self.kind, &self.folder) {
             (NewKind::Folder, _) => format!("{title}/"),
-            (k, Some(f)) => state::read(cx, |l| l.note_name(&title, f, if k == NewKind::Note { "md" } else { "txt" })),
+            (k, Some(_)) => state::read(cx, |l| l.note_name(&title, if k == NewKind::Note { "md" } else { "txt" })),
             _ => String::new(),
         });
         let (cancel, create) = (me.clone(), me.clone());

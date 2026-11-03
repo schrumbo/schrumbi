@@ -10,7 +10,8 @@ use gpui_kit::*;
 use super::markdown_view;
 use super::quick::Dismissed;
 use super::state::act;
-use super::theme::{Theme, font, space};
+use super::motion::Soft;
+use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::prefs;
@@ -83,7 +84,7 @@ pub fn init(cx: &mut App) {
 /// Opens the dialog for the available update.
 pub fn show(window: &mut Window, cx: &mut App) {
     let Some(release) = cx.try_global::<Updates>().and_then(|u| u.available.clone()) else { return };
-    let view = cx.new(|_| UpdateSheet { notes: Rc::new(markdown_view::parse(&release.notes)), release, phase: Phase::Offer, task: None });
+    let view = cx.new(|_| UpdateSheet { highlights: highlights(&release.notes).map(|h| Rc::new(markdown_view::parse(&h))), release, phase: Phase::Offer, task: None });
     let handle = window.window_handle();
     cx.subscribe(&view, move |_, _: &Dismissed, cx| {
         let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));
@@ -100,9 +101,16 @@ enum Phase {
     Failed(String),
 }
 
+/// The hand-written part on top of the release notes, without the full list of changes below it.
+fn highlights(notes: &str) -> Option<String> {
+    let (top, _) = notes.split_once("\n## All changes")?;
+    let body = top.trim().strip_prefix("## ").map_or(top.trim(), |rest| rest.split_once('\n').map_or("", |(_, b)| b)).trim();
+    (!body.is_empty()).then(|| body.to_string())
+}
+
 struct UpdateSheet {
     release: Release,
-    notes: Rc<markdown_view::ParsedNote>,
+    highlights: Option<Rc<markdown_view::ParsedNote>>,
     phase: Phase,
     task: Option<Task<()>>,
 }
@@ -200,11 +208,31 @@ impl Render for UpdateSheet {
                 .child(page_button("update-page"))
                 .into_any_element(),
         };
-        let notes: AnyElement = if self.release.notes.trim().is_empty() {
-            caption(tr("Keine Versionshinweise."), &t).into_any_element()
-        } else {
-            markdown_view::render(&self.notes, None, None, &t).into_any_element()
-        };
+        let notes_page = self.release.page.clone();
+        let link = div()
+            .id("update-notes-link")
+            .flex()
+            .items_center()
+            .gap(px(space::XS))
+            .h(px(control::S))
+            .px(px(space::S))
+            .mx(px(-space::S))
+            .cursor_pointer()
+            .key_nav()
+            .soft(t.ink.opacity(0.05), radius::INNER)
+            .text_size(px(font::CALLOUT))
+            .text_color(t.accent_text)
+            .tooltip(tip(tr("Öffnet sich im Browser")))
+            .on_click(move |_, _, _| drop(opener::open(notes_page.as_str())))
+            .child(tr("Alle Änderungen auf der Release-Seite"))
+            .child(icon("arrow-up-right", iconsize::XS, t.accent_text));
+        let notes = div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(space::S))
+            .children(self.highlights.as_ref().map(|h| div().id("update-notes").w_full().max_h(px(240.)).overflow_y_scrollbar().child(markdown_view::render(h, None, None, &t))))
+            .when(automatic, |d| d.child(link));
         div()
             .flex()
             .flex_col()
@@ -220,7 +248,16 @@ impl Render for UpdateSheet {
                     .child(div().font_weight(FontWeight::SEMIBOLD).text_size(px(font::TITLE3)).child(trf("Version %@ ist verfügbar", &[&self.release.version])))
                     .child(caption(trf("Installiert: %@", &[&env!("CARGO_PKG_VERSION")]), &t)),
             )
-            .child(div().id("update-notes").max_h(px(280.)).overflow_y_scrollbar().child(notes))
+            .child(notes)
             .child(footer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_the_written_part_is_shown() {
+        assert_eq!(super::highlights("## Schrumbi 0.3.0\n\nNeu: Office.\n\n## All changes\n\n### Reader\n\n- x\n").as_deref(), Some("Neu: Office."));
+        assert_eq!(super::highlights("## Schrumbi 0.3.0\n\n### Reader\n\n- x\n"), None);
     }
 }
