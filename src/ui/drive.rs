@@ -112,7 +112,9 @@ pub fn frame(window: &Window, ms: Option<f32>, title: Option<&SharedString>) {
 
 /// Brings a window to the front, except while an agent drives the app: the owner keeps the focus.
 pub fn activate_window(window: &Window) {
-    if !drive::fenced("activate", window.window_title()) {
+    let key = window.window_handle().window_id().as_u64();
+    let title = WINDOWS.with_borrow(|w| w.get(&key).and_then(|d| d.title.clone())).map_or_else(|| window.window_title(), |t| t.to_string());
+    if !drive::fenced("activate", title) {
         window.activate_window();
     }
 }
