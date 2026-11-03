@@ -75,7 +75,7 @@ Eine Datei zählt für eine Abgabe, wenn sie dazugehört. Datum und Ordner allei
 
 ## Für einen Tag eintragen
 
-Rechtsklick auf einen Tag unter {ui:Nächste 7 Tage}, oder das + rechts oben, das beim Darüberfahren erscheint. Für Einmaliges ohne Regel:
+Rechtsklick auf einen Tag unter {ui:Nächste 7 Tage}, oder auf das + rechts oben im Tag. Für Einmaliges ohne Regel:
 
 | Befehl | Standardzeit |
 |---|---|

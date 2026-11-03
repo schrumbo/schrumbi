@@ -84,12 +84,12 @@ fn day_group(date: NaiveDate) -> SharedString {
     SharedString::from(format!("board-day-{}", date.num_days_from_ce()))
 }
 
-/// The day menu behind a "+" that shows while the pointer is over the day, so right-click is not the only way in.
+/// The day menu behind a quiet "+" that comes forward while the pointer is over the day, so right-click is not the only way in.
 fn add_button(date: NaiveDate) -> Div {
     div()
-        .invisible()
-        .group_hover(day_group(date), StyleRefinement::visible)
-        .child(Button::new(("board-day-add", date.num_days_from_ce() as u32 as usize)).ghost().xsmall().icon(menu_icon("plus")).tooltip(tr("Für diesen Tag eintragen")).dropdown_menu(move |menu, _, _| day_menu(menu, date)))
+        .opacity(0.45)
+        .group_hover(day_group(date), |s| s.opacity(1.))
+        .child(Button::new(("board-day-add", date.num_days_from_ce() as u32 as usize)).ghost().small().icon(menu_icon("plus")).tooltip(tr("Für diesen Tag eintragen")).dropdown_menu(move |menu, _, _| day_menu(menu, date)))
 }
 
 fn day_label(d: NaiveDate, today: NaiveDate) -> String {
@@ -107,7 +107,6 @@ fn column(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
     let ink = t.ink;
 
     let header = div()
-        .relative()
         .flex()
         .items_baseline()
         .gap(px(space::S))
@@ -115,8 +114,8 @@ fn column(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
         .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent_text } else { t.secondary }).child(day_label(d, today)))
         .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent_text } else { t.primary }).child(d.day().to_string()))
         .child(div().flex_1())
-        .when(open > 0, |h| h.child(div().group_hover(day_group(d), |s| s.invisible()).text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).text_color(t.secondary).child(open.to_string())))
-        .child(add_button(d).absolute().top(px(-space::XXS)).right(px(-space::XXS)));
+        .when(open > 0, |h| h.child(div().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).text_color(t.secondary).child(open.to_string())))
+        .child(add_button(d));
 
     drop_target(div(), d, t)
         .group(day_group(d))

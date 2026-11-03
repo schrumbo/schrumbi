@@ -75,7 +75,7 @@ A file counts for a submission when it belongs to it. Date and folder alone are 
 
 ## Add for a Day
 
-Right-click a day under {ui:Nächste 7 Tage}, or use the + at its top right that appears on hover. For one-off things without a rule:
+Right-click a day under {ui:Nächste 7 Tage}, or click the + at its top right. For one-off things without a rule:
 
 | Command | Default time |
 |---|---|

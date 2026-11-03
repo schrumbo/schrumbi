@@ -84,6 +84,7 @@ fn set(next: State) {
 
 fn send(message: Message) {
     if crate::core::drive::fenced("apple calendar", "sync") {
+        set(State::Unavailable);
         return;
     }
     let tx = WORKER.get_or_init(|| {
