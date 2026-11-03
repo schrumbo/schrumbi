@@ -34,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/bin/gate --hook",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/bin/gate --hook || { echo 'The gate could not run, so nothing was checked. Fix .claude/bin/gate, then stop again.' >&2; exit 2; }",
             "timeout": 590,
             "statusMessage": "Quality gate"
           }

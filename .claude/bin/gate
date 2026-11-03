@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 
 LINTS = [
@@ -351,7 +352,10 @@ def main():
                 tree = snapshot()
                 save(data["session_id"], {"base": tree, "green": tree})
         elif args.hook:
-            hook(data)
+            try:
+                hook(data)
+            except Exception:
+                emit(decision="block", reason="The gate crashed, so nothing was checked. Fix .claude/bin/gate, then stop again:\n" + cap(traceback.format_exc().strip().splitlines()[-8:]))
         else:
             mark(data)
         return 0

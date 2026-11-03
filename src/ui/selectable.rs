@@ -226,9 +226,10 @@ impl Element for SelectableStyled {
 
     fn paint(&mut self, global_id: Option<&GlobalElementId>, inspector_id: Option<&InspectorElementId>, bounds: Bounds<Pixels>, handle: &mut TextSelectionHandle, hitbox: &mut Hitbox, window: &mut Window, cx: &mut App) {
         let layout = self.styled.layout().clone();
-        let before = TextSelection::selected_text(window, cx);
         let projection = handle.update_runs(&[TextSelectionRun::new(self.text.clone(), layout.clone(), bounds).with_document_order(self.order)], cx);
-        if before != TextSelection::selected_text(window, cx) {
+        let painted = projection.ranges().first().cloned().flatten();
+        let changed = window.with_element_state(global_id.expect("selectable text has an id"), |before: Option<Option<Range<usize>>>, _| (before.map_or(painted.is_some(), |b| b != painted), painted));
+        if changed {
             window.refresh();
         }
         for range in projection.ranges().iter().flatten().cloned() {

@@ -42,6 +42,8 @@ def main():
     if code:
         return 0
     os.chdir(top)
+    if out("config", "--get", "core.hooksPath") != ".claude/githooks" and os.path.isdir(".claude/githooks"):
+        git("config", "core.hooksPath", ".claude/githooks")
     here = MACHINES.get(platform.system(), platform.system())
     notes = [f"sync on {here}. The owner also works on this repo on the other machine; origin is the only link and the owner pushes."]
 
