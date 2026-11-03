@@ -58,6 +58,7 @@ pub mod vault_tools;
 pub mod smoke;
 pub mod pdf_view;
 pub mod pdf_worker;
+pub mod sheet_view;
 pub mod motion;
 pub mod palette;
 pub mod help;

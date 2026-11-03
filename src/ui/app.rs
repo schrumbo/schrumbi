@@ -325,6 +325,7 @@ pub fn bind_keys(cx: &mut App) {
     );
     b.extend(super::editor::key_bindings());
     b.extend(super::pdf_view::key_bindings());
+    b.extend(super::sheet_view::key_bindings());
     cx.bind_keys(b);
 }
 

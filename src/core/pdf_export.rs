@@ -901,6 +901,15 @@ fn render_with(markdown_text: &str, base: &Path, meta: Option<&Meta>, o: &Option
     typst_pdf::pdf(&doc, &typst_pdf::PdfOptions::default()).map_err(|errs| joined(errs.iter().map(|e| e.message.to_string()).collect::<Vec<_>>().join("; ")))
 }
 
+/// Compiles Typst source with the files it reads, by absolute name, to PDF bytes.
+pub fn compile(source: &str, files: Vec<(String, Vec<u8>)>) -> Result<Vec<u8>, String> {
+    let files = files.into_iter().map(|(name, bytes)| (file_id(&name), Bytes::new(bytes))).collect();
+    let world = NoteWorld { main: Source::new(file_id("/main.typ"), source.to_string()), files };
+    let joined = |errs: &[typst::diag::SourceDiagnostic]| errs.iter().map(|e| e.message.to_string()).collect::<Vec<_>>().join("; ");
+    let doc: PagedDocument = typst::compile(&world).output.map_err(|e| joined(&e))?;
+    typst_pdf::pdf(&doc, &typst_pdf::PdfOptions::default()).map_err(|e| joined(&e))
+}
+
 /// Whether a PDF came from this export. Anything else may be a submission and must not be replaced.
 pub fn is_export(path: &Path) -> bool {
     std::fs::read(path).is_ok_and(|bytes| bytes.windows(5).any(|w| w == b"Typst"))

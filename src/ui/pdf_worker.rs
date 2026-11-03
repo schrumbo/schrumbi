@@ -5,6 +5,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use gpui_kit::RenderImage;
 
+use crate::core::office::{self, OpenError};
 use crate::core::pdf_render::{PageRect, PageText, PdfDoc, PdfMeta, fold_query};
 
 /// A page at a resolution, in quarter pixels per point.
@@ -21,10 +22,26 @@ pub struct Hit {
     pub excerpt: String,
 }
 
+/// Where the pages come from: a PDF, or an Office file laid out as PDF first.
+#[derive(Clone)]
+pub enum Source {
+    Pdf(PathBuf),
+    Office(PathBuf),
+}
+
+impl Source {
+    fn load(&self) -> Result<Vec<u8>, Option<OpenError>> {
+        match self {
+            Self::Pdf(path) => std::fs::read(path).map_err(|_| None),
+            Self::Office(path) => std::panic::catch_unwind(|| office::render_pdf(path)).unwrap_or(Err(OpenError::Broken)).map_err(Some),
+        }
+    }
+}
+
 pub enum Message {
     Opened(Vec<(f32, f32)>),
     Key(String),
-    Failed,
+    Failed(Option<OpenError>),
     Page(PageKey, Arc<RenderImage>),
     Meta(PdfMeta),
     Text(usize, Arc<PageText>),
@@ -149,14 +166,21 @@ fn copy_range(doc: &PdfDoc, from: (usize, usize), to: (usize, usize)) -> String 
 }
 
 /// Opens the file off the main thread and serves pages, text, search and metadata from background threads.
-pub fn start(path: PathBuf, results: async_channel::Sender<Message>) -> (Arc<RenderQueue>, async_channel::Sender<TextJob>, Arc<AtomicU64>) {
+pub fn start(source: Source, results: async_channel::Sender<Message>) -> (Arc<RenderQueue>, async_channel::Sender<TextJob>, Arc<AtomicU64>) {
     let queue = Arc::new(RenderQueue::new());
     let (jobs_tx, jobs_rx) = async_channel::unbounded::<TextJob>();
     let latest = Arc::new(AtomicU64::new(0));
     let (q, generation) = (queue.clone(), latest.clone());
     std::thread::spawn(move || {
-        let Some((data, doc)) = std::fs::read(&path).ok().map(Arc::new).and_then(|data| PdfDoc::from_data(data.clone()).map(|doc| (data, doc))) else {
-            let _ = results.send_blocking(Message::Failed);
+        let data = match source.load() {
+            Ok(data) => Arc::new(data),
+            Err(why) => {
+                let _ = results.send_blocking(Message::Failed(why));
+                return;
+            }
+        };
+        let Some(doc) = PdfDoc::from_data(data.clone()) else {
+            let _ = results.send_blocking(Message::Failed(matches!(source, Source::Office(_)).then_some(OpenError::Broken)));
             return;
         };
         let sizes = (0..doc.page_count()).filter_map(|i| doc.page_size(i)).collect();

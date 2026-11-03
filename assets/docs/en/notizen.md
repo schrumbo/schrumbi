@@ -26,6 +26,28 @@ Notes are Markdown files in your folder. Obsidian reads them the same way.
 
 At the top you switch between {ui:Dateien}, {ui:Suche}, {ui:Tags} and {ui:Aufgaben}.
 
+## Office Files
+
+Word, Excel and PowerPoint open in Schrumbi, read-only.
+
+| File | View |
+|---|---|
+| `.docx` | Pages like a PDF: zoom, search, copy text |
+| `.pptx` | One slide below the other, with slide numbers |
+| `.xlsx` `.xlsm` `.xls` `.ods` | Spreadsheet with sheets at the bottom |
+
+In a spreadsheet:
+
+| Key | Effect |
+|---|---|
+| {key:up} {key:down} {key:left} {key:right} | Select a cell |
+| {key:shift-down} | Extend the selection |
+| {key:cmd-down} | To the end of the column |
+| {key:cmd-c} | Copy the selection, with tabs between cells |
+| {key:cmd-f} | Search this sheet, {key:return} for the next match |
+
+Edit in the default app: ⋯ → {ui:Mit Standard-App öffnen}. When it saves, Schrumbi shows the new version. Password-protected files open only in the default app.
+
 ## Reading and Editing
 
 | Mode | Shortcut |

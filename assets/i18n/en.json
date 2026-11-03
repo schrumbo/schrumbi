@@ -1618,5 +1618,15 @@
   "Alle Änderungen auf der Release-Seite": "All changes on the release page",
   "Öffnet sich im Browser": "Opens in the browser",
   "Zurück zum Vorschlag": "Back to the suggestion",
-  "PDF ersetzt: %@": "PDF replaced: %@"
+  "PDF ersetzt: %@": "PDF replaced: %@",
+  "In dieser Tabelle suchen": "Search this spreadsheet",
+  "Suche …": "Searching …",
+  "Suche schließen": "Close search",
+  "Zoom": "Zoom",
+  "Mit Passwort geschützt": "Password protected",
+  "Schrumbi kann verschlüsselte Dateien nicht anzeigen. Öffne sie in der Standard-App.": "Schrumbi can't show encrypted files. Open it in the default app.",
+  "Datei konnte nicht geöffnet werden": "Couldn't open the file",
+  "Die Datei ist beschädigt oder hat ein unbekanntes Format.": "The file is damaged or has an unknown format.",
+  "Folie %lld": "Slide %lld",
+  "Folie %lld von %lld": "Slide %lld of %lld"
 }

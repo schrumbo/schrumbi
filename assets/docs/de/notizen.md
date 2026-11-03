@@ -26,6 +26,28 @@ Notizen sind Markdown-Dateien in deinem Ordner. Obsidian liest sie genauso.
 
 Oben wechselst du zwischen {ui:Dateien}, {ui:Suche}, {ui:Tags} und {ui:Aufgaben}.
 
+## Office-Dateien
+
+Word, Excel und PowerPoint öffnen in Schrumbi, nur zum Lesen.
+
+| Datei | Ansicht |
+|---|---|
+| `.docx` | Seiten wie im PDF: Zoom, Suche, Text kopieren |
+| `.pptx` | Eine Folie unter der anderen, mit Foliennummer |
+| `.xlsx` `.xlsm` `.xls` `.ods` | Tabelle mit Blättern unten |
+
+In einer Tabelle:
+
+| Taste | Wirkung |
+|---|---|
+| {key:up} {key:down} {key:left} {key:right} | Zelle wählen |
+| {key:shift-down} | Auswahl erweitern |
+| {key:cmd-down} | Zum Ende der Spalte |
+| {key:cmd-c} | Auswahl kopieren, mit Tabs zwischen den Zellen |
+| {key:cmd-f} | In diesem Blatt suchen, {key:return} zum nächsten Treffer |
+
+Bearbeiten geht in der Standard-App: ⋯ → {ui:Mit Standard-App öffnen}. Sichert sie, zeigt Schrumbi die neue Version. Mit Passwort geschützte Dateien öffnet nur die Standard-App.
+
 ## Lesen und Bearbeiten
 
 | Modus | Kürzel |

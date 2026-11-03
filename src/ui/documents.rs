@@ -2860,23 +2860,30 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
 pub struct FileViewer {
     path: PathBuf,
     pdf: Option<Entity<PdfView>>,
+    sheet: Option<Entity<super::sheet_view::SheetView>>,
     preview: Entity<FilePreview>,
     app: Option<String>,
 }
 
 impl FileViewer {
     pub fn new(path: PathBuf, cx: &mut Context<Self>) -> Self {
+        let kind = crate::core::office::kind(&path);
         let is_pdf = extension(&path.to_string_lossy()).eq_ignore_ascii_case("pdf");
-        let pdf = is_pdf.then(|| cx.new(|cx| PdfView::new(&path, cx).take_focus_on_load()));
+        let pdf = match kind {
+            _ if is_pdf => Some(cx.new(|cx| PdfView::new(&path, cx).take_focus_on_load())),
+            Some(crate::core::office::Kind::Document | crate::core::office::Kind::Slides) => Some(cx.new(|cx| PdfView::office(&path, cx).take_focus_on_load())),
+            _ => None,
+        };
+        let sheet = (kind == Some(crate::core::office::Kind::Sheet)).then(|| cx.new(|cx| super::sheet_view::SheetView::new(&path, cx).take_focus_on_load()));
         let preview = cx.new(|cx| {
             let mut p = FilePreview::new(false);
-            if !is_pdf {
+            if pdf.is_none() && sheet.is_none() {
                 p.set_path(Some(path.clone()), cx);
             }
             p
         });
         let app = super::platform::default_app_name(&path);
-        Self { path, pdf, preview, app }
+        Self { path, pdf, sheet, preview, app }
     }
 }
 
@@ -2885,6 +2892,8 @@ impl FileViewer {
     pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(pdf) = self.pdf.clone() {
             pdf.update(cx, |v, cx| v.take_focus(window, cx));
+        } else if let Some(sheet) = self.sheet.clone() {
+            sheet.update(cx, |v, cx| v.take_focus(window, cx));
         } else {
             self.preview.update(cx, |p, cx| p.take_focus(window, cx));
         }
@@ -2898,6 +2907,10 @@ impl Render for FileViewer {
             if let Some((term, nth)) = take_find_request(&self.path, cx) {
                 pdf.update(cx, |v, cx| v.search_for(&term, nth, window, cx));
             }
+        } else if let Some(sheet) = self.sheet.clone()
+            && let Some((term, nth)) = take_find_request(&self.path, cx)
+        {
+            sheet.update(cx, |v, cx| v.search_for(&term, nth, window, cx));
         }
         let (p1, p2, p3, p4) = (self.path.clone(), self.path.clone(), self.path.clone(), self.path.clone());
         let open_label = self.app.as_ref().map_or_else(|| tr("Mit Standard-App öffnen"), |a| trf("In %@ öffnen", &[a]));
@@ -2915,6 +2928,8 @@ impl Render for FileViewer {
             unavailable("file-question", tr("Datei nicht gefunden"), self.path.file_name().unwrap_or_default().to_string_lossy().to_string(), &t).into_any_element()
         } else if let Some(pdf) = &self.pdf {
             pdf.clone().into_any_element()
+        } else if let Some(sheet) = &self.sheet {
+            sheet.clone().into_any_element()
         } else {
             self.preview.clone().into_any_element()
         };
