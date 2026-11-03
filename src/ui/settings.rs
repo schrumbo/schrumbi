@@ -12,6 +12,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::fields::Fields;
+use super::time_field::Preset;
 use super::state::{self, act, edit_config};
 use super::motion::{self, Soft};
 use super::theme::{self, Theme, font, radius, space, iconsize, control};
@@ -23,7 +24,7 @@ use crate::core::model::*;
 use crate::core::naming::Naming;
 use crate::core::prefs::{self, NoteSaveMode, Shortcut};
 use crate::core::shortcuts::{Group, ShortcutAction};
-use crate::core::{day, schedule};
+use crate::core::{clock, day, schedule};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -92,6 +93,10 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("moodle", "Kalender abonnieren"),
     ("spell", "Rechtschreibung prüfen"),
     ("ects", "Bezeichnung der Punkte"),
+    ("naming", "Namenskonvention"),
+    ("dateiname", "Namenskonvention"),
+    ("umbenennen", "Namenskonvention"),
+    ("muster", "Namenskonvention"),
     ("note", "Notensystem"),
     ("flashcard", "Lernen"),
     ("karteikarten", "Lernen"),
@@ -102,6 +107,9 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("hotkey", "Tastenkürzel"),
     ("keybinding", "Tastenkürzel"),
 ];
+
+/// Settings shown only while there is a naming convention; search leads to its switch instead.
+const NEEDS_CONVENTION: &[&str] = &["Matrikelnummer", "Mitautor:innen", "Beim Ablegen umbenennen", "Dateinamen prüfen", "Muster", "Beispiel"];
 
 /// Every labelled setting and the tab it lives on, for the search field.
 const SEARCHABLE: &[(&str, Tab)] = &[
@@ -114,7 +122,8 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Matrikelnummer", Tab::General),
     ("Mitautor:innen", Tab::General),
     ("Ablegen und Ordner", Tab::General),
-    ("Ordnung", Tab::General),
+    ("Namenskonvention", Tab::General),
+    ("Nach einem Muster benennen", Tab::General),
     ("Beim Ablegen umbenennen", Tab::General),
     ("Dateinamen prüfen", Tab::General),
     ("Fehlende Ordner melden", Tab::General),
@@ -382,7 +391,7 @@ fn section(title: Option<String>, footer: Option<String>, rows: Vec<AnyElement>,
 fn row(label: impl Into<SharedString>, control: impl IntoElement, t: &Theme) -> AnyElement {
     let label: SharedString = label.into();
     let key = label.to_string();
-    jump_target(&key, div().flex().items_center().gap(px(space::M)).px(px(space::L)).min_h(px(40.)).py(px(space::S)).child(div().flex_1().min_w_0().text_color(t.primary).child(label)).child(div().flex_none().max_w(px(460.)).child(control)), t).into_any_element()
+    jump_target(&key, div().flex().items_center().gap(px(space::M)).px(px(space::L)).min_h(px(control::ROW)).py(px(space::S)).child(div().flex_1().min_w_0().text_color(t.primary).child(label)).child(div().flex_none().max_w(px(control::ROW_CONTROL)).child(control)), t).into_any_element()
 }
 
 /// A pop-up button like SwiftUI's menu-style `Picker`.
@@ -415,44 +424,53 @@ fn picker(id: impl Into<ElementId>, label: String, build: impl Fn(PopupMenu) -> 
     Picker { button: Button::new(id).label(label).dropdown_caret(true), build: std::rc::Rc::new(build) }
 }
 
-fn filing_section(c: &StudyConfig, t: &Theme) -> Div {
-    let organizes = c.organizes();
-    let label = match organizes {
-        Some(true) => tr("Schrumbi hilft beim Ordnen"),
-        Some(false) => tr("Meine eigene Struktur"),
-        None => tr("Eigene Auswahl"),
-    };
+fn detail_row(label: impl Into<SharedString>, detail: String, control: impl IntoElement, t: &Theme) -> AnyElement {
+    let label: SharedString = label.into();
+    let key = label.to_string();
+    jump_target(&key, div().flex().items_center().gap(px(space::M)).px(px(space::L)).min_h(px(control::ROW)).py(px(space::S)).child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().text_color(t.primary).child(label)).child(caption(detail, t))).child(div().flex_none().child(control)), t).into_any_element()
+}
+
+fn naming_switch(id: &'static str, c: &StudyConfig) -> Switch {
+    Switch::new(id).checked(c.naming_convention()).on_click(|v, _, cx| {
+        let v = *v;
+        edit_config(cx, |c| c.set_naming_convention(v));
+    })
+}
+
+fn naming_detail(on: bool) -> String {
+    if on { tr("Abgelegte Dateien und Notizen in Abgabeordnern heißen nach dem Muster des Moduls.") } else { tr("Dateien und Notizen behalten die Namen, die du ihnen gibst.") }
+}
+
+fn sub_row(label: impl Into<SharedString>, control: impl IntoElement, t: &Theme) -> AnyElement {
+    let label: SharedString = label.into();
+    let key = label.to_string();
+    jump_target(&key, div().flex().items_center().gap(px(space::M)).pl(px(space::L + space::XL)).pr(px(space::L)).min_h(px(control::ROW)).py(px(space::S)).child(div().flex_1().min_w_0().text_color(t.primary).child(label)).child(div().flex_none().max_w(px(control::ROW_CONTROL)).child(control)), t).into_any_element()
+}
+
+fn filing_sections(c: &StudyConfig, extra: Vec<AnyElement>, t: &Theme) -> (Div, Div) {
     let switch = |id: &'static str, on: bool, set: fn(&mut StudyConfig, bool)| Switch::new(id).checked(on).on_click(move |v, _, cx| {
         let v = *v;
         edit_config(cx, |c| set(c, v));
     });
-    section(
-        Some(tr("Ablegen und Ordner")),
-        Some(tr("Schrumbi benennt und verschiebt nie etwas von selbst. Ohne „Ordner anlegen“ landen Dateien nur in Ordnern, die es schon gibt.")),
-        vec![
-            row(
-                tr("Ordnung"),
-                picker("g-organize", label, move |m| {
-                    m.item(PopupMenuItem::new(tr("Schrumbi hilft beim Ordnen")).checked(organizes == Some(true)).on_click(|_, _, cx| edit_config(cx, |c| c.set_organizes(true))))
-                        .item(PopupMenuItem::new(tr("Meine eigene Struktur")).checked(organizes == Some(false)).on_click(|_, _, cx| edit_config(cx, |c| c.set_organizes(false))))
-                }),
-                t,
-            ),
-            row(tr("Beim Ablegen umbenennen"), switch("g-rename", c.rename_on_filing, |c, v| c.rename_on_filing = v), t),
-            row(tr("Dateinamen prüfen"), switch("g-check-names", c.check_names, |c, v| c.check_names = v), t),
-            row(tr("Fehlende Ordner melden"), switch("g-check-folders", c.check_folders, |c, v| c.check_folders = v), t),
-            row(tr("Ordner anlegen"), switch("g-create-folders", c.create_folders, |c, v| c.create_folders = v), t),
-        ],
-        t,
+    let on = c.naming_convention();
+    let mut naming = vec![detail_row(tr("Nach einem Muster benennen"), naming_detail(on), naming_switch("g-naming", c), t)];
+    if on {
+        naming.push(sub_row(tr("Beim Ablegen umbenennen"), switch("g-rename", c.rename_on_filing, |c, v| c.rename_on_filing = v), t));
+        naming.push(sub_row(tr("Dateinamen prüfen"), switch("g-check-names", c.check_names, |c, v| c.check_names = v), t));
+        naming.extend(extra);
+    }
+    let folders = vec![
+        row(tr("Fehlende Ordner melden"), switch("g-check-folders", c.check_folders, |c, v| c.check_folders = v), t),
+        row(tr("Ordner anlegen"), switch("g-create-folders", c.create_folders, |c, v| c.create_folders = v), t),
+    ];
+    (
+        section(Some(tr("Namenskonvention")), on.then(|| tr("Das Muster steht in den Einstellungen jedes Moduls.")), naming, t),
+        section(Some(tr("Ablegen und Ordner")), Some(tr("Schrumbi benennt und verschiebt nie etwas von selbst. Ohne „Ordner anlegen“ landen Dateien nur in Ordnern, die es schon gibt.")), folders, t),
     )
 }
 
 fn minus(id: impl Into<ElementId>, help: String, f: impl Fn(&mut App) + 'static) -> Button {
     Button::new(id).ghost().small().icon(menu_icon("circle-minus")).tooltip(help).on_click(move |_, _, cx| f(cx))
-}
-
-fn time_options() -> Vec<String> {
-    (0..24).flat_map(|h| [0, 15, 30, 45].map(move |m| format!("{h:02}:{m:02}"))).chain(["23:59".to_string()]).collect()
 }
 
 fn break_summary(b: &Break) -> String {
@@ -560,6 +578,7 @@ impl Settings {
             return Vec::new();
         }
         let mut scored: Vec<(u8, Hit)> = Vec::new();
+        let convention = state::read(cx, |l| l.config.as_ref().is_none_or(StudyConfig::naming_convention));
         for (key, tab) in SEARCHABLE {
             let label = tr(key);
             let folded = fold(&label);
@@ -572,7 +591,8 @@ impl Settings {
             } else {
                 continue;
             };
-            scored.push((score, Hit { label, place: tab_name(*tab), to: HitTarget::Setting(*tab, tr(key)) }));
+            let target = if !convention && NEEDS_CONVENTION.contains(key) { "Nach einem Muster benennen" } else { key };
+            scored.push((score, Hit { label, place: tab_name(*tab), to: HitTarget::Setting(*tab, tr(target)) }));
         }
         state::read(cx, |l| {
             if let Some(c) = &l.config {
@@ -718,26 +738,24 @@ impl Settings {
         let style = c.coauthor_style;
         let grading = c.grading;
 
-        let studium = section(
-            Some(tr("Studium")),
-            None,
-            vec![
-                row(tr("Name"), div().w(px(300.)).child(Input::new(&name)), t),
-                row(tr("Kürzel in Dateinamen"), div().w(px(300.)).child(Input::new(&author)), t),
-                row(tr("Inbox-Ordner"), div().w(px(300.)).child(Input::new(&inbox)), t),
-                row(tr("Matrikelnummer"), div().w(px(300.)).child(Input::new(&matrikel)), t),
-                row(
-                    tr("Mitautor:innen"),
-                    picker("g-coauthor", if style == CoauthorStyle::Initial { tr("Nachname-V (Mueller-C)") } else { tr("Frei (beliebiger Name)") }, move |m| {
-                        m.item(PopupMenuItem::new(tr("Nachname-V (Mueller-C)")).checked(style == CoauthorStyle::Initial).on_click(|_, _, cx| edit_config(cx, |c| c.coauthor_style = CoauthorStyle::Initial)))
-                            .item(PopupMenuItem::new(tr("Frei (beliebiger Name)")).checked(style == CoauthorStyle::Free).on_click(|_, _, cx| edit_config(cx, |c| c.coauthor_style = CoauthorStyle::Free)))
-                    }),
-                    t,
-                ),
-            ],
-            t,
-        );
-        let filing = filing_section(c, t);
+        let studium_rows = vec![
+            row(tr("Name"), div().w(px(300.)).child(Input::new(&name)), t),
+            row(tr("Kürzel in Dateinamen"), div().w(px(300.)).child(Input::new(&author)), t),
+            row(tr("Inbox-Ordner"), div().w(px(300.)).child(Input::new(&inbox)), t),
+        ];
+        let naming_extra = vec![
+            sub_row(tr("Matrikelnummer"), div().w(px(300.)).child(Input::new(&matrikel)), t),
+            sub_row(
+                tr("Mitautor:innen"),
+                picker("g-coauthor", if style == CoauthorStyle::Initial { tr("Nachname-V (Mueller-C)") } else { tr("Frei (beliebiger Name)") }, move |m| {
+                    m.item(PopupMenuItem::new(tr("Nachname-V (Mueller-C)")).checked(style == CoauthorStyle::Initial).on_click(|_, _, cx| edit_config(cx, |c| c.coauthor_style = CoauthorStyle::Initial)))
+                        .item(PopupMenuItem::new(tr("Frei (beliebiger Name)")).checked(style == CoauthorStyle::Free).on_click(|_, _, cx| edit_config(cx, |c| c.coauthor_style = CoauthorStyle::Free)))
+                }),
+                t,
+            ),
+        ];
+        let studium = section(Some(tr("Studium")), None, studium_rows, t);
+        let (naming, filing) = filing_sections(c, naming_extra, t);
         let grades = section(
             Some(tr("Noten")),
             None,
@@ -986,7 +1004,7 @@ impl Settings {
                 .collect(),
             t,
         );
-        div().flex().flex_col().gap(px(space::XL)).child(language).child(studium).child(filing).child(grades).child(sidebar).child(reminders).child(incoming).child(calendar).child(system).child(search).child(storage)
+        div().flex().flex_col().gap(px(space::XL)).child(language).child(studium).child(naming).child(filing).child(grades).child(sidebar).child(reminders).child(incoming).child(calendar).child(system).child(search).child(storage)
     }
 }
 
@@ -1392,7 +1410,11 @@ impl Settings {
             }))(cx)
         })).into_any_element());
         let example = Naming::new(&m, semester.as_ref(), c).render(&tr("Titel"), Local::now().date_naive(), "pdf", &[], None, None, None);
-        let naming_rows = vec![row(tr("Muster"), div().w(px(320.)).child(Input::new(&naming)), t), row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(example), t)];
+        let naming_rows = if c.naming_convention() {
+            vec![row(tr("Muster"), div().w(px(320.)).child(Input::new(&naming)), t), row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(example), t)]
+        } else {
+            vec![detail_row(tr("Nach einem Muster benennen"), naming_detail(false), naming_switch("m-naming", c), t)]
+        };
         let mut rules: Vec<AnyElement> = Vec::new();
         for (i, r) in m.rules.iter().enumerate() {
             rules.push(self.rule_card(&m, semester.as_ref(), i, r, &mut fields, edit.clone(), window, cx, t));
@@ -1428,6 +1450,10 @@ impl Settings {
             let e = edit.clone();
             let room = fields.input(&format!("sr-{}-{i}", m.id), &s.location, &tr("Raum"), window, cx, move |v, cx| e(Box::new(move |m| if let Some(s) = m.sessions.get_mut(i) { s.location = v.clone() }))(cx));
             let (e1, e2, e3, e4) = (edit.clone(), edit.clone(), edit.clone(), edit.clone());
+            let start = fields.time(&format!("sf-{}-{i}", m.id), &s.start, start_presets(), window, cx, move |v, cx| e2(Box::new(move |m| if let Some(s) = m.sessions.get_mut(i) { s.end = clock::keep_length(&s.start, &s.end, &v); s.start = v.clone(); }))(cx));
+            let end = fields.time(&format!("se-{}-{i}", m.id), &s.end, end_presets(&s.start), window, cx, move |v, cx| e3(Box::new(move |m| if let Some(s) = m.sessions.get_mut(i) { s.end = v.clone() }))(cx));
+            let begins = clock::parse(&s.start);
+            end.update(cx, |f, cx| f.after(begins, cx));
             sessions.push(
                 div()
                     .flex()
@@ -1443,9 +1469,9 @@ impl Settings {
                         }
                         menu
                     }).small())
-                    .child(time_picker(("sf", i), s.start.clone(), move |v, cx| e2(Box::new(move |m| if let Some(s) = m.sessions.get_mut(i) { s.start = v.clone() }))(cx)))
+                    .child(start)
                     .child(div().text_color(t.secondary).child("–"))
-                    .child(time_picker(("se", i), s.end.clone(), move |v, cx| e3(Box::new(move |m| if let Some(s) = m.sessions.get_mut(i) { s.end = v.clone() }))(cx)))
+                    .child(end)
                     .child(div().w(px(80.)).child(Input::new(&room).small()))
                     .child(minus(("srm", i), tr("Termin entfernen"), move |cx| e4(Box::new(move |m| if i < m.sessions.len() { m.sessions.remove(i); }))(cx)))
                     .into_any_element(),
@@ -1463,7 +1489,7 @@ impl Settings {
             .gap(px(space::XL))
             .child(section(Some(tr("Modul")), None, module_rows, t))
             .child(section(Some(tr("Links")), Some(tr("Der Upload-Link öffnet sich beim Hochladen einer Abgabe, daneben erscheinen die Dateien zum Hineinziehen.")), links, t))
-            .child(section(Some(tr("Dateinamen")), Some(tr("Platzhalter: {code} {yy} {yyyy} {title} {author} {matrikel} {date} {date:yyyy-MM-dd} {w} {kw}")), naming_rows, t))
+            .child(section(Some(tr("Dateinamen")), Some(if c.naming_convention() { tr("Platzhalter: {code} {yy} {yyyy} {title} {author} {matrikel} {date} {date:yyyy-MM-dd} {w} {kw}") } else { tr("Gilt für alle Module. Eingeschaltet erscheint hier das Muster dieses Moduls.") }), naming_rows, t))
             .child(section(Some(tr("Wiederkehrende Deadlines")), Some(tr("Wird für jede Vorlesungswoche erzeugt. Ordner-Platzhalter: {w} Vorlesungswoche, {kw} Kalenderwoche. Ohne Platzhalter zählt eine Datei, deren Datum in den 7 Tagen vor der Deadline liegt.")), rules, t))
             .child(section(Some(tr("Stundenplan")), Some(tr("Erscheint im 7-Tage-Ausblick der Übersicht, nicht in Pausen.")), sessions, t))
     }
@@ -1551,7 +1577,7 @@ impl Settings {
                         }
                         menu
                     }).small())
-                    .child(time_picker(("rtm", i), r.time.clone(), move |v, cx| s2(Box::new(move |r| r.time = v.clone()))(cx)))
+                    .child(fields.time(&format!("rtm-{}-{i}", m.id), &r.time, due_presets(), window, cx, move |v, cx| s2(Box::new(move |r| r.time = v.clone()))(cx)))
                     .child(picker(("roff", i), offset_label(offset), move |mut menu| {
                         for o in 0..=2i64 {
                             let s = s3.clone();
@@ -1642,18 +1668,20 @@ impl Settings {
     }
 }
 
-fn time_picker(id: impl Into<ElementId>, value: String, set: impl Fn(String, &mut App) + 'static) -> Picker {
-    let set = std::rc::Rc::new(set);
-    picker(id, value.clone(), move |mut menu| {
-        menu = menu.max_h(px(320.)).scrollable(true);
-        for t in time_options() {
-            let s = set.clone();
-            let v = t.clone();
-            menu = menu.item(PopupMenuItem::new(t.clone()).checked(t == value).on_click(move |_, _, cx| s(v.clone(), cx)));
-        }
-        menu
-    })
-    .small()
+fn due_presets() -> Vec<Preset> {
+    ["08:00", "12:00", "14:00", "18:00", "23:59"].map(Preset::plain).to_vec()
+}
+
+fn start_presets() -> Vec<Preset> {
+    ["08:00", "09:45", "11:30", "13:30", "15:15", "17:00"].map(Preset::plain).to_vec()
+}
+
+fn end_presets(start: &str) -> Vec<Preset> {
+    let Some(from) = clock::parse(start) else { return Vec::new() };
+    [45, 90, 120].iter().map(|&minutes| (minutes, from + chrono::Duration::minutes(minutes))).filter(|(_, to)| *to > from).map(|(minutes, to)| {
+        let time = clock::format(to);
+        Preset { label: trf("%@ · %@ Min.", &[&time, &minutes.to_string()]), time }
+    }).collect()
 }
 
 fn week_limit(id: impl Into<ElementId>, label: String, value: Option<u32>, set: impl Fn(Option<u32>, &mut App) + 'static, t: &Theme) -> Div {

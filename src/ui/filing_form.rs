@@ -20,7 +20,7 @@ use crate::core::day;
 use crate::core::filing::{self, BRIEF_TAG, FileFacts, FileRole, Suggestion};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{Library, MaterialTarget};
-use crate::core::model::{Assignment, CoauthorStyle};
+use crate::core::model::{Assignment, CoauthorStyle, StudyConfig};
 use crate::core::naming::{Naming, extension};
 use crate::core::prefs;
 
@@ -58,6 +58,7 @@ pub struct FilingForm {
     date_value: NaiveDate,
     rename: bool,
     renames_by_default: bool,
+    convention: bool,
     grab_focus: bool,
     details: bool,
     /// Width of the form, measured while painting.
@@ -131,6 +132,7 @@ impl FilingForm {
             date_value: Local::now().date_naive(),
             rename: renames,
             renames_by_default: renames,
+            convention: has_convention(cx),
             grab_focus,
             details: false,
             width: 560.,
@@ -315,18 +317,20 @@ impl FilingForm {
         cx.notify();
     }
 
-    /// Renaming is on when the workspace wants it, and for a task sheet whose name would otherwise count as the submission.
+    /// Renaming is on when the workspace wants it, and, while there is a convention, for a task sheet whose name would otherwise count as the submission.
     fn renames_for_role(&self, cx: &App) -> bool {
         let author = state::read(cx, |l| l.config.as_ref().map(|c| c.author.clone()).unwrap_or_default());
-        renames_by_default(cx) || (self.role == FileRole::Brief && self.path().is_some_and(|p| !FileRole::is_brief(&name_of(p), &author)))
+        renames_by_default(cx) || (has_convention(cx) && self.role == FileRole::Brief && self.path().is_some_and(|p| !FileRole::is_brief(&name_of(p), &author)))
     }
 
     fn follow_rename_setting(&mut self, cx: &App) {
         let now = renames_by_default(cx);
-        if now == self.renames_by_default {
+        let convention = has_convention(cx);
+        if now == self.renames_by_default && convention == self.convention {
             return;
         }
         self.renames_by_default = now;
+        self.convention = convention;
         self.rename = match &self.target {
             Some(Target::Folder(f)) => now && state::read(cx, |l| l.module_containing(f).is_some()),
             _ => self.renames_for_role(cx),
@@ -697,6 +701,10 @@ fn renames_by_default(cx: &App) -> bool {
     state::read(cx, |l| l.config.as_ref().is_none_or(|c| c.rename_on_filing))
 }
 
+fn has_convention(cx: &App) -> bool {
+    state::read(cx, |l| l.config.as_ref().is_none_or(StudyConfig::naming_convention))
+}
+
 impl Render for FilingForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.follow_rename_setting(cx);
@@ -925,8 +933,9 @@ impl Render for FilingForm {
 
         if folder.is_some() {
             let e = me.clone();
+            let convention = has_convention(cx);
             let mut name = div().flex().flex_col().gap(px(space::M)).child(
-                div().flex().items_center().child(section_label(tr("Name"), &t)).child(div().flex_1()).child(
+                div().flex().items_center().child(section_label(tr("Name"), &t)).child(div().flex_1()).when(convention, |d| d.child(
                     div()
                         .id("rename-switch")
                         .flex()
@@ -942,7 +951,7 @@ impl Render for FilingForm {
                             })
                         }))
                         .tooltip(tip(if module_id.is_none() { tr("Ordner gehört zu keinem Modul") } else { tr("Muster aus den Moduleinstellungen") })),
-                ),
+                )),
             );
             if self.rename && module_id.is_some() {
                 let mut sugg = div().flex().flex_wrap().gap(px(space::S));

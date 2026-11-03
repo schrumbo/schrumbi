@@ -50,6 +50,12 @@ pub mod control {
     pub const FOOTBAR: f32 = 60.;
     /// A button that shows a count, wide enough for two digits so its row does not move.
     pub const COUNTED: f32 = 104.;
+    /// A settings row with a label and a line of explanation.
+    pub const ROW: f32 = 40.;
+    /// A time field, wide enough for a typed time and how it is read.
+    pub const TIME: f32 = 92.;
+    /// The widest a control at the end of a settings row gets.
+    pub const ROW_CONTROL: f32 = 460.;
 }
 
 /// Widths of the document tab row.

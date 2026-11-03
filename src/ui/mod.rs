@@ -33,6 +33,7 @@ pub mod editor;
 pub mod settings;
 pub mod checks;
 pub mod fields;
+pub mod time_field;
 pub mod grid;
 pub mod record;
 pub mod browser;

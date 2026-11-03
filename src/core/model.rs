@@ -11,6 +11,10 @@ pub const CURRENT_VERSION: u32 = 2;
 pub const DEFAULT_NAMING: &str = "{code}_{yy}_{title}_{author}_{date}";
 pub const PALETTE: [&str; 12] = ["blue", "green", "orange", "purple", "pink", "teal", "red", "yellow", "indigo", "mint", "brown", "gray"];
 
+fn on() -> bool {
+    true
+}
+
 fn default_exclude() -> Vec<String> {
     [".git", "node_modules", "build", "DerivedData", ".build", "Pods"].map(String::from).to_vec()
 }
@@ -38,9 +42,11 @@ pub struct StudyConfig {
     pub credit_label: String,
     /// Folder names skipped by search and file browsing.
     pub search_exclude: Vec<String>,
-    /// Filing renames to the module naming pattern unless switched off for the file.
+    /// Filing renames to the module naming pattern unless switched off for the file. Configs written before this switch existed keep it on.
+    #[serde(default = "on")]
     pub rename_on_filing: bool,
-    /// Flags handed-in files that do not follow the naming pattern.
+    /// Flags handed-in files that do not follow the naming pattern, and names notes in checked folders by it. Configs written before this switch existed keep it on.
+    #[serde(default = "on")]
     pub check_names: bool,
     /// Reports folders that rules expect but that do not exist.
     pub check_folders: bool,
@@ -63,8 +69,8 @@ impl Default for StudyConfig {
             grading: GradingSystem::German,
             credit_label: "ECTS".into(),
             search_exclude: default_exclude(),
-            rename_on_filing: true,
-            check_names: true,
+            rename_on_filing: false,
+            check_names: false,
             check_folders: true,
             create_folders: true,
         }
@@ -76,15 +82,14 @@ impl StudyConfig {
         Self { version: CURRENT_VERSION, name, author, semesters, modules, ..Default::default() }
     }
 
-    /// `Some(true)` when Schrumbi helps with naming and folders, `Some(false)` for the user's own structure, `None` when mixed.
-    pub fn organizes(&self) -> Option<bool> {
-        let all = [self.rename_on_filing, self.check_names, self.check_folders, self.create_folders];
-        all.iter().all(|&v| v == all[0]).then_some(all[0])
+    /// Whether file names follow the module patterns at all; off, nothing is renamed or checked and new files keep their plain names.
+    pub fn naming_convention(&self) -> bool {
+        self.rename_on_filing || self.check_names
     }
 
-    /// Sets every naming and folder switch at once.
-    pub fn set_organizes(&mut self, on: bool) {
-        (self.rename_on_filing, self.check_names, self.check_folders, self.create_folders) = (on, on, on, on);
+    /// Switches renaming and name checks together.
+    pub fn set_naming_convention(&mut self, on: bool) {
+        (self.rename_on_filing, self.check_names) = (on, on);
     }
 
     pub fn module(&self, id: &str) -> Option<&Module> {

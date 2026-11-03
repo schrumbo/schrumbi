@@ -1948,7 +1948,7 @@ impl Library {
         out
     }
 
-    /// The file name of something new in `folder`: notes are called what you call them unless the folder checks names, other files follow the module's convention.
+    /// The file name of something new in `folder`: notes are called what you call them unless the folder checks names, other files follow the module's convention while there is one.
     pub fn note_name(&self, title: &str, folder: &Path, ext: &str) -> String {
         if ext == "md" {
             let plain = format!("{}.md", title.trim().chars().map(|c| if "\\/:".contains(c) { '-' } else { c }).collect::<String>());
@@ -1957,7 +1957,7 @@ impl Library {
                 None => plain,
             };
         }
-        let Some(naming) = self.module_containing(folder).and_then(|m| self.naming(&m.id)) else { return format!("{}.{ext}", Naming::clean(title)) };
+        let Some(naming) = self.module_containing(folder).filter(|_| self.config.as_ref().is_some_and(StudyConfig::naming_convention)).and_then(|m| self.naming(&m.id)) else { return format!("{}.{ext}", Naming::clean(title)) };
         naming.render(title, self.today(), ext, &[], self.lecture_week_containing(self.today()).map(|w| w.index), None, None)
     }
 
@@ -2501,6 +2501,16 @@ impl Library {
     /// Renames a file in an assignment folder so it counts as task description (or back as own work).
     pub fn set_role(&mut self, role: FileRole, path: &Path, assignment_id: &str) {
         let Some(a) = self.assignment(assignment_id).cloned() else { return };
+        if !self.config.as_ref().is_some_and(StudyConfig::naming_convention) {
+            let author = self.config.as_ref().map(|c| c.author.clone()).unwrap_or_default();
+            let new = plain_role_name(&name_of(path), role, &author);
+            if heading_titled(path) {
+                self.rename_titled(path, &new, super::naming::stem(&new), false);
+            } else {
+                self.rename_file(path, &new);
+            }
+            return;
+        }
         let Some(naming) = self.naming(&a.module_id) else { return };
         let facts = FileFacts::read(path);
         let namings = self.namings();
@@ -3530,6 +3540,28 @@ fn trash_with_copy(path: &Path) -> Result<Change> {
 /// The path with its folder resolved, so it compares with open documents; works after the file itself is gone.
 fn settled_path(p: &Path) -> PathBuf {
     p.parent().and_then(|d| dunce::canonicalize(d).ok()).zip(p.file_name()).map_or_else(|| p.to_path_buf(), |(d, n)| d.join(n))
+}
+
+/// The name a file gets for `role` without a convention: its own, with only the task-sheet word added or taken out.
+pub(crate) fn plain_role_name(name: &str, role: FileRole, author: &str) -> String {
+    let brief = FileRole::is_brief(name, author);
+    let ext = super::naming::extension(name);
+    let stem = super::naming::stem(name);
+    let dotted = |stem: &str| if ext.is_empty() { stem.to_string() } else { format!("{stem}.{ext}") };
+    let word = |token: &str| FileRole::is_brief(token, "");
+    match role {
+        FileRole::Brief if !brief => {
+            let own = if author.is_empty() { stem.to_string() } else { stem.replace(author, "") };
+            let own = own.trim_matches(|c: char| c == ' ' || c == '_' || c == '-');
+            if own.is_empty() { dotted(BRIEF_TAG) } else if word(own) { dotted(own) } else { dotted(&format!("{own} {BRIEF_TAG}")) }
+        }
+        FileRole::Work if brief => {
+            let gap = stem.chars().find(|c| matches!(c, ' ' | '_' | '-')).unwrap_or(' ');
+            let kept: Vec<&str> = stem.split([' ', '_', '-']).filter(|t| !t.is_empty() && !word(t)).collect();
+            dotted(&if kept.is_empty() { tr("Abgabe") } else { kept.join(&gap.to_string()) })
+        }
+        _ => name.to_string(),
+    }
 }
 
 fn heading_titled(path: &Path) -> bool {

@@ -9,6 +9,7 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -459,15 +460,24 @@ impl Render for Setup {
                 }));
                 let sample_module = Module { code: self.draft.modules.first().map_or("ABC".into(), |m| m.code.clone()), ..Default::default() };
                 let author_text = if self.draft.author.is_empty() { tr("Nachname-V") } else { self.draft.author.clone() };
-                let organizes = self.draft.organizes();
-                let (help, own) = (me.clone(), me.clone());
+                let folders = (self.draft.check_folders, self.draft.create_folders);
+                let naming = self.draft.naming_convention();
+                let (help, own, named) = (me.clone(), me.clone(), me.clone());
                 let help = move |_: &ClickEvent, _: &mut Window, cx: &mut App| help.update(cx, |s, cx| {
-                    s.draft.set_organizes(true);
+                    (s.draft.check_folders, s.draft.create_folders) = (true, true);
                     cx.notify();
                 });
                 let own = move |_: &ClickEvent, _: &mut Window, cx: &mut App| own.update(cx, |s, cx| {
-                    s.draft.set_organizes(false);
+                    (s.draft.check_folders, s.draft.create_folders) = (false, false);
                     cx.notify();
+                });
+                let vault = state::read(cx, |l| l.is_vault);
+                let naming_switch = Switch::new("setup-naming").checked(naming).on_click(move |v, _, cx| {
+                    let v = *v;
+                    named.update(cx, |s, cx| {
+                        s.draft.set_naming_convention(v);
+                        cx.notify();
+                    });
                 });
                 let example = Naming::with_author(&sample_module, self.draft.semesters.first(), &author_text, "", CoauthorStyle::Initial).render(&tr("Titel"), Local::now().date_naive(), "pdf", &[], None, None, None);
                 div()
@@ -476,24 +486,42 @@ impl Render for Setup {
                     .gap(px(space::L))
                     .child(div().flex().items_center().gap(px(space::M)).child(super::onboarding::snail(54., &t)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Willkommen"))))
                     .child(div().text_color(t.secondary).child(if self.is_vault { tr("Deine Notizen bleiben normale Dateien. Du kannst sie hier schreiben und in Obsidian, auch gleichzeitig.") } else { tr("Vier kurze Schritte, danach kennt die App deine Module und Abgaben.") }))
-                    .child(
-                        grouped(&t)
-                            .child(form_row(tr("Studiengang"), Input::new(&name), &t))
-                            .when(!state::read(cx, |l| l.is_vault), |d| d.child(divider(&t)).child(form_row(tr("Kürzel in Dateinamen"), Input::new(&author), &t)))
-                            .when(!state::read(cx, |l| l.is_vault), |d| d.child(divider(&t)).child(form_row(tr("Beispiel"), if self.draft.rename_on_filing { div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).text_color(t.secondary).child(example) } else { div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(tr("Dateien behalten ihren Namen")) }, &t)),)
-                    )
+                    .child(grouped(&t).child(form_row(tr("Studiengang"), Input::new(&name), &t)))
+                    .when(!vault, |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(space::S))
+                                .child(section_title(tr("Dateinamen")))
+                                .child(
+                                    grouped(&t)
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(space::M))
+                                                .px(px(space::L))
+                                                .py(px(space::S))
+                                                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().font_weight(FontWeight::SEMIBOLD).child(tr("Nach einem Muster benennen"))).child(caption(if naming { tr("Abgelegte Dateien heißen dann zum Beispiel so wie unten.") } else { tr("Aus: Dateien und Notizen behalten die Namen, die du ihnen gibst.") }, &t)))
+                                                .child(naming_switch),
+                                        )
+                                        .when(naming, |d| d.child(divider(&t)).child(form_row(tr("Kürzel in Dateinamen"), Input::new(&author), &t)).child(divider(&t)).child(form_row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).text_color(t.secondary).child(example), &t))),
+                                ),
+                        )
+                    })
                     .child(
                         div()
                             .flex()
                             .flex_col()
                             .gap(px(space::S))
-                            .child(section_title(tr("Ordnung")))
+                            .child(section_title(tr("Ordner")))
                             .child(
                                 div()
                                     .flex()
                                     .gap(px(space::M))
-                                    .child(order_choice("setup-order-help", "wand-sparkles", tr("Schrumbi hilft beim Ordnen"), tr("Benennt abgelegte Dateien nach einem Muster, legt Abgabeordner an und meldet, was fehlt."), organizes == Some(true), help, &t))
-                                    .child(order_choice("setup-order-own", "folder-tree", tr("Meine eigene Struktur"), tr("Schrumbi liest nur. Dateien landen dort, wo du sie hinlegst, mit ihrem Namen."), organizes == Some(false), own, &t)),
+                                    .child(order_choice("setup-order-help", "wand-sparkles", tr("Schrumbi hilft beim Ordnen"), tr("Legt Abgabeordner an und meldet, was fehlt."), folders == (true, true), help, &t))
+                                    .child(order_choice("setup-order-own", "folder-tree", tr("Meine eigene Struktur"), tr("Schrumbi liest nur. Dateien landen dort, wo du sie hinlegst."), folders == (false, false), own, &t)),
                             )
                             .child(caption(tr("Lässt sich jederzeit in den Einstellungen ändern, auch einzeln."), &t)),
                     )

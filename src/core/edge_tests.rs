@@ -816,7 +816,6 @@ fn a_note_made_here_takes_the_name_of_its_heading() {
 fn existing_configs_keep_organizing() {
     let (root, lib) = workspace("organize-default", &config(1, 1));
     let c = lib.config.unwrap();
-    assert_eq!(c.organizes(), Some(true));
     assert!(c.rename_on_filing && c.check_names && c.check_folders && c.create_folders);
     let _ = std::fs::remove_dir_all(root);
 }
@@ -833,7 +832,7 @@ fn own_structure_hides_name_and_folder_findings_until_switched_back() {
     assert!(!lib.misnamed().is_empty());
     assert!(lib.reports_missing_folders() && !lib.missing_folders().is_empty());
     let mut c = lib.config.clone().unwrap();
-    c.set_organizes(false);
+    (c.rename_on_filing, c.check_names, c.check_folders, c.create_folders) = (false, false, false, false);
     lib.update_config(c.clone());
     assert!(lib.misnamed().is_empty());
     assert!(!lib.reports_missing_folders() && lib.missing_folders().is_empty());
@@ -880,7 +879,7 @@ fn filing_a_file_where_it_already_is_keeps_its_name() {
 fn a_file_filed_into_a_fallback_folder_still_counts_and_undo_takes_both_back() {
     let (root, mut lib) = workspace("organize-fallback", &config(1, 1));
     let mut c = lib.config.clone().unwrap();
-    c.set_organizes(false);
+    (c.rename_on_filing, c.check_names, c.check_folders, c.create_folders) = (false, false, false, false);
     lib.update_config(c);
     std::fs::create_dir_all(root.join("M0")).unwrap();
     let a = lib.assignments.first().cloned().unwrap();
@@ -1212,4 +1211,112 @@ fn trashed_notes_stay_out_of_the_tree_until_a_later_scan() {
     assert!(index::hidden().hides(&sub.join("Tief/Notiz.md")), "a hidden folder hides what lies below it");
     index::trash_ended(&[], std::slice::from_ref(&sub));
     assert!(!index::hidden().hides(&sub.join("Tief/Notiz.md")));
+}
+
+#[test]
+fn new_workspaces_start_without_a_naming_convention_and_keep_that_after_a_reload() {
+    let root = folder("naming-new");
+    std::fs::create_dir_all(root.join("Mathe")).unwrap();
+    let c = open(&root).config.unwrap();
+    assert!(!c.naming_convention() && !c.rename_on_filing && !c.check_names);
+    assert!(c.check_folders && c.create_folders, "folder help stays on");
+    let raw: Value = serde_json::from_slice(&std::fs::read(root.join("schrumbi.json")).unwrap()).unwrap();
+    assert_eq!(raw["renameOnFiling"], json!(false), "written out, so a reload does not fall back to the legacy default");
+    assert!(!open(&root).config.unwrap().naming_convention());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn configs_from_before_the_switch_keep_their_convention() {
+    let (root, lib) = workspace("naming-legacy", &config(1, 1));
+    assert!(lib.config.as_ref().unwrap().naming_convention());
+    let explicit = json!({ "version": 2, "name": "T", "renameOnFiling": false, "checkNames": false });
+    let c: crate::core::model::StudyConfig = serde_json::from_value(explicit).unwrap();
+    assert!(!c.naming_convention(), "a choice once written stays");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn without_a_convention_nothing_is_flagged_and_new_files_keep_plain_names() {
+    let (root, mut lib) = workspace("naming-off", &config(1, 1));
+    let today = chrono::Local::now().date_naive();
+    let a = lib.assignments.iter().filter(|a| a.upload && crate::core::day::local_date(a.due) >= today).min_by_key(|a| a.due).cloned().unwrap();
+    std::fs::create_dir_all(&a.folder).unwrap();
+    std::fs::write(a.folder.join("Mein Entwurf.pdf"), "x").unwrap();
+    let rescan = |lib: &mut Library| {
+        if let Some(job) = lib.scan_job() {
+            lib.apply_scan(job.run());
+        }
+    };
+    rescan(&mut lib);
+    assert!(!lib.misnamed().is_empty());
+    let mut c = lib.config.clone().unwrap();
+    c.set_naming_convention(false);
+    lib.update_config(c.clone());
+    rescan(&mut lib);
+    assert!(lib.misnamed().is_empty(), "no misnamed findings");
+    let read = |p: &Path| std::fs::read_to_string(p).unwrap();
+
+    let made = lib.create_note("TEST", &a.folder, "md").unwrap();
+    assert_eq!(name_of(&made), "TEST.md", "a note in a checked folder keeps the plain name");
+    assert_eq!(lib.note_name("Liste", &root.join("M0"), "txt"), "Liste.txt", "other new files too");
+
+    std::fs::write(&made, "# Neuer Titel\n\nText\n").unwrap();
+    lib.follow_heading(&made);
+    let followed = a.folder.join("Neuer Titel.md");
+    assert!(followed.exists(), "the name follows the heading as typed");
+
+    lib.rename(&followed, "Anders.md");
+    let typed = a.folder.join("Anders.md");
+    assert!(typed.exists(), "a typed name stays as typed");
+    assert!(read(&typed).starts_with("# Anders\n"), "{}", read(&typed));
+
+    c.set_naming_convention(true);
+    lib.update_config(c);
+    rescan(&mut lib);
+    assert!(!lib.misnamed().is_empty(), "switching back brings the findings back");
+    assert!(typed.exists() && a.folder.join("Mein Entwurf.pdf").exists(), "switching never renames anything by itself");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn without_a_convention_a_role_only_adds_or_takes_out_the_task_word() {
+    use crate::core::filing::FileRole::{self, Brief, Material, Work};
+    use crate::core::library::plain_role_name;
+    assert_eq!(plain_role_name("Mein Entwurf.pdf", Brief, "Muster-M"), "Mein Entwurf Aufgabe.pdf");
+    assert_eq!(plain_role_name("Blatt 3 Muster-M.pdf", Brief, "Muster-M"), "Blatt 3 Aufgabe.pdf");
+    assert_eq!(plain_role_name("Übungsblatt 3.pdf", Brief, "Muster-M"), "Übungsblatt 3.pdf", "already a task sheet");
+    assert_eq!(plain_role_name("Muster-M.pdf", Brief, "Muster-M"), "Aufgabe.pdf");
+    assert_eq!(plain_role_name("Blatt_3_Aufgabe.pdf", Work, "Muster-M"), "Blatt_3.pdf");
+    assert_eq!(plain_role_name("Aufgabe.pdf", Work, ""), "Abgabe.pdf");
+    assert_eq!(plain_role_name("Mein Entwurf.pdf", Work, "Muster-M"), "Mein Entwurf.pdf", "already counts as the submission");
+    assert_eq!(plain_role_name("Aufgabe.pdf", Material, ""), "Aufgabe.pdf");
+    for (name, role) in [("Mein Entwurf.pdf", Brief), ("Blatt_3_Aufgabe.pdf", Work), ("Notiz", Brief)] {
+        let new = plain_role_name(name, role, "Muster-M");
+        assert_eq!(FileRole::is_brief(&new, "Muster-M"), role == Brief, "{name} → {new}");
+    }
+
+    let (_root, mut lib) = workspace("naming-off-role", &config(1, 1));
+    let mut c = lib.config.clone().unwrap();
+    c.set_naming_convention(false);
+    lib.update_config(c);
+    let today = chrono::Local::now().date_naive();
+    let a = lib.assignments.iter().filter(|a| a.upload && crate::core::day::local_date(a.due) >= today).min_by_key(|a| a.due).cloned().unwrap();
+    std::fs::create_dir_all(&a.folder).unwrap();
+    let file = a.folder.join("Mein Entwurf.pdf");
+    std::fs::write(&file, "x").unwrap();
+    lib.set_role(Brief, &file, &a.id);
+    assert_eq!(std::fs::read(a.folder.join("Mein Entwurf Aufgabe.pdf")).unwrap(), b"x");
+    lib.set_role(Work, &a.folder.join("Mein Entwurf Aufgabe.pdf"), &a.id);
+    assert_eq!(std::fs::read(&file).unwrap(), b"x", "back to the name it had");
+}
+
+#[test]
+fn either_naming_switch_alone_keeps_the_convention() {
+    let mut c = crate::core::model::StudyConfig::default();
+    assert!(!c.naming_convention());
+    (c.rename_on_filing, c.check_names) = (true, false);
+    assert!(c.naming_convention(), "renaming on filing still needs the pattern");
+    (c.rename_on_filing, c.check_names) = (false, true);
+    assert!(c.naming_convention(), "checking names still needs the pattern");
 }
