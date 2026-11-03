@@ -30,13 +30,13 @@ Statt zu tippen gehen auch {ui:Heute}, {ui:Morgen}, {ui:Nächster Mo} und {ui:In
 ## Aus Moodle
 
 1. In Moodle: Kalender → Exportieren → alle Termine → `.ics` speichern.
-2. In Schrumbi: {key:CommandPalette} → {ui:Kalender importieren (.ics)…}.
+2. In Schrumbi: {key:CommandPalette} → {ui:Kalender importieren (.ics)…}
 
 Termine landen beim passenden Modul, wenn Kürzel oder Name im Kurs stehen. Im Fenster wählst du sonst pro Kurs ein Modul oder {ui:Nicht importieren}.
 
 ## Termin verschieben
 
-- Termin aus einer Regel: Rechtsklick auf den Eintrag → {ui:Termin verschieben…}. {ui:Ursprünglicher Termin} stellt das alte Datum wieder her.
+- Termin aus einer Regel: {ui:Termin verschieben…} im Rechtsklick-Menü des Eintrags. {ui:Ursprünglicher Termin} stellt das alte Datum wieder her.
 - Eigene und importierte Einträge: Datum direkt in den Details unter {ui:Fällig} ändern.
 
 ## Kalender

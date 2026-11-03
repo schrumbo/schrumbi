@@ -8,7 +8,7 @@ use gpui_kit::*;
 use super::markdown_view::{self, Folds, LinkFocus, ParsedNote};
 use super::motion::{self, Soft};
 use super::selectable::selectable;
-use super::theme::{Theme, font, iconsize, radius, space, syntax_palette};
+use super::theme::{Theme, control, font, iconsize, radius, space, syntax_palette};
 use super::widgets::*;
 use crate::core::i18n::tr;
 use crate::core::markdown::TokenKind;
@@ -16,8 +16,8 @@ use crate::core::markdown::TokenKind;
 /// How long the copy button shows its check mark.
 pub const COPIED_FOR: Duration = Duration::from_millis(1400);
 
-/// Height of the bar above an example.
-const BAR: f32 = 36.;
+/// Height of the bar above an example: a control with room around it.
+const BAR: f32 = control::S + space::M;
 
 /// Called with whether the source should show.
 pub type OnShow = Rc<dyn Fn(bool, &mut Window, &mut App)>;
@@ -50,7 +50,7 @@ pub fn example(id: usize, title: String, source: String, note: Rc<ParsedNote>, f
 fn segment(id: (&'static str, usize), label: String, on: bool, t: &Theme) -> Stateful<Div> {
     div()
         .id(id)
-        .h(px(BAR - space::S * 2. - 2.))
+        .h(px(control::S - space::XXS * 2.))
         .px(px(space::S + space::XXS))
         .flex()
         .items_center()
@@ -115,7 +115,7 @@ impl RenderOnce for Example {
         let copied = self.copied;
         let copy_button = div()
             .id(("help-ex-copy", id))
-            .size(px(BAR - space::S * 2.))
+            .size(px(control::S))
             .flex()
             .items_center()
             .justify_center()

@@ -30,13 +30,13 @@ Instead of typing, {ui:Heute}, {ui:Morgen}, {ui:Nächster Mo} and {ui:In 1 Woche
 ## From Moodle
 
 1. In Moodle: Calendar → Export → all events → save the `.ics`.
-2. In Schrumbi: {key:CommandPalette} → {ui:Kalender importieren (.ics)…}.
+2. In Schrumbi: {key:CommandPalette} → {ui:Kalender importieren (.ics)…}
 
 Events land in the matching module if its code or name appears in the course. Otherwise you choose a module per course in the window, or {ui:Nicht importieren}.
 
 ## Move a Date
 
-- Date from a rule: right-click the entry → {ui:Termin verschieben…}. {ui:Ursprünglicher Termin} restores the old date.
+- Date from a rule: {ui:Termin verschieben…} in the entry's right-click menu. {ui:Ursprünglicher Termin} restores the old date.
 - Your own and imported entries: change the date directly in the details under {ui:Fällig}.
 
 ## Calendar

@@ -232,7 +232,7 @@ fn commands(cx: &App) -> Vec<Command> {
     }
     add(&general, tr("Einrichtung erneut starten"), "settings", None, Run::Call(Rc::new(|cx| act(cx, |l| l.needs_setup = true))));
     add(&general, tr("Einstellungen…"), "settings", Some(fixed_keys(",")), Run::Action(Box::new(app::OpenSettings)));
-    add(&general, tr("Schrumbi-Anleitung"), "book-open", Some(fixed_keys("?")), Run::Action(Box::new(app::ShowHelp)));
+    add(&general, tr("Schrumbi-Anleitung"), "book-open", Some("F1".to_string()), Run::Action(Box::new(app::ShowHelp)));
     add(&general, tr("Tastenkürzel anzeigen"), "keyboard", Some(fixed_keys("/")), Run::Action(Box::new(app::ShowShortcuts)));
     add(&general, tr("Nach Updates suchen…"), "download", None, Run::Action(Box::new(app::CheckForUpdates)));
     add(&general, tr("Über Schrumbi"), "info", None, Run::Action(Box::new(app::About)));
@@ -420,7 +420,7 @@ impl Render for ShortcutSheet {
         let mut general = vec![
             shortcut_row(tr("Befehl suchen …"), fixed_parts("K"), &t),
             shortcut_row(tr("Tastenkürzel anzeigen"), fixed_parts("/"), &t),
-            shortcut_row(tr("Schrumbi-Anleitung"), fixed_parts("?"), &t),
+            shortcut_row(tr("Schrumbi-Anleitung"), vec!["F1".to_string()], &t),
             shortcut_row(tr("Suchen"), vec!["/".to_string()], &t),
             shortcut_row(tr("Seitenleiste ein-/ausblenden"), fixed_parts("B"), &t),
             shortcut_row(tr("Widerrufen"), fixed_parts("Z"), &t),

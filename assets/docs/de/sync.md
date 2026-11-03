@@ -6,7 +6,7 @@ Sync sichert deinen Ordner mit Git und gleicht ihn mit anderen Geräten ab. Jede
 
 Du brauchst Git ab Version 2.38.
 
-1. {key:CommandPalette} → {ui:Sync einrichten…}.
+1. {key:CommandPalette} → {ui:Sync einrichten…}
 2. {ui:Aufräumen}: Schrumbi schlägt eine `.gitignore` vor.
 3. {ui:Verbinden}: {ui:Privat auf GitHub anlegen} oder eine eigene {ui:Adresse des Online-Speichers}.
 4. {ui:Wann soll gesichert werden?} {ui:Automatisch} oder {ui:Manuell}.

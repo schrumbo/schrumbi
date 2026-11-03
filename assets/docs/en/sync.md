@@ -6,7 +6,7 @@ Sync backs up your folder with Git and syncs it with other devices. Every versio
 
 You need Git version 2.38 or newer.
 
-1. {key:CommandPalette} → {ui:Sync einrichten…}.
+1. {key:CommandPalette} → {ui:Sync einrichten…}
 2. {ui:Aufräumen}: Schrumbi suggests a `.gitignore`.
 3. {ui:Verbinden}: {ui:Privat auf GitHub anlegen} or your own {ui:Adresse des Online-Speichers}.
 4. {ui:Wann soll gesichert werden?} {ui:Automatisch} or {ui:Manuell}.

@@ -1503,7 +1503,7 @@ fn file_card(path: PathBuf, detail: Option<String>, action: String, cx: &Ctx) ->
         .border_color(t.separator)
         .cursor_pointer()
         .soft(t.ink.opacity(0.04), radius::CONTROL)
-        .on_click(move |_, _, cx| super::state::act(cx, |l| l.open_file(&open)))
+        .on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) })
         .child(super::widgets::file_icon(&path, iconsize::L))
         .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(name)).when_some(detail, |d, text| d.child(super::widgets::caption(text, t))))
         .child(super::widgets::caption(action, t).flex_none())
@@ -1559,7 +1559,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     let open = path.clone();
     if cx.chain.len() >= 3 {
-        return div().id(("md-embed-link", order)).text_color(t.accent_text).cursor_pointer().on_click(move |_, _, cx| super::state::act(cx, |l| l.open_file(&open))).child(name).into_any_element();
+        return div().id(("md-embed-link", order)).text_color(t.accent_text).cursor_pointer().on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) }).child(name).into_any_element();
     }
     let note = embedded_note(&path, target);
     let mut chain = cx.chain.clone();
@@ -1586,7 +1586,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
                 .soft(t.ink.opacity(0.04), 0.)
                 .text_size(px(font::CAPTION))
                 .text_color(t.secondary)
-                .on_click(move |_, _, cx| super::state::act(cx, |l| l.open_file(&open)))
+                .on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) })
                 .child(div().flex_1().min_w_0().truncate().child(name))
                 .child(super::widgets::icon("external-link", iconsize::XS, t.tertiary)),
         )

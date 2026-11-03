@@ -4,7 +4,7 @@ Three ways to find anything.
 
 | What | Shortcut | Finds |
 |---|---|---|
-| Command palette | {key:CommandPalette} | Every command in the app |
+| **Command palette** | {key:CommandPalette} | Every command in the app |
 | {ui:Datei schnell öffnen} | {key:quickOpen} | Files by name |
 | {ui:In allen Dateien suchen} | {key:searchFiles} | Text in notes, PDFs and names |
 

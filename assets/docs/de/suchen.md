@@ -4,7 +4,7 @@ Drei Wege, alles zu finden.
 
 | Was | Kürzel | Findet |
 |---|---|---|
-| Befehlspalette | {key:CommandPalette} | Jeden Befehl der App |
+| **Befehlspalette** | {key:CommandPalette} | Jeden Befehl der App |
 | {ui:Datei schnell öffnen} | {key:quickOpen} | Dateien nach Namen |
 | {ui:In allen Dateien suchen} | {key:searchFiles} | Text in Notizen, PDFs und Namen |
 

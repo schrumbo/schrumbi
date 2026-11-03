@@ -189,7 +189,30 @@ static MARKUP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"</?kbd>|\*\*|__|`
 
 /// Readable text of a Markdown snippet, line by line, for search and snippets.
 pub fn plain(markdown: &str) -> String {
-    markdown.lines().map(|l| MARKUP.replace_all(l, "").trim().to_string()).filter(|l| !l.is_empty() && !l.chars().all(|c| c == '-' || c == ':' || c == ' ')).collect::<Vec<_>>().join(" ")
+    let rule = |l: &str| l.trim().starts_with('|') && l.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '));
+    let lines: Vec<&str> = markdown.lines().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut in_table = false;
+    for (i, l) in lines.iter().enumerate() {
+        if rule(l) || lines.get(i + 1).is_some_and(|next| rule(next)) {
+            continue;
+        }
+        let row = l.trim().starts_with('|');
+        let text = if row {
+            l.split('|').map(|c| MARKUP.replace_all(c, "").trim().to_string()).filter(|c| !c.is_empty()).collect::<Vec<_>>().join(" · ")
+        } else {
+            MARKUP.replace_all(l, "").trim().to_string()
+        };
+        if text.is_empty() || text.chars().all(|c| c == '-' || c == ':' || c == ' ') {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if row && in_table => *last = format!("{last} · {text}"),
+            _ => out.push(text),
+        }
+        in_table = row;
+    }
+    out.join(" ")
 }
 
 /// A page section that matches a search.
@@ -252,7 +275,8 @@ fn snippet(text: &str, words: &[&str]) -> (String, Vec<std::ops::Range<usize>>) 
     let tail = if end < text.len() { "…" } else { "" };
     let shown = format!("{lead}{}{tail}", part(start..end));
     let mut marks = Vec::new();
-    for w in words {
+    let longest = words.iter().map(|w| w.chars().count()).max().unwrap_or(0);
+    for w in words.iter().filter(|w| longest < 2 || w.chars().count() > 1) {
         let mut from = 0;
         while let Some(r) = shown.get(from..).and_then(|rest| find_word(rest, w)) {
             marks.push(from + r.start..from + r.end);
@@ -260,7 +284,14 @@ fn snippet(text: &str, words: &[&str]) -> (String, Vec<std::ops::Range<usize>>) 
         }
     }
     marks.sort_by_key(|r| r.start);
-    (shown, marks)
+    let mut merged: Vec<std::ops::Range<usize>> = Vec::with_capacity(marks.len());
+    for r in marks {
+        match merged.last_mut() {
+            Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
+            _ => merged.push(r),
+        }
+    }
+    (shown, merged)
 }
 
 /// Sections where every query word occurs, best first: page title, then heading, then text.
@@ -336,6 +367,20 @@ mod tests {
         assert_eq!(plain_key("GoToday"), None);
         assert_eq!(expand("Mit {key:quickOpen} öffnen, {ui:Abbrechen}.", &keys), "Mit <kbd>⌘O</kbd> öffnen, **Abbrechen**.");
         assert_eq!(placeholders("{ui:A} {key:b} {nichts} $\\frac{1}{2}$"), vec![("ui".to_string(), "A".to_string()), ("key".to_string(), "b".to_string())]);
+    }
+
+    #[test]
+    fn table_rows_read_as_cells_without_header() {
+        assert_eq!(plain("| Taste | Wirkung |\n|---|---|\n| `e` | Alle **Felder** |\n| x | y |"), "e · Alle Felder · x · y");
+    }
+
+    #[test]
+    fn snippet_marks_never_overlap() {
+        let (shown, marks) = snippet("Hat eine andere App die Datei geändert, bis du wählst", &["datei", "d", "du"]);
+        assert!(marks.windows(2).all(|w| w[0].end <= w[1].start), "{marks:?}");
+        assert!(marks.iter().all(|r| shown.is_char_boundary(r.start) && shown.is_char_boundary(r.end)));
+        let (_, marks) = snippet("Datei da", &["datei", "d"]);
+        assert_eq!(marks, vec![0..5]);
     }
 
     #[test]

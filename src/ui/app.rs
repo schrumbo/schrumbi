@@ -113,7 +113,7 @@ pub fn init(cx: &mut App) {
     });
     cx.on_action(|_: &CommandPalette, cx| act(cx, |l| if l.root.is_some() { l.show_palette = true }));
     cx.on_action(|_: &ShowShortcuts, cx| act(cx, |l| if l.root.is_some() { l.show_shortcuts = true }));
-    cx.on_action(|_: &ShowHelp, cx| super::help::open(None, cx));
+    cx.on_action(|_: &ShowHelp, cx| cx.defer(|cx| super::help::open(None, cx)));
     cx.on_action(|_: &NewEntry, cx| act(cx, |l| if l.root.is_some() { l.show_quick_add = true }));
     cx.on_action(|_: &NewFile, cx| {
         act(cx, |l| {
@@ -272,7 +272,6 @@ pub fn bind_keys(cx: &mut App) {
         kb(cmd("shift-p"), CommandPalette, None),
         kb(cmd("/"), ShowShortcuts, None),
         kb(cmd("shift-7"), ShowShortcuts, None),
-        kb(cmd("?"), ShowHelp, None),
         kb("f1".into(), ShowHelp, None),
         kb(cmd(","), OpenSettings, None),
         kb(cmd("z"), Undo, Some("MainWindow")),

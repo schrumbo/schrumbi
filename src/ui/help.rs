@@ -19,7 +19,7 @@ use crate::core::prefs::Shortcut;
 use crate::core::shortcuts::ShortcutAction;
 
 const SIDEBAR: f32 = 232.;
-const MEASURE: f32 = 680.;
+const MEASURE: f32 = 600.;
 const STEP: f32 = 48.;
 
 struct LastPage(usize);
@@ -57,15 +57,20 @@ pub fn open(slug: Option<&str>, cx: &mut App) {
     let _ = gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Help::new(page, window, cx)));
 }
 
-/// Where the examples find the notes and images they link and embed; never inside the user's folder.
+static SAMPLES: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| crate::core::prefs::data_dir().unwrap_or_else(std::env::temp_dir).join("guide"));
+
+/// Where the examples find the notes and images they link and embed: Schrumbi's own data folder, never the user's.
 pub fn sample_dir() -> PathBuf {
-    std::env::temp_dir().join("schrumbi-guide")
+    SAMPLES.clone()
 }
 
-/// Whether a note lives in the guide's sample folder, whose links must do nothing.
-pub fn is_sample(base: &Path) -> bool {
-    base.starts_with(sample_dir())
+/// Whether a note or file lives in the guide's sample folder, which examples must not open.
+pub fn is_sample(path: &Path) -> bool {
+    path.starts_with(&*SAMPLES)
 }
+
+/// Room above the sidebar and results for the window buttons.
+const TOP: f32 = control::BAR - space::S;
 
 /// How long a section found by search stays lit.
 const FLASH: std::time::Duration = std::time::Duration::from_millis(1400);
@@ -76,6 +81,15 @@ const SAMPLE_NOTE_EN: &str = "# Example\n\nA note the examples link to.\n\n## Se
 
 const SAMPLE_IMAGE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200" viewBox="0 0 320 200"><rect width="320" height="200" rx="16" fill="#0A84FF" fill-opacity="0.12"/><rect x="40" y="120" width="40" height="50" rx="6" fill="#0A84FF"/><rect x="100" y="90" width="40" height="80" rx="6" fill="#0A84FF"/><rect x="160" y="60" width="40" height="110" rx="6" fill="#0A84FF"/><rect x="220" y="30" width="40" height="140" rx="6" fill="#0A84FF"/></svg>"##;
 
+fn group_of(page: usize) -> usize {
+    PAGES.iter().take(page + 1).enumerate().filter(|(i, p)| *i == 0 || PAGES[i - 1].group != p.group).count().saturating_sub(1)
+}
+
+fn expanded(cx: &App) -> Vec<String> {
+    let lang = i18n::lang();
+    PAGES.iter().map(|p| docs::expand(p.source(lang), &|name| key_text(name, cx))).collect()
+}
+
 fn write_samples() {
     let dir = sample_dir();
     if std::fs::create_dir_all(&dir).is_err() {
@@ -83,6 +97,9 @@ fn write_samples() {
     }
     for (name, text) in [("Beispiel.md", SAMPLE_NOTE), ("Beispiel", SAMPLE_NOTE), ("Example.md", SAMPLE_NOTE_EN), ("Example", SAMPLE_NOTE_EN), ("Diagramm.svg", SAMPLE_IMAGE), ("Chart.svg", SAMPLE_IMAGE)] {
         let path = dir.join(name);
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| !m.is_file()) {
+            continue;
+        }
         if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
             let _ = std::fs::write(path, text);
         }
@@ -124,8 +141,11 @@ enum Item {
 /// The guide window: pages in a sidebar, search across all of them, and the page in the reader.
 pub struct Help {
     focus: FocusHandle,
+    rows: Vec<FocusHandle>,
+    pages: ScrollHandle,
     search: Entity<InputState>,
     docs: Vec<Doc>,
+    expanded: Vec<String>,
     page: usize,
     items: Vec<Item>,
     starts: Vec<usize>,
@@ -137,6 +157,8 @@ pub struct Help {
     copied: Option<(usize, usize)>,
     copy_task: Option<Task<()>>,
     flash: Option<(usize, usize)>,
+    flash_task: Option<Task<()>>,
+    toggle_task: Option<Task<()>>,
     back: Vec<usize>,
     forward: Vec<usize>,
     _subs: Vec<Subscription>,
@@ -156,12 +178,20 @@ impl Help {
             }
             cx.notify();
         })];
-        let lang = i18n::lang();
-        let docs = PAGES.iter().map(|p| docs::split(&docs::expand(p.source(lang), &|name| key_text(name, cx)))).collect();
+        let subs = subs.into_iter().chain([cx.observe_window_activation(window, |h, window, cx| {
+            if window.is_window_active() {
+                h.refresh(cx);
+            }
+        })]).collect();
+        let expanded = expanded(cx);
+        let docs = expanded.iter().map(|s| docs::split(s)).collect();
         let mut help = Self {
             focus: cx.focus_handle(),
+            rows: PAGES.iter().map(|_| cx.focus_handle().tab_index(0)).collect(),
+            pages: ScrollHandle::new(),
             search,
             docs,
+            expanded,
             page,
             items: Vec::new(),
             starts: Vec::new(),
@@ -173,11 +203,14 @@ impl Help {
             copied: None,
             copy_task: None,
             flash: None,
+            flash_task: None,
+            toggle_task: None,
             back: Vec::new(),
             forward: Vec::new(),
             _subs: subs,
         };
         help.load();
+        help.pages.scroll_to_item(group_of(page));
         help
     }
 
@@ -219,6 +252,7 @@ impl Help {
         self.flash = None;
         cx.set_global(LastPage(page));
         self.load();
+        self.pages.scroll_to_item(group_of(page));
         cx.notify();
     }
 
@@ -226,6 +260,10 @@ impl Help {
         let item = section.filter(|s| *s > 0).and_then(|s| self.starts.get(s).copied()).unwrap_or(0);
         self.list.scroll_to(ListOffset { item_ix: item, offset_in_item: px(0.) });
         self.flash = section.filter(|s| *s > 0).map(|s| (self.page, s));
+        self.flash_task = self.flash.map(|lit| cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(FLASH).await;
+            let _ = this.update(cx, |h, _| if h.flash == Some(lit) { h.flash = None });
+        }));
         cx.notify();
     }
 
@@ -261,6 +299,25 @@ impl Help {
         self.go(hit.page, Some(hit.section), cx);
     }
 
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        let expanded = expanded(cx);
+        if expanded == self.expanded {
+            return;
+        }
+        self.docs = expanded.iter().map(|s| docs::split(s)).collect();
+        self.expanded = expanded;
+        self.hits = docs::search(&self.docs, self.search.read(cx).value().trim());
+        self.hit = 0;
+        self.load();
+        cx.notify();
+    }
+
+    fn step_hit(&mut self, by: isize, cx: &mut Context<Self>) -> bool {
+        self.hit = self.hit.saturating_add_signed(by).min(self.hits.len().saturating_sub(1));
+        cx.notify();
+        true
+    }
+
     fn toggle_source(&mut self, item: usize, index: usize, show: bool, cx: &mut Context<Self>) {
         let key = (self.page, index);
         if show == self.sources.contains(&key) {
@@ -272,6 +329,10 @@ impl Help {
             self.sources.remove(&key);
         }
         self.toggled = Some(key);
+        self.toggle_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(motion::FAST).await;
+            let _ = this.update(cx, |h, _| if h.toggled == Some(key) { h.toggled = None });
+        }));
         self.list.remeasure_items(item..item + 1);
         cx.notify();
     }
@@ -293,7 +354,16 @@ impl Help {
         let k = &e.keystroke;
         let secondary = k.modifiers.secondary(cx);
         let typing = window.context_stack().iter().any(|c| c.contains("Input"));
+        let row = self.rows.iter().position(|h| h.is_focused(window)).filter(|_| !k.modifiers.modified());
         let handled = match k.key.as_str() {
+            "down" | "up" if row.is_some() => {
+                let from = row.unwrap_or(self.page);
+                let to = if k.key == "down" { (from + 1).min(PAGES.len() - 1) } else { from.saturating_sub(1) };
+                self.clear_search(window, cx);
+                window.focus(&self.rows[to], cx);
+                self.go(to, None, cx);
+                true
+            }
             "f" if secondary => {
                 self.search.update(cx, |s, cx| s.focus(window, cx));
                 true
@@ -310,24 +380,8 @@ impl Help {
                 window.remove_window();
                 true
             }
-            "down" if self.searching(cx) => {
-                self.hit = (self.hit + 1).min(self.hits.len().saturating_sub(1));
-                true
-            }
-            "up" if self.searching(cx) => {
-                self.hit = self.hit.saturating_sub(1);
-                true
-            }
-            "[" if secondary => {
-                window.focus(&self.focus, cx);
-                self.history(false, cx);
-                true
-            }
-            "]" if secondary => {
-                window.focus(&self.focus, cx);
-                self.history(true, cx);
-                true
-            }
+            "down" if self.searching(cx) => self.step_hit(1, cx),
+            "up" if self.searching(cx) => self.step_hit(-1, cx),
             "up" if k.modifiers.alt && !typing => {
                 window.focus(&self.focus, cx);
                 self.step_page(-1, cx);
@@ -345,7 +399,8 @@ impl Help {
             }
             "down" => self.scroll(px(STEP)),
             "up" => self.scroll(px(-STEP)),
-            "pagedown" | "space" if !k.modifiers.shift => self.scroll(self.page_height()),
+            "pagedown" => self.scroll(self.page_height()),
+            "space" if !k.modifiers.shift => self.scroll(self.page_height()),
             "pageup" | "space" => self.scroll(-self.page_height()),
             "home" => {
                 self.list.scroll_to(ListOffset { item_ix: 0, offset_in_item: px(0.) });
@@ -373,7 +428,7 @@ impl Help {
     }
 
     fn sidebar(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut groups = div().flex().flex_col().gap(px(space::L));
+        let mut groups = div().id("help-pages").track_scroll(&self.pages).flex_1().min_h_0().overflow_y_scrollbar().px(px(space::S)).pt(px(space::M)).pb(px(space::L)).flex().flex_col().gap(px(space::L));
         let mut current: Option<Group> = None;
         let mut block = div();
         for (i, page) in PAGES.iter().enumerate() {
@@ -388,6 +443,7 @@ impl Help {
             block = block.child(
                 div()
                     .id(("help-page", i))
+                    .track_focus(&self.rows[i].clone().tab_stop(i == self.page))
                     .h(px(control::M))
                     .px(px(space::S))
                     .flex()
@@ -416,8 +472,8 @@ impl Help {
             .bg(t.sidebar)
             .border_r_1()
             .border_color(t.separator)
-            .child(div().px(px(space::M)).pt(px(if super::chrome::CUSTOM { space::M } else { 44. })).pb(px(space::M)).child(Input::new(&self.search).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary))))
-            .child(div().id("help-pages").flex_1().min_h_0().overflow_y_scrollbar().px(px(space::S)).pb(px(space::L)).child(groups))
+            .child(div().px(px(space::M)).pt(px(if super::chrome::CUSTOM { space::M } else { TOP })).pb(px(space::M)).border_b_1().border_color(t.separator).key_context("SearchField").on_action(cx.listener(|h, _: &super::main_window::SearchDown, _, cx| { h.step_hit(1, cx); })).on_action(cx.listener(|h, _: &super::main_window::SearchUp, _, cx| { h.step_hit(-1, cx); })).child(Input::new(&self.search).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary))))
+            .child(groups)
     }
 
     fn results(&self, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -464,13 +520,13 @@ impl Help {
                     .on_click(cx.listener(move |h, _, window, cx| h.open_hit(i, window, cx))),
             );
         }
-        div().id("help-results").size_full().overflow_y_scrollbar().pt(px(if super::chrome::CUSTOM { space::XL } else { 44. })).px(px(space::XL)).pb(px(space::XL)).flex().justify_center().child(rows).into_any_element()
+        div().id("help-results").size_full().overflow_y_scrollbar().pt(px(if super::chrome::CUSTOM { space::XL } else { TOP })).px(px(space::XL)).pb(px(space::XL)).flex().justify_center().child(rows).into_any_element()
     }
 
     fn head(&self, t: &Theme) -> AnyElement {
         let page = &PAGES[self.page];
         div()
-            .pt(px(if super::chrome::CUSTOM { space::XL } else { 52. }))
+            .pt(px(if super::chrome::CUSTOM { space::XL } else { control::BAR }))
             .pb(px(space::L))
             .flex()
             .flex_col()
@@ -591,6 +647,14 @@ impl Render for Help {
             .line_height(relative(1.22))
             .text_color(t.primary)
             .capture_key_down(cx.listener(Self::on_key))
+            .on_action(cx.listener(|h, _: &super::app::GoBack, window, cx| {
+                window.focus(&h.focus, cx);
+                h.history(false, cx);
+            }))
+            .on_action(cx.listener(|h, _: &super::app::GoForward, window, cx| {
+                window.focus(&h.focus, cx);
+                h.history(true, cx);
+            }))
             .child(self.sidebar(&t, cx))
             .child(div().flex_1().min_w_0().h_full().child(body));
         super::chrome::frame(tr("Schrumbi-Anleitung"), content, &t)
