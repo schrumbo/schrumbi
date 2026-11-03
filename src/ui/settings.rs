@@ -437,7 +437,7 @@ fn naming_switch(id: &'static str, c: &StudyConfig) -> Switch {
     })
 }
 
-fn naming_detail(on: bool) -> String {
+pub(crate) fn naming_detail(on: bool) -> String {
     if on { tr("Abgelegte Dateien und Notizen in Abgabeordnern heißen nach dem Muster des Moduls.") } else { tr("Dateien und Notizen behalten die Namen, die du ihnen gibst.") }
 }
 
@@ -1454,6 +1454,7 @@ impl Settings {
             let end = fields.time(&format!("se-{}-{i}", m.id), &s.end, end_presets(&s.start), window, cx, move |v, cx| e3(Box::new(move |m| if let Some(s) = m.sessions.get_mut(i) { s.end = v.clone() }))(cx));
             let begins = clock::parse(&s.start);
             end.update(cx, |f, cx| f.after(begins, cx));
+            start.update(cx, |f, cx| f.before(Some(clock::last_minute()), cx));
             sessions.push(
                 div()
                     .flex()

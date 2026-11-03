@@ -1948,16 +1948,20 @@ impl Library {
         out
     }
 
+    fn typed_name(title: &str) -> String {
+        title.trim().chars().map(|c| if "\\/:".contains(c) { '-' } else { c }).collect()
+    }
+
     /// The file name of something new in `folder`: notes are called what you call them unless the folder checks names, other files follow the module's convention while there is one.
     pub fn note_name(&self, title: &str, folder: &Path, ext: &str) -> String {
         if ext == "md" {
-            let plain = format!("{}.md", title.trim().chars().map(|c| if "\\/:".contains(c) { '-' } else { c }).collect::<String>());
+            let plain = format!("{}.md", Self::typed_name(title));
             return match self.convention_at(&folder.join(&plain)) {
                 Some((naming, a)) => naming.render(title, self.today(), ext, &[], a.week, a.iso_week, None),
                 None => plain,
             };
         }
-        let Some(naming) = self.module_containing(folder).filter(|_| self.config.as_ref().is_some_and(StudyConfig::naming_convention)).and_then(|m| self.naming(&m.id)) else { return format!("{}.{ext}", Naming::clean(title)) };
+        let Some(naming) = self.module_containing(folder).filter(|_| self.config.as_ref().is_some_and(StudyConfig::naming_convention)).and_then(|m| self.naming(&m.id)) else { return format!("{}.{ext}", Self::typed_name(title)) };
         naming.render(title, self.today(), ext, &[], self.lecture_week_containing(self.today()).map(|w| w.index), None, None)
     }
 
@@ -3549,19 +3553,48 @@ pub(crate) fn plain_role_name(name: &str, role: FileRole, author: &str) -> Strin
     let stem = super::naming::stem(name);
     let dotted = |stem: &str| if ext.is_empty() { stem.to_string() } else { format!("{stem}.{ext}") };
     let word = |token: &str| FileRole::is_brief(token, "");
+    let separator = |c: char| matches!(c, ' ' | '_' | '-');
     match role {
         FileRole::Brief if !brief => {
-            let own = if author.is_empty() { stem.to_string() } else { stem.replace(author, "") };
-            let own = own.trim_matches(|c: char| c == ' ' || c == '_' || c == '-');
-            if own.is_empty() { dotted(BRIEF_TAG) } else if word(own) { dotted(own) } else { dotted(&format!("{own} {BRIEF_TAG}")) }
+            let own = without_author(stem, author);
+            let own = own.trim_matches(separator);
+            let new = if own.is_empty() { dotted(BRIEF_TAG) } else if word(own) { dotted(own) } else { dotted(&format!("{own} {BRIEF_TAG}")) };
+            if FileRole::is_brief(&new, author) { new } else { name.to_string() }
         }
         FileRole::Work if brief => {
-            let gap = stem.chars().find(|c| matches!(c, ' ' | '_' | '-')).unwrap_or(' ');
-            let kept: Vec<&str> = stem.split([' ', '_', '-']).filter(|t| !t.is_empty() && !word(t)).collect();
-            dotted(&if kept.is_empty() { tr("Abgabe") } else { kept.join(&gap.to_string()) })
+            let kept = match stem.strip_suffix(BRIEF_TAG) {
+                Some("") => Some(""),
+                Some(rest) if rest.ends_with(separator) => Some(rest.trim_end_matches(separator)),
+                _ => None,
+            };
+            match kept {
+                Some("") => dotted(&tr("Abgabe")),
+                Some(rest) if !FileRole::is_brief(rest, "") => dotted(rest),
+                _ => name.to_string(),
+            }
         }
         _ => name.to_string(),
     }
+}
+
+fn without_author(stem: &str, author: &str) -> String {
+    let separator = |c: char| matches!(c, ' ' | '_' | '-');
+    let wanted: Vec<String> = fold(author).split(separator).filter(|t| !t.is_empty()).map(str::to_string).collect();
+    if wanted.is_empty() {
+        return stem.to_string();
+    }
+    let mut runs: Vec<(bool, String)> = Vec::new();
+    for c in stem.chars() {
+        match runs.last_mut() {
+            Some((gap, text)) if *gap == separator(c) => text.push(c),
+            _ => runs.push((separator(c), c.to_string())),
+        }
+    }
+    let words: Vec<usize> = (0..runs.len()).filter(|&i| !runs[i].0).collect();
+    let Some(first) = (0..words.len()).find(|&i| i + wanted.len() <= words.len() && words[i..i + wanted.len()].iter().zip(&wanted).all(|(&r, w)| fold(&runs[r].1) == *w)) else { return stem.to_string() };
+    let from = words[first];
+    let to = words[first + wanted.len() - 1] + 1;
+    runs.iter().enumerate().filter(|(i, _)| *i < from || *i > to).map(|(_, r)| r.1.as_str()).collect()
 }
 
 fn heading_titled(path: &Path) -> bool {

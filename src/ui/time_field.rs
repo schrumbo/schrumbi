@@ -9,7 +9,7 @@ use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::theme::{Theme, control, font, iconsize, space};
+use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::{icon, menu_icon, tip};
 use crate::core::clock;
 use crate::core::i18n::{tr, trf};
@@ -38,6 +38,7 @@ pub struct TimeField {
     value: String,
     presets: Vec<Preset>,
     after: Option<NaiveTime>,
+    before: Option<NaiveTime>,
     on_commit: Commit,
     _sub: Subscription,
 }
@@ -55,7 +56,7 @@ impl TimeField {
             }
             InputEvent::Change => cx.notify(),
         });
-        Self { input, value: value.to_string(), presets, after: None, on_commit: Rc::new(on_commit), _sub: sub }
+        Self { input, value: value.to_string(), presets, after: None, before: None, on_commit: Rc::new(on_commit), _sub: sub }
     }
 
     /// Only times later than `after` are taken, like the end of a class after its start.
@@ -66,8 +67,16 @@ impl TimeField {
         }
     }
 
+    /// Only times earlier than `before` are taken, like the start of a class, which needs a later minute for its end.
+    pub fn before(&mut self, before: Option<NaiveTime>, cx: &mut Context<Self>) {
+        if before != self.before {
+            self.before = before;
+            cx.notify();
+        }
+    }
+
     fn read(&self, text: &str) -> Option<NaiveTime> {
-        clock::parse(text).filter(|t| self.after.is_none_or(|a| *t > a))
+        clock::parse(text).filter(|t| self.after.is_none_or(|a| *t > a) && self.before.is_none_or(|b| *t < b))
     }
 
     /// Follows the stored value unless it is being typed in.
@@ -117,7 +126,7 @@ impl TimeField {
     fn step(&mut self, minutes: i64, window: &mut Window, cx: &mut Context<Self>) {
         let from = clock::parse(&self.text(cx)).or_else(|| clock::parse(&self.value)).unwrap_or(NaiveTime::MIN);
         let to = clock::step(from, minutes);
-        if self.after.is_some_and(|a| to <= a) {
+        if self.after.is_some_and(|a| to <= a) || self.before.is_some_and(|b| to >= b) {
             return;
         }
         let v = clock::format(to);
@@ -142,11 +151,15 @@ impl Render for TimeField {
         let invalid = !typed.is_empty() && read.is_none();
         let early = invalid && clock::parse(typed).is_some();
         let reading = read.filter(|r| r != typed);
-        let suffix: Option<AnyElement> = if invalid {
-            let why = match self.after.filter(|_| early) {
-                Some(a) => trf("Muss nach %@ liegen. Esc stellt %@ wieder her.", &[&clock::format(a), &self.value]),
-                None => trf("Keine Uhrzeit. Esc stellt %@ wieder her.", &[&self.value]),
-            };
+        let why = invalid.then(|| {
+            let typed_time = clock::parse(typed).filter(|_| early);
+            match (self.after.filter(|a| typed_time.is_some_and(|t| t <= *a)), self.before.filter(|b| typed_time.is_some_and(|t| t >= *b))) {
+                (Some(a), _) => trf("Muss nach %@ liegen. Esc stellt %@ wieder her.", &[&clock::format(a), &self.value]),
+                (None, Some(b)) => trf("Muss vor %@ liegen. Esc stellt %@ wieder her.", &[&clock::format(b), &self.value]),
+                (None, None) => trf("Keine Uhrzeit. Esc stellt %@ wieder her.", &[&self.value]),
+            }
+        });
+        let suffix: Option<AnyElement> = if let Some(why) = why.clone() {
             Some(div().id("time-invalid").child(icon("circle-alert", iconsize::XS, t.red)).tooltip(tip(why)).into_any_element())
         } else {
             reading.map(|r| div().text_size(px(font::CAPTION)).text_color(t.secondary).child(r).into_any_element())
@@ -155,9 +168,13 @@ impl Render for TimeField {
         let presets = self.presets.clone();
         let current = self.value.clone();
         div()
+            .relative()
             .flex()
             .items_center()
             .gap(px(space::XXS))
+            .when_some(why, |d, why| {
+                d.child(deferred(div().absolute().top_full().left_0().mt(px(space::XXS)).px(px(space::XS)).rounded(px(radius::SMALL)).bg(t.content).whitespace_nowrap().text_size(px(font::CAPTION)).text_color(t.red).child(why)).with_priority(1))
+            })
             .child(
                 div()
                     .id("time-input")

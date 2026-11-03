@@ -1260,6 +1260,7 @@ fn without_a_convention_nothing_is_flagged_and_new_files_keep_plain_names() {
     let made = lib.create_note("TEST", &a.folder, "md").unwrap();
     assert_eq!(name_of(&made), "TEST.md", "a note in a checked folder keeps the plain name");
     assert_eq!(lib.note_name("Liste", &root.join("M0"), "txt"), "Liste.txt", "other new files too");
+    assert_eq!(lib.note_name("meine Übung", &root.join("M0"), "txt"), "meine Übung.txt", "typed as typed");
 
     std::fs::write(&made, "# Neuer Titel\n\nText\n").unwrap();
     lib.follow_heading(&made);
@@ -1309,6 +1310,29 @@ fn without_a_convention_a_role_only_adds_or_takes_out_the_task_word() {
     assert_eq!(std::fs::read(a.folder.join("Mein Entwurf Aufgabe.pdf")).unwrap(), b"x");
     lib.set_role(Work, &a.folder.join("Mein Entwurf Aufgabe.pdf"), &a.id);
     assert_eq!(std::fs::read(&file).unwrap(), b"x", "back to the name it had");
+}
+
+#[test]
+fn a_plain_role_name_takes_out_only_the_author_token_and_only_the_added_word() {
+    use crate::core::filing::FileRole::{self, Brief, Work};
+    use crate::core::library::plain_role_name;
+    assert_eq!(plain_role_name("muster-m Entwurf.pdf", Brief, "Muster-M"), "Entwurf Aufgabe.pdf");
+    assert_eq!(plain_role_name("Entwurf_MUSTER-M_v2.pdf", Brief, "Muster-M"), "Entwurf_v2 Aufgabe.pdf");
+    let filed = plain_role_name("Blatt3.pdf", Brief, "Muster-M");
+    assert_eq!(filed, "Blatt3 Aufgabe.pdf");
+    assert!(FileRole::is_brief(&filed, "Muster-M"), "a task sheet filed without a convention counts as one");
+    assert_eq!(plain_role_name("Blatt3.pdf", Work, "Muster-M"), "Blatt3.pdf");
+    assert_eq!(plain_role_name("Maximierung.pdf", Brief, "Max"), "Maximierung.pdf", "a name that holds the author stays as it is");
+    assert_eq!(plain_role_name("Max Entwurf.pdf", Brief, "Max"), "Entwurf Aufgabe.pdf");
+    assert_eq!(plain_role_name("Übungsblatt 3.pdf", Work, "Muster-M"), "Übungsblatt 3.pdf");
+    assert_eq!(plain_role_name("Lösung,Aufgabe 2.pdf", Work, "Muster-M"), "Lösung,Aufgabe 2.pdf");
+    assert_eq!(plain_role_name("Blatt-3_Lösung Aufgabe.pdf", Work, "Muster-M"), "Blatt-3_Lösung.pdf");
+    assert_eq!(plain_role_name("Aufgabenstellung Aufgabe.pdf", Work, ""), "Aufgabenstellung Aufgabe.pdf", "still reads as a brief");
+    for name in ["Mein Entwurf.pdf", "Blatt-3_Lösung.pdf", "Notiz", "Übung 3.pdf"] {
+        let brief = plain_role_name(name, Brief, "Muster-M");
+        assert!(FileRole::is_brief(&brief, "Muster-M"), "{brief}");
+        assert_eq!(plain_role_name(&brief, Work, "Muster-M"), name, "round trip");
+    }
 }
 
 #[test]

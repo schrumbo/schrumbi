@@ -493,7 +493,7 @@ impl Render for Setup {
                                 .flex()
                                 .flex_col()
                                 .gap(px(space::S))
-                                .child(section_title(tr("Dateinamen")))
+                                .child(section_title(tr("Namenskonvention")))
                                 .child(
                                     grouped(&t)
                                         .child(
@@ -503,7 +503,7 @@ impl Render for Setup {
                                                 .gap(px(space::M))
                                                 .px(px(space::L))
                                                 .py(px(space::S))
-                                                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().font_weight(FontWeight::SEMIBOLD).child(tr("Nach einem Muster benennen"))).child(caption(if naming { tr("Abgelegte Dateien heißen dann zum Beispiel so wie unten.") } else { tr("Aus: Dateien und Notizen behalten die Namen, die du ihnen gibst.") }, &t)))
+                                                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().font_weight(FontWeight::SEMIBOLD).child(tr("Nach einem Muster benennen"))).child(caption(super::settings::naming_detail(naming), &t)))
                                                 .child(naming_switch),
                                         )
                                         .when(naming, |d| d.child(divider(&t)).child(form_row(tr("Kürzel in Dateinamen"), Input::new(&author), &t)).child(divider(&t)).child(form_row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).text_color(t.secondary).child(example), &t))),

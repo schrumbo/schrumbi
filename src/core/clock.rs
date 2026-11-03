@@ -2,10 +2,18 @@ use chrono::{NaiveTime, Timelike};
 
 const DAY: i64 = 24 * 60;
 
-/// Reads a typed time of day: `18`, `1830`, `18:30`, `6:30`, `18.30`, `18h30`, `18 Uhr`, `6pm`, `6:30 am`.
+/// The last minute of the day, which `24`, `24:00` and `24 Uhr` read as.
+pub fn last_minute() -> NaiveTime {
+    NaiveTime::from_hms_opt(23, 59, 0).unwrap_or(NaiveTime::MIN)
+}
+
+/// Reads a typed time of day: `18`, `1830`, `18:30`, `6:30`, `18.30`, `18h30`, `14:00h`, `18 Uhr`, `6pm`, `6:30 am`.
 pub fn parse(input: &str) -> Option<NaiveTime> {
     let mut s: String = input.trim().to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
     s = s.trim_end_matches("uhr").to_string();
+    if let Some(rest) = s.strip_suffix('h') {
+        s = rest.to_string();
+    }
     let meridiem = if let Some(rest) = s.strip_suffix("a.m.").or_else(|| s.strip_suffix("am")).or_else(|| s.strip_suffix('a')) {
         let rest = rest.to_string();
         s = rest;
@@ -33,6 +41,9 @@ pub fn parse(input: &str) -> Option<NaiveTime> {
         Some(_) => return None,
         None => h,
     };
+    if (h, m) == (24, 0) && meridiem.is_none() {
+        return Some(last_minute());
+    }
     NaiveTime::from_hms_opt(h, m, 0)
 }
 
@@ -54,7 +65,7 @@ pub fn step(t: NaiveTime, minutes: i64) -> NaiveTime {
 pub fn keep_length(start: &str, end: &str, new_start: &str) -> String {
     let (Some(from), Some(to), Some(now)) = (parse(start), parse(end), parse(new_start)) else { return end.to_string() };
     let length = to - from;
-    let last = NaiveTime::from_hms_opt(23, 59, 0).unwrap_or(NaiveTime::MIN);
+    let last = last_minute();
     let ends = now + length;
     match () {
         _ if length <= chrono::Duration::zero() => end.to_string(),
@@ -97,6 +108,12 @@ mod tests {
             ("18 Uhr", "18:00"),
             ("18:30 Uhr", "18:30"),
             ("23:59", "23:59"),
+            ("24", "23:59"),
+            ("24:00", "23:59"),
+            ("24 Uhr", "23:59"),
+            ("14:00h", "14:00"),
+            ("14.00 h", "14:00"),
+            ("14 h", "14:00"),
             ("6pm", "18:00"),
             ("6:30 pm", "18:30"),
             ("12am", "00:00"),
@@ -110,7 +127,7 @@ mod tests {
 
     #[test]
     fn refuses_what_is_no_time() {
-        for typed in ["", " ", "24", "2400", "25:00", "18:60", "1860", "12345", "abc", "18:30:00", "13pm", "0am", ":30", "18:300", "-1", "6 30x"] {
+        for typed in ["", " ", "24:01", "25:00", "18:60", "1860", "12345", "abc", "18:30:00", "13pm", "0am", ":30", "18:300", "-1", "6 30x"] {
             assert_eq!(parse(typed), None, "{typed}");
         }
     }
@@ -137,5 +154,16 @@ mod tests {
         assert_eq!(keep_length("10:15", "11:45", "23:59"), "11:45", "no later time left");
         assert_eq!(keep_length("12:00", "11:00", "13:00"), "11:00", "an inverted span stays as it was");
         assert_eq!(keep_length("", "11:00", "13:00"), "11:00");
+    }
+
+    #[test]
+    fn a_moved_start_leaves_the_end_after_it_except_at_the_last_minute() {
+        for start in ["00:00", "09:00", "11:45", "12:00", "22:30", "23:30", "23:58"] {
+            let end = keep_length("10:15", "11:45", start);
+            assert!(parse(&end) > parse(start), "{start} -> {end}");
+        }
+        assert_eq!(keep_length("10:15", "11:45", "23:58"), "23:59");
+        assert_eq!(keep_length("10:15", "11:45", "24"), "11:45", "no later minute, the start field refuses it");
+        assert_eq!(parse("24"), Some(super::last_minute()), "so a start field that must stay before it refuses it");
     }
 }

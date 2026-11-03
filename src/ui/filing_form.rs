@@ -19,7 +19,7 @@ use super::widgets::*;
 use crate::core::day;
 use crate::core::filing::{self, BRIEF_TAG, FileFacts, FileRole, Suggestion};
 use crate::core::i18n::{tr, trf};
-use crate::core::library::{Library, MaterialTarget};
+use crate::core::library::{Library, MaterialTarget, plain_role_name};
 use crate::core::model::{Assignment, CoauthorStyle, StudyConfig};
 use crate::core::naming::{Naming, extension};
 use crate::core::prefs;
@@ -290,7 +290,10 @@ impl FilingForm {
     fn final_name(&self, l: &Library, cx: &App) -> String {
         let Some(path) = self.path() else { return String::new() };
         let name = name_of(path);
-        let Some(naming) = self.module_id(l).and_then(|m| l.naming(&m)).filter(|_| self.rename) else { return name };
+        let Some(naming) = self.module_id(l).and_then(|m| l.naming(&m)).filter(|_| self.rename) else {
+            let author = l.config.as_ref().map(|c| c.author.clone()).unwrap_or_default();
+            return plain_role_name(&name, self.role, &author);
+        };
         let a = self.target_assignment(l);
         let week = a.as_ref().and_then(|a| a.week).or_else(|| l.current_week().map(|w| w.index));
         let iso = a.as_ref().and_then(|a| a.iso_week);
@@ -406,9 +409,9 @@ impl FilingForm {
         }
         let Some(current) = self.path().cloned() else { return };
         let lib = state::lib(cx);
-        let (folder, current_name, naming, namings, ignore, week, assignment) = {
+        let (folder, current_name, naming, namings, ignore, week, assignment, author) = {
             let l = lib.read(cx);
-            (self.folder(l), self.final_name(l, cx), self.module_id(l).and_then(|m| l.naming(&m)).filter(|_| self.rename), l.namings(), l.title_ignore_words(), self.target_assignment(l).and_then(|a| a.week).or_else(|| l.current_week().map(|w| w.index)), self.target_assignment(l).map(|a| a.id))
+            (self.folder(l), self.final_name(l, cx), self.module_id(l).and_then(|m| l.naming(&m)).filter(|_| self.rename), l.namings(), l.title_ignore_words(), self.target_assignment(l).and_then(|a| a.week).or_else(|| l.current_week().map(|w| w.index)), self.target_assignment(l).map(|a| a.id), l.config.as_ref().map(|c| c.author.clone()).unwrap_or_default())
         };
         let Some(folder) = folder else { return };
         let rest: Vec<PathBuf> = self.paths[self.index..].to_vec();
@@ -424,7 +427,7 @@ impl FilingForm {
                     if let Some(shared) = &shared_name {
                         return (p.clone(), numbered(shared, i + 1, extension(&name)));
                     }
-                    let Some(naming) = &naming else { return (p.clone(), name) };
+                    let Some(naming) = &naming else { return (p.clone(), plain_role_name(&name, role, &author)) };
                     let f = FileFacts::read(p);
                     let t = filing::title_suggestions(&f, &namings, &ignore).first().map(|s| s.title.clone()).unwrap_or_else(|| Naming::guess_title(&name));
                     let d = f.name_date.unwrap_or_else(|| day::local_date(f.created));
