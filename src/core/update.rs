@@ -159,6 +159,9 @@ pub fn bundle_of(exe: &Path) -> Option<PathBuf> {
 
 /// Replaces the running app with the installer's and starts the new version shortly after this one quits.
 pub fn install(installer: &Path) -> Result<(), String> {
+    if super::drive::fenced("install update", installer.display()) {
+        return Err("an agent drives this instance".into());
+    }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     match target() {
         Target::Mac => install_mac(installer, &exe),

@@ -382,7 +382,7 @@ impl Render for MainWindow {
                     cx.propagate();
                     return;
                 }
-                cx.write_to_clipboard(ClipboardItem::new_string(super::selectable::without_room(&text)));
+                super::drive::copy(super::selectable::without_room(&text).to_string(), cx);
             })
             .on_action(cx.listener(|this, _: &SearchUp, _, cx| this.step_results(-1, cx)))
             .on_action(cx.listener(|this, _: &SearchDown, _, cx| this.step_results(1, cx)))

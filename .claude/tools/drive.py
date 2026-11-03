@@ -189,7 +189,7 @@ class Instance:
         found = image(self.pid)
         if found is None:
             return False
-        return found == "" or os.path.normcase(os.path.realpath(found)) == os.path.normcase(os.path.realpath(self.exe)) or (not WIN and os.path.basename(found) == EXE)
+        return bool(found) and os.path.normcase(os.path.realpath(found)) == os.path.normcase(os.path.realpath(self.exe))
 
     def log_tail(self, n=30):
         log = self.dir / "log"
@@ -261,20 +261,18 @@ def pick_instance(name):
             die(f"no instance {name}; `app ps` lists them")
         return inst
     live = [i for i in instances() if i.alive()]
+    owner = owner_pid()
+    if owner:
+        live = [i for i in live if i.meta.get("owner") == owner]
     if not live:
-        owner = owner_pid()
-        dead = [i for i in instances() if owner and i.meta.get("owner") == owner]
+        dead = [i for i in instances() if owner and i.meta.get("owner") == owner and not i.meta.get("stopped")]
         if dead:
             gone = max(dead, key=lambda i: i.meta.get("started", 0))
             die(f"instance {gone.name} exited without app stop:\n{gone.log_tail()}")
-        die("no instance is running; use: app start")
+        die("none of your instances is running; use: app start (app ps lists all)")
     if len(live) == 1:
         return live[0]
-    owner = owner_pid()
-    mine = [i for i in live if owner and i.meta.get("owner") == owner]
-    if len(mine) == 1:
-        return mine[0]
-    die("several instances run here; pick one with -i NAME or APP_INSTANCE: " + ", ".join(i.name for i in (mine or live)))
+    die("several of your instances run; pick one with -i NAME or APP_INSTANCE: " + ", ".join(i.name for i in live))
 
 
 def claim(name):
@@ -298,7 +296,9 @@ def stop(inst, quiet=False):
         if inst.alive():
             kill(inst.pid)
             time.sleep(0.3)
-    (inst.dir / "meta.json").unlink(missing_ok=True)
+    if inst.meta:
+        inst.meta["stopped"] = True
+        (inst.dir / "meta.json").write_text(json.dumps(inst.meta), encoding="utf-8")
     (inst.dir / "drive.json").unlink(missing_ok=True)
     if not quiet:
         print(f"stopped {inst.name}")
@@ -326,12 +326,7 @@ def start(opts):
             elif not inst.meta and time.time() - inst.dir.stat().st_mtime < 60:
                 die(f"instance {name} is being started by someone else; pick another name")
     else:
-        mine = [i for i in instances() if i.alive() and owner and i.meta.get("owner") == owner]
-        if len(mine) == 1 and not opts["new"]:
-            name = mine[0].name
-            stop(mine[0], quiet=True)
-        else:
-            name = next((n for n in GENERIC_NAMES if claim(n)), None) or next(f"i{n}" for n in range(1000) if claim(f"i{n}"))
+        name = next((n for n in GENERIC_NAMES if claim(n)), None) or next(f"i{n}" for n in range(1000) if claim(f"i{n}"))
     inst = Instance(name)
     d = inst.dir
     os.utime(d)
@@ -451,6 +446,8 @@ def shot(inst, name, window, full):
         r = subprocess.run([str(gui), "shot", str(inst.pid), str(out), str(win["native"]), str(width)], capture_output=True, text=True)
         if r.returncode:
             die(r.stderr.strip() or "screenshot failed")
+    elif MAC and inst_capture(inst, win, out, full):
+        pass
     elif MAC:
         r = subprocess.run(["screencapture", "-x", "-o", f"-l{win['native']}", str(out)], capture_output=True, text=True)
         if r.returncode or not out.exists():
@@ -464,6 +461,14 @@ def shot(inst, name, window, full):
         if width:
             subprocess.run(["convert", str(out), "-resize", f"{width}x{round(win['h'])}!", str(out)], capture_output=True)
     print(out)
+
+
+def inst_capture(inst, win, out, full):
+    try:
+        inst.call("capture", path=str(out), full=full, window=win["id"])
+        return out.exists()
+    except SystemExit:
+        return False
 
 
 def gui_exe():
@@ -519,8 +524,9 @@ def perf_measure(inst, scenario):
 
 
 HELP = """\
-app start [--name N] [--new] [--light|--dark] [--lang de|en] [--notes N] [--size WxH] [--data DIR] [--debug] [--no-build]
-                                 build, then start a private instance: scratch data, settings and temp folder
+app start [--name N] [--light|--dark] [--lang de|en] [--notes N] [--size WxH] [--data DIR] [--debug] [--no-build]
+                                 build, then start a new private instance: scratch data, settings and temp folder;
+                                 --name N restarts your instance N (e.g. after a rebuild)
 app ps | app gc                  instances of this worktree | remove dead ones
 app stop [--all]                 quit the selected instance (or all of yours)
 app windows                      window id, size, position, scale, theme, title (alias: list)
@@ -531,7 +537,8 @@ app hover <target|x y> [name]    move the pointer, wait, screenshot if a name is
 app move <target|x y>
 app drag <from> <to> [steps]     from and to are targets or x,y
 app wheel <target|x y> <steps> [mods]   positive steps scroll up
-app key <key>... [mods]          esc enter tab space backspace delete left … f12, a, cmd-k, shift-tab
+app key <key>... [mods]          esc enter tab space backspace delete left … f12, a, cmd-k, shift-tab;
+                                 copy, cut and paste are refused unless --clipboard: the clipboard is the owner's
 app type <text> [--paste]        types every character as a key (umlauts work); --paste inserts it at once
 app action <Name> [json]         dispatches a registered action; app actions [filter] lists them
 app drop <target|x y> <path>...  drops files from outside, as the file manager would
@@ -546,7 +553,7 @@ app ping                         is the UI thread responsive? exit 3 when it han
 app stats | app sample [seconds] | app log [lines]
 
 Options for every command: -i NAME (or APP_INSTANCE) picks the instance, -w WINDOW a window
-(main, part of its title, or its id). Without -i the only instance, or the only one of this agent, is used.
+(main, part of its title, or its id). Without -i your only instance is used; with several, -i is required.
 Targets: id:sidebar-today (exact id), text:Heute (exact label), role:tab, ~heu (part of id or label),
 plain text (part of id or label; exact matches first). --nth N picks among several matches.
 Coordinates are logical pixels from the window's top-left, the same on every OS and scale;
@@ -577,13 +584,11 @@ def main(argv):
         print(HELP)
         return
     if cmd == "start":
-        opts = {"name": None, "new": False, "theme": None, "lang": None, "notes": 60, "size": (1360, 860), "data": None, "debug": False, "build": True, "timeout": 90, "ttl": 1800}
+        opts = {"name": None, "theme": None, "lang": None, "notes": 60, "size": (1360, 860), "data": None, "debug": False, "build": True, "timeout": 90, "ttl": 1800}
         a = iter(args)
         for x in a:
             if x == "--name":
                 opts["name"] = next(a)
-            elif x == "--new":
-                opts["new"] = True
             elif x in ("--light", "--dark"):
                 opts["theme"] = x[2:]
             elif x == "--notes":
@@ -696,7 +701,9 @@ def main(argv):
         if len(keys) >= 2 and is_mods(keys[-1]) and not is_mods(keys[0]):
             mods = keys.pop().replace("+", "-")
             keys = [f"{mods}-{k}" for k in keys]
-        inst.call("key", keys=keys, **win_arg)
+        clip = "--clipboard" in keys
+        keys = [k for k in keys if k != "--clipboard"]
+        inst.call("key", keys=keys, clipboard=clip, **win_arg)
     elif cmd == "type":
         paste = "--paste" in args
         text = " ".join(a for a in args if a != "--paste")
@@ -704,7 +711,9 @@ def main(argv):
     elif cmd == "action":
         if not args:
             die("app action <Name> [json]")
-        inst.call("action", name=args[0], data=json.loads(args[1]) if len(args) > 1 else None, **win_arg)
+        clip = "--clipboard" in args
+        rest_args = [a for a in args if a != "--clipboard"]
+        inst.call("action", name=rest_args[0], data=json.loads(rest_args[1]) if len(rest_args) > 1 else None, clipboard=clip, **win_arg)
     elif cmd == "actions":
         for a in inst.call("actions")["actions"]:
             if not args or args[0].lower() in a.lower():

@@ -1792,7 +1792,7 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
                 .tooltip(super::widgets::tip(tr("Code kopieren")))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
-                    cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
+                    super::drive::copy(copied.to_string(), cx);
                 })
                 .child(super::widgets::icon("copy", iconsize::S, t.secondary)),
         )

@@ -6,7 +6,7 @@ effort: high
 tools: Read, Grep, Glob, Bash, LSP
 ---
 
-Measure; do not guess from code. Do not edit source files. `.claude/bin/app help` lists the commands. `app start` builds the perf profile and starts your own instance; judge only that profile, never a debug build. Drive it with targets (`app click text:Notizen`, `app wheel id:notes-list -20`, `app type …`) and `app wait idle` between steps, never sleeps.
+Measure; do not guess from code. Do not edit source files. `.claude/bin/app help` lists the commands. `app start` builds the perf profile and starts a new instance of your own; pass `-i <name>` from its output on every later call; judge only that profile, never a debug build. Drive it with targets (`app click text:Notizen`, `app wheel id:notes-list -20`, `app type …`) and `app wait idle` between steps, never sleeps.
 
 Run every `.claude/bin/app` call with `dangerouslyDisableSandbox: true`. Read `~/.claude/skills/app-polish/references/scale.md` first; it defines data levels and what passes.
 

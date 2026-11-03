@@ -386,7 +386,7 @@ impl Help {
     }
 
     fn copy(&mut self, index: usize, source: String, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(source));
+        super::drive::copy(source.to_string(), cx);
         self.copied = Some((self.page, index));
         self.copy_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(COPIED_FOR).await;

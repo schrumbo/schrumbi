@@ -20,7 +20,7 @@ pub fn reveal_label() -> String {
 pub fn pick(options: PathPromptOptions, cx: &mut App, then: impl FnOnce(Vec<PathBuf>, &mut App) + 'static) {
     if crate::core::drive::on() {
         if let Some(paths) = crate::core::drive::answer("open") {
-            then(paths, cx);
+            cx.defer(move |cx| then(paths, cx));
         }
         return;
     }
@@ -37,7 +37,7 @@ pub fn pick(options: PathPromptOptions, cx: &mut App, then: impl FnOnce(Vec<Path
 pub fn save(directory: PathBuf, name: String, cx: &mut App, then: impl FnOnce(PathBuf, &mut App) + 'static) {
     if crate::core::drive::on() {
         if let Some(path) = crate::core::drive::answer("save").and_then(|mut p| p.pop()) {
-            then(path, cx);
+            cx.defer(move |cx| then(path, cx));
         }
         return;
     }

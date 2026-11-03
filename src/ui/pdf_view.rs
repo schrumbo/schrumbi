@@ -300,7 +300,7 @@ impl PdfView {
                     }
                 }
             }
-            Message::Clipboard(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
+            Message::Clipboard(text) => super::drive::copy(text.to_string(), cx),
         }
         cx.notify();
     }

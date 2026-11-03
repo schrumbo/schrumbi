@@ -92,12 +92,17 @@ pub fn frame(window: &Window, ms: Option<f32>, title: Option<&SharedString>) {
     let key = window.window_handle().window_id().as_u64();
     let forced = WINDOWS.with_borrow_mut(|w| {
         let drawn = w.entry(key).or_default();
-        drawn.shown = std::mem::take(&mut drawn.pending);
+        let forced = std::mem::take(&mut drawn.forced);
+        if forced {
+            drawn.shown = std::mem::take(&mut drawn.pending);
+        } else {
+            drawn.pending.clear();
+        }
         drawn.last = Some(Instant::now());
         if let Some(title) = title {
             drawn.title = Some(title.clone());
         }
-        std::mem::take(&mut drawn.forced)
+        forced
     });
     if let Some(ms) = ms.filter(|_| !forced) {
         FRAMES.with_borrow_mut(|f| {
@@ -116,6 +121,13 @@ pub fn activate_window(window: &Window) {
     let title = WINDOWS.with_borrow(|w| w.get(&key).and_then(|d| d.title.clone())).map_or_else(|| window.window_title(), |t| t.to_string());
     if !drive::fenced("activate", title) {
         window.activate_window();
+    }
+}
+
+/// Copies `text`, except while an agent drives the app: the owner's clipboard stays untouched.
+pub fn copy(text: String, cx: &mut App) {
+    if !drive::fenced("clipboard", &text) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 }
 
@@ -191,7 +203,7 @@ fn serve(stream: TcpStream, token: &str, tx: &async_channel::Sender<Call>, last:
                     let ui = ask(tx, json!({ "cmd": "ui" }), Duration::from_secs(2)).is_some();
                     json!({ "ok": true, "pid": std::process::id(), "ui": ui })
                 } else {
-                    let wait = Duration::from_secs_f64(body["timeout"].as_f64().unwrap_or(30.) + 5.);
+                    let wait = Duration::from_secs_f64(body["timeout"].as_f64().unwrap_or(30.).clamp(0., 3600.) + 5.);
                     ask(tx, body, wait).unwrap_or_else(|| json!({ "ok": false, "hung": true, "error": format!("the UI thread did not answer within {} s", wait.as_secs()) }))
                 }
             }
@@ -306,6 +318,9 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
             let handle = one_window(b, cx)?;
             let keys: Vec<String> = b["keys"].as_array().map(|k| k.iter().filter_map(|k| k.as_str()).map(key_name).collect()).unwrap_or_default();
             for k in keys {
+                if !b["clipboard"].as_bool().unwrap_or(false) && touches_clipboard(&k) {
+                    return Err(format!("{k} would use the owner's clipboard; pass --clipboard if that is intended"));
+                }
                 let handled = handle
                     .update(cx, |_, window, cx| {
                         let keystroke = Keystroke::parse_with_os(&k, cx.platform_info().os).map_err(|e| format!("{k}: {e}"))?;
@@ -343,6 +358,9 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
         "action" => {
             let handle = one_window(b, cx)?;
             let name = b["name"].as_str().unwrap_or_default().to_string();
+            if !b["clipboard"].as_bool().unwrap_or(false) && ["::Copy", "::Cut", "::Paste"].iter().any(|s| name.ends_with(s)) {
+                return Err(format!("{name} would use the owner's clipboard; pass --clipboard if that is intended"));
+            }
             handle
                 .update(cx, |_, window, cx| {
                     let action = cx.build_action(&name, b.get("data").cloned()).map_err(|e| e.to_string())?;
@@ -360,6 +378,11 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
             settle(handle, cx).await;
             Ok(json!({}))
         }
+        "capture" => {
+            let handle = one_window(b, cx)?;
+            settle(handle, cx).await;
+            capture(handle, std::path::Path::new(b["path"].as_str().ok_or("path missing")?), b["full"].as_bool().unwrap_or(false), cx)
+        }
         "theme" => {
             let choice: crate::core::prefs::ThemeChoice = serde_json::from_value(b["name"].clone()).map_err(|e| e.to_string())?;
             let handle = one_window(b, cx)?;
@@ -369,6 +392,13 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
         }
         other => Err(format!("unknown command {other:?}")),
     }
+}
+
+fn touches_clipboard(key: &str) -> bool {
+    let parts: Vec<&str> = key.split('-').collect();
+    let (last, mods) = parts.split_last().map_or(("", &[][..]), |(l, m)| (*l, m));
+    let command = mods.iter().any(|m| matches!(*m, "secondary" | "ctrl" | "cmd"));
+    (command && matches!(last, "c" | "x" | "v" | "insert")) || (mods.contains(&"shift") && matches!(last, "insert" | "delete"))
 }
 
 fn key_name(k: &str) -> String {
@@ -582,7 +612,125 @@ async fn next_frame(handle: AnyWindowHandle, refresh: bool, limit: Duration, cx:
             let _ = late.try_send(());
         })
         .detach();
+    for _ in 0..3 {
+        if rx.try_recv().is_ok() || !pump(handle, cx) {
+            break;
+        }
+    }
     let _ = rx.recv().await;
+}
+
+#[cfg(target_os = "macos")]
+fn pump(handle: AnyWindowHandle, cx: &mut AsyncApp) -> bool {
+    let view = handle.update(cx, |_, window, _| mac::view(window)).ok().flatten();
+    view.is_some_and(|v| mac::covered(v) && mac::draw(v))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pump(_: AnyWindowHandle, _: &mut AsyncApp) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn capture(handle: AnyWindowHandle, path: &std::path::Path, full: bool, cx: &mut AsyncApp) -> Result<Value, String> {
+    let number = handle.update(cx, |_, window, _| native(window)).map_err(|e| e.to_string())?.as_u64().ok_or("no native window")?;
+    mac::capture(u32::try_from(number).map_err(|e| e.to_string())?, path, full)?;
+    Ok(json!({}))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn capture(_: AnyWindowHandle, _: &std::path::Path, _: bool, _: &mut AsyncApp) -> Result<Value, String> {
+    Err("the app captures itself only on macOS".into())
+}
+
+#[cfg(target_os = "macos")]
+mod mac {
+    use std::ffi::c_void;
+    use std::path::Path;
+
+    use gpui_kit::Window;
+    use objc2::msg_send;
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::{NSString, NSURL};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGRect {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        static CGRectNull: CGRect;
+        fn CGWindowListCreateImage(bounds: CGRect, list: u32, window: u32, image: u32) -> *mut c_void;
+        fn CGImageRelease(image: *mut c_void);
+    }
+
+    #[link(name = "ImageIO", kind = "framework")]
+    unsafe extern "C" {
+        fn CGImageDestinationCreateWithURL(url: *const c_void, kind: *const c_void, count: usize, options: *const c_void) -> *mut c_void;
+        fn CGImageDestinationAddImage(destination: *mut c_void, image: *mut c_void, properties: *const c_void);
+        fn CGImageDestinationFinalize(destination: *mut c_void) -> bool;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(object: *const c_void);
+    }
+
+    pub fn view(window: &Window) -> Option<usize> {
+        let Ok(RawWindowHandle::AppKit(h)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw()) else { return None };
+        Some(h.ns_view.as_ptr() as usize)
+    }
+
+    pub fn covered(view: usize) -> bool {
+        unsafe {
+            let ns_window: *mut AnyObject = msg_send![view as *mut AnyObject, window];
+            if ns_window.is_null() {
+                return false;
+            }
+            let state: usize = msg_send![ns_window, occlusionState];
+            state & 2 == 0
+        }
+    }
+
+    pub fn draw(view: usize) -> bool {
+        unsafe {
+            let view = view as *mut AnyObject;
+            let layer: *mut AnyObject = msg_send![view, layer];
+            if layer.is_null() {
+                return false;
+            }
+            let _: () = msg_send![view, displayLayer: layer];
+        }
+        true
+    }
+
+    pub fn capture(window: u32, path: &Path, full: bool) -> Result<(), String> {
+        unsafe {
+            let image = CGWindowListCreateImage(CGRectNull, 8, window, 1 | if full { 8 } else { 16 });
+            if image.is_null() {
+                return Err("the window could not be captured".into());
+            }
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            let kind = NSString::from_str("public.png");
+            let destination = CGImageDestinationCreateWithURL(Retained::as_ptr(&url).cast(), Retained::as_ptr(&kind).cast(), 1, std::ptr::null());
+            if destination.is_null() {
+                CGImageRelease(image);
+                return Err(format!("cannot write {}", path.display()));
+            }
+            CGImageDestinationAddImage(destination, image, std::ptr::null());
+            let written = CGImageDestinationFinalize(destination);
+            CFRelease(destination);
+            CGImageRelease(image);
+            if written { Ok(()) } else { Err(format!("cannot write {}", path.display())) }
+        }
+    }
 }
 
 async fn find(b: &Value, cx: &mut AsyncApp) -> Result<(AnyWindowHandle, Spot), String> {
@@ -613,7 +761,7 @@ async fn find(b: &Value, cx: &mut AsyncApp) -> Result<(AnyWindowHandle, Spot), S
 
 async fn wait(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
     let started = Instant::now();
-    let limit = Duration::from_secs_f64(b["timeout"].as_f64().unwrap_or(10.));
+    let limit = Duration::from_secs_f64(b["timeout"].as_f64().unwrap_or(10.).clamp(0., 3600.));
     let quiet = Duration::from_millis(b["quiet"].as_u64().unwrap_or(300));
     let what = b["for"].as_str().unwrap_or("idle");
     loop {
@@ -632,6 +780,11 @@ async fn wait(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
         if started.elapsed() > limit {
             let frames = FRAMES.with_borrow(|f| f.times.len());
             return Err(format!("still not {what} after {:.1} s ({frames} frames so far)", limit.as_secs_f64()));
+        }
+        if what == "idle" {
+            for handle in cx.update(|cx| cx.windows()) {
+                pump(handle, cx);
+            }
         }
         cx.background_executor().timer(Duration::from_millis(if what == "idle" { 50 } else { 150 })).await;
     }

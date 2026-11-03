@@ -955,7 +955,7 @@ impl Settings {
             outgoing_rows.push(row(tr("Abonnieren oder importieren"), div().flex().gap(px(space::S))
                 .child(Button::new("calendar-copy").small().label(tr("Adresse kopieren")).on_click(|_, _, cx| {
                     if let Some(address) = crate::core::calendar_server::address() {
-                        cx.write_to_clipboard(ClipboardItem::new_string(address));
+                        super::drive::copy(address.to_string(), cx);
                         state::act(cx, |l| l.notify(tr("Adresse kopiert"), "link", None, None));
                     }
                 }))

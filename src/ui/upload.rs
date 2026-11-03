@@ -238,7 +238,7 @@ impl UploadPanel {
                 let (a, b, c) = (menu.clone(), menu.clone(), menu.clone());
                 m.item(PopupMenuItem::new(tr("Vorschau")).on_click(move |_, _, cx| super::preview::show(&a, cx)))
                     .item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&b)))
-                    .item(PopupMenuItem::new(tr("Pfad kopieren")).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(c.to_string_lossy().to_string()))))
+                    .item(PopupMenuItem::new(tr("Pfad kopieren")).on_click(move |_, _, cx| super::drive::copy(c.to_string_lossy().to_string(), cx)))
             })
             .child(file_icon(path, iconsize::L))
             .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(crate::core::text::middle_ellipsis(&path.file_name().unwrap_or_default().to_string_lossy(), 36))).child(caption(size_label(path), t)))

@@ -12,11 +12,11 @@ First read `~/.claude/skills/app-polish/references/feel.md` and `~/.claude/skill
 
 Run every `.claude/bin/app` call with `dangerouslyDisableSandbox: true`; screenshots and input fail inside the sandbox.
 
-Run `.claude/bin/app help` for the commands, then `app start`. It starts your own instance with scratch data and settings; other agents' instances never interfere. If `app` says several instances run, pass `-i <name>` from your `app start` output.
+Run `.claude/bin/app help` for the commands, then `app start`. It starts a new instance of your own with scratch data and settings; other agents' instances never interfere. Pass `-i <name>` from its output on every later call, since other agents of the same session count as you. After a rebuild, `app start --name <name>` restarts the same instance.
 
 - Find elements with `app tree` and `app find`, then act on them by target: `app click text:Heute`, `app hover id:sidebar-today hover-today`. Coordinates are logical pixels, the same as screenshot pixels; use them for kit buttons and menus, which have no target.
 - Every input command waits until the frame after it; `app wait <target>` or `app wait idle` waits for more. Never sleep.
-- `app type` types umlauts too. `app dialog <path>` answers the next file dialog, `app drop <target> <file>` drops files, `app events` shows what the app tried to open, reveal or notify outside.
+- `app type` types umlauts too. Copy, cut and paste are refused because the clipboard is the owner's; the app's own copy buttons show up in `app events` instead. `app dialog <path>` answers the next file dialog, `app drop <target> <file>` drops files, `app events` shows what the app tried to open, reveal or notify outside.
 - Read each screenshot before acting on it.
 
 For every changed element:
