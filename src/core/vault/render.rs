@@ -46,6 +46,12 @@ fn typst_formula(latex: &str, display: bool) -> Result<String, String> {
 
 /// A Mermaid diagram as SVG.
 pub fn mermaid_svg(code: &str, dark: bool) -> Result<String, String> {
+    if let Ok(Ok(parsed)) = std::panic::catch_unwind(|| mermaid_rs_renderer::parse_mermaid(code))
+        && parsed.graph.kind == mermaid_rs_renderer::DiagramKind::Pie
+        && let Some(svg) = pie_svg(parsed.graph.pie_title.as_deref(), parsed.graph.pie_show_data, &parsed.graph.pie_slices.iter().map(|s| (s.label.clone(), s.value)).collect::<Vec<_>>(), dark)
+    {
+        return Ok(svg);
+    }
     let mut theme = if dark { mermaid_rs_renderer::Theme::dark() } else { mermaid_rs_renderer::Theme::modern() };
     let (fill, border, line, text) = if dark { ("#2B3442", "#82AAF5", "#8E939B", "#EDEDED") } else { ("#E8EEF9", "#1F5FCC", "#68707C", "#1F1F1F") };
     theme.primary_color = fill.into();
@@ -60,6 +66,13 @@ pub fn mermaid_svg(code: &str, dark: bool) -> Result<String, String> {
     theme.pie_title_text_color = text.into();
     theme.pie_legend_text_color = text.into();
     theme.pie_stroke_color = "transparent".into();
+    theme.sequence_actor_fill = fill.into();
+    theme.sequence_actor_border = border.into();
+    theme.sequence_actor_line = line.into();
+    theme.sequence_activation_fill = fill.into();
+    theme.sequence_activation_border = border.into();
+    theme.sequence_note_fill = if dark { "#3A3426" } else { "#FFF6D6" }.into();
+    theme.sequence_note_border = if dark { "#C9A34A" } else { "#D9B44A" }.into();
     theme.pie_outer_stroke_color = "transparent".into();
     let options = mermaid_rs_renderer::RenderOptions { theme, ..Default::default() };
     let caught = std::panic::catch_unwind(|| mermaid_rs_renderer::render_with_options(code, options));
@@ -68,6 +81,133 @@ pub fn mermaid_svg(code: &str, dark: bool) -> Result<String, String> {
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => Err("Das Diagramm ließ sich nicht zeichnen.".to_string()),
     }
+}
+
+/// Series colours for light and dark notes, checked for colour blindness against each surface.
+const PIE_LIGHT: [&str; 8] = ["#2A78D6", "#EB6834", "#1BAF7A", "#EDA100", "#E87BA4", "#008300", "#6250D6", "#E34948"];
+const PIE_DARK: [&str; 8] = ["#3987E5", "#D95926", "#199E70", "#C98500", "#D55181", "#008300", "#9085E9", "#E66767"];
+
+fn xml_escaped(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// About how wide text is in the diagram font, for laying out the legend.
+fn text_width(text: &str, size: f32) -> f32 {
+    text.chars().map(|c| if (c as u32) >= 0x1100 && !matches!(c as u32, 0x2000..=0x206F) { 1. } else if c.is_uppercase() || c == 'm' || c == 'w' { 0.72 } else if c == ' ' || c == 'i' || c == 'l' || c == '.' || c == ',' { 0.3 } else { 0.58 }).sum::<f32>() * size
+}
+
+fn shortened(text: &str, most: usize) -> String {
+    if text.chars().count() <= most { text.to_string() } else { format!("{}…", text.chars().take(most - 1).collect::<String>().trim_end()) }
+}
+
+fn number(value: f32) -> String {
+    let shown = if (value - value.round()).abs() < 0.005 { format!("{}", value.round() as i64) } else { format!("{value:.2}").trim_end_matches('0').trim_end_matches('.').to_string() };
+    if crate::core::i18n::is_english() { shown } else { shown.replace('.', ",") }
+}
+
+fn percent(share: f32) -> String {
+    let n = share * 100.;
+    let shown = if n > 0. && n < 1. { "<1".to_string() } else { format!("{}", n.round() as i64) };
+    if crate::core::i18n::is_english() { format!("{shown}%") } else { format!("{shown}\u{202F}%") }
+}
+
+/// Whether dark text reads better than white on a fill.
+fn light_fill(hex: &str) -> bool {
+    let value = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0);
+    let channel = |shift: u32| {
+        let c = ((value >> shift) & 0xFF) as f32 / 255.;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0) > 0.4
+}
+
+/// A pie chart as a ring with gaps between slices and a legend that carries the numbers.
+fn pie_svg(title: Option<&str>, show_data: bool, slices: &[(String, f32)], dark: bool) -> Option<String> {
+    let mut slices: Vec<(String, f32)> = slices.iter().filter(|(_, v)| v.is_finite() && *v > 0.).cloned().collect();
+    let total: f32 = slices.iter().map(|(_, v)| v).sum();
+    if slices.is_empty() || total <= 0. {
+        return None;
+    }
+    let palette = if dark { PIE_DARK } else { PIE_LIGHT };
+    if slices.len() > palette.len() {
+        let mut order: Vec<usize> = (0..slices.len()).collect();
+        order.sort_by(|a, b| slices[*b].1.total_cmp(&slices[*a].1));
+        let kept: std::collections::HashSet<usize> = order.into_iter().take(palette.len() - 1).collect();
+        let rest: f32 = slices.iter().enumerate().filter(|(i, _)| !kept.contains(i)).map(|(_, (_, v))| v).sum();
+        slices = slices.into_iter().enumerate().filter(|(i, _)| kept.contains(i)).map(|(_, s)| s).collect();
+        slices.push((crate::core::i18n::tr("Andere"), rest));
+    }
+    let (text, muted, other) = if dark { ("#E4E4E4", "#A7A7A7", "#6E6E73") } else { ("#1F1F1F", "#616161", "#A1A1A6") };
+    let folded = slices.len() == palette.len() && slices.len() > 1 && slices.last().is_some_and(|(l, _)| *l == crate::core::i18n::tr("Andere"));
+    let colour = |i: usize| if folded && i == slices.len() - 1 { other } else { palette[i % palette.len()] };
+    let (outer, inner, gap) = (92_f32, 58_f32, 2_f32);
+    let (legend_size, row, swatch) = (13_f32, 24_f32, 10_f32);
+    let labels: Vec<String> = slices.iter().map(|(l, _)| shortened(l, 32)).collect();
+    let values: Vec<String> = slices.iter().map(|(_, v)| number(*v)).collect();
+    let shares: Vec<String> = slices.iter().map(|(_, v)| percent(v / total)).collect();
+    let label_width = labels.iter().map(|l| text_width(l, legend_size)).fold(0., f32::max);
+    let value_width = if show_data { values.iter().map(|v| text_width(v, legend_size)).fold(0., f32::max) + 16. } else { 0. };
+    let share_width = shares.iter().map(|s| text_width(s, legend_size)).fold(0., f32::max);
+    let legend_width = swatch + 8. + label_width + 20. + value_width + share_width;
+    let legend_height = slices.len() as f32 * row;
+    let title_size = 15_f32;
+    let top = if title.is_some() { title_size * 1.4 + 16. } else { 0. };
+    let body = (outer * 2.).max(legend_height);
+    let pad = 4_f32;
+    let content = outer * 2. + 32. + legend_width;
+    let width = (pad * 2. + content).max(title.map_or(0., |t| text_width(&shortened(t, 60), title_size) + pad * 2.));
+    let height = pad * 2. + top + body;
+    let (cx, cy) = ((width - content) / 2. + outer, pad + top + body / 2.);
+    let font = r#"font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Inter, 'Segoe UI', Arial, sans-serif""#;
+    let mut svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" {font}>"#);
+    if let Some(title) = title {
+        svg.push_str(&format!(r#"<text x="{:.1}" y="{:.1}" text-anchor="middle" font-size="{title_size}" font-weight="600" fill="{text}">{}</text>"#, width / 2., pad + title_size, xml_escaped(&shortened(title, 60))));
+    }
+    let point = |angle: f32, radius: f32| (cx + radius * angle.sin(), cy - radius * angle.cos());
+    let tau = std::f32::consts::TAU;
+    if slices.len() == 1 {
+        svg.push_str(&format!(r#"<path fill-rule="evenodd" fill="{}" d="M {cx} {:.2} a {outer} {outer} 0 1 0 0.01 0 Z M {cx} {:.2} a {inner} {inner} 0 1 0 0.01 0 Z"/>"#, colour(0), cy - outer, cy - inner));
+    }
+    let mut start = 0_f32;
+    let mut marks = String::new();
+    for (i, (_, value)) in slices.iter().enumerate() {
+        let sweep = value / total * tau;
+        let end = start + sweep;
+        if slices.len() > 1 {
+            let (outer_pad, inner_pad) = ((gap / 2.) / outer, (gap / 2.) / inner);
+            let (outer_pad, inner_pad) = if sweep > inner_pad * 2. + 0.002 { (outer_pad, inner_pad) } else { (0., 0.) };
+            let (a, b) = (point(start + outer_pad, outer), point(end - outer_pad, outer));
+            let (c, d) = (point(end - inner_pad, inner), point(start + inner_pad, inner));
+            let large_outer = i32::from(sweep - outer_pad * 2. > std::f32::consts::PI);
+            let large_inner = i32::from(sweep - inner_pad * 2. > std::f32::consts::PI);
+            svg.push_str(&format!(
+                r#"<path fill="{}" d="M {:.2} {:.2} A {outer} {outer} 0 {large_outer} 1 {:.2} {:.2} L {:.2} {:.2} A {inner} {inner} 0 {large_inner} 0 {:.2} {:.2} Z"/>"#,
+                colour(i), a.0, a.1, b.0, b.1, c.0, c.1, d.0, d.1
+            ));
+        }
+        if value / total >= 0.08 {
+            let (x, y) = point(start + sweep / 2., (outer + inner) / 2.);
+            let ink = if light_fill(colour(i)) { "#1A1A19" } else { "#FFFFFF" };
+            marks.push_str(&format!(r#"<text x="{x:.1}" y="{:.1}" text-anchor="middle" font-size="11" font-weight="600" fill="{ink}">{}</text>"#, y + 4., xml_escaped(&shares[i])));
+        }
+        start = end;
+    }
+    svg.push_str(&marks);
+    let left = cx + outer + 32.;
+    let first = cy - legend_height / 2.;
+    for (i, label) in labels.iter().enumerate() {
+        let middle = first + row * (i as f32 + 0.5);
+        let baseline = middle + legend_size * 0.36;
+        svg.push_str(&format!(r#"<rect x="{left:.1}" y="{:.1}" width="{swatch}" height="{swatch}" rx="3" fill="{}"/>"#, middle - swatch / 2., colour(i)));
+        svg.push_str(&format!(r#"<text x="{:.1}" y="{baseline:.1}" font-size="{legend_size}" fill="{text}">{}</text>"#, left + swatch + 8., xml_escaped(label)));
+        let right = left + legend_width;
+        if show_data {
+            svg.push_str(&format!(r#"<text x="{:.1}" y="{baseline:.1}" text-anchor="end" font-size="{legend_size}" fill="{muted}">{}</text>"#, right - share_width - 16., xml_escaped(&values[i])));
+        }
+        svg.push_str(&format!(r#"<text x="{right:.1}" y="{baseline:.1}" text-anchor="end" font-size="{legend_size}" font-weight="500" fill="{muted}">{}</text>"#, xml_escaped(&shares[i])));
+    }
+    svg.push_str("</svg>");
+    Some(svg)
 }
 
 /// Quadrant charts and timelines come with fixed light colours, whatever the theme says.
@@ -190,6 +330,39 @@ fn script_down(c: char) -> Option<char> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pie_charts_draw_a_ring_with_a_legend() {
+        let svg = super::mermaid_svg("pie title Zeit <pro> Fach\n  \"Mathe\" : 42\n  \"Kunst\" : 0\n  \"Deutsch\" : 18", true).unwrap();
+        assert!(svg.contains("Zeit &lt;pro&gt; Fach"));
+        assert!(svg.contains(">Mathe<") && svg.contains(">Deutsch<"));
+        assert!(!svg.contains(">Kunst<"));
+        assert_eq!(svg.matches("<path").count(), 2);
+        assert!(svg.contains("#3987E5") && !svg.contains("#2A78D6"));
+    }
+
+    #[test]
+    fn a_pie_with_more_slices_than_colours_folds_the_smallest() {
+        let code = format!("pie\n{}", (1..=11).map(|i| format!("  \"S{i}\" : {i}\n")).collect::<String>());
+        let svg = super::mermaid_svg(&code, false).unwrap();
+        assert_eq!(svg.matches("<path").count(), 8);
+        assert!(svg.contains(">S11<") && svg.contains(">S5<") && !svg.contains(">S4<"));
+        assert!(svg.contains(&format!(">{}<", crate::core::i18n::tr("Andere"))));
+    }
+
+    #[test]
+    fn a_long_pie_title_widens_the_picture() {
+        let svg = super::mermaid_svg("pie title Lernzeit pro Woche im Wintersemester nach Fach und Thema\n  \"A\" : 1\n  \"B\" : 1", false).unwrap();
+        let width: f32 = svg.split("width=\"").nth(1).and_then(|w| w.split('"').next()).and_then(|w| w.parse().ok()).unwrap();
+        assert!(width >= super::text_width("Lernzeit pro Woche im Wintersemester nach Fach und Thema", 15.));
+        assert!(super::text_width("数学", 13.) >= 26.);
+    }
+
+    #[test]
+    fn a_single_slice_pie_is_a_whole_ring() {
+        let svg = super::mermaid_svg("pie\n  \"Alles\" : 3", false).unwrap();
+        assert!(svg.contains("evenodd") && svg.contains(">Alles<"));
+    }
+
     #[test]
     fn linked_mermaid_nodes_can_be_found_in_the_picture() {
         let code = "graph TD\n  A[Ziel] --> B[Anders]\n  class A internal-link\n";

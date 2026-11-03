@@ -1560,5 +1560,7 @@
   "Muss nach %@ liegen. Esc stellt %@ wieder her.": "Must be after %@. Esc restores %@.",
   "Muss vor %@ liegen. Esc stellt %@ wieder her.": "Must be before %@. Esc restores %@.",
   "Tippe z. B. 18, 1830 oder 18:30. ↑↓ in Viertelstunden, mit ⇧ in vollen Stunden.": "Type e.g. 18, 1830 or 18:30. ↑↓ step by quarter hours, with ⇧ by full hours.",
-  "Keine Schnellauswahl für diese Uhrzeit": "No quick choices for this time"
+  "Keine Schnellauswahl für diese Uhrzeit": "No quick choices for this time",
+  "Einklappen": "Collapse",
+  "Ausklappen": "Expand"
 }
