@@ -145,6 +145,7 @@ pub struct Help {
     rows: Vec<FocusHandle>,
     pages: ScrollHandle,
     results: ScrollHandle,
+    settle: bool,
     search: Entity<InputState>,
     docs: Vec<Doc>,
     expanded: Vec<String>,
@@ -183,7 +184,7 @@ impl Help {
         })];
         let subs = subs.into_iter().chain([cx.observe_window_activation(window, |h, window, cx| {
             if window.is_window_active() {
-                h.refresh(cx);
+                h.refresh(window, cx);
             }
         })]).collect();
         let expanded = expanded(cx);
@@ -193,6 +194,7 @@ impl Help {
             rows: PAGES.iter().map(|_| cx.focus_handle().tab_index(0)).collect(),
             pages: ScrollHandle::new(),
             results: ScrollHandle::new(),
+            settle: true,
             search,
             docs,
             expanded,
@@ -257,6 +259,7 @@ impl Help {
         cx.set_global(LastPage(page));
         self.load();
         self.pages.scroll_to_item(group_of(page));
+        self.settle = true;
         cx.notify();
     }
 
@@ -303,11 +306,12 @@ impl Help {
         self.go(hit.page, Some(hit.section), cx);
     }
 
-    fn refresh(&mut self, cx: &mut Context<Self>) {
+    fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let expanded = expanded(cx);
         if expanded == self.expanded {
             return;
         }
+        self.search.update(cx, |s, cx| s.set_placeholder(tr("In der Anleitung suchen"), window, cx));
         self.docs = expanded.iter().map(|s| docs::split(s)).collect();
         self.expanded = expanded;
         self.hits = docs::search(&self.docs, self.search.read(cx).value().trim());
@@ -319,6 +323,7 @@ impl Help {
     fn step_hit(&mut self, by: isize, cx: &mut Context<Self>) -> bool {
         self.hit = self.hit.saturating_add_signed(by).min(self.hits.len().saturating_sub(1));
         self.results.scroll_to_item(self.hit + 1);
+        self.settle = true;
         cx.notify();
         true
     }
@@ -436,7 +441,7 @@ impl Help {
     }
 
     fn sidebar(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut groups = div().id("help-pages").track_scroll(&self.pages).flex_1().min_h_0().overflow_y_scrollbar().px(px(space::S)).pt(px(space::M)).pb(px(space::L)).flex().flex_col().gap(px(space::L));
+        let mut groups = div().id("help-pages").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.pages).px(px(space::S)).pt(px(space::M)).pb(px(space::L)).flex().flex_col().gap(px(space::L));
         let mut current: Option<Group> = None;
         let mut block = div();
         for (i, page) in PAGES.iter().enumerate() {
@@ -470,7 +475,7 @@ impl Help {
                     })),
             );
         }
-        groups = groups.child(block);
+        groups = groups.child(block).vertical_scrollbar(&self.pages);
         div()
             .w(px(SIDEBAR))
             .flex_none()
@@ -490,7 +495,7 @@ impl Help {
             return unavailable("search", tr("Keine Treffer"), trf("Nichts zu „%@“. Versuch ein anderes Wort, zum Beispiel Karten, Sync oder Tabelle.", &[&query]), t).into_any_element();
         }
         let selected = self.hit.min(self.hits.len() - 1);
-        let mut rows = div().id("help-results").track_scroll(&self.results).size_full().overflow_y_scrollbar().pt(px(if super::chrome::CUSTOM { space::XL } else { TOP })).px(px(space::XL)).pb(px(space::XL)).flex().flex_col().items_center().gap(px(space::XXS));
+        let mut rows = div().id("help-results").size_full().overflow_y_scroll().track_scroll(&self.results).pt(px(if super::chrome::CUSTOM { space::XL } else { TOP })).px(px(space::XL)).pb(px(space::XL)).flex().flex_col().items_center().gap(px(space::XXS));
         rows = rows.child(div().w_full().max_w(px(MEASURE)).px(px(space::M)).pb(px(space::S)).child(caption(if self.hits.len() == 1 { tr("1 Treffer") } else { trf("%lld Treffer", &[&self.hits.len()]) }, t)));
         for (i, hit) in self.hits.iter().enumerate() {
             let page = &PAGES[hit.page];
@@ -530,7 +535,7 @@ impl Help {
                     .on_click(cx.listener(move |h, _, window, cx| h.open_hit(i, window, cx))),
             );
         }
-        rows.into_any_element()
+        rows.vertical_scrollbar(&self.results).into_any_element()
     }
 
     fn head(&self, t: &Theme) -> AnyElement {
@@ -640,6 +645,9 @@ fn sample_links(source: &str) -> String {
 impl Render for Help {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         super::perf::frame_start();
+        if std::mem::take(&mut self.settle) {
+            window.request_animation_frame();
+        }
         if window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
         }

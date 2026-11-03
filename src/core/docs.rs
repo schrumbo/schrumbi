@@ -101,7 +101,20 @@ fn indexed(section: &Section) -> Indexed {
         Piece::Text(t) => plain(&t.lines().filter(|l| !l.starts_with("## ")).collect::<Vec<_>>().join("\n")),
         Piece::Example { title, .. } => title.clone(),
     };
-    let body = section.pieces.iter().map(prose).filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" ");
+    let mut body = String::new();
+    let mut after_example = false;
+    for piece in &section.pieces {
+        let text = prose(piece);
+        if text.is_empty() {
+            continue;
+        }
+        let example = matches!(piece, Piece::Example { .. });
+        if !body.is_empty() {
+            body.push_str(if example && after_example { " · " } else { " " });
+        }
+        body.push_str(&text);
+        after_example = example;
+    }
     let sources = section.pieces.iter().filter_map(|p| if let Piece::Example { source, .. } = p { Some(plain(source)) } else { None }).collect::<Vec<_>>().join(" ");
     let forms = simple(&format!("{body} {sources}"));
     Indexed { heading: section.heading.as_deref().map(simple), body, forms }
