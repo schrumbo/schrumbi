@@ -1621,5 +1621,9 @@
   "In %@ suchen": "Search in %@",
   "In %@": "In %@",
   "Überall suchen": "Search everywhere",
-  "Abgabe, Aufgabe oder Prüfung eintragen": "Add a submission, task or exam"
+  "Abgabe, Aufgabe oder Prüfung eintragen": "Add a submission, task or exam",
+  "Aufgabe eintragen…": "Add task…",
+  "Abgabe eintragen…": "Add submission…",
+  "Prüfung eintragen…": "Add exam…",
+  "Für diesen Tag eintragen": "Add for this day"
 }

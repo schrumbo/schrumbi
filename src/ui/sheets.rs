@@ -74,7 +74,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     let (quick_add, quick_open, new_note, module, import, reschedule, setup) = lib.update(cx, |l, _| {
         let module = if let crate::core::library::Route::Module(id) = l.route() { Some(id.clone()) } else { None };
         let setup = std::mem::take(&mut l.needs_setup);
-        ((std::mem::take(&mut l.show_quick_add), l.quick_add_kind.take()), std::mem::take(&mut l.show_quick_open), l.new_note.take(), module, l.import_path.take(), l.reschedule_id.take(), setup)
+        ((std::mem::take(&mut l.show_quick_add), l.quick_add_kind.take(), l.quick_add_day.take()), std::mem::take(&mut l.show_quick_open), l.new_note.take(), module, l.import_path.take(), l.reschedule_id.take(), setup)
     });
     if setup {
         let view = cx.new(|cx| Setup::new(window, cx));
@@ -94,8 +94,8 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     } else if let Some(r) = new_note {
         let view = cx.new(|cx| NewNote::new(r.module_id, r.folder, window, cx));
         show(view, 540., window, cx);
-    } else if let (true, kind) = quick_add {
-        let view = cx.new(|cx| QuickAdd::new(module, kind, window, cx));
+    } else if let (true, kind, day) = quick_add {
+        let view = cx.new(|cx| QuickAdd::new(module, kind, day, window, cx));
         show(view, 520., window, cx);
     } else if quick_open {
         let view = cx.new(|cx| QuickOpen::new(window, cx));

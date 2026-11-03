@@ -72,3 +72,15 @@ Eine Datei zählt für eine Abgabe, wenn sie dazugehört. Datum und Ordner allei
 - Gesammelt: {ui:Überfällig} und {ui:Fertig, aber Upload nicht bestätigt}, mit {ui:Alle als hochgeladen markieren}.
 - {ui:Nächste 7 Tage}, {ui:Prüfungen} und {ui:Zuletzt geschrieben}.
 - Warten Karten, erscheint ein Hinweis mit {ui:Lernen}.
+
+## Für einen Tag eintragen
+
+Rechtsklick auf einen Tag unter {ui:Nächste 7 Tage}, oder das + rechts oben, das beim Darüberfahren erscheint. Für Einmaliges ohne Regel:
+
+| Befehl | Standardzeit |
+|---|---|
+| {ui:Abgabe eintragen…} | 23:59 |
+| {ui:Aufgabe eintragen…} | 18:00 |
+| {ui:Prüfung eintragen…} | 10:00 |
+
+Das Datum steht schon drin. Titel tippen, {key:return}. Rechtsklick auf einen Eintrag zeigt weiter seine eigenen Befehle.

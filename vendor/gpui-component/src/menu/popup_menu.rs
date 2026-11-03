@@ -950,8 +950,9 @@ impl PopupMenu {
 
     fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        let first_clickable_ix = self.clickable_menu_items().next().map(|(ix, _)| ix).unwrap_or(0);
         let Some(ix) = self.selected_index else {
-            self.set_selected_index(0, cx);
+            self.set_selected_index(first_clickable_ix, cx);
             return;
         };
 
@@ -965,7 +966,7 @@ impl PopupMenu {
             return;
         }
 
-        self.set_selected_index(0, cx);
+        self.set_selected_index(first_clickable_ix, cx);
     }
 
     fn select_left(&mut self, _: &SelectLeft, window: &mut Window, cx: &mut Context<Self>) {
@@ -1014,7 +1015,8 @@ impl PopupMenu {
         if let Some(active_submenu) = self.active_submenu() {
             // Focus the submenu, so that can be handle the action.
             active_submenu.update(cx, |view, cx| {
-                view.set_selected_index(0, cx);
+                let first_clickable_ix = view.clickable_menu_items().next().map(|(ix, _)| ix).unwrap_or(0);
+                view.set_selected_index(first_clickable_ix, cx);
                 view.focus_handle.focus(window, cx);
             });
             cx.notify();

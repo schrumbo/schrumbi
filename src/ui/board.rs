@@ -1,15 +1,17 @@
 use chrono::{Datelike, Local, NaiveDate, Utc};
-use gpui_kit::component::menu::ContextMenuExt;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem};
+use gpui_kit::component::Sizable;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::act;
 use super::motion::Soft;
 use super::theme::{Theme, font, radius, space, iconsize};
-use super::widgets::{KeyNav, file_target, icon, status_menu, status_toggle, tip};
+use super::widgets::{KeyNav, file_target, icon, menu_icon, status_menu, status_toggle, tip};
 use crate::core::i18n::tr;
 use crate::core::library::Library;
-use crate::core::model::{Assignment, Module, Session, Status};
+use crate::core::model::{Assignment, Kind, Module, Session, Status};
 use crate::core::day;
 
 /// Column-per-day board showing timetable sessions and deadlines; one row per day when narrow.
@@ -61,6 +63,35 @@ fn drop_target(day: Div, date: NaiveDate, t: &Theme) -> Div {
     day.drag_over::<DraggedCard>(move |s, _, _, _| s.border_color(accent).bg(accent.opacity(0.08))).on_drop(move |card: &DraggedCard, _, cx| move_to_day(&card.id, date, cx))
 }
 
+/// Right-click on a day: add a one-off task, submission or exam due that day.
+fn day_menu(menu: PopupMenu, date: NaiveDate) -> PopupMenu {
+    let add = |label: String, kind: Kind| {
+        PopupMenuItem::new(label).icon(menu_icon(kind.icon())).on_click(move |_, _, cx| {
+            act(cx, |l| {
+                l.quick_add_kind = Some(kind);
+                l.quick_add_day = Some(date);
+                l.show_quick_add = true;
+            })
+        })
+    };
+    menu.label(day::long(date))
+        .item(add(tr("Abgabe eintragen…"), Kind::Submission))
+        .item(add(tr("Aufgabe eintragen…"), Kind::Task))
+        .item(add(tr("Prüfung eintragen…"), Kind::Exam))
+}
+
+fn day_group(date: NaiveDate) -> SharedString {
+    SharedString::from(format!("board-day-{}", date.num_days_from_ce()))
+}
+
+/// The day menu behind a "+" that shows while the pointer is over the day, so right-click is not the only way in.
+fn add_button(date: NaiveDate) -> Div {
+    div()
+        .invisible()
+        .group_hover(day_group(date), StyleRefinement::visible)
+        .child(Button::new(("board-day-add", date.num_days_from_ce() as u32 as usize)).ghost().xsmall().icon(menu_icon("plus")).tooltip(tr("Für diesen Tag eintragen")).dropdown_menu(move |menu, _, _| day_menu(menu, date)))
+}
+
 fn day_label(d: NaiveDate, today: NaiveDate) -> String {
     if d == today { tr("Heute").to_uppercase() } else { day::weekday_short(d).to_uppercase() }
 }
@@ -76,6 +107,7 @@ fn column(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
     let ink = t.ink;
 
     let header = div()
+        .relative()
         .flex()
         .items_baseline()
         .gap(px(space::S))
@@ -83,9 +115,13 @@ fn column(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
         .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent_text } else { t.secondary }).child(day_label(d, today)))
         .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).text_color(if is_today { t.accent_text } else { t.primary }).child(d.day().to_string()))
         .child(div().flex_1())
-        .when(open > 0, |h| h.child(div().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).text_color(t.secondary).child(open.to_string())));
+        .when(open > 0, |h| h.child(div().group_hover(day_group(d), |s| s.invisible()).text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).text_color(t.secondary).child(open.to_string())))
+        .child(add_button(d).absolute().top(px(-space::XXS)).right(px(-space::XXS)));
 
     drop_target(div(), d, t)
+        .group(day_group(d))
+        .id(("board-day", d.num_days_from_ce() as u32 as usize))
+        .context_menu(move |menu, _, _| day_menu(menu, d))
         .flex_1()
         .min_w_0()
         .min_h(px(230.))
@@ -122,6 +158,9 @@ fn agenda_row(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
     let items = lib.assignments_on(d);
     let sessions = lib.sessions_on(d);
     drop_target(div(), d, t)
+        .group(day_group(d))
+        .id(("board-agenda-day", d.num_days_from_ce() as u32 as usize))
+        .context_menu(move |menu, _, _| day_menu(menu, d))
         .flex()
         .items_start()
         .gap(px(space::M))
@@ -150,6 +189,8 @@ fn agenda_row(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
                 .children(items.iter().map(|a| div().w(px(200.)).child(deadline_card(lib, a, t))))
                 .into_any_element()
         })
+        .child(div().flex_1())
+        .child(add_button(d))
         .into_any_element()
 }
 

@@ -1609,3 +1609,14 @@ fn a_workspace_from_before_links_without_a_state_file_keeps_what_counted() {
     assert!(lib.is_linked(&file, &a.id));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn the_week_counts_what_the_semester_counts() {
+    use crate::core::model::{Kind, ManualAssignment};
+    let (_root, mut lib) = workspace("week-count", &config(1, 0));
+    let due = chrono::Local::now().with_timezone(&chrono::Utc);
+    for (kind, optional) in [(Kind::Task, false), (Kind::Exam, false), (Kind::Submission, true), (Kind::Submission, false)] {
+        lib.add_manual(ManualAssignment { module: "m0".into(), title: format!("{kind:?}"), due, kind, optional, upload: kind == Kind::Submission, ..Default::default() });
+    }
+    assert_eq!(lib.week_progress(), (0, 2), "the task and the required submission, like the semester count");
+}

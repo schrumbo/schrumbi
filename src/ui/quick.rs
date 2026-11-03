@@ -1,4 +1,4 @@
-use chrono::{Days, Local, NaiveTime};
+use chrono::{Days, Local, NaiveDate, NaiveTime};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::date_picker::{DatePicker, DatePickerEvent, DatePickerState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -51,12 +51,18 @@ fn default_time(kind: Kind) -> NaiveTime {
     .unwrap_or_default()
 }
 
+/// The kind's usual time, unless that has already passed today; then the end of the day, so nothing starts overdue.
+fn start_time(kind: Kind, date: NaiveDate) -> NaiveTime {
+    let (time, now) = (default_time(kind), Local::now());
+    if date == now.date_naive() && time <= now.time() { NaiveTime::from_hms_opt(23, 59, 0).unwrap_or(time) } else { time }
+}
+
 impl QuickAdd {
-    pub fn new(module: Option<String>, kind: Option<Kind>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(module: Option<String>, kind: Option<Kind>, day: Option<NaiveDate>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let title = cx.new(|cx| InputState::new(window, cx).placeholder(tr("z. B. Kapitel 3 lesen")));
         let due = datetime_picker(window, cx);
-        let tomorrow = Local::now().date_naive() + Days::new(1);
-        due.update(cx, |s, cx| s.set_date_time(tomorrow.and_time(default_time(Kind::Task)), window, cx));
+        let day = day.unwrap_or_else(|| Local::now().date_naive() + Days::new(1));
+        due.update(cx, |s, cx| s.set_date_time(day.and_time(start_time(Kind::Task, day)), window, cx));
         let module = module.or_else(|| state::read(cx, |l| l.semester_modules().first().map(|m| m.id.clone()))).unwrap_or_default();
         let subs = vec![
             cx.subscribe_in(&title, window, |this, _, e: &InputEvent, window, cx| match e {
@@ -85,7 +91,7 @@ impl QuickAdd {
         };
         self.title.update(cx, |s, cx| s.set_placeholder(placeholder, window, cx));
         if let Some(d) = self.due.read(cx).date_time().start() {
-            self.due.update(cx, |s, cx| s.set_date_time(d.date().and_time(default_time(kind)), window, cx));
+            self.due.update(cx, |s, cx| s.set_date_time(d.date().and_time(start_time(kind, d.date())), window, cx));
         }
         cx.notify();
     }
@@ -178,7 +184,7 @@ impl Render for QuickAdd {
         for (i, (label, d)) in quick.into_iter().enumerate() {
             let e = me.clone();
             chips = chips.child(Button::new(("qa-date", i)).small().label(label).on_click(move |_, window, cx| e.update(cx, |q, cx| {
-                let t = default_time(q.kind);
+                let t = start_time(q.kind, d);
                 q.due.update(cx, |s, cx| s.set_date_time(d.and_time(t), window, cx));
                 cx.notify();
             })));

@@ -273,6 +273,8 @@ pub struct Library {
     pub show_quick_add: bool,
     /// The kind the next quick add starts on, when the place it was opened from implies one.
     pub quick_add_kind: Option<Kind>,
+    /// The day the next quick add starts on, when it was opened from a day.
+    pub quick_add_day: Option<chrono::NaiveDate>,
     pub show_quick_open: bool,
     /// A deadline waiting for a file to be picked and linked to it.
     pub link_pick: Option<String>,
@@ -436,6 +438,7 @@ impl Library {
             inspector_peek: false,
             show_quick_add: false,
             quick_add_kind: None,
+            quick_add_day: None,
             show_quick_open: false,
             link_pick: None,
             find_in_file: None,
@@ -1726,7 +1729,7 @@ impl Library {
             .iter()
             .filter(|a| {
                 let d = day::local_date(a.due);
-                d >= monday && d < next && !a.optional && self.status(a) != Status::Skipped
+                d >= monday && d < next && self.counts(a)
             })
             .collect();
         (items.iter().filter(|a| self.is_done(a)).count(), items.len())

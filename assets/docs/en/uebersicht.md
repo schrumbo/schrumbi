@@ -72,3 +72,15 @@ A file counts for a submission when it belongs to it. Date and folder alone are 
 - Collected: {ui:Überfällig} and {ui:Fertig, aber Upload nicht bestätigt}, with {ui:Alle als hochgeladen markieren}.
 - {ui:Nächste 7 Tage}, {ui:Prüfungen} and {ui:Zuletzt geschrieben}.
 - If cards are waiting, a hint with {ui:Lernen} appears.
+
+## Add for a Day
+
+Right-click a day under {ui:Nächste 7 Tage}, or use the + at its top right that appears on hover. For one-off things without a rule:
+
+| Command | Default time |
+|---|---|
+| {ui:Abgabe eintragen…} | 23:59 |
+| {ui:Aufgabe eintragen…} | 18:00 |
+| {ui:Prüfung eintragen…} | 10:00 |
+
+The date is already filled in. Type the title, {key:return}. Right-clicking an entry still shows its own commands.
