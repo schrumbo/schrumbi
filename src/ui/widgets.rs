@@ -232,13 +232,42 @@ pub fn status_menu(menu: PopupMenu, id: &str, cx: &App) -> PopupMenu {
         menu = menu.item(item(tr("Termin verschieben…"), "calendar-clock", Box::new(move |cx| act(cx, |l| l.reschedule_id = Some(id2.clone())))));
     }
     if a.tracks_files() {
-        let id2 = id.to_string();
-        let folder = a.folder.clone();
+        let (id2, id3) = (id.to_string(), id.to_string());
+        let folder = a.folder.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf).unwrap_or_else(|| a.folder.clone());
         menu = menu
-            .item(item(tr("Vorhandene Datei zuordnen…"), "link", Box::new(move |cx| super::platform::pick_link_files(&id2, cx))))
-            .item(item(tr("Ordner öffnen"), "folder", Box::new(move |_| library::open_path(&folder))));
+            .item(item(tr("Notiz dafür anlegen"), "square-pen", Box::new(move |cx| new_assignment_note(&id3, cx))))
+            .item(item(tr("Datei zuordnen…"), "link", Box::new(move |cx| act(cx, |l| l.link_pick = Some(id2.clone())))))
+            .item(item(tr("Abgabeordner öffnen"), "folder", Box::new(move |_| library::open_path(&folder))));
     }
     menu
+}
+
+/// Makes a note that belongs to the deadline and opens it.
+pub fn new_assignment_note(id: &str, cx: &mut App) {
+    if let Some(p) = act(cx, |l| l.create_assignment_note(id)) {
+        state::reindex(cx);
+        act(cx, |l| l.open_document(&p));
+    }
+}
+
+/// The deadlines a file may belong to, checked where it does; picking one links or unlinks it.
+pub fn deadline_items(mut menu: PopupMenu, path: &Path, cx: &App) -> PopupMenu {
+    let (choices, now) = state::read(cx, |l| (l.link_choices(path), l.now));
+    if choices.is_empty() {
+        return menu.item(PopupMenuItem::new(tr("Keine offenen Abgaben")).disabled(true));
+    }
+    for (a, on) in choices {
+        let (p, id) = (path.to_path_buf(), a.id.clone());
+        let label = format!("{} · {}", library::deadline_label(&a), crate::core::day::countdown(a.due, now));
+        menu = menu.item(PopupMenuItem::new(label).checked(on).on_click(move |_, _, cx| act(cx, |l| l.toggle_link(&p, &id))));
+    }
+    menu
+}
+
+/// "Abgabe zuordnen ›" for a file's context menu.
+pub fn deadline_submenu(menu: PopupMenu, path: &Path, window: &mut Window, cx: &mut Context<PopupMenu>) -> PopupMenu {
+    let path = path.to_path_buf();
+    menu.submenu_with_icon(Some(menu_icon("link")), tr("Abgabe zuordnen"), window, cx, move |m, _, cx| deadline_items(m, &path, cx))
 }
 
 /// Common file actions for context menus.
@@ -534,40 +563,43 @@ pub fn assignment_row_with(lib: &Library, a: &Assignment, show_module: bool, sho
         .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx))
 }
 
-/// Lets an assignment take files from outside and from the file list; call it after the last child, the element must be relative.
+/// Lets an assignment take files: from outside they are filed, from the file list they are linked where they are. Call it after the last child, the element must be relative.
 pub fn file_target(element: Stateful<Div>, a: &Assignment, t: &Theme) -> Stateful<Div> {
     let group = SharedString::from(format!("drop-{}", a.id));
     let (outside, inside) = (a.id.clone(), a.id.clone());
+    let overlay = |label: String| {
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .invisible()
+            .hover(|s| s)
+            .flex()
+            .items_center()
+            .justify_center()
+            .px(px(space::S))
+            .rounded(px(radius::CONTROL))
+            .bg(t.accent)
+            .text_color(t.on_accent)
+            .text_size(px(font::CALLOUT))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(div().truncate().child(label))
+    };
     element
         .group(group.clone())
         .on_drop(move |p: &ExternalPaths, _, cx| {
             let paths = p.paths().to_vec();
             act(cx, |l| l.request_filing(paths, Some(outside.clone())));
         })
-        .on_drop(move |f: &DraggedFile, _, cx| {
-            let path = f.0.clone();
-            act(cx, |l| l.request_filing(vec![path], Some(inside.clone())));
-        })
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
-                .right_0()
-                .invisible()
-                .hover(|s| s)
-                .group_drag_over::<ExternalPaths>(group.clone(), |s| s.visible())
-                .group_drag_over::<DraggedFile>(group, |s| s.visible())
-                .flex()
-                .items_center()
-                .justify_center()
-                .px(px(space::S))
-                .rounded(px(radius::CONTROL))
-                .bg(t.accent)
-                .text_color(t.on_accent)
-                .text_size(px(font::CALLOUT))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(div().truncate().child(trf("In %@ ablegen", &[&a.title]))),
-        )
+        .on_drop(move |f: &DraggedFile, _, cx| link_dropped(&f.0, &inside, cx))
+        .child(overlay(trf("In %@ ablegen", &[&a.title])).group_drag_over::<ExternalPaths>(group.clone(), |s| s.visible()))
+        .child(overlay(trf("Zu %@ zuordnen", &[&library::deadline_label(a)])).group_drag_over::<DraggedFile>(group, |s| s.visible()))
+}
+
+/// A file dragged from the file list onto a deadline: linked where it is, or filed when it lives outside the study folder.
+pub fn link_dropped(path: &Path, id: &str, cx: &mut App) {
+    let path = path.to_path_buf();
+    act(cx, |l| if l.root.as_ref().is_some_and(|r| path.starts_with(r)) { l.link(std::slice::from_ref(&path), id) } else { l.request_filing(vec![path.clone()], Some(id.to_string())) });
 }

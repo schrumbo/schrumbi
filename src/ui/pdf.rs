@@ -43,9 +43,13 @@ pub fn export(path: &Path, text: Option<String>, cx: &mut App) {
                 match result {
                     Ok(()) => {
                         l.refresh();
-                        l.record_export(&target, replaced);
+                        l.record_export(&target, replaced, &source);
                         let name = target.file_name().unwrap_or_default().to_string_lossy().to_string();
-                        l.notify(trf("PDF erstellt: %@", &[&name]), "file-text", Some(tr("Öffnen")), Some(Box::new(move |l| l.open_file(&target))));
+                        let message = match l.deadlines_of(&target).first() {
+                            Some(a) => trf("PDF erstellt für %@: %@", &[&library::deadline_label(a), &name]),
+                            None => trf("PDF erstellt: %@", &[&name]),
+                        };
+                        l.notify(message, "file-text", Some(tr("Öffnen")), Some(Box::new(move |l| l.open_file(&target))));
                     }
                     Err(e) => l.last_error = Some(trf("PDF-Export fehlgeschlagen: %@", &[&e])),
                 }

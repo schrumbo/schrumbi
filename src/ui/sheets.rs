@@ -16,7 +16,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     }
     let pending = {
         let l = lib.read(cx);
-        l.show_save_layout || l.note_pick.is_some() || l.show_sync_setup || l.show_conflicts || l.filing_request.is_some() || l.show_quick_add || l.show_quick_open || l.show_palette || l.show_shortcuts || l.new_note.is_some() || l.import_path.is_some() || l.reschedule_id.is_some() || l.needs_setup
+        l.show_save_layout || l.note_pick.is_some() || l.show_sync_setup || l.show_conflicts || l.filing_request.is_some() || l.show_quick_add || l.show_quick_open || l.link_pick.is_some() || l.show_palette || l.show_shortcuts || l.new_note.is_some() || l.import_path.is_some() || l.reschedule_id.is_some() || l.needs_setup
     };
     if pending {
         window.activate_window();
@@ -53,6 +53,11 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
         let pick = if merge { super::vault_tools::Pick::MergeInto(note) } else { super::vault_tools::Pick::InsertTemplate(note) };
         let view = cx.new(|cx| super::vault_tools::NotePicker::new(pick, window, cx));
         show(view, 720., window, cx);
+        return;
+    }
+    if let Some(id) = lib.update(cx, |l, _| l.link_pick.take()) {
+        let view = cx.new(|cx| QuickOpen::linking(id, window, cx));
+        show(view, 620., window, cx);
         return;
     }
     let (palette, shortcuts) = lib.update(cx, |l, _| (std::mem::take(&mut l.show_palette), std::mem::take(&mut l.show_shortcuts)));

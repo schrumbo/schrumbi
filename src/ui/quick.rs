@@ -35,7 +35,6 @@ pub struct QuickAdd {
     /// The title without the date words found in it.
     clean_title: Option<String>,
     due: Entity<DatePickerState>,
-    folder: String,
     optional: bool,
     focused: bool,
     _subs: Vec<Subscription>,
@@ -70,7 +69,7 @@ impl QuickAdd {
             }),
             cx.subscribe(&due, |_, _, _: &DatePickerEvent, cx| cx.notify()),
         ];
-        Self { module, kind: Kind::Task, title, clean_title: None, due, folder: String::new(), optional: false, focused: false, _subs: subs }
+        Self { module, kind: Kind::Task, title, clean_title: None, due, optional: false, focused: false, _subs: subs }
     }
 
     fn set_kind(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {
@@ -114,22 +113,11 @@ impl QuickAdd {
             kind: self.kind,
             optional: self.kind == Kind::Submission && self.optional,
             upload: self.kind == Kind::Submission,
-            folder: if self.kind == Kind::Submission { self.folder.clone() } else { String::new() },
             ..Default::default()
         };
         act(cx, |l| l.add_manual(m));
         cx.emit(Dismissed);
     }
-}
-
-fn subfolders(module: &str, cx: &App) -> Vec<String> {
-    let Some(base) = state::read(cx, |l| l.root.clone().zip(l.module_by_id(module).map(|m| m.folder.clone())).map(|(r, f)| r.join(f))) else { return Vec::new() };
-    let re = regex::Regex::new(r"^W\d{2}").unwrap();
-    let mut v: Vec<String> = std::fs::read_dir(base)
-        .map(|d| d.filter_map(Result::ok).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| !n.starts_with('.') && !re.is_match(n)).collect())
-        .unwrap_or_default();
-    v.sort();
-    v
 }
 
 fn row(label: String, content: impl IntoElement, t: &Theme) -> Div {
@@ -174,7 +162,6 @@ impl Render for QuickAdd {
                 let (e, id) = (e.clone(), id.clone());
                 menu = menu.item(PopupMenuItem::new(name.clone()).on_click(move |_, _, cx| e.update(cx, |q, cx| {
                     q.module = id.clone();
-                    q.folder.clear();
                     cx.notify();
                 })));
             }
@@ -200,29 +187,8 @@ impl Render for QuickAdd {
             .child(row(tr("Modul"), module_menu, &t))
             .child(row(if self.kind == Kind::Exam { tr("Termin") } else { tr("Fällig") }, div().flex().flex_col().gap(px(space::S)).child(div().w(px(240.)).child(DatePicker::new(&self.due))).child(chips).child(caption(countdown, &t)), &t));
         if self.kind == Kind::Submission {
-            let folders = subfolders(&self.module, cx);
-            let label = if self.folder.is_empty() { tr("Modulordner") } else { self.folder.clone() };
-            let (e1, e2) = (me.clone(), me.clone());
+            let e2 = me.clone();
             grid = grid
-                .child(row(
-                    tr("Ordner"),
-                    Button::new("qa-folder").label(label).dropdown_caret(true).dropdown_menu(move |mut menu, _, _| {
-                        let e = e1.clone();
-                        menu = menu.item(PopupMenuItem::new(tr("Modulordner")).on_click(move |_, _, cx| e.update(cx, |q, cx| {
-                            q.folder.clear();
-                            cx.notify();
-                        })));
-                        for f in &folders {
-                            let (e, f) = (e1.clone(), f.clone());
-                            menu = menu.item(PopupMenuItem::new(f.clone()).on_click(move |_, _, cx| e.update(cx, |q, cx| {
-                                q.folder = f.clone();
-                                cx.notify();
-                            })));
-                        }
-                        menu
-                    }),
-                    &t,
-                ))
                 .child(row(String::new(), Switch::new("qa-optional").label(tr("Optional")).checked(self.optional).on_click(move |v, _, cx| {
                     let v = *v;
                     e2.update(cx, |q, cx| {
@@ -234,7 +200,7 @@ impl Render for QuickAdd {
         let hint = match self.kind {
             Kind::Exam => tr("Erscheint mit Countdown in der Übersicht."),
             Kind::Task => tr("Zum Abhaken, ohne Datei."),
-            Kind::Submission => tr("Status wird über den Ordner erkannt."),
+            Kind::Submission => tr("Dateien gehören dazu, sobald du sie ablegst oder zuordnest."),
         };
         let can_add = !self.title.read(cx).value().trim().is_empty() && !self.module.is_empty();
         let (cancel, add) = (me.clone(), me.clone());
@@ -259,11 +225,12 @@ impl Render for QuickAdd {
     }
 }
 
-/// ⌘P: find any file by name or folder and open it; open tabs come first.
+/// ⌘P: find any file by name or folder and open it; open tabs come first. With a deadline, the picked file is linked to it instead.
 pub struct QuickOpen {
     query: Entity<InputState>,
     index: usize,
     focused: bool,
+    link_to: Option<String>,
     _subs: Vec<Subscription>,
 }
 
@@ -326,7 +293,17 @@ actions!(schrumbi_quick, [QuickUp, QuickDown]);
 
 impl QuickOpen {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let query = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Dateiname, Ordner, „w3“ …")));
+        Self::with(tr("Dateiname, Ordner, „w3“ …"), None, window, cx)
+    }
+
+    /// Finds a file to link to a deadline: its suggestions and the unlinked files in its folder first.
+    pub fn linking(id: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let label = state::read(cx, |l| l.assignment(&id).map(crate::core::library::deadline_label)).unwrap_or_default();
+        Self::with(trf("Datei für %@ suchen …", &[&label]), Some(id), window, cx)
+    }
+
+    fn with(placeholder: String, link_to: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         let subs = vec![cx.subscribe(&query, |this, _, e: &InputEvent, cx| match e {
             InputEvent::Change => {
                 this.index = 0;
@@ -336,10 +313,13 @@ impl QuickOpen {
             InputEvent::PressEnter { .. } => this.open(cx),
             _ => {}
         })];
-        Self { query, index: 0, focused: false, _subs: subs }
+        Self { query, index: 0, focused: false, link_to, _subs: subs }
     }
 
     fn results(&self, cx: &App) -> Vec<(CatalogFile, bool)> {
+        if let Some(id) = &self.link_to {
+            return self.link_results(id, cx);
+        }
         let q = self.query.read(cx).value().to_string();
         state::read(cx, |l| {
             let terms: Vec<String> = fold(&q).split(' ').filter(|t| !t.is_empty()).map(String::from).collect();
@@ -358,8 +338,39 @@ impl QuickOpen {
         })
     }
 
+    /// Files for a deadline; the flag says the file already belongs to it.
+    fn link_results(&self, id: &str, cx: &App) -> Vec<(CatalogFile, bool)> {
+        let q = self.query.read(cx).value().to_string();
+        state::read(cx, |l| {
+            let Some(a) = l.assignment(id) else { return Vec::new() };
+            let e = l.evaluation(a);
+            let terms: Vec<String> = fold(&q).split(' ').filter(|t| !t.is_empty()).map(String::from).collect();
+            let current = l.current_week().map(|w| w.index);
+            let mine = |f: &CatalogFile| f.module_id.as_deref() == Some(a.module_id.as_str());
+            let linked = |f: &CatalogFile| e.files.contains(&f.file.path) || e.briefs.contains(&f.file.path);
+            let files: Vec<&CatalogFile> = l.catalog.iter().filter(|f| !f.in_project || !terms.is_empty()).collect();
+            let mut scored: Vec<(&CatalogFile, f64)> = if terms.is_empty() {
+                files
+                    .iter()
+                    .filter(|f| mine(f))
+                    .map(|f| {
+                        let rank = if let Some(i) = e.suggested.iter().position(|p| *p == f.file.path) { 100. - i as f64 } else if f.file.path.starts_with(&a.folder) && !linked(f) { 50. } else if linked(f) { 40. } else { 0. };
+                        (*f, rank)
+                    })
+                    .collect()
+            } else {
+                files.iter().filter_map(|f| catalog::score(f, &terms, current).map(|s| (*f, s + if mine(f) { 2. } else { 0. }))).collect()
+            };
+            scored.sort_by(|a, b| if a.1 == b.1 { b.0.date.cmp(&a.0.date) } else { b.1.total_cmp(&a.1) });
+            scored.into_iter().take(40).map(|(f, _)| (f.clone(), linked(f))).collect()
+        })
+    }
+
     /// ⌘↩: straight to Obsidian, for the file that would have opened here.
     fn hand_over(&mut self, cx: &mut Context<Self>) {
+        if self.link_to.is_some() {
+            return;
+        }
         let files = self.results(cx);
         let target = files.get(self.index).map(|(f, _)| f.file.path.clone()).or_else(|| {
             let q = self.query.read(cx).value().to_string();
@@ -373,6 +384,14 @@ impl QuickOpen {
 
     fn open(&mut self, cx: &mut Context<Self>) {
         let files = self.results(cx);
+        if let Some(id) = self.link_to.clone() {
+            if let Some((f, _)) = files.get(self.index) {
+                let p = f.file.path.clone();
+                cx.emit(Dismissed);
+                act(cx, |l| l.toggle_link(&p, &id));
+            }
+            return;
+        }
         if let Some((f, _)) = files.get(self.index) {
             let p = f.file.path.clone();
             cx.emit(Dismissed);
@@ -405,7 +424,8 @@ impl Render for QuickOpen {
         }
         let t = Theme::get(cx);
         let items = self.results(cx);
-        let extra = vault_hits(&self.query.read(cx).value());
+        let linking = self.link_to.is_some();
+        let extra = if linking { Vec::new() } else { vault_hits(&self.query.read(cx).value()) };
         self.index = self.index.min((items.len() + extra.len()).saturating_sub(1));
         let me = cx.entity();
         let mut list = div().flex().flex_col().gap(px(space::XXS)).p(px(space::S));
@@ -448,7 +468,7 @@ impl Render for QuickOpen {
                                     .when(!f.place.is_empty(), |d| d.child(div().truncate().child(f.place.join(" › ")))),
                             ),
                     )
-                    .when(*is_open, |d| d.child(div().text_size(px(font::CAPTION2)).font_weight(FontWeight::SEMIBOLD).text_color(sub).child(tr("Geöffnet"))))
+                    .when(*is_open, |d| d.child(div().flex().items_center().gap(px(space::XXS)).text_size(px(font::CAPTION2)).font_weight(FontWeight::SEMIBOLD).text_color(sub).when(linking, |d| d.child(icon("check", iconsize::XS, sub))).child(if linking { tr("Zugeordnet") } else { tr("Geöffnet") })))
                     .on_click(move |_, _, cx| e.update(cx, |q, cx| {
                         q.index = i;
                         q.open(cx);
@@ -498,7 +518,7 @@ impl Render for QuickOpen {
             .child(div().flex().items_center().gap(px(space::S)).p(px(space::L)).child(icon("search", iconsize::M, t.secondary)).child(div().flex_1().child(Input::new(&self.query).appearance(false).large())))
             .child(div().h(px(1.)).bg(t.separator))
             .child(if !any {
-                unavailable("search", tr("Keine Treffer"), "", &t).h(px(360.)).into_any_element()
+                unavailable("search", tr("Keine Treffer"), if linking { tr("Tippe einen Namen; gesucht wird im ganzen Studienordner.") } else { String::new() }, &t).h(px(360.)).into_any_element()
             } else {
                 div().id("qo-list").h(px(360.)).overflow_y_scrollbar().child(list).into_any_element()
             })
@@ -511,8 +531,8 @@ impl Render for QuickOpen {
                     .py(px(space::S))
                     .text_size(px(font::CAPTION))
                     .text_color(t.secondary)
-                    .child(hint("corner-down-left", tr("Öffnen")))
-                    .when(state::read(cx, |l| l.is_vault), |d| d.child(hint("external-link", tr("⌘↩ In Obsidian"))))
+                    .child(hint("corner-down-left", if linking { tr("Zuordnen") } else { tr("Öffnen") }))
+                    .when(!linking && state::read(cx, |l| l.is_vault), |d| d.child(hint("external-link", tr("⌘↩ In Obsidian"))))
                     .child(hint("arrow-down-up", tr("Auswählen")))
                     .child(hint("x", tr("Schließen"))),
             )

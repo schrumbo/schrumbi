@@ -799,7 +799,7 @@ impl FileBrowser {
                             .child(Button::new(SharedString::from(format!("rv-{}", path.display()))).ghost().small().icon(menu_icon("folder")).tooltip(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&reveal))),
                     ),
             )
-            .context_menu(move |menu, _, cx| {
+            .context_menu(move |menu, window, cx| {
                 let p = menu_path.clone();
                 let (p1, p2, p3, p4) = (p.clone(), p.clone(), p.clone(), p.clone());
                 let current = state::read(cx, current_week);
@@ -843,7 +843,8 @@ impl FileBrowser {
                     })));
                 }
                 let (rename, trash_path, e) = (p.clone(), p.clone(), entity.clone());
-                menu.separator()
+                deadline_submenu(menu.separator(), &p, window, cx)
+                    .separator()
                     .item(PopupMenuItem::new(tr("Umbenennen…")).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
                     .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| state::trash(vec![trash_path.clone()], cx)))
             })

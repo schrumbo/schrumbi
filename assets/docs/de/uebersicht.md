@@ -31,7 +31,7 @@ Ist nichts offen, steht dort {ui:Nichts offen}. Daneben zeigt {ui:Diese Woche}, 
 | {ui:In Arbeit} | Angefangen, aber nicht fertig |
 | {ui:Entfällt} | Zählt nicht mehr mit |
 | {ui:Termin verschieben…} | Neuer Termin für einen Eintrag aus einer Regel |
-| {ui:Vorhandene Datei zuordnen…} | Eine Datei als Abgabe nehmen |
+| {ui:Datei zuordnen…} | Eine Datei als Abgabe nehmen |
 | {ui:Automatisch erkennen} | Den von Hand gesetzten Status aufheben |
 
 {key:Undo} nimmt Statusänderungen zurück.

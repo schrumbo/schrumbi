@@ -1348,3 +1348,187 @@ fn either_naming_switch_alone_keeps_the_convention() {
     (c.rename_on_filing, c.check_names) = (false, true);
     assert!(c.naming_convention(), "checking names still needs the pattern");
 }
+
+/// One module whose single rule hands in to the shared `Abgaben` folder.
+fn shared_config() -> Value {
+    let mut c = config(1, 1);
+    c["modules"][0]["rules"][0]["folder"] = json!("Abgaben");
+    c
+}
+
+fn rescan(lib: &mut Library) {
+    if let Some(job) = lib.scan_job() {
+        lib.apply_scan(job.run());
+    }
+}
+
+fn upcoming(lib: &Library) -> crate::core::model::Assignment {
+    lib.assignments.iter().find(|a| a.due > lib.now).cloned().unwrap()
+}
+
+fn dated(a: &crate::core::model::Assignment, stem: &str) -> String {
+    format!("{stem} {}.pdf", super::day::local_date(a.due).format("%Y-%m-%d"))
+}
+
+#[test]
+fn in_a_shared_folder_only_linked_files_count_and_others_are_suggested() {
+    let (root, mut lib) = workspace("links-only", &shared_config());
+    let a = upcoming(&lib);
+    assert_eq!(a.folder, root.join("M0/Abgaben"));
+    std::fs::create_dir_all(&a.folder).unwrap();
+    let file = a.folder.join(dated(&a, "Entwurf"));
+    std::fs::write(&file, "x").unwrap();
+    rescan(&mut lib);
+    let e = lib.evaluation(&a);
+    assert!(e.files.is_empty(), "a file in the shared folder does not count by its date");
+    assert_eq!(e.suggested, vec![file.clone()]);
+    lib.link(std::slice::from_ref(&file), &a.id);
+    let e = lib.evaluation(&a);
+    assert_eq!(e.files, vec![file.clone()]);
+    assert!(e.suggested.is_empty());
+    let other = lib.assignments.iter().find(|b| b.id != a.id && b.tracks_files() && b.due > a.due).cloned().unwrap();
+    assert!(!lib.evaluation(&other).suggested.contains(&file), "a linked file is no suggestion for another deadline");
+    lib.undo();
+    assert!(lib.evaluation(&a).files.is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn files_older_versions_found_by_date_are_adopted_once() {
+    let root = folder("links-adopt");
+    std::fs::write(root.join("schrumbi.json"), serde_json::to_vec_pretty(&shared_config()).unwrap()).unwrap();
+    std::fs::write(root.join(".schrumbi-state.json"), "{}").unwrap();
+    let mut lib = open(&root);
+    let a = upcoming(&lib);
+    let file = a.folder.join(dated(&a, "Entwurf"));
+    drop(lib);
+    std::fs::create_dir_all(&a.folder).unwrap();
+    std::fs::write(&file, "x").unwrap();
+    std::fs::write(root.join(".schrumbi-state.json"), "{}").unwrap();
+    lib = open(&root);
+    assert_eq!(lib.evaluation(&a).files, vec![file.clone()], "what counted before still counts");
+    assert!(lib.is_linked(&file, &a.id));
+    lib.unlink(&file, &a.id);
+    drop(lib);
+    let lib = open(&root);
+    assert!(!lib.is_linked(&file, &a.id), "adopting happens only once");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_new_workspace_guesses_nothing() {
+    let root = folder("links-fresh");
+    std::fs::write(root.join("schrumbi.json"), serde_json::to_vec_pretty(&shared_config()).unwrap()).unwrap();
+    let lib = open(&root);
+    let a = upcoming(&lib);
+    drop(lib);
+    std::fs::create_dir_all(&a.folder).unwrap();
+    std::fs::write(a.folder.join(dated(&a, "Entwurf")), "x").unwrap();
+    let lib = open(&root);
+    assert!(lib.evaluation(&a).files.is_empty());
+    assert_eq!(lib.evaluation(&a).suggested.len(), 1);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_folder_per_week_still_counts_without_links() {
+    let (root, mut lib) = workspace("links-per-week", &config(1, 1));
+    let a = upcoming(&lib);
+    assert!(a.owns_folder());
+    std::fs::create_dir_all(&a.folder).unwrap();
+    let file = a.folder.join("Irgendwas.pdf");
+    std::fs::write(&file, "x").unwrap();
+    rescan(&mut lib);
+    assert_eq!(lib.evaluation(&a).files, vec![file]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn filing_for_a_deadline_goes_into_the_submissions_folder_and_links() {
+    let (root, mut lib) = workspace("links-filing", &shared_config());
+    let a = upcoming(&lib);
+    let folder = lib.filing_folder(&a).unwrap();
+    assert_eq!(folder, root.join("M0/Abgaben"));
+    assert!(!folder.exists(), "the folder appears only when something goes into it");
+    let source = root.join("Blatt.pdf");
+    std::fs::write(&source, "x").unwrap();
+    let target = lib.file_for(&source, &folder, "Blatt.pdf", Some(&a.id), true).unwrap();
+    assert!(lib.is_linked(&target, &a.id));
+    assert_eq!(lib.evaluation(&a).files, vec![target.clone()]);
+    lib.undo();
+    assert!(source.exists() && !target.exists() && !lib.is_linked(&target, &a.id));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_note_made_for_a_deadline_belongs_to_it_and_so_does_its_pdf() {
+    let (root, mut lib) = workspace("links-note", &shared_config());
+    let a = upcoming(&lib);
+    let note = lib.create_assignment_note(&a.id).unwrap();
+    assert!(note.starts_with(root.join("M0/Abgaben")));
+    assert!(lib.is_linked(&note, &a.id));
+    assert_eq!(lib.evaluation(&a).status, crate::core::model::Status::InProgress);
+    assert_eq!(lib.deadlines_of(&note).first().map(|d| d.id.clone()), Some(a.id.clone()));
+    let pdf = note.with_extension("pdf");
+    std::fs::write(&pdf, "x").unwrap();
+    lib.record_export(&pdf, None, &note);
+    assert!(lib.is_linked(&pdf, &a.id));
+    assert!(lib.evaluation(&a).files.contains(&pdf));
+    lib.undo();
+    assert!(!pdf.exists() && !lib.is_linked(&pdf, &a.id));
+    lib.undo();
+    assert!(!note.exists() && !lib.is_linked(&note, &a.id));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn links_follow_a_rename_and_leave_with_the_trash() {
+    let (root, mut lib) = workspace("links-move", &shared_config());
+    let a = upcoming(&lib);
+    let note = lib.create_assignment_note(&a.id).unwrap();
+    lib.rename(&note, "Anders.md");
+    let renamed = lib.evaluation(&a).files.first().cloned().unwrap();
+    assert!(renamed != note && renamed.exists() && !note.exists());
+    assert!(lib.is_linked(&renamed, &a.id) && !lib.is_linked(&note, &a.id));
+    let going = lib.trashing(std::slice::from_ref(&renamed));
+    let results = super::library::trash_files(&going);
+    lib.trashed(results);
+    assert!(!lib.is_linked(&renamed, &a.id));
+    lib.undo();
+    assert!(renamed.exists() && lib.is_linked(&renamed, &a.id), "undo brings back the file and its link");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_linked_file_gone_outside_the_app_is_reported_not_counted() {
+    let (root, mut lib) = workspace("links-gone", &shared_config());
+    let a = upcoming(&lib);
+    std::fs::create_dir_all(&a.folder).unwrap();
+    let file = a.folder.join("Blatt.pdf");
+    std::fs::write(&file, "x").unwrap();
+    lib.link(std::slice::from_ref(&file), &a.id);
+    std::fs::remove_file(&file).unwrap();
+    rescan(&mut lib);
+    let e = lib.evaluation(&a);
+    assert!(e.files.is_empty());
+    assert_eq!(e.missing, vec![file]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn choices_for_a_file_are_its_modules_open_deadlines_with_the_linked_ones_checked() {
+    let (root, mut lib) = workspace("links-choices", &shared_config());
+    let a = upcoming(&lib);
+    std::fs::create_dir_all(root.join("M0")).unwrap();
+    let file = root.join("M0/Notiz.md");
+    std::fs::write(&file, "x").unwrap();
+    let choices = lib.link_choices(&file);
+    assert!(!choices.is_empty() && choices.len() <= 8);
+    assert!(choices.iter().all(|(_, on)| !on));
+    assert!(choices.windows(2).all(|w| w[0].0.due <= w[1].0.due));
+    lib.toggle_link(&file, &a.id);
+    assert!(lib.link_choices(&file).iter().any(|(c, on)| c.id == a.id && *on));
+    lib.toggle_link(&file, &a.id);
+    assert!(!lib.is_linked(&file, &a.id));
+    let _ = std::fs::remove_dir_all(root);
+}

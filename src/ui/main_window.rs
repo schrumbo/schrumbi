@@ -1,4 +1,4 @@
-use gpui_kit::component::Disableable;
+use gpui_kit::component::{Disableable, Sizable};
 use std::path::PathBuf;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -17,7 +17,7 @@ use super::state::{self, act};
 use super::theme::{self, Theme, font, space, iconsize, radius, control};
 use super::widgets::*;
 use super::{sheets, sidebar, today};
-use crate::core::i18n::tr;
+use crate::core::i18n::{tr, trf};
 use crate::core::library::{Library, NewNoteRequest, Route};
 use crate::core::shortcuts::ShortcutAction;
 
@@ -228,34 +228,30 @@ impl MainWindow {
                 })
                 .child(lib.note_title(path)),
         );
-        if let Some(next) = lib.next_deadline_for(path) {
-            let (module, id) = (next.module_id.clone(), next.id.clone());
-            row = row.child(
-                div()
-                    .id("note-deadline")
-                    .flex_none()
-                    .ml(px(space::S))
-                    .px(px(space::S))
-                    .py(px(space::XXS))
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .gap(px(space::XS))
-                    .bg(t.ink.opacity(0.06))
-                    .cursor_pointer()
-                    .text_size(px(font::CAPTION))
-                    .soft(t.ink.opacity(0.1), radius::FULL)
-                    .tooltip(tip(next.title.clone()))
-                    .on_click(move |_, _, cx| {
+        let linked = lib.deadlines_of(path);
+        if !linked.is_empty() || lib.module_containing(path).is_some() {
+            let menu_path = path.to_path_buf();
+            let shown = linked.first().map(|a| (a.module_id.clone(), a.id.clone()));
+            let pill = Button::new("note-deadline").ghost().xsmall().icon(menu_icon("link"));
+            let pill = match linked.first() {
+                Some(a) => {
+                    let more = if linked.len() > 1 { format!(" +{}", linked.len() - 1) } else { String::new() };
+                    pill.label(format!("{}{more} · {}", crate::core::library::deadline_label(a), crate::core::day::countdown(a.due, lib.now))).tooltip(trf("Gehört zu %@", &[&a.title]))
+                }
+                None => pill.tooltip(tr("Einer Abgabe zuordnen")),
+            };
+            row = row.child(div().flex_none().ml(px(space::S)).child(pill.dropdown_menu(move |menu, _, cx| {
+                let mut menu = deadline_items(menu.label(tr("Gehört zu")), &menu_path, cx);
+                if let Some((module, id)) = shown.clone() {
+                    menu = menu.separator().item(PopupMenuItem::new(tr("Abgabe anzeigen")).icon(menu_icon("arrow-right")).on_click(move |_, _, cx| {
                         act(cx, |l| {
                             l.set_route(Route::Module(module.clone()));
                             l.select(Some(id.clone()));
-                        });
-                    })
-                    .child(icon("calendar-clock", iconsize::XS, t.secondary))
-                    .child(div().max_w(px(120.)).truncate().child(next.short.clone()))
-                    .child(div().text_color(t.secondary).child(crate::core::day::countdown(next.due, lib.now))),
-            );
+                        })
+                    }));
+                }
+                menu
+            })));
         }
         row
     }

@@ -122,11 +122,12 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Matrikelnummer", Tab::General),
     ("Mitautor:innen", Tab::General),
     ("Ablegen und Ordner", Tab::General),
+    ("Abgabeordner", Tab::General),
     ("Namenskonvention", Tab::General),
     ("Nach einem Muster benennen", Tab::General),
     ("Beim Ablegen umbenennen", Tab::General),
     ("Dateinamen prüfen", Tab::General),
-    ("Fehlende Ordner melden", Tab::General),
+    ("Fehlende Wochenordner melden", Tab::General),
     ("Ordner anlegen", Tab::General),
     ("Noten", Tab::General),
     ("Notensystem", Tab::General),
@@ -446,7 +447,7 @@ fn sub_row(label: impl Into<SharedString>, control: impl IntoElement, t: &Theme)
     jump_target(&key, div().flex().items_center().gap(px(space::M)).pl(px(space::L + space::XL)).pr(px(space::L)).min_h(px(control::ROW)).py(px(space::S)).child(div().flex_1().min_w_0().text_color(t.primary).child(label)).child(div().flex_none().max_w(px(control::ROW_CONTROL)).child(control)), t).into_any_element()
 }
 
-fn filing_sections(c: &StudyConfig, extra: Vec<AnyElement>, t: &Theme) -> (Div, Div) {
+fn filing_sections(c: &StudyConfig, extra: Vec<AnyElement>, submissions: AnyElement, t: &Theme) -> (Div, Div) {
     let switch = |id: &'static str, on: bool, set: fn(&mut StudyConfig, bool)| Switch::new(id).checked(on).on_click(move |v, _, cx| {
         let v = *v;
         edit_config(cx, |c| set(c, v));
@@ -458,10 +459,13 @@ fn filing_sections(c: &StudyConfig, extra: Vec<AnyElement>, t: &Theme) -> (Div, 
         naming.push(sub_row(tr("Dateinamen prüfen"), switch("g-check-names", c.check_names, |c, v| c.check_names = v), t));
         naming.extend(extra);
     }
-    let folders = vec![
-        row(tr("Fehlende Ordner melden"), switch("g-check-folders", c.check_folders, |c, v| c.check_folders = v), t),
+    let mut folders = vec![
+        detail_row(tr("Abgabeordner"), tr("In jedem Modul. Hier landen abgelegte Dateien und neue Notizen für eine Abgabe. Leer: der Modulordner."), submissions, t),
         row(tr("Ordner anlegen"), switch("g-create-folders", c.create_folders, |c, v| c.create_folders = v), t),
     ];
+    if c.modules.iter().any(|m| m.rules.iter().any(|r| r.is_per_week())) {
+        folders.push(row(tr("Fehlende Wochenordner melden"), switch("g-check-folders", c.check_folders, |c, v| c.check_folders = v), t));
+    }
     (
         section(Some(tr("Namenskonvention")), on.then(|| tr("Das Muster steht in den Einstellungen jedes Moduls.")), naming, t),
         section(Some(tr("Ablegen und Ordner")), Some(tr("Schrumbi benennt und verschiebt nie etwas von selbst. Ohne „Ordner anlegen“ landen Dateien nur in Ordnern, die es schon gibt.")), folders, t),
@@ -728,6 +732,7 @@ impl Settings {
         let name = text(&mut f, "g-name", &c.name, "", window, cx, |c, v| c.name = v);
         let author = text(&mut f, "g-author", &c.author, &tr("Nachname-V"), window, cx, |c, v| c.author = v);
         let inbox = text(&mut f, "g-inbox", &c.inbox, "", window, cx, |c, v| if is_inner_folder(&v) { c.inbox = v });
+        let submissions = text(&mut f, "g-submissions", &c.submission_folder, &tr("Modulordner"), window, cx, |c, v| if v.trim().is_empty() || is_inner_folder(&v) { c.submission_folder = v });
         let matrikel = text(&mut f, "g-matrikel", &c.matrikel, &tr("für {matrikel} in Dateinamen"), window, cx, |c, v| c.matrikel = v);
         let credit = text(&mut f, "g-credit", &c.credit_label, &tr("ECTS, CP, Credits"), window, cx, |c, v| c.credit_label = v);
         let exclude = text(&mut f, "g-exclude", &c.search_exclude.join(", "), "", window, cx, |c, v| c.search_exclude = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
@@ -754,7 +759,7 @@ impl Settings {
             ),
         ];
         let studium = section(Some(tr("Studium")), None, studium_rows, t);
-        let (naming, filing) = filing_sections(c, naming_extra, t);
+        let (naming, filing) = filing_sections(c, naming_extra, div().w(px(300.)).child(Input::new(&submissions)).into_any_element(), t);
         let grades = section(
             Some(tr("Noten")),
             None,
@@ -1434,12 +1439,12 @@ impl Settings {
                 }
             };
             let base = |title: &str, short: &str, weekday: u32, time: &str, offset: i64, folder: &str| Rule { title: tr(title), short: tr(short), weekday, time: time.into(), week_offset: offset, folder: folder.into(), ..Default::default() };
-            menu.item(PopupMenuItem::new(tr("Abgabe in Wochenordner (Mo 18:00, Folgewoche)")).on_click(add(base("Hausübung", "HÜ", 1, "18:00", 1, "W{w}_KW{kw}/Hausuebung"))))
-                .item(PopupMenuItem::new(tr("Abgabe in Sammelordner (Mo 10:00)")).on_click(add(base("Abgabe", "Abgabe", 1, "10:00", 0, "Abgaben"))))
-                .item(PopupMenuItem::new(tr("Übung am selben Tag (optional, 22:00)")).on_click(add(Rule { optional: true, ..base("Tagesübung", "TÜ", 3, "22:00", 0, "W{w}_KW{kw}/Tagesuebung") })))
+            menu.item(PopupMenuItem::new(tr("Abgabe (Mo 18:00, Folgewoche)")).on_click(add(base("Hausübung", "HÜ", 1, "18:00", 1, ""))))
+                .item(PopupMenuItem::new(tr("Abgabe am selben Tag (optional, 22:00)")).on_click(add(Rule { optional: true, ..base("Tagesübung", "TÜ", 3, "22:00", 0, "") })))
                 .item(PopupMenuItem::new(tr("Wöchentliche Aufgabe zum Abhaken")).on_click(add(Rule { upload: false, file_pattern: "-".into(), ..base("Wochenaufgabe", "Aufgabe", 5, "18:00", 0, "") })))
+                .item(PopupMenuItem::new(tr("Abgabe mit eigenem Ordner pro Woche")).on_click(add(base("Hausübung", "HÜ", 1, "18:00", 1, "W{w}_KW{kw}/Hausuebung"))))
                 .separator()
-                .item(PopupMenuItem::new(tr("Leere Regel")).on_click(add(base("Abgabe", "Abgabe", 1, "18:00", 0, "Abgaben"))))
+                .item(PopupMenuItem::new(tr("Leere Regel")).on_click(add(base("Abgabe", "Abgabe", 1, "18:00", 0, ""))))
         })).into_any_element());
         let mut sessions: Vec<AnyElement> = Vec::new();
         let names = day::weekday_names();
@@ -1490,7 +1495,7 @@ impl Settings {
             .child(section(Some(tr("Modul")), None, module_rows, t))
             .child(section(Some(tr("Links")), Some(tr("Der Upload-Link öffnet sich beim Hochladen einer Abgabe, daneben erscheinen die Dateien zum Hineinziehen.")), links, t))
             .child(section(Some(tr("Namenskonvention")), Some(if c.naming_convention() { tr("Platzhalter: {code} {yy} {yyyy} {title} {author} {matrikel} {date} {date:yyyy-MM-dd} {w} {kw}") } else { tr("Gilt für alle Module. Eingeschaltet erscheint hier das Muster dieses Moduls.") }), naming_rows, t))
-            .child(section(Some(tr("Wiederkehrende Deadlines")), Some(tr("Wird für jede Vorlesungswoche erzeugt. Ordner-Platzhalter: {w} Vorlesungswoche, {kw} Kalenderwoche. Ohne Platzhalter zählt eine Datei, deren Datum in den 7 Tagen vor der Deadline liegt.")), rules, t))
+            .child(section(Some(tr("Wiederkehrende Deadlines")), Some(tr("Wird für jede Vorlesungswoche erzeugt. Eine Datei gehört dazu, wenn du sie dort ablegst, dafür eine Notiz anlegst oder sie zuordnest.")), rules, t))
             .child(section(Some(tr("Stundenplan")), Some(tr("Erscheint im 7-Tage-Ausblick der Übersicht, nicht in Pausen.")), sessions, t))
     }
 
@@ -1504,7 +1509,7 @@ impl Settings {
             1 => tr(" der Folgewoche"),
             n => trf(" +%lld Wochen", &[&n]),
         };
-        let summary = format!("{wd}{when}, {} · {}", r.time, if r.folder.is_empty() { m.folder.clone() } else { r.folder.clone() });
+        let summary = if r.is_per_week() { format!("{wd}{when}, {} · {}", r.time, r.folder) } else { format!("{wd}{when}, {}", r.time) };
         let rid = r.id.clone();
         let header = div()
             .id(SharedString::from(format!("rule-{}", r.id)))
@@ -1539,6 +1544,7 @@ impl Settings {
         let short = fields.input(&key("rs"), &r.short, &tr("Kurzname"), window, cx, move |v, cx| s1(Box::new(move |r| r.short = v.clone()))(cx));
         let s1 = set.clone();
         let folder = fields.input(&key("rf"), &r.folder, "W{w}_KW{kw}/Abgabe", window, cx, move |v, cx| s1(Box::new(move |r| r.folder = v.clone()))(cx));
+        let folder_open = r.is_per_week();
         let s1 = set.clone();
         let pattern = fields.input(&key("rp"), &r.file_pattern, &tr("* oder *.pdf"), window, cx, move |v, cx| s1(Box::new(move |r| r.file_pattern = v.clone()))(cx));
         let s1 = set.clone();
@@ -1587,7 +1593,7 @@ impl Settings {
                     }).small())
                     .into_any_element(),
             ))
-            .child(field(tr("Ordner"), div().flex().flex_col().gap(px(space::XS)).child(Input::new(&folder).small()).when_some(example, |d, ex| d.child(div().font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.secondary).child(trf("z. B. %@/%@", &[&m.folder, &ex])))).into_any_element()))
+            .when(folder_open, |c| c.child(field(tr("Wochenordner"), div().flex().flex_col().gap(px(space::XS)).child(Input::new(&folder).small()).when_some(example.clone(), |d, ex| d.child(div().font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.secondary).child(trf("z. B. %@/%@", &[&m.folder, &ex])))).into_any_element())))
             .child(field(String::new(), Switch::new(("ropt", i)).label(tr("Optional")).checked(r.optional).on_click(move |v, _, cx| {
                 let v = *v;
                 s4(Box::new(move |r| r.optional = v))(cx)
@@ -1613,6 +1619,7 @@ impl Settings {
             let has_weeks = r.weeks.as_ref().is_some_and(|w| !w.is_empty());
             let interval_label = |n: u32| if n == 1 { tr("jede Woche") } else { trf("jede %lld. Woche", &[&n]) };
             card = card
+                .when(!folder_open, |c| c.child(field(tr("Wochenordner"), div().flex().flex_col().gap(px(space::XS)).child(Input::new(&folder).small()).child(caption(tr("Nur wenn jede Woche einen eigenen Ordner hat, z. B. W{w}_KW{kw}/Hausuebung. Was darin liegt, zählt dann ohne Zuordnen."), t)).into_any_element())))
                 .child(field(tr("Dateien"), div().w(px(140.)).child(Input::new(&pattern).small()).into_any_element()))
                 .child(field(String::new(), Switch::new(("rup", i)).label(tr("Upload bestätigen")).checked(r.upload).tooltip(tr("Aus: zählt als erledigt, sobald eine Datei da ist")).on_click(move |v, _, cx| {
                     let v = *v;

@@ -31,7 +31,7 @@ If nothing is open, it says {ui:Nichts offen}. Next to it, {ui:Diese Woche} show
 | {ui:In Arbeit} | Started, but not finished |
 | {ui:Entfällt} | No longer counts |
 | {ui:Termin verschieben…} | New date for an entry from a rule |
-| {ui:Vorhandene Datei zuordnen…} | Use an existing file as the submission |
+| {ui:Datei zuordnen…} | Use an existing file as the submission |
 | {ui:Automatisch erkennen} | Remove the status you set by hand |
 
 {key:Undo} reverts status changes.

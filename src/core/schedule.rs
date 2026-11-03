@@ -54,6 +54,7 @@ pub fn assignments(config: &StudyConfig, state: &StudyState, root: &Path) -> Vec
     for module in &config.modules {
         let Some(semester) = config.semester(&module.semester) else { continue };
         let module_dir = root.join(&module.folder);
+        let submissions = root.join(config.submissions_of(module));
         let weeks = lecture_weeks(semester);
         for rule in &module.rules {
             let mut previous_due = None;
@@ -65,7 +66,8 @@ pub fn assignments(config: &StudyConfig, state: &StudyState, root: &Path) -> Vec
                 let id = format!("{}.{}.w{}", module.id, rule.id, week.index);
                 let moved = state.moved.get(&id).map(|d| d.with_timezone(&Local));
                 let due = moved.unwrap_or_else(|| shift_off_holidays(planned, semester));
-                let folder = if rule.folder.is_empty() { module_dir.clone() } else { module_dir.join(resolve(&rule.folder, week, planned)) };
+                let searched = if rule.folder.is_empty() { module_dir.clone() } else { module_dir.join(resolve(&rule.folder, week, planned)) };
+                let per_week = rule.is_per_week();
                 result.push(Assignment {
                     id,
                     module_id: module.id.clone(),
@@ -79,13 +81,14 @@ pub fn assignments(config: &StudyConfig, state: &StudyState, root: &Path) -> Vec
                     iso_week: Some(week.iso_week),
                     optional: rule.optional,
                     upload: rule.upload,
-                    folder,
-                    per_week_folder: rule.is_per_week(),
+                    folder: if per_week { searched.clone() } else { submissions.clone() },
+                    per_week_folder: per_week,
                     file_pattern: rule.file_pattern.clone(),
                     window_start: previous_due,
-                    recursive: rule.recursive,
+                    recursive: if per_week { rule.recursive } else { true },
                     keywords: rule.keywords.clone(),
                     is_moved: moved.is_some(),
+                    legacy: (!per_week).then_some((searched, rule.recursive)),
                 });
                 previous_due = Some(due);
             }
@@ -109,20 +112,21 @@ pub fn assignments(config: &StudyConfig, state: &StudyState, root: &Path) -> Vec
             iso_week: Some(day::iso_week(day::local_date(due))),
             optional: m.optional,
             upload: m.kind == Kind::Submission && m.upload,
-            folder: if m.folder.is_empty() { module_dir } else { module_dir.join(&m.folder) },
+            folder: root.join(config.submissions_of(module)),
             per_week_folder: false,
             file_pattern: "*".into(),
             window_start: None,
-            recursive: false,
+            recursive: true,
             keywords: Vec::new(),
             is_moved: false,
+            legacy: Some((if m.folder.is_empty() { module_dir } else { module_dir.join(&m.folder) }, false)),
         });
     }
     result.sort_by_key(|a| a.due);
     result
 }
 
-/// Folders that rules expect to exist for a semester.
+/// Folders that rules with a folder per week expect to exist for a semester.
 pub fn expected_folders(config: &StudyConfig, semester: &Semester, root: &Path) -> Vec<PathBuf> {
     let mut urls = BTreeSet::new();
     let weeks = lecture_weeks(semester);
@@ -130,7 +134,7 @@ pub fn expected_folders(config: &StudyConfig, semester: &Semester, root: &Path) 
         let module_dir = root.join(&module.folder);
         urls.insert(module_dir.clone());
         for week in &weeks {
-            for rule in module.rules.iter().filter(|r| !r.folder.is_empty() && r.applies_to_week(week.index)) {
+            for rule in module.rules.iter().filter(|r| r.is_per_week() && r.applies_to_week(week.index)) {
                 if let Some(due) = due_date(rule, week) {
                     urls.insert(module_dir.join(resolve(&rule.folder, week, due)));
                 }

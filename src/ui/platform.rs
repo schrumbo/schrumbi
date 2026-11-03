@@ -54,11 +54,6 @@ pub fn pick_files_for_filing(assignment_id: Option<String>, cx: &mut App) {
     pick(files_only(true), cx, move |paths, cx| act(cx, |l| l.request_filing(paths, assignment_id)));
 }
 
-pub fn pick_link_files(id: &str, cx: &mut App) {
-    let id = id.to_string();
-    pick(files_only(true), cx, move |paths, cx| act(cx, |l| l.link(&paths, &id)));
-}
-
 pub fn pick_calendar_import(cx: &mut App) {
     pick(files_only(false), cx, |mut paths, cx| {
         if let Some(p) = paths.pop() {

@@ -15,6 +15,10 @@ fn on() -> bool {
     true
 }
 
+fn submissions() -> String {
+    "Abgaben".into()
+}
+
 fn default_exclude() -> Vec<String> {
     [".git", "node_modules", "build", "DerivedData", ".build", "Pods"].map(String::from).to_vec()
 }
@@ -52,6 +56,9 @@ pub struct StudyConfig {
     pub check_folders: bool,
     /// Setup and filing may create folders; off, files only go into folders that exist.
     pub create_folders: bool,
+    /// Folder inside each module where files for its deadlines go; empty = the module folder itself.
+    #[serde(default = "submissions")]
+    pub submission_folder: String,
 }
 
 impl Default for StudyConfig {
@@ -73,6 +80,7 @@ impl Default for StudyConfig {
             check_names: false,
             check_folders: true,
             create_folders: true,
+            submission_folder: submissions(),
         }
     }
 }
@@ -98,6 +106,13 @@ impl StudyConfig {
 
     pub fn module_mut(&mut self, id: &str) -> Option<&mut Module> {
         self.modules.iter_mut().find(|m| m.id == id)
+    }
+
+    /// Where files for a module's deadlines go, relative to the workspace root.
+    pub fn submissions_of(&self, module: &Module) -> PathBuf {
+        let folder = PathBuf::from(&module.folder);
+        let name = self.submission_folder.trim().trim_matches(['/', '\\']);
+        if name.is_empty() { folder } else { folder.join(name) }
     }
 
     pub fn semester(&self, id: &str) -> Option<&Semester> {
@@ -554,8 +569,10 @@ pub struct StudyState {
     /// Per-occurrence due dates that replace the rule's date.
     #[serde(with = "iso8601::map")]
     pub moved: BTreeMap<String, DateTime<Utc>>,
-    /// Files linked by hand, as paths relative to the workspace root.
+    /// Files that belong to a deadline, as paths relative to the workspace root.
     pub linked_files: BTreeMap<String, Vec<String>>,
+    /// Set once the files older versions found by date in shared folders were turned into links.
+    pub links_adopted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -654,6 +671,8 @@ pub struct Assignment {
     pub recursive: bool,
     pub keywords: Vec<String>,
     pub is_moved: bool,
+    /// The shared folder older versions searched by date, read once to turn what they found into links.
+    pub legacy: Option<(PathBuf, bool)>,
 }
 
 impl Assignment {
@@ -663,6 +682,11 @@ impl Assignment {
 
     pub fn tracks_files(&self) -> bool {
         self.kind == Kind::Submission
+    }
+
+    /// Files in its folder count without a link, because the folder belongs to this deadline alone.
+    pub fn owns_folder(&self) -> bool {
+        self.per_week_folder
     }
 }
 
@@ -676,11 +700,15 @@ pub struct Evaluation {
     pub completed_on_time: Option<bool>,
     /// Task descriptions found next to the submission; they never count as handed in.
     pub briefs: Vec<PathBuf>,
+    /// Linked files that are no longer where the link points.
+    pub missing: Vec<PathBuf>,
+    /// Unlinked files in the deadline's folder from around its time; they count only once linked.
+    pub suggested: Vec<PathBuf>,
 }
 
 impl Evaluation {
     pub fn empty() -> Self {
-        Self { status: Status::Open, files: Vec::new(), misnamed: Vec::new(), is_override: false, completed_on_time: None, briefs: Vec::new() }
+        Self { status: Status::Open, files: Vec::new(), misnamed: Vec::new(), is_override: false, completed_on_time: None, briefs: Vec::new(), missing: Vec::new(), suggested: Vec::new() }
     }
 
     /// Ready but not confirmed as uploaded after the deadline.

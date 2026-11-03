@@ -82,7 +82,7 @@ fn recent_notes(t: &Theme) -> Option<Div> {
         inset_file_row(("recent-note", i), &path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t)
             .child(caption(super::notes_page::changed_ago(now - modified), t).flex_none())
             .on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
-            .context_menu(move |m, _, _| file_menu(m, menu.clone()))
+            .context_menu(move |m, window, cx| deadline_submenu(file_menu(m, menu.clone()).separator(), &menu, window, cx))
     });
     Some(div().flex().flex_col().gap(px(space::S)).child(section_title(tr("Zuletzt geschrieben"))).child(inset_list(t).children(rows)))
 }

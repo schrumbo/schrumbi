@@ -177,6 +177,7 @@ pub struct ScanResult {
     pub listings: Listings,
     pub inbox: Vec<PathBuf>,
     pub missing: usize,
+    pub gone: HashSet<PathBuf>,
 }
 
 /// Work for a background scan.
@@ -185,6 +186,7 @@ pub struct ScanJob {
     pub requests: HashSet<scanner::FolderRequest>,
     pub inbox: PathBuf,
     pub expected: Vec<PathBuf>,
+    pub linked: Vec<PathBuf>,
 }
 
 impl ScanJob {
@@ -194,6 +196,7 @@ impl ScanJob {
             listings: scanner::listings(&self.requests),
             inbox: scanner::files(&self.inbox, "*"),
             missing: self.expected.iter().filter(|p| !p.exists()).count(),
+            gone: self.linked.into_iter().filter(|p| !p.exists()).collect(),
         }
     }
 }
@@ -269,6 +272,8 @@ pub struct Library {
     inspector_peek: bool,
     pub show_quick_add: bool,
     pub show_quick_open: bool,
+    /// A deadline waiting for a file to be picked and linked to it.
+    pub link_pick: Option<String>,
     /// A PDF about to open and the text to look for in it, set when coming from the file search.
     pub find_in_file: Option<(PathBuf, String, usize)>,
     pub show_palette: bool,
@@ -314,6 +319,8 @@ pub struct Library {
     pub show_save_layout: bool,
     pub filing_request: Option<FilingRequest>,
     pub missing_folder_count: usize,
+    /// Linked files the last scan did not find.
+    gone_links: HashSet<PathBuf>,
     action_items: Vec<Assignment>,
     listings: Listings,
     scan_generation: u64,
@@ -426,6 +433,7 @@ impl Library {
             inspector_peek: false,
             show_quick_add: false,
             show_quick_open: false,
+            link_pick: None,
             find_in_file: None,
             show_palette: false,
             show_overdue: false,
@@ -472,6 +480,7 @@ impl Library {
             show_save_layout: false,
             filing_request: None,
             missing_folder_count: 0,
+            gone_links: HashSet::new(),
             action_items: Vec::new(),
             listings: HashMap::new(),
             scan_generation: 0,
@@ -530,13 +539,27 @@ impl Library {
         path.exists().then(|| stash(path).ok()).flatten()
     }
 
-    /// Records an exported file as a step: undo removes it, or brings back the version it replaced.
-    pub fn record_export(&mut self, target: &Path, replaced: Option<PathBuf>) {
-        let change = match replaced {
+    /// Records an exported file as a step: undo removes it, or brings back the version it replaced. The export belongs to the deadlines its source belongs to.
+    pub fn record_export(&mut self, target: &Path, replaced: Option<PathBuf>, source: &Path) {
+        let mut changes = vec![match replaced {
             Some(backup) => Change::Replaced { path: target.to_path_buf(), backup },
             None => Change::Trash(target.to_path_buf()),
-        };
-        self.record(trf("PDF erstellt: %@", &[&name_of(target)]), vec![change]);
+        }];
+        let ids: Vec<String> = self.deadlines_of(source).into_iter().map(|a| a.id).collect();
+        let rel = self.relative_path(target);
+        if !ids.is_empty() && self.inside(target) && ids.iter().any(|id| !self.state.linked_files.get(id).is_some_and(|l| l.contains(&rel))) {
+            changes.push(self.state_snapshot());
+            for id in ids {
+                let list = self.state.linked_files.entry(id).or_default();
+                if !list.contains(&rel) {
+                    list.push(rel.clone());
+                }
+            }
+            self.gone_links.remove(target);
+            self.save_state();
+            self.reevaluate();
+        }
+        self.record(trf("PDF erstellt: %@", &[&name_of(target)]), changes);
     }
 
     pub fn close(&mut self) {
@@ -631,7 +654,7 @@ impl Library {
         self.highlights = self.highlights_path().and_then(|p| workspace::load::<Highlights>(&p).ok().flatten()).unwrap_or_default();
         let Some(path) = self.state_path() else { return };
         match workspace::load::<StudyState>(&path) {
-            Ok(s) => self.state = s.unwrap_or_default(),
+            Ok(s) => self.state = s.unwrap_or_else(|| StudyState { links_adopted: true, ..Default::default() }),
             Err(_) => {
                 if workspace::restore_latest::<StudyState>(&path)
                     && let Ok(Some(s)) = workspace::load::<StudyState>(&path)
@@ -835,12 +858,6 @@ impl Library {
                 self.preview_document = Some(path);
             }
         }
-    }
-
-    /// The next open deadline of the module a note belongs to.
-    pub fn next_deadline_for(&self, path: &Path) -> Option<Assignment> {
-        let module = self.module_containing(path)?.id.clone();
-        self.module_deadlines(&module).into_iter().next()
     }
 
     /// A module's deadlines that are still open, soonest first.
@@ -1349,7 +1366,7 @@ impl Library {
     /// Cheap: status from cached folder listings, no disk access.
     pub fn reevaluate(&mut self) {
         let Some(config) = self.config.as_ref() else { return };
-        self.evaluations = scanner::evaluate(&self.assignments, &self.listings, config, &self.state, self.now, self.root.as_deref());
+        self.evaluations = scanner::evaluate(&self.assignments, &self.listings, config, &self.state, self.now, self.root.as_deref(), &self.gone_links);
         let mut actions: Vec<Assignment> = self.assignments.iter().filter(|a| self.needs_action(a)).cloned().collect();
         actions.sort_by(|a, b| b.due.cmp(&a.due));
         self.action_items = actions;
@@ -1365,6 +1382,7 @@ impl Library {
             requests: scanner::requests(&self.assignments),
             inbox: root.join(&config.inbox),
             expected: self.semester().map(|s| schedule::expected_folders(config, s, root)).unwrap_or_default(),
+            linked: self.state.linked_files.values().flatten().map(|rel| root.join(rel)).collect(),
         })
     }
 
@@ -1375,8 +1393,27 @@ impl Library {
         self.missing_folder_count = r.missing;
         self.listings = r.listings;
         self.inbox = r.inbox;
+        self.gone_links = r.gone;
         self.hide_leaving();
+        self.adopt_found_files();
         self.reevaluate();
+    }
+
+    /// Older versions counted files by date in shared folders; turns what they counted into links once, so no status changes on update.
+    fn adopt_found_files(&mut self) {
+        if self.state.links_adopted || self.read_only {
+            return;
+        }
+        let Some(config) = self.config.as_ref() else { return };
+        for (id, path) in scanner::adoptable(&self.assignments, &self.listings, config) {
+            let rel = self.relative_path(&path);
+            let list = self.state.linked_files.entry(id).or_default();
+            if !list.contains(&rel) {
+                list.push(rel);
+            }
+        }
+        self.state.links_adopted = true;
+        self.save_state();
     }
 
     pub fn index_job(&mut self) -> Option<IndexJob> {
@@ -2435,10 +2472,10 @@ impl Library {
         self.file_for(path, folder, name, None, announce)
     }
 
-    /// Like `file`; a file filed for an assignment into another folder than the assignment's own is linked to it, so it still counts.
+    /// Like `file`; a file filed for an assignment is linked to it, so it counts wherever it goes.
     pub fn file_for(&mut self, path: &Path, folder: &Path, name: &str, assignment: Option<&str>, announce: bool) -> Option<PathBuf> {
         let inside = self.inside(path);
-        let link_to = assignment.and_then(|id| self.assignment(id)).filter(|a| a.folder != folder).map(|a| a.id.clone());
+        let link_to = assignment.and_then(|id| self.assignment(id)).filter(|a| a.tracks_files()).map(|a| a.id.clone());
         let result: Result<PathBuf> = (|| {
             std::fs::create_dir_all(folder)?;
             let wanted = folder.join(name);
@@ -2664,9 +2701,12 @@ impl Library {
         });
     }
 
-    /// The convention a file in this place must follow: a checked upload whose folder holds it, the next one due first.
+    /// The convention a file in this place must follow: a checked upload it belongs to or whose folder holds it, the next one due first.
     fn convention_at(&self, path: &Path) -> Option<(Naming, Assignment)> {
         self.config.as_ref().filter(|c| c.check_names)?;
+        if let Some(a) = self.deadlines_of(path).into_iter().find(|a| a.upload) {
+            return Some((self.naming(&a.module_id)?, a));
+        }
         let name = name_of(path);
         let raw = path.parent()?.to_path_buf();
         let settled = dunce::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
@@ -2908,13 +2948,15 @@ impl Library {
         }
         self.leaving_folder &= !self.leaving.is_empty();
         super::vault::index::trash_ended(&gone, &kept);
+        let trashed: Vec<PathBuf> = done.iter().map(|(p, _)| p.clone()).collect();
+        let unlinked = self.drop_links_to(&trashed);
         self.refresh();
         let message = match &done[..] {
             [] => return,
             [(path, _)] => trf("In den Papierkorb: %@", &[&name_of(path)]),
             _ => trf("%lld Dateien in den Papierkorb", &[&done.len()]),
         };
-        self.commit(message, "trash-2", done.into_iter().map(|(_, c)| c).collect());
+        self.commit(message, "trash-2", done.into_iter().map(|(_, c)| c).chain(unlinked).collect());
     }
 
     pub fn note(&self, id: &str) -> String {
@@ -2969,12 +3011,11 @@ impl Library {
     }
 
     pub fn import_events(&mut self, items: Vec<(CalendarEvent, String, Kind)>) -> (usize, usize) {
-        let (Some(root), Some(config)) = (self.root.clone(), self.config.clone()) else { return (0, 0) };
+        let (Some(_), Some(config)) = (self.root.as_ref(), self.config.clone()) else { return (0, 0) };
         let (mut added, mut updated) = (0, 0);
         let before = self.state_snapshot();
         for (event, module_id, kind) in items {
             let Some(module) = config.module(&module_id) else { continue };
-            let folder = if kind == Kind::Submission && root.join(&module.folder).join("Abgaben").exists() { "Abgaben".to_string() } else { String::new() };
             if let Some(m) = self.state.manual.iter_mut().find(|m| m.external_id.as_deref() == Some(event.uid.as_str())) {
                 m.title = event.title();
                 m.due = event.due;
@@ -2989,7 +3030,6 @@ impl Library {
                     due: event.due,
                     kind,
                     upload: kind == Kind::Submission,
-                    folder,
                     external_id: Some(event.uid.clone()),
                     ..Default::default()
                 });
@@ -3017,11 +3057,13 @@ impl Library {
 
     /// Counts existing files inside the workspace towards an assignment without moving them.
     pub fn link(&mut self, paths: &[PathBuf], id: &str) {
-        let rels: Vec<String> = paths.iter().filter(|p| self.inside(p)).map(|p| self.relative_path(p)).collect();
-        if rels.is_empty() {
+        let Some(label) = self.assignment(id).filter(|a| a.tracks_files()).map(deadline_label) else { return };
+        let inside: Vec<&PathBuf> = paths.iter().filter(|p| self.inside(p)).collect();
+        if inside.is_empty() {
             self.last_error = Some(tr("Nur Dateien im Studienordner können zugeordnet werden."));
             return;
         }
+        let rels: Vec<String> = inside.iter().map(|p| self.relative_path(p)).collect();
         let before = self.state_snapshot();
         let list = self.state.linked_files.entry(id.into()).or_default();
         for r in &rels {
@@ -3029,9 +3071,98 @@ impl Library {
                 list.push(r.clone());
             }
         }
+        for p in inside {
+            self.gone_links.remove(p);
+        }
         self.save_state();
         self.refresh();
-        self.commit(if rels.len() == 1 { tr("1 Datei zugeordnet") } else { trf("%lld Dateien zugeordnet", &[&rels.len()]) }, "link", vec![before]);
+        let message = if let [one] = &paths[..] { trf("„%@“ gehört jetzt zu %@", &[&name_of(one), &label]) } else { trf("%lld Dateien gehören jetzt zu %@", &[&rels.len(), &label]) };
+        self.commit(message, "link", vec![before]);
+    }
+
+    /// Links a file to a deadline, or takes the link back when it already is linked.
+    pub fn toggle_link(&mut self, path: &Path, id: &str) {
+        if self.is_linked(path, id) { self.unlink(path, id) } else { self.link(&[path.to_path_buf()], id) }
+    }
+
+    /// The deadlines a file belongs to, the next one due first.
+    pub fn deadlines_of(&self, path: &Path) -> Vec<Assignment> {
+        let rel = self.relative_path(path);
+        let mut found: Vec<Assignment> = self.state.linked_files.iter().filter(|(_, l)| l.contains(&rel)).filter_map(|(id, _)| self.assignment(id).cloned()).collect();
+        let today = self.today();
+        found.sort_by_key(|a| (day::local_date(a.due) < today, if day::local_date(a.due) < today { -a.due.timestamp() } else { a.due.timestamp() }));
+        found
+    }
+
+    /// Deadlines a file could belong to: those of its module still open, nearest first, and the ones it already belongs to.
+    pub fn link_choices(&self, path: &Path) -> Vec<(Assignment, bool)> {
+        let module = self.module_containing(path).map(|m| m.id.clone());
+        let linked: Vec<String> = self.deadlines_of(path).into_iter().map(|a| a.id).collect();
+        let now = self.now;
+        let mut choices: Vec<(Assignment, bool)> = self
+            .semester_assignments()
+            .into_iter()
+            .filter(|a| a.tracks_files() && module.as_ref().is_none_or(|m| *m == a.module_id))
+            .filter(|a| linked.contains(&a.id) || !self.status(a).is_closed())
+            .map(|a| (a.clone(), linked.contains(&a.id)))
+            .collect();
+        choices.sort_by_key(|(a, on)| (!on, (a.due - now).num_minutes().abs()));
+        choices.truncate(8);
+        choices.sort_by_key(|(a, _)| a.due);
+        choices
+    }
+
+    /// A note that belongs to the deadline from the start, in its module's submissions folder; one undo takes both back.
+    pub fn create_assignment_note(&mut self, id: &str) -> Option<PathBuf> {
+        let a = self.assignment(id).filter(|a| a.tracks_files()).cloned()?;
+        let folder = self.filing_folder(&a)?;
+        let plain = match (a.rule_id.is_some(), a.week) {
+            (true, Some(w)) => format!("{} W{w:02}", a.title),
+            _ => a.title.clone(),
+        };
+        let name = match self.naming(&a.module_id).filter(|_| self.config.as_ref().is_some_and(|c| c.check_names && c.naming_convention())) {
+            Some(naming) => naming.render(&a.title, self.today(), "md", &[], a.week, a.iso_week, None),
+            None => format!("{}.md", Self::typed_name(&plain)),
+        };
+        let result: Result<PathBuf> = (|| {
+            std::fs::create_dir_all(&folder)?;
+            let path = unique_path(&folder.join(name));
+            std::fs::write(&path, self.new_note_text(&plain))?;
+            Ok(path)
+        })();
+        match result {
+            Ok(path) => {
+                self.mark_made_here(&path);
+                let before = self.state_snapshot();
+                let rel = self.relative_path(&path);
+                self.state.linked_files.entry(a.id.clone()).or_default().push(rel);
+                self.save_state();
+                self.refresh();
+                self.sync_soon = true;
+                self.commit(trf("Angelegt für %@: %@", &[&deadline_label(&a), &name_of(&path)]), "square-pen", vec![Change::Trash(path.clone()), before]);
+                Some(path)
+            }
+            Err(e) => {
+                self.last_error = Some(trf("Notiz konnte nicht angelegt werden: %@", &[&explain(&e)]));
+                None
+            }
+        }
+    }
+
+    /// Forgets links to files that went to the trash; returns the state from before, for the same undo step.
+    fn drop_links_to(&mut self, gone: &[PathBuf]) -> Option<Change> {
+        let rels: Vec<String> = gone.iter().filter(|p| self.inside(p)).map(|p| self.relative_path(p)).collect();
+        let hit = |r: &String| rels.iter().any(|g| r == g || r.starts_with(&format!("{g}/")));
+        if !self.state.linked_files.values().flatten().any(hit) {
+            return None;
+        }
+        let before = self.state_snapshot();
+        for list in self.state.linked_files.values_mut() {
+            list.retain(|r| !hit(r));
+        }
+        self.state.linked_files.retain(|_, l| !l.is_empty());
+        self.save_state();
+        Some(before)
     }
 
     pub fn is_linked(&self, path: &Path, id: &str) -> bool {
@@ -3665,6 +3796,14 @@ pub fn reveal(path: &Path) {
 }
 
 /// What takes back filing `original` as `target`: moving it back, or trashing the copy of an outside file.
+/// How a deadline is named in short messages, e.g. "ÜB W03".
+pub fn deadline_label(a: &Assignment) -> String {
+    match (a.rule_id.is_some(), a.week) {
+        (true, Some(w)) => format!("{} W{w:02}", a.short),
+        _ => a.short.clone(),
+    }
+}
+
 fn filing_change(original: &Path, target: &Path, moved: bool) -> Change {
     if moved { Change::Move { from: target.to_path_buf(), to: original.to_path_buf() } } else { Change::Trash(target.to_path_buf()) }
 }

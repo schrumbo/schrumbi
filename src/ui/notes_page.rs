@@ -962,9 +962,9 @@ impl NotesPage {
                     .children(ago.map(|a| caption(changed_ago(a), t).flex_none()))
                     .on_drag(DraggedFile(drag), |d, _, _, cx| cx.new(|_| d.clone()))
                     .on_click(click(row, me))
-                    .context_menu(move |m, _, _| {
+                    .context_menu(move |m, window, cx| {
                         let (r, m2, x) = (rename.clone(), rename_me.clone(), trash.clone());
-                        file_menu(m, menu.clone())
+                        deadline_submenu(file_menu(m, menu.clone()).separator(), &menu, window, cx)
                             .separator()
                             .item(PopupMenuItem::new(tr("Umbenennen")).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
                                 let p = r.clone();

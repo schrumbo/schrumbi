@@ -312,26 +312,15 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         .child(info)
         .child(actions);
 
-    let mut notes: Vec<std::path::PathBuf> = crate::core::vault::index::current().notes.keys().filter(|p| p.starts_with(&a.folder)).cloned().collect();
-    notes.sort();
-    notes.truncate(20);
-    if !notes.is_empty() {
-        let rows = notes.into_iter().enumerate().map(|(i, path)| {
-            let open = path.clone();
-            file_row(("assignment-note", i), &path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
-        });
-        col = col.child(div().flex().flex_col().gap(px(space::S)).child(div().font_weight(FontWeight::BOLD).child(tr("Notizen"))).child(div().flex().flex_col().children(rows)));
-    }
-
     if a.tracks_files() {
-        let folder = a.folder.clone();
+        let folder = a.folder.ancestors().find(|p| p.is_dir()).map(std::path::Path::to_path_buf).unwrap_or_else(|| a.folder.clone());
         let mut files = div().flex().flex_col().gap(px(space::S)).child(
             div()
                 .flex()
                 .items_center()
                 .child(div().font_weight(FontWeight::BOLD).child(tr("Dateien")))
                 .child(div().flex_1())
-                .child(Button::new("open-folder").ghost().small().icon(menu_icon("folder")).tooltip(folder.display().to_string()).on_click(move |_, _, _| library::open_path(&folder))),
+                .child(Button::new("open-folder").ghost().small().icon(menu_icon("folder")).tooltip(trf("Abgabeordner öffnen: %@", &[&l.relative_path(&folder)])).on_click(move |_, _, _| library::open_path(&folder))),
         );
         if !e.briefs.is_empty() {
             let mut briefs = div()
@@ -370,20 +359,68 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
                 );
             }
         }
-        let (title_text, folder2) = (a.title.clone(), a.folder.clone());
-        files = files.child(
-            link_button("note-for-assignment", tr("Markdown-Datei anlegen"), t)
+        for (i, p) in e.missing.iter().enumerate() {
+            let (p2, id2) = (p.clone(), id.clone());
+            files = files.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S))
+                    .child(icon("unlink", iconsize::S, t.tertiary))
+                    .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().text_color(t.secondary).line_through().child(p.file_name().unwrap_or_default().to_string_lossy().to_string())).child(caption(tr("Nicht mehr gefunden"), t)))
+                    .child(Button::new(("missing-unlink", i)).ghost().small().label(tr("Entfernen")).tooltip(tr("Zuordnung lösen")).on_click(move |_, _, cx| act(cx, |l| l.unlink(&p2, &id2)))),
+            );
+        }
+        if !e.suggested.is_empty() {
+            let mut box_ = div()
                 .flex()
-                .items_center()
+                .flex_col()
                 .gap(px(space::XS))
-                .text_size(px(font::CALLOUT))
-                .child(icon("square-pen", iconsize::XS, t.accent))
-                .tooltip(tip(tr("Markdown-Notiz im Abgabeordner anlegen; zählt als „In Arbeit“, nicht als fertig")))
-                .on_click(move |_, _, cx| {
-                    if let Some(p) = act(cx, |l| l.create_note(&title_text, &folder2, "md")) {
-                        act(cx, |l| l.open_document(&p));
-                    }
-                }),
+                .p(px(space::M))
+                .rounded(px(radius::CONTROL))
+                .bg(t.accent.opacity(0.06))
+                .child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(icon("lightbulb", iconsize::XS, t.secondary)).child(if e.suggested.len() == 1 { tr("Gehört das dazu?") } else { tr("Gehört etwas davon dazu?") }));
+            for (i, p) in e.suggested.iter().enumerate() {
+                let (open, p2, id2) = (p.clone(), p.clone(), id.clone());
+                box_ = box_.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S))
+                        .child(file_row(("suggested", i), p, p.file_name().unwrap_or_default().to_string_lossy().to_string(), t).flex_1().min_w_0().on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))))
+                        .child(Button::new(("suggest-link", i)).small().icon(menu_icon("link")).label(tr("Zuordnen")).on_click(move |_, _, cx| act(cx, |l| l.link(std::slice::from_ref(&p2), &id2)))),
+                );
+            }
+            files = files.child(box_);
+        }
+        let (note_id, pick_id) = (id.clone(), id.clone());
+        let place = l.relative_path(&a.folder);
+        files = files.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_x(px(space::L))
+                .gap_y(px(space::XS))
+                .child(
+                    link_button("note-for-assignment", tr("Notiz anlegen"), t)
+                        .flex()
+                        .items_center()
+                        .gap(px(space::XS))
+                        .text_size(px(font::CALLOUT))
+                        .child(icon("square-pen", iconsize::XS, t.accent))
+                        .tooltip(tip(trf("Neue Notiz in %@, die zu dieser Abgabe gehört. Als PDF exportiert, gehört auch das PDF dazu.", &[&place])))
+                        .on_click(move |_, _, cx| new_assignment_note(&note_id, cx)),
+                )
+                .child(
+                    link_button("link-existing", tr("Datei zuordnen…"), t)
+                        .flex()
+                        .items_center()
+                        .gap(px(space::XS))
+                        .text_size(px(font::CALLOUT))
+                        .child(icon("link", iconsize::XS, t.accent))
+                        .tooltip(tip(tr("Eine Datei aus dem Studienordner suchen; sie bleibt, wo sie ist.")))
+                        .on_click(move |_, _, cx| act(cx, |l| l.link_pick = Some(pick_id.clone()))),
+                ),
         );
         files = files.child(drop_zone(id.clone(), !e.files.is_empty(), t));
         col = col.child(files);
@@ -428,10 +465,7 @@ fn drop_zone(id: String, has_files: bool, t: &Theme) -> impl IntoElement {
             let paths = paths.paths().to_vec();
             act(cx, |l| l.request_filing(paths, Some(drop_id.clone())));
         })
-        .on_drop(move |f: &super::browser::DraggedFile, _, cx| {
-            let path = f.0.clone();
-            act(cx, |l| l.request_filing(vec![path], Some(list_id.clone())));
-        })
+        .on_drop(move |f: &super::browser::DraggedFile, _, cx| link_dropped(&f.0, &list_id, cx))
         .child(icon("arrow-down-to-line", iconsize::L, secondary))
         .child(div().text_size(px(font::CALLOUT)).child(if has_files { tr("Weitere Datei hierher ziehen") } else { tr("Datei hierher ziehen") }))
         .child(link_button("pick-files", tr("oder auswählen…"), t).text_size(px(font::CAPTION)).on_click(move |_, _, cx| super::platform::pick_files_for_filing(Some(pick_id.clone()), cx)))
