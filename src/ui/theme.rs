@@ -52,6 +52,24 @@ pub mod control {
     pub const COUNTED: f32 = 104.;
 }
 
+/// Widths of the document tab row.
+pub mod tab {
+    /// Narrowest a tab gets before the strip scrolls.
+    pub const MIN: f32 = 100.;
+    /// Narrowest the shown tab gets while the row has room for it.
+    pub const ACTIVE_MIN: f32 = 168.;
+    /// Widest a tab title is drawn.
+    pub const TITLE_MAX: f32 = 180.;
+    /// Narrowest row that still shows the list of all tabs; below, the row keeps its room for the shown tab.
+    pub const LIST_MIN_BAR: f32 = 360.;
+    /// Title width a split pane's row keeps while its actions are comfortable.
+    pub const SPLIT_TITLE: f32 = 120.;
+    /// Title width a split pane's row keeps at the least.
+    pub const SPLIT_TITLE_TIGHT: f32 = 64.;
+    /// Width of the split grip; it lies right of the divider so the left pane's scrollbar stays free.
+    pub const SPLIT_GRIP: f32 = 12.;
+}
+
 /// Corner radii used across the app.
 pub mod radius {
     /// Keyboard chips, small marks.
@@ -77,6 +95,8 @@ pub mod font {
     pub const CAPTION: f32 = 11.;
     pub const CAPTION2: f32 = 10.;
     pub const LINE: f32 = 1.22;
+    /// The label of a kit small button, 0.875 rem.
+    pub const BUTTON: f32 = 14.;
 }
 
 static NOTE_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1065353216);

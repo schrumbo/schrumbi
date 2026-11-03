@@ -36,14 +36,20 @@ pub fn follow(id: impl Into<ElementId>, target: f32, duration: Duration, window:
 pub trait Soft {
     /// Paints `color` behind the children on hover and twice as strong on press. Call it before adding children.
     fn soft(self, color: Hsla, radius: f32) -> Self;
+    /// Like `soft`, with a line of `width` at the left edge in `line` that fades with it.
+    fn soft_edge(self, color: Hsla, radius: f32, line: Hsla, width: f32) -> Self;
 }
 
 impl Soft for Stateful<Div> {
-    fn soft(mut self, color: Hsla, radius: f32) -> Self {
+    fn soft(self, color: Hsla, radius: f32) -> Self {
+        self.soft_edge(color, radius, color, 0.)
+    }
+
+    fn soft_edge(mut self, color: Hsla, radius: f32, line: Hsla, width: f32) -> Self {
         if self.style().position.is_none() {
             self = self.relative();
         }
-        self.child(HoverLayer { color, radius })
+        self.child(HoverLayer { color, radius, line, width })
     }
 }
 
@@ -51,6 +57,8 @@ impl Soft for Stateful<Div> {
 struct HoverLayer {
     color: Hsla,
     radius: f32,
+    line: Hsla,
+    width: f32,
 }
 
 impl RenderOnce for HoverLayer {
@@ -66,6 +74,7 @@ impl RenderOnce for HoverLayer {
             .inset_0()
             .rounded(px(self.radius))
             .when(level > 0., |d| d.bg(Hsla { a: (self.color.a * level).min(1.), ..self.color }))
+            .when(level > 0. && self.width > 0., |d| d.child(div().absolute().top_0().bottom_0().left_0().w(px(self.width)).bg(Hsla { a: (self.line.a * level).min(1.), ..self.line })))
             .on_hover(move |hovered, _, cx| on_hover.update(cx, |s, cx| {
                 s.0 = *hovered;
                 s.1 &= *hovered;

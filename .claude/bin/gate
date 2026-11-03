@@ -184,7 +184,7 @@ def clickable_without_feedback(text, offset):
         return False
     body = " ".join(f".{n}{a}" for n, a in parts if n not in ("child", "children"))
     names = {n for n, _ in parts}
-    return not (names & {"soft", "hover", "active"} or re.search(r"\.(soft|hover|active)\(", body))
+    return not (names & {"soft", "soft_edge", "hover", "active"} or re.search(r"\.(soft|soft_edge|hover|active)\(", body))
 
 
 def ui_lint(scope):

@@ -4,26 +4,14 @@ use std::rc::Rc;
 
 use gpui_kit::*;
 
-use super::theme::{Theme, control, font, iconsize, space};
+use super::theme::{Theme, control, font, iconsize, space, tab};
 
-/// Narrowest a tab gets before the strip scrolls.
-pub const TAB_MIN: f32 = 100.;
-/// Narrowest the shown tab gets while the row has room for it.
-pub const ACTIVE_MIN: f32 = 168.;
-/// Widest a tab title is drawn.
-pub const TITLE_MAX: f32 = 180.;
 /// A tab without title and close button: padding, file icon and the gap after it.
 pub const TAB_BASE: f32 = space::M + iconsize::M + space::S + space::S;
 /// The close button and the gap before it; a squeezed tab shows it only on hover, over its title.
 pub const TAB_CLOSE: f32 = iconsize::M + space::S;
-/// Text size of a small button's label.
-pub const BUTTON_TEXT: f32 = 14.;
-/// Border on both sides of an outlined button.
-pub const BUTTON_BORDER: f32 = 2.;
 /// Width of an icon-only button.
 pub const ICON_BUTTON: f32 = control::S;
-/// Narrowest row that still shows the list of all tabs; below, the row keeps its room for the shown tab.
-pub const LIST_MIN_BAR: f32 = 360.;
 
 /// How wide a document's top row and its tab strip were when last drawn, so the next frame fits them.
 #[derive(Clone, Default)]
@@ -31,7 +19,7 @@ pub struct BarFit {
     bar: Rc<Cell<f32>>,
     strip: Rc<Cell<f32>>,
     revealed: Rc<RefCell<(Option<PathBuf>, f32)>>,
-    listed: Rc<Cell<bool>>,
+    decided: Rc<Cell<Option<bool>>>,
 }
 
 thread_local! {
@@ -66,14 +54,14 @@ impl BarFit {
         true
     }
 
-    /// Whether the list of all tabs was shown last time; it takes room from the strip.
-    pub fn listed(&self) -> bool {
-        self.listed.get()
+    /// Records whether the actions fitting just now left room for the list of all tabs.
+    pub fn decide(&self, listed: bool) {
+        self.decided.set(Some(listed));
     }
 
-    /// Records whether the list of all tabs is shown.
-    pub fn set_listed(&self, on: bool) {
-        self.listed.set(on);
+    /// The list of all tabs as the actions' fitting just decided it, once.
+    pub fn decided(&self) -> Option<bool> {
+        self.decided.take()
     }
 
     /// Fills its parent and records the row's width.
@@ -109,9 +97,10 @@ pub fn text_width(text: &str, size: f32, weight: FontWeight, window: &Window) ->
     if text.is_empty() {
         return 0.;
     }
+    let text: String = text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
     let font = Font { weight, ..gpui_kit::font(Theme::font_family()) };
     let run = TextRun { len: text.len(), font, color: Hsla::default(), background_color: None, underline: None, strikethrough: None };
-    f32::from(window.text_system().shape_line(text.to_string().into(), px(size), &[run], None).width).ceil()
+    f32::from(window.text_system().shape_line(text.into(), px(size), &[run], None).width).ceil()
 }
 
 /// How wide a tab with this title is when nothing squeezes it.
@@ -127,12 +116,12 @@ pub fn tab_natural(title: &str, window: &Window) -> f32 {
         });
         width
     });
-    TAB_BASE + TAB_CLOSE + text.min(TITLE_MAX)
+    TAB_BASE + TAB_CLOSE + text.min(tab::TITLE_MAX)
 }
 
 /// How wide a small outlined button with an icon and this label is.
 pub fn button_width(label: &str, window: &Window) -> f32 {
-    2. * space::S + iconsize::S + space::XS + text_width(label, BUTTON_TEXT, FontWeight::NORMAL, window) + BUTTON_BORDER
+    2. * space::S + iconsize::S + space::XS + text_width(label, font::BUTTON, FontWeight::NORMAL, window) + space::XXS
 }
 
 /// Widths for tabs sharing a strip of width `strip` with `gap` between them. Wide tabs give way first,
@@ -141,8 +130,8 @@ pub fn button_width(label: &str, window: &Window) -> f32 {
 pub fn tab_widths(natural: &[f32], active: Option<usize>, strip: f32, gap: f32, margin: f32) -> Vec<f32> {
     let room = strip - gap * natural.len().saturating_sub(1) as f32;
     let margins = active.map_or(0., |a| margin * (f32::from(u8::from(a > 0)) + f32::from(u8::from(a + 1 < natural.len()))));
-    let shown_max = (strip - margins).max(strip.min(TAB_MIN)).max(0.);
-    let floor = |i: usize| natural[i].min(if Some(i) == active { ACTIVE_MIN.min(shown_max) } else { TAB_MIN });
+    let shown_max = (strip - margins).max(strip.min(tab::MIN)).max(0.);
+    let floor = |i: usize| natural[i].min(if Some(i) == active { tab::ACTIVE_MIN.min(shown_max) } else { tab::MIN });
     let total: f32 = natural.iter().sum();
     if total <= room {
         return natural.to_vec();
@@ -158,6 +147,12 @@ pub fn tab_widths(natural: &[f32], active: Option<usize>, strip: f32, gap: f32, 
         if fill(mid) > room { high = mid } else { low = mid }
     }
     natural.iter().zip(&floors).map(|(n, f)| low.clamp(*f, *n).floor()).collect()
+}
+
+/// Whether tabs of these natural widths do not all fit in a strip of width `strip`.
+pub fn overflows(natural: &[f32], active: Option<usize>, strip: f32) -> bool {
+    let gaps = space::XXS * natural.len().saturating_sub(1) as f32;
+    tab_widths(natural, active, strip, space::XXS, space::XL).iter().sum::<f32>() + gaps > strip + 0.5
 }
 
 /// Scroll offset (zero or negative) that shows tab `shown` whole, `margin` away from an edge that has more tabs behind it.
@@ -199,8 +194,9 @@ impl Room {
 
 /// Which of the ever more compact action rows to draw. The shown tab stays wide while
 /// steps before `keep` are folded; steps from `keep` on are taken only when even a narrow tab leaves no room.
+/// The step just before `keep` is the last one a wide tab may cost.
 pub fn fold_room(room: Room, widths: &[f32], keep: usize) -> usize {
-    fold(room.comfortable, widths).min(fold(room.tight, widths).max(keep))
+    fold(room.comfortable, widths).min(fold(room.tight, widths).max(keep.saturating_sub(1)))
 }
 
 /// The first of the ever more compact widths that fits in `room`, else the most compact.
@@ -216,7 +212,8 @@ pub fn row(items: &[f32], gap: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACTIVE_MIN, Room, TAB_MIN, fold, fold_room, reveal, row, tab_widths};
+    use super::{Room, fold, fold_room, overflows, reveal, row, tab_widths};
+    use crate::ui::theme::tab::{ACTIVE_MIN, MIN as TAB_MIN};
 
     #[test]
     fn tabs_keep_natural_width_when_they_fit() {
@@ -288,6 +285,19 @@ mod tests {
         assert_eq!(fold_room(Room { comfortable: 50., tight: 30. }, &widths, 3), 4);
         assert_eq!(fold_room(Room { comfortable: 260., tight: 500. }, &widths, 3), 1);
         assert_eq!(fold_room(Room::OPEN, &widths, 3), 0);
+    }
+
+    #[test]
+    fn file_viewer_keeps_its_labeled_button_for_a_narrow_tab() {
+        let widths = [152., 56., 24.];
+        assert_eq!(fold_room(Room { comfortable: 20., tight: 88. }, &widths, 2), 1);
+    }
+
+    #[test]
+    fn tabs_overflow_only_when_they_do_not_fit() {
+        assert!(!overflows(&[120., 120.], Some(0), 300.));
+        assert!(overflows(&[120., 120.], Some(0), 200.));
+        assert!(!overflows(&[], None, 0.));
     }
 
     #[test]

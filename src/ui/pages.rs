@@ -12,7 +12,7 @@ use super::preview::FilePreview;
 use super::record::{self, RecordState};
 use super::state::{self, act};
 use super::motion::Soft;
-use super::theme::{Theme, control, font, space, iconsize, radius};
+use super::theme::{Theme, control, font, space, iconsize, radius, tab};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::tr;
@@ -440,7 +440,7 @@ impl Pages {
                     .child(div().flex_none().min_w_0().h_full().overflow_hidden().w(relative(self.split_share)).child(view))
                     .child(div().h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator))
                     .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(right))
-                    .child(div().id("doc-split").group("doc-split").absolute().top_0().bottom_0().left(relative(self.split_share)).ml(px((space::XS - control::S) / 2.)).w(px(control::S)).flex().justify_center().cursor_col_resize().soft(accent.opacity(0.06), 0.).child(div().h_full().w(px(space::XS)).group_hover("doc-split", |s| s.bg(accent.opacity(0.3)))).on_click(cx.listener(|p, e: &ClickEvent, _, cx| {
+                    .child(div().id("doc-split").absolute().top_0().bottom_0().left(relative(self.split_share)).w(px(tab::SPLIT_GRIP)).cursor_col_resize().soft_edge(accent.opacity(0.06), 0., accent.opacity(0.3), space::XS).on_click(cx.listener(|p, e: &ClickEvent, _, cx| {
                         if e.click_count() >= 2 {
                             p.split_share = 0.5;
                             crate::core::prefs::update(|prefs| prefs.split_share = 0.5);
