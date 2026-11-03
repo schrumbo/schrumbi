@@ -29,6 +29,8 @@ pub struct NoteFacts {
     pub footnotes: Vec<(String, String, usize)>,
     /// The flashcards written in the note.
     pub cards: Vec<crate::core::cards::RawCard>,
+    /// The file's length when it was read; with `modified` it tells whether the file changed since.
+    pub size: u64,
 }
 
 /// A place where a note is linked or mentioned.
@@ -97,7 +99,7 @@ pub fn facts_of(text: &str, modified: f64) -> NoteFacts {
     tags.dedup();
     static FOOTNOTE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\[\^([^\]]+)\]:\s*(.*)$").unwrap());
     let footnotes = lines.iter().enumerate().filter_map(|(i, l)| FOOTNOTE.captures(l).map(|c| (c[1].to_string(), c[2].to_string(), i))).collect();
-    NoteFacts { cards: crate::core::cards::parse::cards_in(text), tasks: open_tasks(text), footnotes, modified, links, tags, aliases: frontmatter::aliases(text), headings: links::headings(text), blocks: links::block_ids(text), properties: frontmatter::properties(text).unwrap_or_default(), words: text.split_whitespace().count() }
+    NoteFacts { cards: crate::core::cards::parse::cards_in(text), tasks: open_tasks(text), footnotes, modified, links, tags, aliases: frontmatter::aliases(text), headings: links::headings(text), blocks: links::block_ids(text), properties: frontmatter::properties(text).unwrap_or_default(), words: text.split_whitespace().count(), size: 0 }
 }
 
 /// The tasks of a note still to be done. Any other mark counts as done, as in Obsidian.
@@ -120,8 +122,12 @@ pub fn open_tasks(text: &str) -> Vec<(usize, String)> {
     tasks
 }
 
-fn time_of(path: &Path) -> f64 {
-    std::fs::metadata(path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0., |d| d.as_secs_f64())
+fn unchanged(facts: &NoteFacts, modified: f64, size: u64) -> bool {
+    (facts.modified - modified).abs() < 0.001 && facts.size == size
+}
+
+fn stamp_of(path: &Path) -> (f64, u64) {
+    std::fs::metadata(path).ok().map_or((0., 0), |m| (m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0., |d| d.as_secs_f64()), m.len()))
 }
 
 fn list_files(root: &Path, exclude: &[String]) -> Vec<PathBuf> {
@@ -164,13 +170,14 @@ pub fn rebuild(root: &Path, exclude: &[String]) {
         .par_iter()
         .filter(|p| markdown::is_markdown(p) || is_canvas(p))
         .filter_map(|p| {
-            let modified = time_of(p);
-            if let Some(old) = known.get(p).filter(|o| (o.modified - modified).abs() < 0.001) {
+            let (modified, size) = stamp_of(p);
+            if let Some(old) = known.get(p).filter(|o| unchanged(o, modified, size)) {
                 return Some((p.clone(), old.clone()));
             }
             let bytes = std::fs::read(p).ok()?;
             let text = String::from_utf8_lossy(&bytes);
-            let facts = if is_canvas(p) { super::canvas::facts_of(&text, modified) } else { facts_of(&text, modified) };
+            let mut facts = if is_canvas(p) { super::canvas::facts_of(&text, modified) } else { facts_of(&text, modified) };
+            facts.size = bytes.len() as u64;
             Some((p.clone(), facts))
         })
         .collect();
@@ -386,6 +393,14 @@ mod tests {
     fn built(root: PathBuf, files: Vec<PathBuf>) -> VaultIndex {
         let notes = files.iter().filter(|p| markdown::is_markdown(p)).map(|p| (p.clone(), facts_of(&std::fs::read_to_string(p).unwrap_or_default(), 0.))).collect();
         assemble(root, files, notes)
+    }
+
+    #[test]
+    fn a_rewrite_within_the_same_clock_tick_is_read_again() {
+        let read = NoteFacts { modified: 100., size: 5, ..Default::default() };
+        assert!(unchanged(&read, 100., 5));
+        assert!(!unchanged(&read, 100., 22), "coarse file clocks keep the time, the length still tells");
+        assert!(!unchanged(&read, 101., 5));
     }
 
     #[test]
