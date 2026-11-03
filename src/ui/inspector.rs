@@ -256,7 +256,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         let url = link.url().map(|u| u.to_string()).unwrap_or_default();
         let label = if link.title.is_empty() { tr("Link") } else { link.title.clone() };
         links = links.child(link_button(("link", i), label, t).flex().items_center().gap(px(space::XS)).child(icon("link", iconsize::XS, t.accent)).tooltip(tip(link.address.clone())).on_click(move |_, _, _| {
-            let _ = opener::open(&url);
+            crate::core::library::open_path(&url);
         }));
     }
 

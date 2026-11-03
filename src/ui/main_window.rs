@@ -382,7 +382,7 @@ impl Render for MainWindow {
                     cx.propagate();
                     return;
                 }
-                cx.write_to_clipboard(ClipboardItem::new_string(super::selectable::without_room(&text)));
+                super::drive::copy(super::selectable::without_room(&text).to_string(), cx);
             })
             .on_action(cx.listener(|this, _: &SearchUp, _, cx| this.step_results(-1, cx)))
             .on_action(cx.listener(|this, _: &SearchDown, _, cx| this.step_results(1, cx)))
@@ -585,11 +585,11 @@ pub fn show(cx: &mut App) {
     let handle = cx.try_global::<MainHandle>().map(|m| m.0).filter(|h| cx.windows().contains(h));
     match handle {
         Some(h) => {
-            let _ = h.update(cx, |_, window, _| window.activate_window());
+            let _ = h.update(cx, |_, window, _| super::drive::activate_window(window));
         }
         None => open(cx),
     }
-    cx.activate(true);
+    super::drive::activate(cx);
 }
 
 /// Whether `id` is the main window, open or just closed.

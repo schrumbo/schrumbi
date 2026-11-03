@@ -11,6 +11,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::browser::DraggedFile;
+use super::drive::Mark;
 use super::motion::{self, Soft, chevron};
 use super::state::{self, act};
 use super::theme::{Theme, control, font, iconsize, radius, space};
@@ -904,6 +905,7 @@ impl NotesPage {
                 let (drop_rel, menu_rel, menu_me, drop_me) = (rel.clone(), rel.clone(), me.clone(), me.clone());
                 let accent = t.accent;
                 base(("tree-folder", i))
+                    .mark("folder", name.clone())
                     .pl(px(space::S + *depth as f32 * space::M))
                     .font_weight(FontWeight::MEDIUM)
                     .child(chevron(("tree-chevron", i), *open, t.secondary))
@@ -963,6 +965,7 @@ impl NotesPage {
                 let (menu, rename, trash, drag) = (path.clone(), path.clone(), path.clone(), path.clone());
                 let rename_me = me.clone();
                 base(("tree-file", i))
+                    .mark("file", name.clone())
                     .pl(px(space::S + *depth as f32 * space::M + iconsize::XS + space::XS))
                     .when(is_active, |d| d.bg(t.accent.opacity(0.18)))
                     .child(file_icon(path, iconsize::S))
@@ -990,6 +993,7 @@ impl NotesPage {
                     .into_any_element()
             }
             Row::Tag { label, depth, count, .. } => base(("tree-tag", i))
+                .mark("tag", format!("#{label}"))
                 .pl(px(space::M + *depth as f32 * space::M))
                 .child(div().flex_1().min_w_0().truncate().child(format!("#{label}")))
                 .child(caption(count.to_string(), t).flex_none().font_features(tabular()))
@@ -997,6 +1001,7 @@ impl NotesPage {
                 .into_any_element(),
             Row::BackToTags => base(("tree-back", i)).pl(px(space::S)).text_color(t.secondary).child(icon("arrow-left", iconsize::S, t.secondary)).child(tr("Alle Tags")).on_click(click(row, me)).into_any_element(),
             Row::Mark { title, query, .. } => base(("tree-mark", i))
+                .mark("bookmark", title.clone())
                 .pl(px(space::M))
                 .child(icon(if query.is_some() { "search" } else { "bookmark" }, iconsize::S, t.secondary))
                 .child(div().flex_1().min_w_0().truncate().child(title.clone()))
@@ -1006,6 +1011,7 @@ impl NotesPage {
             Row::Task { path, note, line, text } => {
                 let (tick, menu, line, label) = (path.clone(), path.clone(), *line, text.clone());
                 base(("tree-task", i))
+                    .mark("task", text.clone())
                     .pl(px(space::M))
                     .gap(px(space::S))
                     .child(div().id(("task-box", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).soft(t.ink.opacity(0.08), radius::SMALL).border_1().border_color(t.secondary).cursor_pointer().aria_label(tr("Abhaken")).tooltip(tip(tr("Abhaken"))).on_click(move |_, _, cx| {

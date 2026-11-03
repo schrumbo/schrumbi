@@ -15,7 +15,9 @@ pub enum Event {
 /// Starts listening for clicks on reminders.
 pub fn init(cx: &mut App) {
     let (tx, rx) = async_channel::unbounded::<Event>();
-    platform::init(tx);
+    if !crate::core::drive::on() {
+        platform::init(tx);
+    }
     cx.spawn(async move |cx| {
         while let Ok(event) = rx.recv().await {
             cx.update(|cx| match event {
@@ -33,11 +35,14 @@ pub fn init(cx: &mut App) {
 
 /// Replaces all pending reminders. Returns the ones the app has to fire itself while running.
 pub fn schedule(reminders: &[Reminder]) -> Vec<Reminder> {
-    if platform::schedule(reminders) { Vec::new() } else { reminders.to_vec() }
+    if !crate::core::drive::on() && platform::schedule(reminders) { Vec::new() } else { reminders.to_vec() }
 }
 
 /// Shows a reminder now, off the main thread.
 pub fn show(reminder: Reminder, cx: &mut App) {
+    if crate::core::drive::fenced("notification", &reminder.title) {
+        return;
+    }
     cx.background_spawn(async move { platform::show(reminder) }).detach();
 }
 

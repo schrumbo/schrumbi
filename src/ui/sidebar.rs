@@ -7,6 +7,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::act;
+use super::drive::Mark;
 use super::motion::Soft;
 use super::theme::{Theme, font, space, iconsize, radius, control};
 use super::widgets::{KeyNav, icon, tip};
@@ -117,6 +118,7 @@ fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: Stri
     let (accent, selected, hover) = (t.accent, t.ink.opacity(0.08), t.ink.opacity(0.05));
     div()
         .id(id)
+        .mark("tab", label.clone())
         .relative()
         .w_full()
         .h(px(ROW))
@@ -232,7 +234,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
                     for (title, url) in &links {
                         let url = url.clone();
                         menu = menu.item(PopupMenuItem::new(trf("%@ öffnen", &[title])).on_click(move |_, _, _| {
-                            let _ = opener::open(&url);
+                            crate::core::library::open_path(&url);
                         }));
                     }
                     let edit = edit_id.clone();

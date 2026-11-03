@@ -427,7 +427,7 @@ fn overview_rail(lib: &Library, m: &Module, t: &Theme) -> Option<Div> {
                 .child(icon("external-link", iconsize::S, t.secondary))
                 .child(div().flex_1().min_w_0().truncate().child(if link.title.is_empty() { link.address.clone() } else { link.title.clone() }))
                 .on_click(move |_, _, _| {
-                    let _ = opener::open(&url);
+                    crate::core::library::open_path(&url);
                 })
         });
         rail = rail.child(div().flex().flex_col().gap(px(space::S)).child(section_title(tr("Links"))).child(grouped(t).children(rows)));

@@ -45,7 +45,7 @@ pub fn open(path: &Path, cx: &mut App) {
             && h.update(cx, |root, window, cx| {
                 let found = root.view().clone().downcast::<NoteView>().ok().is_some_and(|n| n.read(cx).path() == path);
                 if found {
-                    window.activate_window();
+                    super::drive::activate_window(window);
                 }
                 found
             })

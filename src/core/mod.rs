@@ -2,6 +2,7 @@ pub mod calendar_server;
 pub mod catalog;
 pub mod clock;
 pub mod crash;
+pub mod drive;
 pub mod day;
 pub mod docs;
 pub mod cards;

@@ -300,7 +300,7 @@ impl PdfView {
                     }
                 }
             }
-            Message::Clipboard(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
+            Message::Clipboard(text) => super::drive::copy(text.to_string(), cx),
         }
         cx.notify();
     }
@@ -551,7 +551,7 @@ impl PdfView {
     fn follow_link(&mut self, target: LinkTarget, cx: &mut Context<Self>) {
         match target {
             LinkTarget::Uri(uri) => {
-                let _ = opener::open(uri);
+                crate::core::library::open_path(uri);
             }
             LinkTarget::Page(page) => {
                 if let Some(here) = self.anchor_at(0., 0.) {

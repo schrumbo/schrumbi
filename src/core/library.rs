@@ -3309,7 +3309,7 @@ impl Library {
     pub fn begin_upload(&mut self, id: &str) {
         self.upload_assignment_id = Some(id.into());
         if let Some(u) = self.assignment(id).and_then(|a| self.module(a)).and_then(|m| m.upload_link()).and_then(|l| l.url()) {
-            let _ = opener::open(u.as_str());
+            open_path(u.as_str());
         }
         self.changed();
     }
@@ -3831,20 +3831,23 @@ fn copy_path(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Opens a file or folder in its default app.
-pub fn open_path(path: &Path) {
-    let _ = opener::open(path);
+/// Opens a file, folder or web address in its default app.
+pub fn open_path(path: impl AsRef<std::ffi::OsStr>) {
+    let target = path.as_ref();
+    if !super::drive::fenced("open", Path::new(target).display()) {
+        let _ = opener::open(target);
+    }
 }
 
 /// Opens a folder in Finder / Explorer / the file manager, creating it first if needed.
 pub fn open_folder(path: &Path) {
     let _ = std::fs::create_dir_all(path);
-    let _ = opener::open(path);
+    open_path(path);
 }
 
 /// Shows a file in Finder / Explorer / the file manager.
 pub fn reveal(path: &Path) {
-    if path.exists() {
+    if path.exists() && !super::drive::fenced("reveal", path.display()) {
         let _ = opener::reveal(path);
     }
 }

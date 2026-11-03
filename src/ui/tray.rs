@@ -103,7 +103,7 @@ pub fn sync(cx: &mut App) {
     set_badge(count);
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        let enabled = prefs::get().tray;
+        let enabled = prefs::get().tray && !crate::core::drive::on();
         cx.global_mut::<Tray>().native.sync(enabled, &title);
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -184,7 +184,7 @@ fn toggle((x, y): (f64, f64), cx: &mut App) {
     if let Ok((handle, _)) = gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| TrayPopup::new(window, cx))) {
         cx.global_mut::<Tray>().popup = Some(handle);
     }
-    cx.activate(true);
+    super::drive::activate(cx);
 }
 
 /// The tray popover: next deadline, what needs action, the next three days.

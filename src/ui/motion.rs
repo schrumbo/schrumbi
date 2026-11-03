@@ -52,7 +52,7 @@ impl Soft for Stateful<Div> {
         if self.style().position.is_none() {
             self = self.relative();
         }
-        self.child(HoverLayer { color, radius, line, width })
+        super::drive::marked(self, "clickable").child(HoverLayer { color, radius, line, width })
     }
 }
 

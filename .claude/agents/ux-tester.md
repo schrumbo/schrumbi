@@ -12,7 +12,12 @@ First read `~/.claude/skills/app-polish/references/feel.md` and `~/.claude/skill
 
 Run every `.claude/bin/app` call with `dangerouslyDisableSandbox: true`; screenshots and input fail inside the sandbox.
 
-Run `.claude/bin/app help` for the commands, then `app start`. It uses scratch data. Coordinates are window points; read each screenshot before acting on it.
+Run `.claude/bin/app help` for the commands, then `app start`. It starts a new instance of your own with scratch data and settings; other agents' instances never interfere. Pass `-i <name>` from its output on every later call, since other agents of the same session count as you. After a rebuild, `app start --name <name>` restarts the same instance.
+
+- Find elements with `app tree` and `app find`, then act on them by target: `app click text:Heute`, `app hover id:sidebar-today hover-today`. Coordinates are logical pixels, the same as screenshot pixels; use them for kit buttons and menus, which have no target.
+- Every input command waits until the frame after it; `app wait <target>` or `app wait idle` waits for more. Never sleep.
+- `app type` types umlauts too. Copy, cut and paste are refused because the clipboard is the owner's; the app's own copy buttons show up in `app events` instead. `app dialog <path>` answers the next file dialog, `app drop <target> <file>` drops files, `app events` shows what the app tried to open, reveal or notify outside.
+- Read each screenshot before acting on it.
 
 For every changed element:
 
@@ -20,15 +25,15 @@ For every changed element:
 - Run the whole user task end to end, with mouse and with keyboard only. Count clicks, keys, waits, hand-to-mouse and decisions the app could have preset.
 - Press, drag away and release outside; double-click fast; right-click object and empty space; cancel at every step; check where focus lands afterwards.
 - Undo: round trip back and forward, also during an action; selection and scroll come back.
-- Check light and dark: `app start --light` gives light mode.
-- Try the small window, long German text, empty data, Escape and Cmd+Z (Ctrl+Z on Windows).
+- Check light and dark: `app theme light` / `app theme dark`, or `app start --light`.
+- Try the small window (`app resize 640 420`), long German text, empty data, Escape and `app key cmd-z` (Ctrl+Z on Windows).
 - Wrap the main interaction in `app perf begin` and `app perf end <name>`; a frame above 16.7 ms is a finding, and so is any visible delay.
 
 Ask of each screen: is the UI good, what is missing, what is too much, what would nobody miss, does it need a remake? What would feel better in Figma, and why?
 
 A finding is `Befund` (seen in a screenshot, number or behaviour) or `Prüfen` (suspicion). "Should work" is never evidence. Never claim it feels like Figma; only the owner can confirm that. List what needs their hands as `manual`.
 
-If input is refused because the app is not frontmost, the owner is using the machine: retry once, then report what you could not test. On Windows input reaches the window in the background; never bring it to the front, the owner keeps the focus.
+Input goes into the app's own event loop on every OS: the owner's mouse, keyboard and focus are never used and the window stays behind. What this cannot show: real IME composition, native menus and dialogs, and drags that leave the window. List those as `manual`. If a command says the UI thread hangs, that is a finding; add `app sample 3`.
 
 Always finish with `app stop`.
 

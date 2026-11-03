@@ -7,6 +7,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::browser::DraggedFile;
+use super::drive::Mark;
 use super::motion::{self, Soft};
 use super::state::{self, act};
 use super::theme::{Theme, font, radius, space, iconsize};
@@ -28,7 +29,7 @@ pub trait KeyNav {
 impl KeyNav for Stateful<Div> {
     fn key_nav(self) -> Self {
         let ring = rgb(0x0A84FF);
-        self.tab_index(0).focus_visible(move |s| s.bg(Hsla::from(ring).opacity(0.28)))
+        super::drive::marked(self, "clickable").tab_index(0).focus_visible(move |s| s.bg(Hsla::from(ring).opacity(0.28)))
     }
 }
 
@@ -283,10 +284,12 @@ pub fn file_menu(menu: PopupMenu, path: PathBuf) -> PopupMenu {
 
 /// Rounded card with a caption header, as the Swift `Tile`.
 pub fn tile(id: impl Into<SharedString>, title: impl Into<SharedString>, icon_name: &str, tint: Hsla, clickable: bool, t: &Theme) -> Stateful<Div> {
+    let title = title.into();
     let ink = t.ink;
     let bg = t.secondary_bg;
     let card = div()
         .id(id.into())
+        .mark("tile", title.clone())
         .group("tile")
         .flex_1()
         .min_w_0()
@@ -308,7 +311,7 @@ pub fn tile(id: impl Into<SharedString>, title: impl Into<SharedString>, icon_na
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(t.secondary)
                 .child(icon(icon_name, iconsize::XS, tint))
-                .child(title.into())
+                .child(title)
                 .when(clickable, |d| d.child(div().flex_1()).child(div().invisible().group_hover("tile", |s| s.visible()).child(icon("chevron-right", iconsize::XS, t.tertiary)))),
         );
     if clickable { card.cursor_pointer().key_nav().soft(ink.opacity(0.04), radius::CARD) } else { card }
@@ -449,8 +452,10 @@ pub fn inset_file_row(id: impl Into<ElementId>, path: &Path, name: impl Into<Sha
 }
 
 fn file_row_shaped(id: impl Into<ElementId>, path: &Path, name: impl Into<SharedString>, corner: f32, t: &Theme) -> Stateful<Div> {
+    let name = name.into();
     div()
         .id(id)
+        .mark("file", name.clone())
         .h(px(super::theme::control::M))
         .flex()
         .items_center()
@@ -459,7 +464,7 @@ fn file_row_shaped(id: impl Into<ElementId>, path: &Path, name: impl Into<Shared
         .key_nav()
         .soft(t.ink.opacity(0.05), corner)
         .child(file_icon(path, iconsize::S))
-        .child(div().flex_1().min_w_0().truncate().child(name.into()))
+        .child(div().flex_1().min_w_0().truncate().child(name))
 }
 
 pub fn row_button(id: impl Into<ElementId>, t: &Theme) -> Stateful<Div> {
@@ -470,7 +475,8 @@ pub fn row_button(id: impl Into<ElementId>, t: &Theme) -> Stateful<Div> {
 /// Compact text button styled like `.borderless` / `.link` buttons.
 pub fn link_button(id: impl Into<ElementId>, label: impl Into<SharedString>, t: &Theme) -> Stateful<Div> {
     let accent = t.accent_text;
-    div().id(id).text_color(accent).cursor_pointer().key_nav().hover(move |s| s.text_color(accent.opacity(0.8))).child(label.into())
+    let label = label.into();
+    div().id(id).mark("link", label.clone()).text_color(accent).cursor_pointer().key_nav().hover(move |s| s.text_color(accent.opacity(0.8))).child(label)
 }
 
 /// Keyboard-shortcut chip.

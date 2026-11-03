@@ -29,6 +29,7 @@ impl AssetSource for Assets {
 }
 
 fn main() {
+    core::drive::check();
     core::crash::install();
     core::i18n::init(&core::prefs::get().language);
     let workspace = core::workspace::resolve();
@@ -55,6 +56,7 @@ fn main() {
         }
         ui::main_window::open(cx);
         ui::tray::init(cx);
+        ui::drive::init(cx);
         for f in &files {
             ui::state::act(cx, |l| l.open_document(f));
         }
@@ -76,6 +78,6 @@ fn main() {
                 l.notify(core::i18n::tr("Schrumbi wurde beim letzten Mal unerwartet beendet."), "triangle-alert", Some(core::i18n::tr("Protokoll zeigen")), Some(Box::new(move |_| core::library::reveal(&log))));
             });
         }
-        cx.activate(true);
+        ui::drive::activate(cx);
     });
 }

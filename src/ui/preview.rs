@@ -223,6 +223,7 @@ impl PreviewWindow {
 
 impl Render for PreviewWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        super::perf::frame_start();
         if !std::mem::replace(&mut self.focused, true) {
             window.focus(&self.focus, cx);
         }

@@ -101,7 +101,7 @@ static class Gui {
         if (wins.Count == 0) { Console.Error.WriteLine("no window for pid " + pid); return 1; }
         IntPtr h = wins[0];
         switch (cmd) {
-            case "shot": Shot(h, a[2]); break;
+            case "shot": Shot(a.Length > 3 ? (IntPtr)long.Parse(a[3]) : h, a[2], a.Length > 4 ? int.Parse(a[4]) : -1); break;
             case "move": Move(h, int.Parse(a[2]), int.Parse(a[3])); break;
             case "click": {
                 int n = a.Length > 4 && a[4].All(char.IsDigit) ? int.Parse(a[4]) : 1;
@@ -187,7 +187,7 @@ static class Gui {
         return 0;
     }
 
-    static void Shot(IntPtr h, string outPath) {
+    static void Shot(IntPtr h, string outPath, int width) {
         RECT wr; GetWindowRect(h, out wr);
         RECT cr; GetClientRect(h, out cr);
         var o = Origin(h);
@@ -195,7 +195,8 @@ static class Gui {
             using (var g = Graphics.FromImage(full)) { var dc = g.GetHdc(); PrintWindow(h, dc, 2); g.ReleaseHdc(dc); }
             var crop = new Rectangle(o.X - wr.L, o.Y - wr.T, cr.R, cr.B);
             int w = cr.R, hh = cr.B;
-            if (w > 1500) { hh = (int)Math.Round(hh * 1500.0 / w); w = 1500; }
+            int limit = width < 0 ? Math.Min(w, 1500) : width == 0 ? w : width;
+            if (w != limit) { hh = (int)Math.Round(hh * (double)limit / w); w = limit; }
             using (var outBmp = new Bitmap(w, hh)) {
                 using (var g = Graphics.FromImage(outBmp)) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(full, new Rectangle(0, 0, w, hh), crop, GraphicsUnit.Pixel); }
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath)));

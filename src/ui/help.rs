@@ -35,7 +35,7 @@ pub fn open(slug: Option<&str>, cx: &mut App) {
         if let Some(h) = w.downcast::<gpui_kit::base::Root>()
             && h.update(cx, |root, window, cx| {
                 let Ok(view) = root.view().clone().downcast::<Help>() else { return false };
-                window.activate_window();
+                super::drive::activate_window(window);
                 if let Some(p) = page {
                     view.update(cx, |h, cx| h.go(p, None, cx));
                 }
@@ -386,7 +386,7 @@ impl Help {
     }
 
     fn copy(&mut self, index: usize, source: String, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(source));
+        super::drive::copy(source.to_string(), cx);
         self.copied = Some((self.page, index));
         self.copy_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(COPIED_FOR).await;
@@ -713,7 +713,7 @@ impl Render for Help {
             }))
             .child(self.sidebar(&t, cx))
             .child(div().flex_1().min_w_0().h_full().child(body));
-        super::chrome::frame(tr("Schrumbi-Anleitung"), super::perf::frame_end(content), &t)
+        super::chrome::frame(tr("Schrumbi-Anleitung"), content, &t)
     }
 }
 

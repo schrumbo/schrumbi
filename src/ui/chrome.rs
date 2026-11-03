@@ -10,6 +10,7 @@ pub const CUSTOM: bool = !cfg!(target_os = "macos");
 
 /// Prepares a window for the custom title bar; on macOS the options stay as they are.
 pub fn window_options(options: WindowOptions, title: impl Into<SharedString>) -> WindowOptions {
+    let options = WindowOptions { focus: options.focus && !crate::core::drive::on(), ..options };
     if !CUSTOM {
         return options;
     }
@@ -29,19 +30,21 @@ fn secondary_bar(title: SharedString, t: &Theme) -> TitleBar {
 
 /// Puts a window's content below the custom title bar.
 pub fn frame(title: impl Into<SharedString>, content: impl IntoElement, t: &Theme) -> AnyElement {
+    let title = title.into();
     if !CUSTOM {
-        return content.into_any_element();
+        return super::perf::window(content.into_any_element(), title);
     }
-    div().size_full().flex().flex_col().child(secondary_bar(title.into(), t)).child(div().flex_1().min_h_0().child(content)).into_any_element()
+    super::perf::window(div().size_full().flex().flex_col().child(secondary_bar(title.clone(), t)).child(div().flex_1().min_h_0().child(content)).into_any_element(), title)
 }
 
 /// Like `frame`, but the close button runs `close` instead of just removing the window.
 pub fn frame_with_close(title: impl Into<SharedString>, content: impl IntoElement, close: impl Fn(&mut Window, &mut App) + 'static, t: &Theme) -> AnyElement {
+    let title = title.into();
     if !CUSTOM {
-        return content.into_any_element();
+        return super::perf::window(content.into_any_element(), title);
     }
-    let bar = secondary_bar(title.into(), t).on_close_window(move |_, window, cx| close(window, cx));
-    div().size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().child(content)).into_any_element()
+    let bar = secondary_bar(title.clone(), t).on_close_window(move |_, window, cx| close(window, cx));
+    super::perf::window(div().size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().child(content)).into_any_element(), title)
 }
 
 struct MainMenu(Entity<AppMenuBar>);

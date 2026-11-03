@@ -404,7 +404,7 @@ fn announce(error: GitError, title: String, body: String, cx: &mut App) {
         return;
     }
     cx.global_mut::<Sync>().announced = Some(error);
-    if cx.active_window().is_some() {
+    if cx.active_window().is_some() || crate::core::drive::fenced("notification", &title) {
         return;
     }
     cx.background_spawn(async move {

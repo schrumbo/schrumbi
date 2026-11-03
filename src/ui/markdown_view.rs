@@ -1510,14 +1510,14 @@ pub fn link_action(url: &str, base: Option<&Path>) -> LinkAction {
                     l.set_route(crate::core::library::Route::Search);
                 }),
                 None => {
-                    let _ = opener::open(&url);
+                    crate::core::library::open_path(&url);
                 }
             }
         });
     }
     if is_external(&url) {
         return Rc::new(move |_| {
-            let _ = opener::open(&url);
+            crate::core::library::open_path(&url);
         });
     }
     let from = from_note(base);
@@ -1792,7 +1792,7 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
                 .tooltip(super::widgets::tip(tr("Code kopieren")))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
-                    cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
+                    super::drive::copy(copied.to_string(), cx);
                 })
                 .child(super::widgets::icon("copy", iconsize::S, t.secondary)),
         )
