@@ -19,6 +19,7 @@ actions!(
         CommandPalette,
         ShowGraph,
         ShowShortcuts,
+        ShowHelp,
         NewEntry,
         NewFile,
         QuickOpen,
@@ -112,6 +113,7 @@ pub fn init(cx: &mut App) {
     });
     cx.on_action(|_: &CommandPalette, cx| act(cx, |l| if l.root.is_some() { l.show_palette = true }));
     cx.on_action(|_: &ShowShortcuts, cx| act(cx, |l| if l.root.is_some() { l.show_shortcuts = true }));
+    cx.on_action(|_: &ShowHelp, cx| cx.defer(|cx| super::help::open(None, cx)));
     cx.on_action(|_: &NewEntry, cx| act(cx, |l| if l.root.is_some() { l.show_quick_add = true }));
     cx.on_action(|_: &NewFile, cx| {
         act(cx, |l| {
@@ -270,6 +272,7 @@ pub fn bind_keys(cx: &mut App) {
         kb(cmd("shift-p"), CommandPalette, None),
         kb(cmd("/"), ShowShortcuts, None),
         kb(cmd("shift-7"), ShowShortcuts, None),
+        kb("f1".into(), ShowHelp, None),
         kb(cmd(","), OpenSettings, None),
         kb(cmd("z"), Undo, Some("MainWindow")),
         kb(cmd("shift-z"), Redo, Some("MainWindow")),
@@ -408,7 +411,7 @@ pub fn rebuild_menus(cx: &mut App) {
         ]),
         Menu::new(tr("Gehe zu")).items(go),
         Menu::new(tr("Fenster")).items([MenuItem::action(tr("Im Dock ablegen"), Minimize), MenuItem::action(tr("Zoomen"), Zoom)]),
-        Menu::new(tr("Hilfe")).items([MenuItem::action(tr("Tastenkürzel anzeigen"), ShowShortcuts)]),
+        Menu::new(tr("Hilfe")).items([MenuItem::action(tr("Schrumbi-Anleitung"), ShowHelp), MenuItem::action(tr("Tastenkürzel anzeigen"), ShowShortcuts)]),
     ]);
     super::chrome::sync_menus(cx);
 }

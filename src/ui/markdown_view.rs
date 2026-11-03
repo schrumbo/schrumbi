@@ -1411,6 +1411,9 @@ fn link_exists(url: &str, base: Option<&Path>) -> bool {
 
 /// Web links open in the browser; everything else is a link inside the vault, created if it is missing.
 pub fn link_action(url: &str, base: Option<&Path>) -> LinkAction {
+    if base.is_some_and(super::help::is_sample) {
+        return Rc::new(|_| {});
+    }
     let url = url.to_string();
     if url.starts_with("obsidian://") {
         return Rc::new(move |cx| {
@@ -1513,7 +1516,7 @@ fn file_card(path: PathBuf, detail: Option<String>, action: String, cx: &Ctx) ->
         .border_color(t.separator)
         .cursor_pointer()
         .soft(t.ink.opacity(0.04), radius::CONTROL)
-        .on_click(move |_, _, cx| super::state::act(cx, |l| l.open_file(&open)))
+        .on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) })
         .child(super::widgets::file_icon(&path, iconsize::L))
         .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(name)).when_some(detail, |d, text| d.child(super::widgets::caption(text, t))))
         .child(super::widgets::caption(action, t).flex_none())
@@ -1532,7 +1535,7 @@ fn embed(src: &str, alt: &str, cx: &Ctx) -> AnyElement {
     let vault = index::current();
     let from = from_note(cx.base);
     let beside = cx.base.map(|b| b.join(&target.path)).filter(|p| !target.path.is_empty() && p.is_file());
-    let Some(path) = beside.or_else(|| vault.resolver.resolve(&target, from.as_deref())) else { return missing_embed(&target.path, cx) };
+    let Some(path) = beside.or_else(|| vault.resolver.resolve(&target, from.as_deref()).filter(|_| !cx.base.is_some_and(super::help::is_sample))) else { return missing_embed(&target.path, cx) };
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     if IMAGE_TYPES.contains(&ext.as_str()) {
         return image_at(path, alt, &decoded, cx);
@@ -1569,7 +1572,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     let open = path.clone();
     if cx.chain.len() >= 3 {
-        return div().id(("md-embed-link", order)).text_color(t.accent_text).cursor_pointer().on_click(move |_, _, cx| super::state::act(cx, |l| l.open_file(&open))).child(name).into_any_element();
+        return div().id(("md-embed-link", order)).text_color(t.accent_text).cursor_pointer().on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) }).child(name).into_any_element();
     }
     let note = embedded_note(&path, target);
     let mut chain = cx.chain.clone();
@@ -1596,7 +1599,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
                 .soft(t.ink.opacity(0.04), 0.)
                 .text_size(px(font::CAPTION))
                 .text_color(t.secondary)
-                .on_click(move |_, _, cx| super::state::act(cx, |l| l.open_file(&open)))
+                .on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) })
                 .child(div().flex_1().min_w_0().truncate().child(name))
                 .child(super::widgets::icon("external-link", iconsize::XS, t.tertiary)),
         )
@@ -1625,7 +1628,7 @@ fn image_at(p: PathBuf, alt: &str, source_written: &str, cx: &Ctx) -> AnyElement
         let order = cx.order.get();
         cx.order.set(order + 1);
         let open = p.clone();
-        let drawn = div().id(("md-image", order)).cursor_pointer().capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| super::preview::show(&open, cx)).child(img(p).when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL)));
+        let drawn = div().id(("md-image", order)).cursor_pointer().capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::preview::show(&open, cx) }).child(img(p).when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL)));
         let source_name = source_written.to_string();
         match (cx.focus.and_then(|f| f.edit_item.clone()), cx.block) {
             (Some(edit), item) => drawn

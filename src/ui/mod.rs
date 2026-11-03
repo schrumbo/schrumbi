@@ -59,3 +59,5 @@ pub mod pdf_view;
 pub mod pdf_worker;
 pub mod motion;
 pub mod palette;
+pub mod help;
+pub mod help_example;
