@@ -38,6 +38,8 @@ pub mod iconsize {
 
 /// Control heights.
 pub mod control {
+    /// Where the macOS window buttons sit in secondary windows.
+    pub const TRAFFIC_INSET: f32 = 14.;
     pub const S: f32 = 24.;
     pub const M: f32 = 28.;
     /// The toolbar band.
@@ -523,6 +525,23 @@ pub struct SyntaxPalette {
     pub number: u32,
     pub kind: u32,
     pub function: u32,
+}
+
+impl SyntaxPalette {
+    /// The colour of a token, none for plain text.
+    pub fn of(&self, kind: crate::core::markdown::TokenKind) -> Option<Hsla> {
+        use crate::core::markdown::TokenKind;
+        let c = match kind {
+            TokenKind::Plain => return None,
+            TokenKind::Keyword => self.keyword,
+            TokenKind::String => self.string,
+            TokenKind::Comment => self.comment,
+            TokenKind::Number => self.number,
+            TokenKind::Type => self.kind,
+            TokenKind::Attribute => self.function,
+        };
+        Some(rgb(c).into())
+    }
 }
 
 pub fn syntax_palette(kind: Kind) -> SyntaxPalette {

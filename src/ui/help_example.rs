@@ -11,7 +11,6 @@ use super::selectable::selectable;
 use super::theme::{Theme, control, font, iconsize, radius, space, syntax_palette};
 use super::widgets::*;
 use crate::core::i18n::tr;
-use crate::core::markdown::TokenKind;
 
 /// How long the copy button shows its check mark.
 pub const COPIED_FOR: Duration = Duration::from_millis(1400);
@@ -70,17 +69,8 @@ fn highlighted(source: &str, t: &Theme) -> (String, Vec<(std::ops::Range<usize>,
     for (s, kind) in crate::core::markdown::highlight(source, Some("markdown")) {
         let start = text.len();
         text.push_str(&s);
-        let color = match kind {
-            TokenKind::Plain => None,
-            TokenKind::Keyword => Some(colors.keyword),
-            TokenKind::String => Some(colors.string),
-            TokenKind::Comment => Some(colors.comment),
-            TokenKind::Number => Some(colors.number),
-            TokenKind::Type => Some(colors.kind),
-            TokenKind::Attribute => Some(colors.function),
-        };
-        if let Some(c) = color {
-            marks.push((start..text.len(), HighlightStyle { color: Some(rgb(c).into()), ..Default::default() }));
+        if let Some(c) = colors.of(kind) {
+            marks.push((start..text.len(), HighlightStyle { color: Some(c), ..Default::default() }));
         }
     }
     (text, marks)

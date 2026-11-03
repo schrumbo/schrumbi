@@ -51,7 +51,7 @@ pub fn open(slug: Option<&str>, cx: &mut App) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(720.), px(480.))),
-        titlebar: Some(TitlebarOptions { title: Some(tr("Schrumbi-Anleitung").into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }),
+        titlebar: Some(TitlebarOptions { title: Some(tr("Schrumbi-Anleitung").into()), appears_transparent: true, traffic_light_position: Some(point(px(control::TRAFFIC_INSET), px(control::TRAFFIC_INSET))) }),
         ..Default::default()
     };
     let options = super::chrome::window_options(options, tr("Schrumbi-Anleitung"));
