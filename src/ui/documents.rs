@@ -1466,42 +1466,36 @@ impl NoteView {
 
     fn header(&self, exporting: bool, room: Option<Room>, t: &Theme, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let me = cx.entity();
-        let help = ShortcutAction::TogglePreview.shortcut().map_or_else(|| tr("Lesen oder Bearbeiten"), |s| trf("Lesen oder Bearbeiten (%@ wechselt)", &[&s.display()]));
+        let keyed = |label: &str, m: Mode| format!("{label}{}", if m == Mode::Split { ShortcutAction::SplitPreview } else { ShortcutAction::TogglePreview }.hint());
         let edit_mode = if self.editor_kind == prefs::NoteEditor::Live { Mode::Live } else { Mode::Source };
-        let mode_list: Vec<(Mode, String, &'static str)> = [(Mode::Read, tr("Lesen"), "eye"), (edit_mode, tr("Bearbeiten"), "pencil"), (Mode::Split, tr("Geteilt"), "columns-2")].into_iter().filter(|(m, ..)| *m != Mode::Split || self.editor_kind == prefs::NoteEditor::Code).collect();
+        let mode_list: Vec<(Mode, String, &'static str)> = [(Mode::Read, tr("Lesen"), "eye"), (edit_mode, tr("Bearbeiten"), "pencil"), (Mode::Split, tr("Geteilte Ansicht"), "columns-2")].into_iter().filter(|(m, ..)| *m != Mode::Split || self.editor_kind == prefs::NoteEditor::Code).collect();
         let entries = self.toc.clone();
         let has_toc = !entries.is_empty();
-        let count = mode_list.len() as f32;
-        let labels: f32 = mode_list.iter().map(|(_, l, _)| bar_fit::text_width(l, font::CALLOUT, FontWeight::MEDIUM, window)).sum();
-        let segment = 2. * space::XXS + count * control::S;
-        let modes_full = 2. * space::XXS + count * (2. * space::S + space::XS + iconsize::XS) + labels;
+        let segment = 2. * space::XXS + mode_list.len() as f32 * control::S;
         let toc_w = if has_toc { control::S } else { 0. };
         let pdf_w = bar_fit::button_width(&tr("PDF"), window);
         let more = control::S;
-        let steps = [bar_fit::row(&[modes_full, toc_w, pdf_w, more], space::S), bar_fit::row(&[segment, toc_w, pdf_w, more], space::S), bar_fit::row(&[segment, toc_w, more], space::S), bar_fit::row(&[segment, more], space::S), bar_fit::row(&[control::S, more], space::S), more];
-        let fold = room.map_or_else(|| actions_fold(&self.path, &steps, 3, window, cx), |room| bar_fit::fold_room(room, &steps, 3));
-        let (labeled, pdf_out, toc_out, picker, modes_out) = (fold == 0, fold >= 2, fold >= 3, fold == 4, fold >= 5);
+        let steps = [bar_fit::row(&[segment, toc_w, pdf_w, more], space::S), bar_fit::row(&[segment, toc_w, more], space::S), bar_fit::row(&[segment, more], space::S), bar_fit::row(&[control::S, more], space::S), more];
+        let fold = room.map_or_else(|| actions_fold(&self.path, &steps, 2, window, cx), |room| bar_fit::fold_room(room, &steps, 2));
+        let (pdf_out, toc_out, picker, modes_out) = (fold >= 1, fold >= 2, fold == 3, fold >= 4);
         let mut modes = div().flex().flex_none().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS));
         for (m, label, icon_name) in mode_list.iter().cloned() {
             let active = m == self.mode;
             let e = me.clone();
-            let hint = if labeled { help.clone() } else { trf("%@ – %@", &[&label, &help]) };
+            let hint = keyed(&label, m);
             modes = modes.child(
                 div()
                     .id(SharedString::from(format!("mode-{icon_name}")))
                     .flex()
                     .items_center()
-                    .gap(px(space::XS))
+                    .justify_center()
+                    .w(px(control::S))
                     .h(px(control::S - 2. * space::XXS))
-                    .when(labeled, |d| d.px(px(space::S)))
-                    .when(!labeled, |d| d.w(px(control::S)).justify_center())
                     .rounded(px(radius::SMALL))
                     .cursor_pointer().key_nav()
                     .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
-                    .text_size(px(font::CALLOUT))
-                    .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
+                    .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm())
                     .child(icon(icon_name, iconsize::XS, if active { t.primary } else { t.secondary }))
-                    .when(labeled, |d| d.child(label))
                     .tooltip(tip(hint))
                     .on_click(move |_, window, cx| e.update(cx, |n, cx| n.set_mode(m, window, cx))),
             );
@@ -1532,7 +1526,7 @@ impl NoteView {
         let mode_picker = picker.then(|| {
             let (list, e) = (mode_list.clone(), me.clone());
             let (label, icon_name) = shown_mode.as_ref().or_else(|| mode_list.first()).map_or_else(|| (String::new(), "eye"), |(_, l, i)| (l.clone(), *i));
-            Button::new("note-mode").ghost().small().icon(menu_icon(icon_name)).tooltip(trf("%@ – %@", &[&label, &help])).dropdown_menu(move |mut menu, _, _| {
+            Button::new("note-mode").ghost().small().icon(menu_icon(icon_name)).tooltip(keyed(&label, current_mode)).dropdown_menu(move |mut menu, _, _| {
                 for (m, label, _) in list.iter().cloned() {
                     let e = e.clone();
                     menu = menu.item(PopupMenuItem::new(label).checked(m == current_mode || (m == edit_mode && current_mode == Mode::Source)).on_click(move |_, window, cx| e.update(cx, |n, cx| n.set_mode(m, window, cx))));

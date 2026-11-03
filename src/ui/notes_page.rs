@@ -88,6 +88,18 @@ pub struct NotesPage {
     _subs: Vec<Subscription>,
 }
 
+fn unlisted_rename(path: &Path, folder: &str, listed: Option<&Vec<PathBuf>>, root: &Path) -> bool {
+    path.exists() && !listed.is_some_and(|f| f.iter().any(|p| p == path)) && path.parent().and_then(|d| d.strip_prefix(root).ok()).is_some_and(|d| d.to_string_lossy().replace('\\', "/") == folder)
+}
+
+fn cancel_on_escape(me: &Entity<NotesPage>) -> impl Fn(&gpui_kit::component::input::Escape, &mut Window, &mut App) + 'static {
+    let me = me.clone();
+    move |_, window, cx| {
+        cx.stop_propagation();
+        me.update(cx, |s, cx| s.cancel_rename(window, cx));
+    }
+}
+
 /// The file tree, from the vault's own list; the workspace's settings file does not belong in it.
 fn build_tree(vault: &index::VaultIndex, hidden: &index::Hidden) -> Tree {
     let mut tree = Tree::default();
@@ -236,9 +248,7 @@ impl NotesPage {
                 }
             }
         }
-        let in_rename = self.renaming.as_ref().map(|(p, ..)| p).filter(|p| Some(*p) != self.pending_folder.as_ref()).filter(|p| {
-            !tree.files.get(folder).is_some_and(|f| f.contains(p)) && p.parent().and_then(|d| d.strip_prefix(&vault.root).ok()).is_some_and(|d| d.to_string_lossy().replace('\\', "/") == folder)
-        });
+        let in_rename = self.renaming.as_ref().map(|(p, ..)| p).filter(|p| Some(*p) != self.pending_folder.as_ref()).filter(|p| unlisted_rename(p, folder, tree.files.get(folder), &vault.root));
         if let Some(path) = in_rename {
             out.push(Self::file_row(path, depth, false, None, vault));
         }
@@ -393,7 +403,11 @@ impl NotesPage {
     /// Where a new note goes: the chosen folder, or next to the open note.
     fn new_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let folder = self.target_folder.as_deref().map(Self::folder_path);
-        let made = act(cx, |l| l.new_untitled_note(folder.as_deref()));
+        let made = act(cx, |l| {
+            let made = l.new_untitled_note(folder.as_deref());
+            l.quiet_open = made.is_some();
+            made
+        });
         if let Some(path) = made {
             state::reindex(cx);
             self.view = View::Files;
@@ -429,11 +443,11 @@ impl NotesPage {
         let sub = cx.subscribe_in(&input, window, move |this, field, e: &InputEvent, window, cx| match e {
             InputEvent::PressEnter { .. } => {
                 let text = field.read(cx).value().trim().to_string();
-                this.finish_rename(&target, &text, window, cx);
+                this.finish_rename(&target, &text, true, window, cx);
             }
             InputEvent::Blur => {
                 let text = field.read(cx).value().trim().to_string();
-                this.finish_rename(&target, &text, window, cx);
+                this.finish_rename(&target, &text, false, window, cx);
             }
             _ => {}
         });
@@ -444,7 +458,18 @@ impl NotesPage {
         cx.notify();
     }
 
-    fn finish_rename(&mut self, path: &Path, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((path, ..)) = self.renaming.take() else { return };
+        if self.pending_folder.as_ref() == Some(&path) || path.is_dir() {
+            self.pending_folder = None;
+            window.focus(&self.focus, cx);
+        } else {
+            act(cx, |l| l.focus_document = true);
+        }
+        cx.notify();
+    }
+
+    fn finish_rename(&mut self, path: &Path, text: &str, hand: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.renaming.take().is_none() {
             return;
         }
@@ -462,8 +487,10 @@ impl NotesPage {
         }
         if is_folder {
             self.pending_folder = None;
+        }
+        if hand && is_folder {
             window.focus(&self.focus, cx);
-        } else {
+        } else if hand {
             act(cx, |l| l.focus_document = true);
         }
         cx.notify();
@@ -650,7 +677,7 @@ impl NotesPage {
                 if let Some((renamed, input, _)) = &self.renaming
                     && *renamed == Self::folder_path(rel)
                 {
-                    return div().w_full().h(px(control::M)).pl(px(space::S + *depth as f32 * space::M + iconsize::M + space::XS)).pr(px(space::S)).flex().items_center().child(Input::new(input).small()).into_any_element();
+                    return div().w_full().h(px(control::M)).pl(px(space::S + *depth as f32 * space::M + iconsize::M + space::XS)).pr(px(space::S)).flex().items_center().capture_action(cancel_on_escape(me)).child(Input::new(input).small()).into_any_element();
                 }
                 let (drop_rel, menu_rel, menu_me, drop_me) = (rel.clone(), rel.clone(), me.clone(), me.clone());
                 let accent = t.accent;
@@ -709,7 +736,7 @@ impl NotesPage {
                 if let Some((renamed, input, _)) = &self.renaming
                     && renamed == path
                 {
-                    return div().w_full().h(px(control::M)).pl(px(space::S + *depth as f32 * space::M + iconsize::M + space::XS)).pr(px(space::S)).flex().items_center().child(Input::new(input).small()).into_any_element();
+                    return div().w_full().h(px(control::M)).pl(px(space::S + *depth as f32 * space::M + iconsize::M + space::XS)).pr(px(space::S)).flex().items_center().capture_action(cancel_on_escape(me)).child(Input::new(input).small()).into_any_element();
                 }
                 let (menu, rename, trash, drag) = (path.clone(), path.clone(), path.clone(), path.clone());
                 let rename_me = me.clone();
@@ -827,6 +854,14 @@ impl Render for NotesPage {
         if self.view == View::Search {
             self.search_vault(cx);
         }
+        if let Some((gone, ..)) = self.renaming.take_if(|(p, ..)| !p.exists()) {
+            if self.pending_folder.take_if(|f| *f == gone).is_some() {
+                let focus = self.focus.clone();
+                window.on_next_frame(move |window, cx| window.focus(&focus, cx));
+            } else {
+                window.on_next_frame(|_, cx| act(cx, |l| l.focus_document = true));
+            }
+        }
         self.refresh(tag.clone(), cx);
         let rows = self.rows();
         let open_tasks = self.cache.as_ref().map_or(0, |c| c.open_tasks);
@@ -936,5 +971,24 @@ impl Render for NotesPage {
             }))
             .child(div().w(px(width + space::XS)).h_full().flex().flex_col().bg(t.column).child(header).child(filter).child(div().flex_1().min_h_0().child(body)))
             .child(handle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unlisted_rename;
+
+    #[test]
+    fn rename_row_goes_when_its_file_moves() {
+        let root = std::env::temp_dir().join(format!("schrumbi-rename-row-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let made = root.join("Unbenannt.md");
+        std::fs::write(&made, "").unwrap();
+        assert!(unlisted_rename(&made, "", None, &root));
+        assert!(!unlisted_rename(&made, "", Some(&vec![made.clone()]), &root));
+        assert!(!unlisted_rename(&made, "Sub", None, &root));
+        std::fs::rename(&made, root.join("Hallo.md")).unwrap();
+        assert!(!unlisted_rename(&made, "", None, &root));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
