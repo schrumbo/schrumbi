@@ -740,10 +740,10 @@ impl Settings {
 
         let studium_rows = vec![
             row(tr("Name"), div().w(px(300.)).child(Input::new(&name)), t),
-            row(tr("Kürzel in Dateinamen"), div().w(px(300.)).child(Input::new(&author)), t),
             row(tr("Inbox-Ordner"), div().w(px(300.)).child(Input::new(&inbox)), t),
         ];
         let naming_extra = vec![
+            sub_row(tr("Kürzel in Dateinamen"), div().w(px(300.)).child(Input::new(&author)), t),
             sub_row(tr("Matrikelnummer"), div().w(px(300.)).child(Input::new(&matrikel)), t),
             sub_row(
                 tr("Mitautor:innen"),
