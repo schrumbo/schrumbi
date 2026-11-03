@@ -33,6 +33,8 @@ pub struct MainWindow {
     save_bounds: Option<Task<()>>,
     sidebar_auto_closed: bool,
     syncing_search: bool,
+    /// What the search field says while empty: where it searches.
+    search_placeholder: String,
     focus: FocusHandle,
     focused_once: bool,
     shown_route: Option<Route>,
@@ -59,7 +61,7 @@ pub fn toggle_sidebar(window: &mut Window, cx: &mut App) {
 
 impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Suchen")).clean_on_escape());
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Suchen")));
         let inspector = cx.new(|cx| Inspector::new(window, cx));
         let pages = cx.new(|cx| Pages::new(window, cx));
         let lib = state::lib(cx);
@@ -119,6 +121,7 @@ impl MainWindow {
             press_stamp: None,
             error_shown: false,
             syncing_search: false,
+            search_placeholder: tr("Suchen"),
             focus: cx.focus_handle(),
             focused_once: false,
             shown_route: None,
@@ -142,6 +145,27 @@ impl MainWindow {
             self.syncing_search = true;
             self.search.update(cx, |s, cx| s.set_value(wanted, window, cx));
             self.syncing_search = false;
+        }
+        let placeholder = state::read(cx, |l| if let Route::Module(id) = l.route() { l.module_by_id(id).map(|m| trf("In %@ suchen", &[&m.code])) } else { None }).unwrap_or_else(|| tr("Suchen"));
+        if self.search_placeholder != placeholder {
+            self.search_placeholder = placeholder.clone();
+            self.search.update(cx, |s, cx| s.set_placeholder(placeholder, window, cx));
+        }
+    }
+
+    /// Esc in the search field clears it first; on an empty field it hands the keyboard back to the page.
+    fn leave_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.search.read(cx).value().is_empty() {
+            act(cx, |l| if let Route::Module(_) = l.route() { l.module_query.clear() } else { l.search_query.clear() });
+            self.search.update(cx, |s, cx| s.set_value("", window, cx));
+            return;
+        }
+        match self.pages.read(cx).module.focus.clone().filter(|_| state::read(cx, |l| matches!(l.route(), Route::Module(_)))) {
+            Some(page) => window.focus(&page, cx),
+            None => {
+                window.focus(&self.focus, cx);
+                state::return_focus_to_page(cx);
+            }
         }
     }
 
@@ -367,6 +391,10 @@ impl Render for MainWindow {
             .text_color(t.primary)
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
                 if window.context_stack().iter().any(|c| c.contains("NoteEditor")) {
+                    return;
+                }
+                if this.search.read(cx).focus_handle(cx).is_focused(window) {
+                    this.leave_search(window, cx);
                     return;
                 }
                 let typing = window.context_stack().iter().any(|c| c.contains("Input"));

@@ -31,7 +31,7 @@ If nothing is open, it says {ui:Nichts offen}. Next to it, {ui:Diese Woche} show
 | {ui:In Arbeit} | Started, but not finished |
 | {ui:Entfällt} | No longer counts |
 | {ui:Termin verschieben…} | New date for an entry from a rule |
-| {ui:Notiz anlegen} | New note that belongs to the submission |
+| {ui:Neue Notiz} | New note that belongs to the submission |
 | {ui:Datei zuordnen…} | Find an existing file and add it |
 | {ui:Abgabeordner öffnen} | Show the folder in the file manager |
 | {ui:Automatisch erkennen} | Remove the status you set by hand |
@@ -44,7 +44,7 @@ A file counts for a submission when it belongs to it. Date and folder alone are 
 
 | How a file comes to belong | Where |
 |---|---|
-| {ui:Notiz anlegen} | On the right, at the submission |
+| {ui:Neue Notiz} | On the right, at the submission |
 | Export a note as PDF | The PDF belongs to the same submissions |
 | Drag or file a file onto the submission | Overview, submissions, inbox |
 | {ui:Abgabe zuordnen} | Right-click a file in {ui:Notizen} |

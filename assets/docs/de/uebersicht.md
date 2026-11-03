@@ -31,7 +31,7 @@ Ist nichts offen, steht dort {ui:Nichts offen}. Daneben zeigt {ui:Diese Woche}, 
 | {ui:In Arbeit} | Angefangen, aber nicht fertig |
 | {ui:Entfällt} | Zählt nicht mehr mit |
 | {ui:Termin verschieben…} | Neuer Termin für einen Eintrag aus einer Regel |
-| {ui:Notiz anlegen} | Neue Notiz, die zur Abgabe gehört |
+| {ui:Neue Notiz} | Neue Notiz, die zur Abgabe gehört |
 | {ui:Datei zuordnen…} | Eine vorhandene Datei suchen und dazunehmen |
 | {ui:Abgabeordner öffnen} | Den Ordner im Dateimanager zeigen |
 | {ui:Automatisch erkennen} | Den von Hand gesetzten Status aufheben |
@@ -44,7 +44,7 @@ Eine Datei zählt für eine Abgabe, wenn sie dazugehört. Datum und Ordner allei
 
 | So gehört eine Datei dazu | Wo |
 |---|---|
-| {ui:Notiz anlegen} | Rechts bei der Abgabe |
+| {ui:Neue Notiz} | Rechts bei der Abgabe |
 | Notiz als PDF exportieren | Das PDF gehört zu denselben Abgaben |
 | Datei auf die Abgabe ziehen oder ablegen | Übersicht, Abgaben, Inbox |
 | {ui:Abgabe zuordnen} | Rechtsklick auf eine Datei in den {ui:Notizen} |

@@ -243,7 +243,7 @@ impl FileBrowser {
             let total_all = items.len();
             let mut matching: Vec<Item> = items.into_iter().filter(|i| kind.matches(i.file.name())).collect();
             let other_kinds = total_all - matching.len();
-            matching.sort_by(|a, b| if a.score == b.score { b.file.date.cmp(&a.file.date) } else { b.score.total_cmp(&a.score) });
+            matching.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| newest_first(a, b)));
             let best: Vec<Item> = if searching && week.is_none() && matching.len() > 8 { matching[..5].to_vec() } else { Vec::new() };
             let rest = matching[best.len()..].to_vec();
             Results { best, groups: group(rest, searching, grouping, today, &module_order, &starts), total: matching.len(), other_kinds: if searching { other_kinds } else { 0 }, searching, query: q.clone(), loaded: true }
@@ -565,6 +565,11 @@ pub fn current_week(l: &Library) -> Option<u32> {
     l.current_week().map(|w| w.index).or_else(|| l.weeks().iter().rev().find(|w| w.monday <= l.today()).map(|w| w.index))
 }
 
+/// Newer files first; equally old ones by name, so equal results keep their order.
+fn newest_first(a: &Item, b: &Item) -> std::cmp::Ordering {
+    b.file.date.cmp(&a.file.date).then_with(|| crate::core::text::natural_cmp(a.file.name(), b.file.name()))
+}
+
 fn group(items: Vec<Item>, searching: bool, grouping: FileGrouping, today: NaiveDate, order: &HashMap<String, usize>, starts: &WeekStarts) -> Vec<Group> {
     match grouping {
         FileGrouping::Week => {
@@ -588,7 +593,7 @@ fn group(items: Vec<Item>, searching: bool, grouping: FileGrouping, today: Naive
                 .map(|k| {
                     let mut items = map.remove(&k).unwrap_or_default();
                     if !searching {
-                        items.sort_by(|a, b| b.file.date.cmp(&a.file.date));
+                        items.sort_by(newest_first);
                     }
                     Group { kind: GroupKind::Folder(k.0, k.1), items }
                 })
@@ -619,7 +624,7 @@ fn group(items: Vec<Item>, searching: bool, grouping: FileGrouping, today: Naive
             map.into_values()
                 .map(|(label, mut items)| {
                     if !searching {
-                        items.sort_by(|a, b| b.file.date.cmp(&a.file.date));
+                        items.sort_by(newest_first);
                     }
                     Group { kind: GroupKind::Date(label), items }
                 })
@@ -954,6 +959,29 @@ impl FileBrowser {
                 menu
             }, t));
         }
+        if let Some(m) = self.scope_module.as_deref().and_then(|id| lib.module_by_id(id)) {
+            bar = bar.child(
+                div()
+                    .id("search-scope")
+                    .flex()
+                    .items_center()
+                    .gap(px(space::XS))
+                    .h(px(control::S))
+                    .pl(px(space::S))
+                    .pr(px(space::XS))
+                    .rounded_full()
+                    .bg(t.accent.opacity(0.14))
+                    .text_size(px(font::CALLOUT))
+                    .text_color(t.accent_text)
+                    .cursor_pointer()
+                    .key_nav()
+                    .soft(t.accent.opacity(0.12), radius::FULL)
+                    .tooltip(tip(tr("Überall suchen")))
+                    .child(trf("In %@", &[&m.code]))
+                    .child(icon("x", iconsize::XS, t.accent_text))
+                    .on_click(|_, _, cx| act(cx, Library::widen_module_search)),
+            );
+        }
         if vault_query::is_structured(&self.query) {
             let sorts = [(vault_query::Sort::NameAsc, tr("Name A–Z")), (vault_query::Sort::NameDesc, tr("Name Z–A")), (vault_query::Sort::ModifiedNew, tr("Zuletzt geändert")), (vault_query::Sort::ModifiedOld, tr("Am längsten unverändert")), (vault_query::Sort::CreatedNew, tr("Zuletzt erstellt")), (vault_query::Sort::CreatedOld, tr("Zuerst erstellt"))];
             let label = sorts.iter().find(|(s, _)| *s == self.vault_sort).map_or_else(String::new, |(_, l)| l.clone());
@@ -1138,6 +1166,7 @@ impl Render for FileBrowser {
                     tr("Gesucht wird in Namen, Ordnern, PDFs und Notizen. Tipp: „w3“ oder „kw44“ filtert nach Woche."),
                     &t,
                 )
+                .when(self.scope_module.is_some() && self.results.searching, |d| d.child(Button::new("search-everywhere").label(tr("Überall suchen")).on_click(|_, _, cx| act(cx, Library::widen_module_search))))
                 .when(filtered, |d| {
                     d.child(Button::new("reset-filters").label(tr("Filter zurücksetzen")).on_click(move |_, _, cx| e.update(cx, |b, cx| {
                         b.module_filter = None;

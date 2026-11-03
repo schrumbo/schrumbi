@@ -1433,9 +1433,8 @@
   "%@ von %@ erledigt": "%@ of %@ done",
   "Notiz, Textdatei oder Ordner in %@ anlegen (N)": "Create a note, text file or folder in %@ (N)",
   "Dateien in %@ ablegen (F)": "File documents into %@ (F)",
-  "Eintrag hinzufügen": "Add entry",
   "Modulordner öffnen": "Open module folder",
-  "Noch keine Abgaben": "No deadlines yet",
+  "Noch keine Abgaben": "No submissions yet",
   "Lege eine einzelne Abgabe an, oder eine Regel, die sich jede Vorlesungswoche wiederholt.": "Add a single deadline, or a rule that repeats every lecture week.",
   "Regel anlegen": "Add rule",
   "Schreibe die erste Notiz oder ziehe Dateien hierher.": "Write the first note or drop files here.",
@@ -1583,7 +1582,6 @@
   "Nicht mehr gefunden": "No longer found",
   "Gehört das dazu?": "Does this belong to it?",
   "Gehört etwas davon dazu?": "Does any of these belong to it?",
-  "Notiz anlegen": "New note",
   "Neue Notiz in %@, die zu dieser Abgabe gehört. Als PDF exportiert, gehört auch das PDF dazu.": "New note in %@ that belongs to this submission. Exported as PDF, the PDF belongs to it too.",
   "Eine Datei aus dem Studienordner suchen; sie bleibt, wo sie ist.": "Find a file in the study folder; it stays where it is.",
   "Dateien gehören dazu, sobald du sie ablegst oder zuordnest.": "Files belong to it once you file or link them.",
@@ -1618,5 +1616,10 @@
   "Alle Änderungen auf der Release-Seite": "All changes on the release page",
   "Öffnet sich im Browser": "Opens in the browser",
   "Zurück zum Vorschlag": "Back to the suggestion",
-  "PDF ersetzt: %@": "PDF replaced: %@"
+  "PDF ersetzt: %@": "PDF replaced: %@",
+  "Alle %lld zeigen": "Show all %lld",
+  "In %@ suchen": "Search in %@",
+  "In %@": "In %@",
+  "Überall suchen": "Search everywhere",
+  "Abgabe, Aufgabe oder Prüfung eintragen": "Add a submission, task or exam"
 }

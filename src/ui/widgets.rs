@@ -81,6 +81,9 @@ pub fn menu_icon(name: &str) -> Icon {
     Icon::empty().path(SharedString::from(format!("icons/{name}.svg")))
 }
 
+/// Accent strength behind a selected list row, clearly apart from the grey hover.
+pub const SELECTED_ROW: f32 = 0.2;
+
 /// How long after a right click tooltips stay away, so none covers the context menu that just opened.
 const TOOLTIP_PAUSE: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -197,9 +200,11 @@ pub fn status_toggle(a: &Assignment, lib: &Library, size: f32, t: &Theme) -> Sta
         .child(status_glyph(status, a.kind, a.optional, tint, size, t))
         .child(motion::done_pulse("done", status.is_closed() && status != Status::Skipped, size))
         .tooltip(tip(help))
-        .on_click(move |_, _, cx| {
+        .on_click(move |e, _, cx| {
             cx.stop_propagation();
-            act(cx, |l| l.toggle_done(&id));
+            if e.click_count() < 2 {
+                act(cx, |l| l.toggle_done(&id));
+            }
         })
 }
 
@@ -236,9 +241,13 @@ pub fn status_menu(menu: PopupMenu, id: &str, cx: &App) -> PopupMenu {
         let (id2, id3) = (id.to_string(), id.to_string());
         let folder = a.folder.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf).unwrap_or_else(|| a.folder.clone());
         menu = menu
-            .item(item(tr("Notiz anlegen"), "square-pen", Box::new(move |cx| new_assignment_note(&id3, cx))))
+            .item(item(tr("Neue Notiz"), "square-pen", Box::new(move |cx| new_assignment_note(&id3, cx))))
             .item(item(tr("Datei zuordnen…"), "link", Box::new(move |cx| act(cx, |l| l.link_pick = Some(id2.clone())))))
             .item(item(tr("Abgabeordner öffnen"), "folder", Box::new(move |_| library::open_path(&folder))));
+    }
+    if l.manual_for(&a).is_some() {
+        let id2 = id.to_string();
+        menu = menu.separator().item(item(tr("Löschen"), "trash-2", Box::new(move |cx| act(cx, |l| l.remove_manual(&id2)))));
     }
     menu
 }
@@ -510,7 +519,7 @@ pub fn assignment_row_with(lib: &Library, a: &Assignment, show_module: bool, sho
     let e = lib.evaluation(a);
     let module = lib.module(a);
     let tint = t.palette(module.map_or("blue", |m| m.color.as_str()));
-    let (menu_id, drop_id, sel) = (a.id.clone(), a.id.clone(), a.id.clone());
+    let (menu_id, sel, pick) = (a.id.clone(), a.id.clone(), a.id.clone());
     let title = div().font_weight(FontWeight::MEDIUM).text_color(if e.status.is_closed() { t.secondary } else { t.primary }).child(a.title.clone());
     let mut meta = div().flex().items_center().gap(px(space::S)).text_size(px(font::CAPTION)).text_color(t.secondary);
     if show_module {
@@ -541,9 +550,12 @@ pub fn assignment_row_with(lib: &Library, a: &Assignment, show_module: bool, sho
         .px(px(space::S))
         .rounded(px(radius::INNER))
         .cursor_pointer().key_nav()
-        .when(selected, |d| d.bg(t.ink.opacity(0.09)))
-        .when(!selected, |d| d.soft(t.ink.opacity(0.045), radius::INNER))
+        .when(selected, |d| d.bg(t.accent.opacity(SELECTED_ROW)))
+        .soft(t.ink.opacity(0.045), radius::INNER)
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(sel.clone()))))
+        .on_mouse_down(MouseButton::Right, move |_, _, cx| if !state::read(cx, |l| l.is_selected(&pick)) {
+            act(cx, |l| l.select(Some(pick.clone())));
+        })
         .child(status_toggle(a, lib, iconsize::M, t))
         .child(
             div()

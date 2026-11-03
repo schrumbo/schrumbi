@@ -295,7 +295,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
             .child(Button::new("mark-uploaded").icon(menu_icon("check")).tooltip(tr("Als hochgeladen markieren")).on_click(move |_, _, cx| act(cx, |l| l.set_status(Some(Status::Uploaded), &mark, true))))
     } else if !e.status.is_closed() {
         let done = id.clone();
-        div().flex_1().child(Button::new("done").primary().w_full().icon(menu_icon("check")).label(tr("Erledigt")).on_click(move |_, _, cx| act(cx, |l| l.toggle_done(&done))))
+        div().flex_1().child(Button::new("done").primary().w_full().icon(menu_icon("check")).label(if a.upload { tr("Hochgeladen") } else { tr("Erledigt") }).on_click(move |_, _, cx| act(cx, |l| l.toggle_done(&done))))
     } else {
         let reset = id.clone();
         div().flex_1().child(Button::new("reset").w_full().icon(menu_icon("undo-2")).label(tr("Zurücksetzen")).on_click(move |_, _, cx| act(cx, |l| l.set_status(None, &reset, true))))
@@ -402,7 +402,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
                 .gap_x(px(space::L))
                 .gap_y(px(space::XS))
                 .child(
-                    link_button("note-for-assignment", tr("Notiz anlegen"), t)
+                    link_button("note-for-assignment", tr("Neue Notiz"), t)
                         .flex()
                         .items_center()
                         .gap(px(space::XS))
