@@ -397,15 +397,16 @@ fn section(title: Option<String>, footer: Option<String>, rows: Vec<AnyElement>,
 fn apple_calendar_row(t: &Theme) -> AnyElement {
     use super::apple_calendar::{self as apple, State};
     let open = || Some(Button::new("apple-cal-open").small().label(tr("Kalender öffnen")).on_click(|_, _, _| apple::open_calendar_app()));
+    let settings = |id: &'static str| Some(Button::new(id).small().label(tr("Systemeinstellungen öffnen")).on_click(|_, _, _| apple::open_privacy_settings()));
     let (mark, label, button) = match apple::state() {
-        State::Off => (Some(("circle-alert", t.secondary)), tr("Wartet auf deinen Studienordner"), None),
+        State::Off => (Some(("circle-dashed", t.secondary)), tr("Wartet auf deinen Studienordner"), None),
         State::Working => (None, tr("Gleicht ab …"), None),
         State::Asking => (None, tr("Warte auf deine Erlaubnis …"), None),
         State::Synced(0) => (Some(("circle-check", t.green)), tr("Noch keine Termine in diesem Semester"), None),
         State::Synced(1) => (Some(("circle-check", t.green)), tr("1 Termin im Kalender „Schrumbi“"), open()),
         State::Synced(n) => (Some(("circle-check", t.green)), trf("%lld Termine im Kalender „Schrumbi“", &[&n]), open()),
-        State::Denied => (Some(("circle-alert", t.orange)), tr("Kein Zugriff auf deine Kalender"), Some(Button::new("apple-cal-allow").small().label(tr("Systemeinstellungen öffnen")).on_click(|_, _, _| apple::open_privacy_settings()))),
-        State::Restricted => (Some(("circle-alert", t.orange)), tr("Kalenderzugriff ist auf diesem Mac gesperrt"), None),
+        State::Denied => (Some(("circle-alert", t.orange)), tr("Kein Zugriff auf deine Kalender"), settings("apple-cal-allow")),
+        State::Restricted => (Some(("circle-alert", t.orange)), tr("Kalenderzugriff ist auf diesem Mac gesperrt"), settings("apple-cal-restricted")),
         State::Unavailable => (Some(("circle-alert", t.secondary)), tr("Nur in der installierten Schrumbi-App"), None),
         State::Failed(e) => (Some(("circle-alert", t.orange)), trf("Abgleich fehlgeschlagen: %@", &[&e]), Some(Button::new("apple-cal-retry").small().label(tr("Erneut versuchen")).on_click(|_, _, _| apple::recheck()))),
     };
@@ -421,7 +422,7 @@ fn apple_calendar_row(t: &Theme) -> AnyElement {
         .min_h(px(control::ROW))
         .py(px(space::S))
         .child(div().flex_1().min_w_0().flex().items_center().gap(px(space::S)).text_color(t.primary).child(div().flex_none().child(indicator)).child(div().id("apple-cal-state").min_w_0().truncate().child(label.clone()).tooltip(tip(label))))
-        .children(button.map(|b| div().flex_none().child(b)))
+        .children(button.map(|b| div().flex_none().max_w(px(control::ROW_CONTROL)).child(b)))
         .into_any_element()
 }
 
