@@ -31,16 +31,31 @@ Ist nichts offen, steht dort {ui:Nichts offen}. Daneben zeigt {ui:Diese Woche}, 
 | {ui:In Arbeit} | Angefangen, aber nicht fertig |
 | {ui:Entfällt} | Zählt nicht mehr mit |
 | {ui:Termin verschieben…} | Neuer Termin für einen Eintrag aus einer Regel |
-| {ui:Datei zuordnen…} | Eine Datei als Abgabe nehmen |
+| {ui:Notiz dafür anlegen} | Neue Notiz, die zur Abgabe gehört |
+| {ui:Datei zuordnen…} | Eine vorhandene Datei suchen und dazunehmen |
+| {ui:Abgabeordner öffnen} | Den Ordner im Dateimanager zeigen |
 | {ui:Automatisch erkennen} | Den von Hand gesetzten Status aufheben |
 
 {key:Undo} nimmt Statusänderungen zurück.
 
-## Was Schrumbi selbst erkennt
+## Welche Dateien zählen
 
-Bei Abgaben schaut Schrumbi in den Ordner. Es zählen Dateien seit der vorigen Frist.
+Eine Datei zählt für eine Abgabe, wenn sie dazugehört. Datum und Ordner allein reichen nicht.
 
-| Im Ordner | Status |
+| So gehört eine Datei dazu | Wo |
+|---|---|
+| {ui:Notiz anlegen} | Rechts bei der Abgabe |
+| Notiz als PDF exportieren | Das PDF gehört zu denselben Abgaben |
+| Datei auf die Abgabe ziehen oder ablegen | Übersicht, Abgaben, Inbox |
+| {ui:Abgabe zuordnen} | Rechtsklick auf eine Datei in den {ui:Notizen} |
+| Pille oben in der Notiz | Zeigt die Abgabe, ein Klick wechselt sie |
+
+- Neue Notizen und abgelegte Dateien landen im {ui:Abgabeordner} des Moduls, z. B. `Analysis/Abgaben`. Den Namen änderst du unter {key:OpenSettings} → {ui:Allgemein}.
+- Umbenennen und Verschieben in Schrumbi behalten die Zuordnung. Fehlt eine Datei, weil eine andere App sie verschoben hat, steht sie rechts als {ui:Nicht mehr gefunden}.
+- Liegt im Abgabeordner etwas aus der Zeit vor der Frist, fragt Schrumbi rechts {ui:Gehört das dazu?}. Erst {ui:Zuordnen} zählt.
+- Hat eine Regel einen {ui:Wochenordner}, zählt alles darin ohne Zuordnen.
+
+| Zugeordnet | Status |
 |---|---|
 | Nichts, Termin noch nicht da | {ui:Offen} |
 | Nichts, Termin vorbei | {ui:Überfällig}, bei optionalen {ui:Entfällt} |

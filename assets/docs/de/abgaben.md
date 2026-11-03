@@ -54,4 +54,4 @@ Termine landen beim passenden Modul, wenn Kürzel oder Name im Kurs stehen. Im F
 | {ui:Dateinamen} | Eine Abgabe passt nicht zur Namenskonvention | {ui:Alle umbenennen} |
 | {ui:Upload bestätigen} | Datei liegt bereit, Frist vorbei, Upload nicht bestätigt | {ui:Alle bestätigen} |
 | {ui:Überfällig} | Termin vorbei, keine Datei oder nicht abgehakt | {ui:Abgegeben} oder {ui:Entfällt} |
-| {ui:Ordnerstruktur} | Ein erwarteter Ordner fehlt | {ui:Alle anlegen} |
+| {ui:Ordnerstruktur} | Ein Modulordner oder ein {ui:Wochenordner} fehlt | {ui:Alle anlegen} |

@@ -54,4 +54,4 @@ Events land in the matching module if its code or name appears in the course. Ot
 | {ui:Dateinamen} | A submission does not match the naming convention | {ui:Alle umbenennen} |
 | {ui:Upload bestätigen} | File is ready, deadline passed, upload not confirmed | {ui:Alle bestätigen} |
 | {ui:Überfällig} | Date passed, no file or not ticked off | {ui:Abgegeben} or {ui:Entfällt} |
-| {ui:Ordnerstruktur} | An expected folder is missing | {ui:Alle anlegen} |
+| {ui:Ordnerstruktur} | A module folder or a {ui:Wochenordner} is missing | {ui:Alle anlegen} |

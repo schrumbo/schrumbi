@@ -8,6 +8,8 @@ Drop a file on Schrumbi, and it lands in the right folder with the right name.
 2. Schrumbi suggests target and name.
 3. {key:return} files it.
 
+Filed onto an entry, the file goes into the module's {ui:Abgabeordner} and belongs to the submission. Dragged from {ui:Notizen} onto an entry, it stays where it is and only comes to belong to it.
+
 | Key | Effect |
 |---|---|
 | {key:return} | File it |

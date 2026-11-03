@@ -21,6 +21,7 @@ Notes are Markdown files in your folder. Obsidian reads them the same way.
 
 - A single click opens a preview, a double click keeps the tab.
 - Dragging a file onto a folder moves it.
+- Right-click → {ui:Abgabe zuordnen} makes the file count for a submission. The pill at the top of the note shows what it belongs to.
 - {ui:In den Papierkorb} does not ask. {key:Undo} brings the file back.
 
 At the top you switch between {ui:Dateien}, {ui:Suche}, {ui:Tags} and {ui:Aufgaben}.

@@ -36,7 +36,7 @@ A worksheet every week? One rule instead of 14 entries:
 2. {ui:Regel hinzufügen} and choose a template.
 3. Adjust title, day and time.
 
-The rule's folder can use placeholders:
+Files belong to the week's submission once you file them, create a note for it or link them. If every week has its own folder, enter it under {ui:Erweitert} → {ui:Wochenordner}. What lies in it then counts without linking. It can use placeholders:
 
 | Placeholder | Becomes |
 |---|---|

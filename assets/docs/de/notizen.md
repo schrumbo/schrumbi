@@ -21,6 +21,7 @@ Notizen sind Markdown-Dateien in deinem Ordner. Obsidian liest sie genauso.
 
 - Einfacher Klick öffnet eine Vorschau, Doppelklick behält den Tab.
 - Datei auf einen Ordner ziehen verschiebt sie.
+- Rechtsklick → {ui:Abgabe zuordnen} zählt die Datei für eine Abgabe. Die Pille oben in der Notiz zeigt, wozu sie gehört.
 - {ui:In den Papierkorb} fragt nicht nach. {key:Undo} holt die Datei zurück.
 
 Oben wechselst du zwischen {ui:Dateien}, {ui:Suche}, {ui:Tags} und {ui:Aufgaben}.

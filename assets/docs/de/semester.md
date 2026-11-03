@@ -36,7 +36,7 @@ Ein Übungsblatt jede Woche? Eine Regel statt 14 Einträgen:
 2. {ui:Regel hinzufügen} und eine Vorlage wählen.
 3. Titel, Tag und Uhrzeit anpassen.
 
-Im Ordner der Regel stehen Platzhalter:
+Dateien gehören zur Abgabe der Woche, sobald du sie ablegst, dafür eine Notiz anlegst oder sie zuordnest. Hat jede Woche einen eigenen Ordner, trägst du ihn unter {ui:Erweitert} → {ui:Wochenordner} ein. Was darin liegt, zählt dann ohne Zuordnen. Dort stehen Platzhalter:
 
 | Platzhalter | Wird zu |
 |---|---|

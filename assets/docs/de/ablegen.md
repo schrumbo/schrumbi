@@ -8,6 +8,8 @@ Ziehe eine Datei auf Schrumbi, und sie landet im richtigen Ordner mit dem richti
 2. Schrumbi schlägt Ziel und Namen vor.
 3. {key:return} legt ab.
 
+Auf einen Eintrag abgelegt, landet die Datei im {ui:Abgabeordner} des Moduls und gehört zur Abgabe. Aus den {ui:Notizen} auf einen Eintrag gezogen, bleibt sie, wo sie ist, und gehört nur dazu.
+
 | Taste | Wirkung |
 |---|---|
 | {key:return} | Ablegen |
