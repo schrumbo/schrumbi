@@ -59,6 +59,7 @@ fn merge(base: &Value, ours: &Value, theirs: &Value, policy: Policy, path: &[&st
     match (ours, theirs) {
         (Value::Object(o), Value::Object(t)) => merge_objects(base.as_object(), o, t, policy, path),
         (Value::Array(o), Value::Array(t)) if has_ids(o) && has_ids(t) => merge_lists(base.as_array(), o, t, policy, path),
+        (Value::Array(o), Value::Array(t)) if policy == Policy::State && path.first() == Some(&"linkedFiles") => Some(merge_sets(base.as_array(), o, t)),
         _ => contradiction(ours, theirs, policy, path),
     }
 }
@@ -102,6 +103,16 @@ fn merge_lists(base: Option<&Vec<Value>>, ours: &[Value], theirs: &[Value], poli
     Some(Value::Array(out))
 }
 
+/// Both sides' additions stay, and what either side took out of the base stays out.
+fn merge_sets(base: Option<&Vec<Value>>, ours: &[Value], theirs: &[Value]) -> Value {
+    let empty = Vec::new();
+    let base = base.unwrap_or(&empty);
+    let kept = |v: &&Value, other: &[Value]| !base.contains(v) || other.contains(v);
+    let mut out: Vec<Value> = ours.iter().filter(|v| kept(v, theirs)).cloned().collect();
+    out.extend(theirs.iter().filter(|v| !ours.contains(v) && !base.contains(v)).cloned());
+    Value::Array(out)
+}
+
 /// The state holds marks made over time: the later one counts, and two notes both stay.
 fn contradiction(ours: &Value, theirs: &Value, policy: Policy, path: &[&str]) -> Option<Value> {
     if policy == Policy::Config {
@@ -130,6 +141,15 @@ mod tests {
 
     fn state(v: Value) -> String {
         v.to_string()
+    }
+
+    #[test]
+    fn links_added_on_both_machines_all_stay() {
+        let base = state(json!({"linkedFiles": {"e": ["a.pdf", "b.pdf"]}}));
+        let ours = state(json!({"linkedFiles": {"e": ["a.pdf", "b.pdf", "mac.pdf"]}}));
+        let theirs = state(json!({"linkedFiles": {"e": ["a.pdf", "win.md"]}}));
+        let s: StudyState = serde_json::from_str(&merge_file(STATE_NAME, Some(&base), &ours, &theirs).unwrap()).unwrap();
+        assert_eq!(s.linked_files["e"], vec!["a.pdf", "mac.pdf", "win.md"]);
     }
 
     #[test]

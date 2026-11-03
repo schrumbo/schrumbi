@@ -79,10 +79,6 @@ pub fn listings(requests: &HashSet<FolderRequest>) -> Listings {
 }
 
 /// Linked files that are not on disk; touches the file system, so run it off the main thread.
-pub fn gone(state: &StudyState, root: &Path) -> HashSet<PathBuf> {
-    state.linked_files.values().flatten().map(|rel| root.join(rel)).filter(|p| !p.exists()).collect()
-}
-
 pub fn matches(name: &str, glob: &str) -> bool {
     let opts = MatchOptions { case_sensitive: false, ..MatchOptions::new() };
     Pattern::new(if glob.is_empty() { "*" } else { glob }).is_ok_and(|p| p.matches_with(name, opts))
@@ -179,12 +175,13 @@ pub fn evaluate(assignments: &[Assignment], listings: &Listings, config: &StudyC
 /// Unlinked files from around the deadline: anything in its folder, and in the folder older versions searched only what names it. Best first.
 fn suggestions(a: &Assignment, own: &[FileInfo], listings: &Listings, claimed: &HashSet<PathBuf>, naming: Option<&Naming>, config: &StudyConfig) -> Vec<PathBuf> {
     let legacy = a.legacy.as_ref().filter(|l| **l != (a.folder.clone(), a.recursive)).and_then(|l| listings.get(l)).map(Vec::as_slice).unwrap_or_default();
-    let mut seen = HashSet::new();
+    let fresh = |f: &&FileInfo| window(a, f.date) && !claimed.contains(&f.path);
+    let inside: HashSet<&Path> = if legacy.is_empty() { HashSet::new() } else { own.iter().filter(fresh).map(|f| f.path.as_path()).collect() };
     let mut found: Vec<(bool, DateTime<Local>, PathBuf)> = own
         .iter()
+        .filter(fresh)
         .map(|f| (f, true))
-        .chain(legacy.iter().map(|f| (f, false)))
-        .filter(|(f, _)| seen.insert(f.path.clone()) && !claimed.contains(&f.path) && window(a, f.date))
+        .chain(legacy.iter().filter(fresh).filter(|f| !inside.contains(f.path.as_path())).map(|f| (f, false)))
         .filter(|(f, _)| matches(file_name(&f.path), &a.file_pattern) && !FileRole::is_brief(file_name(&f.path), &config.author))
         .filter_map(|(f, inside)| {
             let named = names_it(a, file_name(&f.path), naming);

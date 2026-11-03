@@ -235,7 +235,7 @@ pub fn status_menu(menu: PopupMenu, id: &str, cx: &App) -> PopupMenu {
         let (id2, id3) = (id.to_string(), id.to_string());
         let folder = a.folder.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf).unwrap_or_else(|| a.folder.clone());
         menu = menu
-            .item(item(tr("Notiz dafür anlegen"), "square-pen", Box::new(move |cx| new_assignment_note(&id3, cx))))
+            .item(item(tr("Notiz anlegen"), "square-pen", Box::new(move |cx| new_assignment_note(&id3, cx))))
             .item(item(tr("Datei zuordnen…"), "link", Box::new(move |cx| act(cx, |l| l.link_pick = Some(id2.clone())))))
             .item(item(tr("Abgabeordner öffnen"), "folder", Box::new(move |_| library::open_path(&folder))));
     }

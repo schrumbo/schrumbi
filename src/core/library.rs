@@ -313,6 +313,7 @@ pub struct Library {
     pub config_broken: bool,
     read_only: bool,
     pub needs_setup: bool,
+    config_created: bool,
     /// A deck the flashcards page should open and start.
     pub cards_request: Option<String>,
     /// The dialog that names a set of tabs is wanted.
@@ -476,6 +477,7 @@ impl Library {
             config_broken: false,
             read_only: false,
             needs_setup: false,
+            config_created: false,
             cards_request: None,
             show_save_layout: false,
             filing_request: None,
@@ -599,6 +601,7 @@ impl Library {
 
     pub fn load_config(&mut self) {
         let (Some(root), Some(path)) = (self.root.clone(), self.config_path()) else { return };
+        self.config_created = false;
         match workspace::load::<StudyConfig>(&path) {
             Ok(Some(c)) => {
                 self.read_only = c.version > CURRENT_VERSION;
@@ -614,6 +617,7 @@ impl Library {
                 let _ = workspace::save(&c, &path);
                 self.config = Some(c);
                 self.needs_setup = true;
+                self.config_created = true;
                 self.last_error = None;
             }
             Err(e) => {
@@ -654,7 +658,7 @@ impl Library {
         self.highlights = self.highlights_path().and_then(|p| workspace::load::<Highlights>(&p).ok().flatten()).unwrap_or_default();
         let Some(path) = self.state_path() else { return };
         match workspace::load::<StudyState>(&path) {
-            Ok(s) => self.state = s.unwrap_or_else(|| StudyState { links_adopted: true, ..Default::default() }),
+            Ok(s) => self.state = s.unwrap_or_else(|| StudyState { links_adopted: self.config_created, ..Default::default() }),
             Err(_) => {
                 if workspace::restore_latest::<StudyState>(&path)
                     && let Ok(Some(s)) = workspace::load::<StudyState>(&path)
@@ -1401,7 +1405,7 @@ impl Library {
 
     /// Older versions counted files by date in shared folders; turns what they counted into links once, so no status changes on update.
     fn adopt_found_files(&mut self) {
-        if self.state.links_adopted || self.read_only {
+        if self.state.links_adopted || self.read_only || self.sync_gate {
             return;
         }
         let Some(config) = self.config.as_ref() else { return };
@@ -2672,7 +2676,7 @@ impl Library {
     /// A note named after its heading keeps that heading; where a convention applies, the name follows it and the heading stays as typed.
     pub fn rename(&mut self, file: &Path, name: &str) {
         let titled = heading_titled(file);
-        let (name, title, convention) = match titled.then(|| self.convention_at(&file.with_file_name(name))).flatten() {
+        let (name, title, convention) = match titled.then(|| self.convention_for(file, &file.with_file_name(name))).flatten() {
             Some((naming, a)) => match naming.parse(name).or_else(|| self.parse_brief(name, &a.module_id)) {
                 Some(p) => (name.to_string(), p.title.replace('-', " "), true),
                 None => {
@@ -2703,8 +2707,14 @@ impl Library {
 
     /// The convention a file in this place must follow: a checked upload it belongs to or whose folder holds it, the next one due first.
     fn convention_at(&self, path: &Path) -> Option<(Naming, Assignment)> {
+        self.convention_for(path, path)
+    }
+
+    /// Like `convention_at`, for a file that is about to be at `place`: its links still sit on `file`.
+    fn convention_for(&self, file: &Path, place: &Path) -> Option<(Naming, Assignment)> {
+        let path = place;
         self.config.as_ref().filter(|c| c.check_names)?;
-        if let Some(a) = self.deadlines_of(path).into_iter().find(|a| a.upload) {
+        if let Some(a) = self.deadlines_of(file).into_iter().find(|a| a.upload) {
             return Some((self.naming(&a.module_id)?, a));
         }
         let name = name_of(path);
@@ -2714,7 +2724,7 @@ impl Library {
         let settled_root = dunce::canonicalize(&root).unwrap_or_else(|_| root.clone());
         let holds = |a: &Assignment| {
             let other = a.folder.strip_prefix(&root).map_or_else(|_| a.folder.clone(), |rest| settled_root.join(rest));
-            [&a.folder, &other].iter().any(|f| [&raw, &settled].iter().any(|d| *d == *f || (a.recursive && d.starts_with(f))))
+            [&a.folder, &other].iter().any(|f| [&raw, &settled].iter().any(|d| *d == *f || (a.recursive && a.owns_folder() && d.starts_with(f))))
         };
         let fitting: Vec<&Assignment> = self.assignments.iter().filter(|a| a.upload && a.tracks_files() && scanner::matches(&name, &a.file_pattern) && holds(a)).collect();
         let today = self.today();
@@ -2835,8 +2845,15 @@ impl Library {
         }
         let (old, new) = (self.relative_path(&from), self.relative_path(&to));
         let mut relinked = false;
-        for rel in self.state.linked_files.values_mut().flatten().filter(|r| **r == old) {
-            rel.clone_from(&new);
+        let inside = format!("{old}/");
+        for rel in self.state.linked_files.values_mut().flatten() {
+            if *rel == old {
+                rel.clone_from(&new);
+            } else if let Some(rest) = rel.strip_prefix(&inside) {
+                *rel = format!("{new}/{rest}");
+            } else {
+                continue;
+            }
             relinked = true;
         }
         if relinked {
@@ -3115,7 +3132,10 @@ impl Library {
     /// A note that belongs to the deadline from the start, in its module's submissions folder; one undo takes both back.
     pub fn create_assignment_note(&mut self, id: &str) -> Option<PathBuf> {
         let a = self.assignment(id).filter(|a| a.tracks_files()).cloned()?;
-        let folder = self.filing_folder(&a)?;
+        let Some(folder) = self.filing_folder(&a) else {
+            self.last_error = Some(tr("Der Modulordner fehlt. Lege ihn an oder schalte „Ordner anlegen“ ein."));
+            return None;
+        };
         let plain = match (a.rule_id.is_some(), a.week) {
             (true, Some(w)) => format!("{} W{w:02}", a.title),
             _ => a.title.clone(),

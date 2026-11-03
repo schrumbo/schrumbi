@@ -1532,3 +1532,34 @@ fn choices_for_a_file_are_its_modules_open_deadlines_with_the_linked_ones_checke
     assert!(!lib.is_linked(&file, &a.id));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn links_inside_a_renamed_folder_follow_it() {
+    let (root, mut lib) = workspace("links-folder", &shared_config());
+    let a = upcoming(&lib);
+    let note = lib.create_assignment_note(&a.id).unwrap();
+    let folder = note.parent().unwrap().to_path_buf();
+    lib.rename(&folder, "Abgaben WS");
+    let moved = folder.with_file_name("Abgaben WS").join(note.file_name().unwrap());
+    assert!(moved.exists());
+    assert!(lib.is_linked(&moved, &a.id), "the link moves with its folder");
+    lib.undo();
+    assert!(note.exists() && lib.is_linked(&note, &a.id), "undo moves it back");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_workspace_from_before_links_without_a_state_file_keeps_what_counted() {
+    let root = folder("links-no-state");
+    std::fs::write(root.join("schrumbi.json"), serde_json::to_vec_pretty(&shared_config()).unwrap()).unwrap();
+    let lib = open(&root);
+    let a = upcoming(&lib);
+    drop(lib);
+    let _ = std::fs::remove_file(root.join(".schrumbi-state.json"));
+    std::fs::create_dir_all(&a.folder).unwrap();
+    let file = a.folder.join(dated(&a, "Entwurf"));
+    std::fs::write(&file, "x").unwrap();
+    let lib = open(&root);
+    assert!(lib.is_linked(&file, &a.id));
+    let _ = std::fs::remove_dir_all(root);
+}

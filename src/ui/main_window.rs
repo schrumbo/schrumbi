@@ -232,7 +232,7 @@ impl MainWindow {
         if !linked.is_empty() || lib.module_containing(path).is_some() {
             let menu_path = path.to_path_buf();
             let shown = linked.first().map(|a| (a.module_id.clone(), a.id.clone()));
-            let pill = Button::new("note-deadline").ghost().xsmall().icon(menu_icon("link"));
+            let pill = Button::new("note-deadline").ghost().small().icon(menu_icon("link"));
             let pill = match linked.first() {
                 Some(a) => {
                     let more = if linked.len() > 1 { format!(" +{}", linked.len() - 1) } else { String::new() };
@@ -240,7 +240,7 @@ impl MainWindow {
                 }
                 None => pill.tooltip(tr("Einer Abgabe zuordnen")),
             };
-            row = row.child(div().flex_none().ml(px(space::S)).child(pill.dropdown_menu(move |menu, _, cx| {
+            row = row.child(div().flex_none().max_w(px(240.)).overflow_hidden().ml(px(space::S)).child(pill.dropdown_menu(move |menu, _, cx| {
                 let mut menu = deadline_items(menu.label(tr("Gehört zu")), &menu_path, cx);
                 if let Some((module, id)) = shown.clone() {
                     menu = menu.separator().item(PopupMenuItem::new(tr("Abgabe anzeigen")).icon(menu_icon("arrow-right")).on_click(move |_, _, cx| {
