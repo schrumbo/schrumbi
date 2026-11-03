@@ -10,7 +10,7 @@ use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
 use super::motion::Soft;
 use super::selectable::{InlineKind, InlineSlot, LinkAction, selectable};
-use super::theme::{Theme, font, note_size, radius, space, iconsize};
+use super::theme::{Theme, control, font, note_size, radius, space, iconsize};
 use crate::core::i18n::{tr, trf};
 use crate::core::markdown::{self, Run, TokenKind};
 use crate::core::vault::syntax::{self, CalloutHead, MarkColor};
@@ -1304,7 +1304,8 @@ impl Table {
                 let line = window.text_system().shape_line(text.clone().into(), px(self.size), &runs, None);
                 let glyphs: Vec<(usize, f32)> = line.runs.iter().flat_map(|run| run.glyphs.iter().map(|g| (g.index, f32::from(g.position.x)))).collect();
                 let end = f32::from(line.width);
-                let x_at = |i: usize| glyphs.get(glyphs.partition_point(|(at, _)| *at < i)).map_or(end, |(_, x)| *x);
+                let sorted = glyphs.windows(2).all(|w| w[0].0 <= w[1].0);
+                let x_at = |i: usize| if sorted { glyphs.get(glyphs.partition_point(|(at, _)| *at < i)) } else { glyphs.iter().find(|(at, _)| *at >= i) }.map_or(end, |(_, x)| *x);
                 let mut objects: Vec<f32> = cell.pictures.iter().map(|p| *p as f32).collect();
                 for formula in &cell.formulas {
                     objects.push(match super::embeds::inline_math(formula, super::theme::note_scale(), cx) {
@@ -1870,7 +1871,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                             .absolute()
                             .top_0()
                             .left_0()
-                            .size(px(iconsize::L))
+                            .size(px(control::S))
                             .flex()
                             .items_center()
                             .justify_center()
