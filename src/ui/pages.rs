@@ -103,9 +103,6 @@ impl Pages {
                         b.set_scope(Some(id), cx);
                         b.set_query(&module_query, cx);
                     });
-                    if !module_query.is_empty() {
-                        this.module.tab = module_page::ModuleTab::Files;
-                    }
                 }
                 cx.notify();
             }),
@@ -134,7 +131,7 @@ impl Pages {
             grid: GridState::default(),
             record: RecordState::default(),
             checks: ChecksState::default(),
-            module: ModuleState { tab: module_page::ModuleTab::saved(), focus: Some(cx.focus_handle()), ..Default::default() },
+            module: ModuleState { focus: Some(cx.focus_handle()), ..Default::default() },
             search,
             preview,
             module_files,
@@ -234,41 +231,20 @@ impl Pages {
             .into_any_element()
     }
 
-    /// Switches the module page's view and hands the keyboard to it.
-    pub fn show_module_tab(&mut self, tab: module_page::ModuleTab, cx: &mut Context<Self>) {
-        self.module.tab = tab;
-        tab.remember();
-        self.module.scroll.set_offset(point(px(0.), px(0.)));
-        self.module_needs_focus = true;
-        cx.notify();
-    }
-
-    fn module_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        use module_page::ModuleTab as Tab;
+    fn module_key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
         let m = &e.keystroke.modifiers;
         if m.platform || m.control || m.alt {
             return;
         }
         let Route::Module(id) = state::read(cx, |l| l.route().clone()) else { return };
         match e.keystroke.key.as_str() {
-            "1" => self.show_module_tab(Tab::Overview, cx),
-            "2" => self.show_module_tab(Tab::Deadlines, cx),
-            "3" => {
-                self.show_module_tab(Tab::Files, cx);
-                self.module_needs_focus = false;
-                self.module_files.update(cx, |b, cx| b.take_focus(window, cx));
-            }
             "n" => act(cx, |l| l.new_note = Some(crate::core::library::NewNoteRequest { module_id: Some(id), folder: None })),
             "f" => {
                 let next = state::read(cx, |l| l.next_in_module(&id));
                 super::platform::pick_files_for_filing(next, cx);
             }
             "up" | "down" => {
-                let rows: Vec<String> = state::read(cx, |l| match (l.module_by_id(&id), self.module.tab) {
-                    (Some(m), Tab::Overview) => module_page::next_up(l, m).iter().map(|a| a.id.clone()).collect(),
-                    (Some(m), Tab::Deadlines) => module_page::deadline_order(l, m, &self.module),
-                    _ => Vec::new(),
-                });
+                let rows: Vec<String> = state::read(cx, |l| l.module_by_id(&id).map(|m| module_page::deadline_order(l, m, &self.module)).unwrap_or_default());
                 if rows.is_empty() {
                     return;
                 }
@@ -290,12 +266,10 @@ impl Pages {
         let Some(m) = lib.module_by_id(id).cloned() else {
             return unavailable("folder-search", tr("Modul nicht gefunden"), "", t).into_any_element();
         };
-        use module_page::ModuleTab as Tab;
-        let scrolled = |inner: Div| div().flex_1().min_h_0().relative().child(div().id("module-body").size_full().overflow_y_scroll().track_scroll(&self.module.scroll).child(inner)).vertical_scrollbar(&self.module.scroll);
-        let body = match self.module.tab {
-            Tab::Overview => scrolled(module_page::overview(lib, &m, width, &self.module, view.clone(), t)),
-            Tab::Deadlines => scrolled(div().w_full().max_w(px(820.)).mx_auto().child(module_page::deadlines(lib, &m, &self.module, view.clone(), t))),
-            Tab::Files => div().flex_1().min_h_0().child(self.module_files.clone()),
+        let body = if lib.module_query.is_empty() {
+            div().flex_1().min_h_0().relative().child(div().id("module-body").size_full().overflow_y_scroll().track_scroll(&self.module.scroll).child(module_page::overview(lib, &m, width, &self.module, view.clone(), t))).vertical_scrollbar(&self.module.scroll)
+        } else {
+            div().flex_1().min_h_0().child(self.module_files.clone())
         };
         let accent = t.accent;
         let code = m.code.clone();
@@ -306,7 +280,7 @@ impl Pages {
             .group("module-page")
             .when_some(focus, |d, f| d.track_focus(&f))
             .key_context("ModulePage")
-            .on_key_down(move |e: &KeyDownEvent, window, cx| key_view.update(cx, |p, cx| p.module_key(e, window, cx)))
+            .on_key_down(move |e: &KeyDownEvent, _, cx| key_view.update(cx, |p, cx| p.module_key(e, cx)))
             .capture_action(move |_: &super::main_window::Dismiss, window, cx| {
                 let focused = dismiss_view.read(cx).module.focus.as_ref().is_some_and(|f| f.is_focused(window));
                 if focused {
@@ -318,7 +292,7 @@ impl Pages {
             .relative()
             .flex()
             .flex_col()
-            .child(module_page::header(lib, &m, width, &self.module, view, t))
+            .child(module_page::header(lib, &m, width, t))
             .child(body)
             .on_drop(move |paths: &ExternalPaths, _, cx| {
                 let paths = paths.paths().to_vec();
@@ -647,7 +621,7 @@ impl Render for Pages {
                 }
                 if self.module_needs_focus && !window.has_active_dialog(cx) {
                     self.module_needs_focus = false;
-                    if self.module.tab != module_page::ModuleTab::Files
+                    if lib.read(cx).module_query.is_empty()
                         && let Some(focus) = self.module.focus.clone()
                     {
                         window.on_next_frame(move |window, cx| window.focus(&focus, cx));

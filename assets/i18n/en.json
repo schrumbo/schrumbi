@@ -1604,5 +1604,6 @@
   "Wochenordner": "Week folder",
   "Nur wenn jede Woche einen eigenen Ordner hat, z. B. W{w}_KW{kw}/Hausuebung. Was darin liegt, zählt dann ohne Zuordnen.": "Only if every week has its own folder, e.g. W{w}_KW{kw}/Hausuebung. What lies in it then counts without linking.",
   "Legt in jedem Modul einen Abgabeordner an, sobald du etwas ablegst, und benennt nach Muster.": "Creates a submissions folder in each module once you file something, and names by pattern.",
-  "Der Modulordner fehlt. Lege ihn an oder schalte „Ordner anlegen“ ein.": "The module folder is missing. Create it or turn on “Create folders”."
+  "Der Modulordner fehlt. Lege ihn an oder schalte „Ordner anlegen“ ein.": "The module folder is missing. Create it or turn on “Create folders”.",
+  "Im Dateibaum zeigen": "Show in the file tree"
 }

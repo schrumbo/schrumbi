@@ -183,7 +183,6 @@ pub struct Prefs {
     /// Width of the deadlines column on module pages.
     pub module_column: Option<f32>,
     /// The view last open on module pages.
-    pub module_tab: String,
     pub shortcuts: BTreeMap<String, Shortcut>,
     pub disabled_shortcuts: BTreeSet<String>,
     pub git: BTreeMap<String, GitPrefs>,
@@ -233,7 +232,6 @@ impl Default for Prefs {
             card_reviews_per_day: 200,
             card_target: None,
             note_mode: NoteMode::default(),
-            module_tab: String::new(),
             heading_titled: BTreeSet::new(),
             card_deck: String::new(),
             card_open: Vec::new(),

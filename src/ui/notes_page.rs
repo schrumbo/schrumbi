@@ -365,15 +365,7 @@ impl NotesPage {
                     window.focus(&this.focus, cx);
                 }
                 if let Some(folder) = lib.update(cx, |l, _| l.reveal_folder.take()) {
-                    this.view = View::Files;
-                    let mut up = Some(folder.as_str());
-                    while let Some(f) = up {
-                        this.open_folders.insert(f.to_string());
-                        up = f.rsplit_once('/').map(|(a, _)| a);
-                    }
-                    this.select_folder(Some(folder.clone()));
-                    this.target_folder = Some(folder);
-                    window.focus(&this.focus, cx);
+                    this.show_folder(folder, window, cx);
                 }
                 if lib.read(cx).notes_tag.is_some() && lib.read(cx).notes_tag != this.shown_tag {
                     this.view = View::Tags;
@@ -389,7 +381,8 @@ impl NotesPage {
                 cx.notify();
             }),
         ];
-        Self {
+        let waiting = lib.update(cx, |l, _| l.reveal_folder.take());
+        let mut page = Self {
             view: View::Files,
             order: Order::Name,
             open_folders: BTreeSet::new(),
@@ -409,7 +402,23 @@ impl NotesPage {
             searched: String::new(),
             searching: None,
             _subs: subs,
+        };
+        if let Some(folder) = waiting {
+            page.show_folder(folder, window, cx);
         }
+        page
+    }
+
+    fn show_folder(&mut self, folder: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.view = View::Files;
+        let mut up = Some(folder.as_str());
+        while let Some(f) = up {
+            self.open_folders.insert(f.to_string());
+            up = f.rsplit_once('/').map(|(a, _)| a);
+        }
+        self.select_folder(Some(folder.clone()));
+        self.target_folder = Some(folder);
+        window.focus(&self.focus, cx);
     }
 
     /// The explorer's full width, its resize handle included.

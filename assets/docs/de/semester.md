@@ -12,11 +12,14 @@ Ein Semester hat Vorlesungswochen, ein Modul hat einen Ordner. Mehr braucht Schr
 
 ## Modulseite
 
-Klick auf ein Modul in der Seitenleiste öffnet seine Seite.
+Klick auf ein Modul in der Seitenleiste öffnet seine Seite. Links stehen alle {ui:Abgaben} mit ihren Dateien und {ui:Zuletzt geschrieben}, rechts Karten, Termine, Note und Links.
+
+- Was überfällig ist, steht oben. Danach kommen die nächsten zwei Wochen. Spätere und erledigte Abgaben sind eingeklappt.
+- {ui:Alle Dateien} zeigt den Modulordner im Dateibaum.
+- Das Suchfeld oben durchsucht auf der Modulseite nur dieses Modul.
 
 | Taste | Wirkung |
 |---|---|
-| {key:1} {key:2} {key:3} | Reiter {ui:Übersicht}, {ui:Abgaben}, {ui:Dateien} |
 | {key:n} | {ui:Neue Notiz} im Modul |
 | {key:f} | {ui:Ablegen} für die nächste offene Abgabe |
 | {key:up} {key:down} | Durch die Einträge gehen |

@@ -19,42 +19,13 @@ use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library, NewNoteRequest};
 use crate::core::model::{Assignment, Module};
 
-/// The three views of a module page.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum ModuleTab {
-    #[default]
-    Overview,
-    Deadlines,
-    Files,
-}
-
-impl ModuleTab {
-    pub fn saved() -> Self {
-        match crate::core::prefs::get().module_tab.as_str() {
-            "deadlines" => Self::Deadlines,
-            "files" => Self::Files,
-            _ => Self::Overview,
-        }
-    }
-
-    pub fn remember(self) {
-        let name = match self {
-            Self::Overview => "overview",
-            Self::Deadlines => "deadlines",
-            Self::Files => "files",
-        };
-        crate::core::prefs::update(|p| p.module_tab = name.to_string());
-    }
-}
-
 /// View state of a module page.
 #[derive(Default)]
 pub struct ModuleState {
-    pub tab: ModuleTab,
     pub show_past: bool,
     pub show_later: bool,
     pub expanded_files: std::collections::HashSet<String>,
-    /// Takes the keyboard while the page shows anything but the file list.
+    /// Takes the keyboard while the page is not searching its files.
     pub focus: Option<FocusHandle>,
     pub scroll: ScrollHandle,
 }
@@ -229,7 +200,7 @@ pub fn deadlines(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
 }
 
 /// Who the module is and what can always be done: name and state on the left, the two things done most on the right.
-pub fn header(lib: &Library, m: &Module, width: f32, st: &ModuleState, view: Entity<Pages>, t: &Theme) -> Div {
+pub fn header(lib: &Library, m: &Module, width: f32, t: &Theme) -> Div {
     let (done, total) = lib.module_progress(&m.id);
     let color = t.palette(&m.color);
     let folder = lib.root.as_ref().map(|r| r.join(&m.folder)).unwrap_or_default();
@@ -264,45 +235,13 @@ pub fn header(lib: &Library, m: &Module, width: f32, st: &ModuleState, view: Ent
                 .separator()
                 .item(PopupMenuItem::new(tr("Modul bearbeiten")).icon(menu_icon("settings")).on_click(move |_, _, cx| super::settings::open_module(&edit_id, cx)))
         }));
-    let waiting: usize = lib.assignments.iter().filter(|a| a.module_id == m.id && day::local_date(a.due) < lib.today() && !lib.is_done(a)).count();
-    let tab = |id: &'static str, label: String, which: ModuleTab, count: usize| {
-        let v = view.clone();
-        let on = st.tab == which;
-        div()
-            .id(id)
-            .h(px(super::theme::control::M))
-            .mb(px(-1.))
-            .flex()
-            .items_center()
-            .cursor_pointer()
-            .key_nav()
-            .border_b_2()
-            .border_color(if on { color } else { transparent_black() })
-            .text_size(px(font::CALLOUT))
-            .text_color(if on { t.primary } else { t.secondary })
-            .when(on, |d| d.font_weight(FontWeight::SEMIBOLD))
-            .child(
-                div()
-                    .id(SharedString::from(format!("{id}-hover")))
-                    .h(px(super::theme::control::M - space::S))
-                    .px(px(space::S))
-                    .flex()
-                    .items_center()
-                    .gap(px(space::XS))
-                    .rounded(px(radius::INNER))
-                    .when(!on, |d| d.soft(t.ink.opacity(0.05), radius::INNER))
-                    .child(label)
-                    .when(count > 0, |d| d.child(div().px(px(space::XS)).rounded_full().bg(t.red.opacity(0.16)).text_color(t.red).text_size(px(font::CAPTION)).font_features(tabular()).child(count.to_string()))),
-            )
-            .on_click(move |_, _, cx| v.update(cx, |p, cx| p.show_module_tab(which, cx)))
-    };
     div()
         .flex_none()
         .flex()
         .flex_col()
         .gap(px(space::M))
         .px(px(space::XL))
-        .pt(px(space::L))
+        .py(px(space::L))
         .border_b_1()
         .border_color(t.separator)
         .child(
@@ -323,36 +262,22 @@ pub fn header(lib: &Library, m: &Module, width: f32, st: &ModuleState, view: Ent
                 )
                 .child(actions),
         )
-        .child(div().flex().gap(px(space::M)).child(tab("tab-overview", tr("Übersicht"), ModuleTab::Overview, 0)).child(tab("tab-deadlines", tr("Abgaben"), ModuleTab::Deadlines, waiting)).child(tab("tab-files", tr("Dateien"), ModuleTab::Files, 0)))
 }
 
-/// What the overview lists as next: what is late, then what comes, at most five in all.
-pub fn next_up<'a>(lib: &'a Library, m: &Module) -> Vec<&'a Assignment> {
-    let today = lib.today();
-    let mine: Vec<&Assignment> = lib.assignments.iter().filter(|a| a.module_id == m.id && !lib.is_done(a)).collect();
-    let mut late: Vec<&Assignment> = mine.iter().filter(|a| day::local_date(a.due) < today).copied().collect();
-    late.sort_by_key(|a| std::cmp::Reverse(a.due));
-    let mut coming: Vec<&Assignment> = mine.iter().filter(|a| day::local_date(a.due) >= today).copied().collect();
-    coming.sort_by_key(|a| a.due);
-    late.truncate(3);
-    let room = 5 - late.len();
-    late.into_iter().chain(coming.into_iter().take(room)).collect()
+fn more_link(id: &'static str, label: String, t: &Theme) -> Stateful<Div> {
+    div().id(id).flex_none().cursor_pointer().key_nav().text_size(px(font::CALLOUT)).text_color(t.accent_text).hover({ let c = t.accent_text.opacity(0.8); move |s| s.text_color(c) }).child(label)
 }
 
-fn more_link(id: &'static str, label: String, which: ModuleTab, view: Entity<Pages>, t: &Theme) -> Stateful<Div> {
-    div().id(id).flex_none().cursor_pointer().key_nav().text_size(px(font::CALLOUT)).text_color(t.accent_text).hover({ let c = t.accent_text.opacity(0.8); move |s| s.text_color(c) }).child(label).on_click(move |_, _, cx| view.update(cx, |p, cx| p.show_module_tab(which, cx)))
+fn section(title: impl IntoElement, link: Option<Stateful<Div>>) -> Div {
+    div().flex().items_baseline().justify_between().gap(px(space::M)).child(title).children(link)
 }
 
-fn section(title: String, link: Option<Stateful<Div>>) -> Div {
-    div().flex().items_baseline().justify_between().gap(px(space::M)).child(section_title(title)).children(link)
-}
-
-/// The main column: what comes next, and what was worked on last.
+/// The main column: every deadline with what belongs to it, and what was worked on last.
 fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages>, t: &Theme) -> Div {
     let all = lib.assignments.iter().filter(|a| a.module_id == m.id).count();
-    let next = next_up(lib, m);
+    let waiting = lib.assignments.iter().filter(|a| a.module_id == m.id && day::local_date(a.due) < lib.today() && !lib.is_done(a)).count();
     let edit_id = m.id.clone();
-    let deadlines: AnyElement = if next.is_empty() && all == 0 {
+    let list: AnyElement = if all == 0 {
         empty_card(
             "calendar-plus",
             tr("Noch keine Abgaben"),
@@ -364,12 +289,10 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
                 .child(Button::new("first-rule").small().ghost().label(tr("Regel anlegen")).on_click(move |_, _, cx| super::settings::open_module(&edit_id, cx))),
             t,
         )
-    } else if next.is_empty() {
-        empty_card("circle-check", tr("Alles erledigt"), trf("%@ Abgaben, keine offen.", &[&all.to_string()]), div(), t)
     } else {
-        grouped(t).py(px(space::XS)).px(px(space::M)).children(next.iter().map(|a| entry(lib, a, st, view.clone(), t))).into_any_element()
+        grouped(t).child(deadlines(lib, m, st, view, t)).into_any_element()
     };
-    let more = (all > next.len()).then(|| more_link("to-deadlines", trf("Alle %@", &[&all.to_string()]), ModuleTab::Deadlines, view.clone(), t));
+    let title = div().flex().items_center().gap(px(space::S)).child(section_title(tr("Abgaben"))).when(waiting > 0, |d| d.child(div().px(px(space::XS)).rounded_full().bg(t.red.opacity(0.16)).text_color(t.red).text_size(px(font::CAPTION)).font_features(tabular()).child(waiting.to_string())));
     let folder = lib.root.as_ref().map(|r| r.join(&m.folder)).unwrap_or_default();
     let recent = super::today::recent_notes_in(Some(&folder), 6);
     let count = recent.len();
@@ -379,6 +302,14 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
         inset_file_row(("module-recent", i), &path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t).child(caption(super::notes_page::changed_ago(now - at), t).flex_none()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).context_menu(move |menu_box, _, _| file_menu(menu_box, menu.clone()))
     });
     let new_id = m.id.clone();
+    let module_folder = m.folder.clone();
+    let all_files = more_link("to-files", tr("Alle Dateien"), t).tooltip(tip(tr("Im Dateibaum zeigen"))).on_click(move |_, _, cx| {
+        let folder = module_folder.clone();
+        act(cx, |l| {
+            l.reveal_folder = Some(folder);
+            l.set_route(library::Route::Notes);
+        })
+    });
     let files: AnyElement = if count == 0 {
         empty_card(
             "file-plus",
@@ -397,8 +328,8 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
         .flex()
         .flex_col()
         .gap(px(space::XL))
-        .child(div().flex().flex_col().gap(px(space::S)).child(section(tr("Als Nächstes"), more)).child(deadlines))
-        .child(div().flex().flex_col().gap(px(space::S)).child(section(tr("Zuletzt geschrieben"), Some(more_link("to-files", tr("Alle Dateien"), ModuleTab::Files, view, t)))).child(files))
+        .child(div().flex().flex_col().gap(px(space::S)).child(section(title, None)).child(list))
+        .child(div().flex().flex_col().gap(px(space::S)).child(section(section_title(tr("Zuletzt geschrieben")), Some(all_files))).child(files))
 }
 
 fn empty_card(icon_name: &str, title: String, detail: String, actions: impl IntoElement, t: &Theme) -> AnyElement {
@@ -473,7 +404,7 @@ fn overview_rail(lib: &Library, m: &Module, t: &Theme) -> Option<Div> {
         if let Some(line) = summary {
             rows.push(div().px(px(space::M)).py(px(space::S)).border_t_1().border_color(t.separator).font_weight(FontWeight::MEDIUM).text_size(px(font::CALLOUT)).child(line).into_any_element());
         }
-        rail = rail.child(div().flex().flex_col().gap(px(space::S)).child(section(tr("Note"), None)).child(grouped(t).children(rows)));
+        rail = rail.child(div().flex().flex_col().gap(px(space::S)).child(section(section_title(tr("Note")), None)).child(grouped(t).children(rows)));
     }
     let links: Vec<_> = m.links.iter().filter(|k| k.url().is_some()).cloned().collect();
     if !links.is_empty() {
@@ -518,8 +449,4 @@ pub fn overview(lib: &Library, m: &Module, width: f32, st: &ModuleState, view: E
         div().flex().flex_col().gap(px(space::XL)).child(main).children(rail)
     };
     div().w_full().max_w(px(1120.)).mx_auto().px(px(space::XL)).py(px(space::L)).flex().flex_col().gap(px(space::XL)).child(body).children(hint)
-}
-
-pub fn segment(id: &'static str, label: String, active: bool, t: &Theme) -> Stateful<Div> {
-    div().id(id).px(px(space::M)).py(px(space::XXS)).rounded(px(radius::INNER)).text_size(px(font::CALLOUT)).cursor_pointer().key_nav().when(!active, |d| d.soft(t.ink.opacity(0.05), radius::INNER)).when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM)).child(label)
 }
