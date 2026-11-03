@@ -20,6 +20,7 @@ Rust/GPUI desktop study planner working on the user's plain folders. Losing user
 - Cross-platform crates never go into `target.cfg` sections. Linux and Windows are only verified by CI.
 - Never `git push`. No co-author lines. Before committing, search the diff for personal data; use the placeholders `Muster-M`, `Mueller-C`, `Beispiel`.
 - Other sessions may be working in this tree. Leave changes you did not make alone and stage files by name.
+- The owner also works on this repo from a second machine (Mac and Windows). Run `.claude/bin/sync` before work and before each commit; never stash, merge-pull or force. Details in `.claude/rules/workflow.md`.
 
 ## Plans
 

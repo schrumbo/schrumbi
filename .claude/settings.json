@@ -16,6 +16,7 @@
     "SessionStart": [
       {
         "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/bin/sync", "timeout": 120 },
           { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/bin/gate --init" }
         ]
       }

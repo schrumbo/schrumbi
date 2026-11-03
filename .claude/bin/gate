@@ -20,7 +20,7 @@ AUDIT_LINES = 15
 PERF_LINES = 100
 MAX_OUTPUT = 40
 
-os.environ["PATH"] = f"/opt/homebrew/bin:{Path.home()}/.cargo/bin:{os.environ.get('PATH', '')}"
+os.environ["PATH"] = os.pathsep.join(["/opt/homebrew/bin", str(Path.home() / ".cargo" / "bin"), os.environ.get("PATH", "")])
 os.environ["CARGO_TERM_COLOR"] = "never"
 
 

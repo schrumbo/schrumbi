@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Brings the current branch up to date with origin without risking local work.
+
+Fast-forwards when only origin moved, rebases unpushed local commits onto origin
+when the tree is clean, and otherwise only reports. Prints a short status that
+the SessionStart hook hands to the session.
+"""
+import os
+import platform
+import subprocess
+import sys
+
+MACHINES = {"Darwin": "Mac (ssh mac)", "Windows": "Windows PC pimmel (ssh windows)"}
+
+
+def git(*args, timeout=60):
+    run = subprocess.run(["git", *args], capture_output=True, text=True, timeout=timeout)
+    return run.returncode, run.stdout.strip(), run.stderr.strip()
+
+
+def out(*args):
+    return git(*args)[1]
+
+
+def counts(upstream):
+    code, text, _ = git("rev-list", "--left-right", "--count", f"HEAD...{upstream}")
+    if code:
+        return 0, 0
+    ahead, behind = text.split()
+    return int(ahead), int(behind)
+
+
+def dirty():
+    return [row for row in out("status", "--porcelain").splitlines() if row and not row.startswith("??")]
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        print("sync: fetch origin, fast-forward or rebase unpushed commits when safe, report the rest")
+        return 0
+    code, top, _ = git("rev-parse", "--show-toplevel")
+    if code:
+        return 0
+    os.chdir(top)
+    here = MACHINES.get(platform.system(), platform.system())
+    notes = [f"sync on {here}. The owner also works on this repo on the other machine; origin is the only link and the owner pushes."]
+
+    for path in ("rebase-merge", "rebase-apply", "MERGE_HEAD"):
+        if os.path.exists(out("rev-parse", "--git-path", path)):
+            notes.append(f"A rebase or merge is in progress ({path}). Finish or abort it before anything else.")
+            print("\n".join(notes))
+            return 0
+
+    try:
+        fetched = git("fetch", "--prune", "--quiet", "origin", timeout=20)[0] == 0
+    except subprocess.TimeoutExpired:
+        fetched = False
+    if not fetched:
+        notes.append("fetch failed (offline?); status below is against the last known origin.")
+
+    branch = out("branch", "--show-current")
+    upstream = out("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}") if branch else ""
+    if not upstream:
+        notes.append(f"Branch {branch or '(detached)'} has no upstream; nothing synced.")
+        print("\n".join(notes))
+        return 0
+
+    ahead, behind = counts(upstream)
+    changed = dirty()
+    if behind and not ahead:
+        code, _, err = git("merge", "--ff-only", "--quiet", upstream)
+        if code:
+            notes.append(f"origin has {behind} new commits but fast-forward failed because local edits touch the same files: {err.splitlines()[0] if err else ''}. Commit the edits, then run .claude/bin/sync again.")
+        else:
+            notes.append(f"Fast-forwarded {behind} commits from {upstream}.")
+    elif behind and ahead:
+        if changed:
+            notes.append(f"Diverged: {ahead} local commits not on origin, {behind} new on origin, and uncommitted edits. Commit the edits, then run .claude/bin/sync to rebase.")
+        else:
+            code, _, _ = git("rebase", "--rebase-merges", "--quiet", upstream, timeout=300)
+            if code:
+                git("rebase", "--abort")
+                notes.append(f"Diverged: {ahead} local and {behind} origin commits conflict. Rebase aborted, nothing changed. Rebase onto {upstream} by hand and resolve.")
+            else:
+                notes.append(f"Rebased {ahead} unpushed local commits onto {behind} new commits from {upstream}.")
+
+    ahead, behind = counts(upstream)
+    if ahead:
+        notes.append(f"{ahead} commits on {branch} are not on origin; the other machine cannot see them until the owner pushes.")
+    if not ahead and not behind:
+        notes.append(f"{branch} matches {upstream}.")
+    if changed:
+        notes.append(f"{len(changed)} uncommitted tracked changes in the tree.")
+    stashes = out("stash", "list").splitlines()
+    if stashes:
+        notes.append(f"{len(stashes)} stash entries exist; do not add more. Mention them to the owner.")
+    print("\n".join(notes))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
