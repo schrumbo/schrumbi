@@ -1084,3 +1084,132 @@ fn taking_back_a_cards_import_removes_its_notes_and_what_was_taken_as_known() {
     super::cards::close();
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn notes_in_a_checked_folder_follow_the_convention_and_keep_their_heading() {
+    let (root, mut lib) = workspace("convention-heading", &config(1, 1));
+    let today = chrono::Local::now().date_naive();
+    let a = lib.assignments.iter().filter(|a| a.upload && crate::core::day::local_date(a.due) >= today).min_by_key(|a| a.due).cloned().unwrap();
+    std::fs::create_dir_all(&a.folder).unwrap();
+    let naming = lib.naming(&a.module_id).unwrap();
+    let wanted = naming.render("TEST", today, "md", &[], a.week, a.iso_week, None);
+    let read = |p: &Path| std::fs::read_to_string(p).unwrap();
+
+    let made = lib.create_note("TEST", &a.folder, "md").unwrap();
+    assert_eq!(made.file_name().unwrap().to_string_lossy(), wanted);
+    assert!(read(&made).starts_with("# TEST\n"), "{}", read(&made));
+    lib.follow_heading(&made);
+    assert!(made.exists(), "an unchanged heading keeps the convention name");
+    assert!(read(&made).starts_with("# TEST\n"));
+
+    std::fs::write(&made, "# Neuer Titel\n\nText\n").unwrap();
+    lib.follow_heading(&made);
+    let renamed = a.folder.join(naming.render("Neuer Titel", today, "md", &[], a.week, a.iso_week, None));
+    assert!(renamed.exists(), "a new heading gives a new convention name");
+    assert_eq!(read(&renamed), "# Neuer Titel\n\nText\n", "the heading stays as typed");
+
+    let typed = renamed.with_file_name("Anders.md");
+    lib.rename(&renamed, &name_of(&typed));
+    let conventional = a.folder.join(naming.render("Anders", today, "md", &[], a.week, a.iso_week, None));
+    assert!(conventional.exists() && !typed.exists(), "a typed name in a checked folder becomes a convention name");
+    assert!(read(&conventional).starts_with("# Anders\n"), "{}", read(&conventional));
+
+    let elsewhere = lib.create_note("TEST", &root, "md").unwrap();
+    assert_eq!(elsewhere.file_name().unwrap(), "TEST.md", "folders without a convention keep the plain name");
+}
+
+fn name_of(p: &Path) -> String {
+    p.file_name().unwrap().to_string_lossy().to_string()
+}
+
+#[test]
+fn trashed_files_leave_the_lists_before_the_slow_part_and_come_back_on_undo() {
+    let (root, mut lib) = workspace("trash-later", &config(1, 1));
+    let inbox = root.join("_Inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let file = inbox.join("Blatt.pdf");
+    std::fs::write(&file, b"pdf").unwrap();
+    let rescan = |lib: &mut Library| {
+        let job = lib.scan_job().unwrap();
+        lib.apply_scan(job.run());
+    };
+    rescan(&mut lib);
+    assert!(lib.inbox.contains(&file));
+
+    lib.trashing(std::slice::from_ref(&file));
+    assert!(!lib.inbox.contains(&file), "gone from the list at once");
+    assert!(file.exists(), "the file itself goes later, off the main thread");
+    rescan(&mut lib);
+    assert!(!lib.inbox.contains(&file), "a scan in between does not bring it back");
+
+    let results = crate::core::library::trash_files(std::slice::from_ref(&file));
+    lib.trashed(results);
+    assert!(!file.exists());
+    lib.undo();
+    assert_eq!(std::fs::read(&file).unwrap(), b"pdf");
+    rescan(&mut lib);
+    assert!(lib.inbox.contains(&file), "listed again after undo");
+}
+
+#[test]
+fn a_task_sheet_note_keeps_its_role_when_the_heading_is_followed() {
+    let (_root, mut lib) = workspace("convention-brief", &config(1, 1));
+    let today = chrono::Local::now().date_naive();
+    let a = lib.assignments.iter().filter(|a| a.upload && crate::core::day::local_date(a.due) >= today).min_by_key(|a| a.due).cloned().unwrap();
+    std::fs::create_dir_all(&a.folder).unwrap();
+    let made = lib.create_note("Blatt", &a.folder, "md").unwrap();
+    lib.set_role(crate::core::filing::FileRole::Brief, &made, &a.id);
+    let brief = lib.last_renamed.clone().unwrap();
+    assert!(brief.exists() && brief != made);
+    assert!(std::fs::read_to_string(&brief).unwrap().starts_with("# Blatt\n"));
+    lib.follow_heading(&brief);
+    assert!(brief.exists(), "following the heading keeps the task sheet name");
+}
+
+#[test]
+fn undo_waits_for_a_running_trash_and_then_takes_it_back() {
+    let (root, mut lib) = workspace("trash-undo", &config(1, 1));
+    let made = lib.create_note("Eins", &root, "md").unwrap();
+    let file = root.join("Zwei.md");
+    std::fs::write(&file, "# Zwei\n").unwrap();
+    lib.open_document(&made);
+    let going = lib.trashing(&[made.clone(), file.clone()]);
+    assert_eq!(going.len(), 2);
+    assert!(!lib.open_documents.contains(&made), "its tab closes at once");
+    lib.undo();
+    assert!(made.exists(), "the step before the trash stays");
+    lib.trashed(crate::core::library::trash_files(&going));
+    assert!(!made.exists() && !file.exists());
+    lib.undo();
+    assert!(made.exists() && file.exists(), "the trash itself is taken back");
+    lib.undo();
+    assert!(!made.exists(), "and only then the step before it");
+}
+
+#[test]
+fn trashed_notes_stay_out_of_the_tree_until_a_later_scan() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    use crate::core::vault::index;
+    let root = dunce::canonicalize(folder("hidden-tree")).unwrap();
+    let (gone, kept) = (root.join("Weg.md"), root.join("Bleibt.md"));
+    std::fs::write(&gone, "# Weg\n").unwrap();
+    std::fs::write(&kept, "# Bleibt\n").unwrap();
+    index::rebuild(&root, &[]);
+    let started = std::time::Instant::now();
+    index::hide(&[gone.clone(), kept.clone()]);
+    assert!(started.elapsed() < std::time::Duration::from_millis(5), "hiding does not touch the index");
+    assert!(index::hidden().hides(&gone) && index::hidden().hides(&kept));
+    std::fs::remove_file(&gone).unwrap();
+    index::trash_ended(std::slice::from_ref(&gone), std::slice::from_ref(&kept));
+    assert!(!index::hidden().hides(&kept), "a failed trash shows the file again at once");
+    assert!(index::hidden().hides(&gone), "a trashed file stays hidden while the index still lists it");
+    index::rebuild(&root, &[]);
+    assert!(!index::hidden().hides(&gone), "a scan after the trash ends the hiding");
+    assert!(!index::current().files.contains(&gone));
+    let sub = root.join("Ordner");
+    std::fs::create_dir_all(&sub).unwrap();
+    index::hide(std::slice::from_ref(&sub));
+    assert!(index::hidden().hides(&sub.join("Tief/Notiz.md")), "a hidden folder hides what lies below it");
+    index::trash_ended(&[], std::slice::from_ref(&sub));
+    assert!(!index::hidden().hides(&sub.join("Tief/Notiz.md")));
+}

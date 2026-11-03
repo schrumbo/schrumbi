@@ -118,6 +118,7 @@ pub struct VersionList {
     error: Option<String>,
     focus: FocusHandle,
     generation: u64,
+    saved: u64,
 }
 
 impl VersionList {
@@ -127,7 +128,7 @@ impl VersionList {
     }
 
     pub fn new(cx: &mut Context<Self>) -> Self {
-        Self { path: None, versions: Vec::new(), loading: false, more: false, selected: None, error: None, focus: cx.focus_handle(), generation: 0 }
+        Self { path: None, versions: Vec::new(), loading: false, more: false, selected: None, error: None, focus: cx.focus_handle(), generation: 0, saved: 0 }
     }
 
     fn relative(path: &Path, cx: &App) -> Option<String> {
@@ -136,14 +137,16 @@ impl VersionList {
         Some(full.strip_prefix(&root).ok()?.to_string_lossy().replace('\\', "/"))
     }
 
-    fn load(&mut self, skip: usize, cx: &mut Context<Self>) {
+    /// Loads the next page, or with `again` every page shown so far, replacing the list without emptying it first.
+    fn load(&mut self, skip: usize, again: bool, cx: &mut Context<Self>) {
         let Some(path) = self.path.clone() else { return };
         let Some(git) = sync::git_for(&path, cx) else { return };
         let Some(rel) = Self::relative(&path, cx) else { return };
+        let limit = if again { PAGE.max(self.versions.len()) } else { PAGE };
         self.loading = true;
         self.generation += 1;
         let generation = self.generation;
-        let task = cx.background_spawn(async move { git.versions(&rel, skip, PAGE) });
+        let task = cx.background_spawn(async move { git.versions(&rel, skip, limit) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
@@ -152,10 +155,21 @@ impl VersionList {
                 }
                 this.loading = false;
                 match result {
+                    Ok(list) if again => {
+                        let shown = this.selected.and_then(|i| this.versions.get(i)).map(|v| v.rev.clone());
+                        this.more = list.len() == limit;
+                        this.versions = list;
+                        this.error = None;
+                        this.selected = shown.as_ref().and_then(|rev| this.versions.iter().position(|v| v.rev == *rev));
+                        if shown.is_some() && this.selected.is_none() {
+                            close(cx);
+                        }
+                    }
                     Ok(list) => {
                         this.more = list.len() == PAGE;
                         this.versions.extend(list);
                     }
+                    Err(_) if again && !this.versions.is_empty() => {}
                     Err(e) => this.error = Some(sync::explain(&e).0),
                 }
                 cx.notify();
@@ -166,6 +180,14 @@ impl VersionList {
 
     fn sync_path(&mut self, cx: &mut Context<Self>) {
         let current = state::read(cx, |l| l.active_document.clone());
+        let saved = sync::get(cx).saved;
+        if saved != self.saved {
+            self.saved = saved;
+            if current == self.path && self.path.is_some() {
+                self.load(0, true, cx);
+                return;
+            }
+        }
         if current != self.path {
             self.path = current;
             self.versions.clear();
@@ -173,7 +195,7 @@ impl VersionList {
             self.error = None;
             self.more = false;
             if self.path.is_some() {
-                self.load(0, cx);
+                self.load(0, false, cx);
             }
         }
     }
@@ -202,7 +224,7 @@ impl VersionList {
         };
         if next == Some(self.versions.len().saturating_sub(1)) && self.more && !self.loading {
             let skip = self.versions.len();
-            self.load(skip, cx);
+            self.load(skip, false, cx);
         }
         if !self.versions.is_empty() {
             self.select(next, cx);
@@ -278,7 +300,7 @@ impl Render for VersionList {
         if self.more {
             list = list.child(div().p(px(space::M)).child(Button::new("version-more").small().w_full().label(tr("Ältere laden")).disabled(self.loading).on_click(cx.listener(|s, _, _, cx| {
                 let skip = s.versions.len();
-                s.load(skip, cx);
+                s.load(skip, false, cx);
             }))));
         }
         div()

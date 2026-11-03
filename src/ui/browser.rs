@@ -344,7 +344,7 @@ impl FileBrowser {
         let targets = self.targets(state::read(cx, current_week));
         if !targets.is_empty() {
             self.picked.clear();
-            act(cx, |l| l.trash_all(&targets));
+            state::trash(targets, cx);
         }
     }
 
@@ -757,8 +757,7 @@ impl FileBrowser {
                 if group.len() > 1 {
                     let count = group.len();
                     return menu.item(PopupMenuItem::new(trf("%lld Dateien in den Papierkorb", &[&count])).on_click(move |_, _, cx| {
-                        let group = group.clone();
-                        act(cx, |l| l.trash_all(&group))
+                        state::trash(group.clone(), cx);
                     }));
                 }
                 let module = f2.module_id.clone();
@@ -796,7 +795,7 @@ impl FileBrowser {
                 let (rename, trash_path, e) = (p.clone(), p.clone(), entity.clone());
                 menu.separator()
                     .item(PopupMenuItem::new(tr("Umbenennen…")).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
-                    .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| act(cx, |l| l.trash(&trash_path))))
+                    .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| state::trash(vec![trash_path.clone()], cx)))
             })
             .into_any_element()
     }

@@ -60,7 +60,7 @@ impl InboxPage {
             let targets = self.queue(&inbox);
             if !targets.is_empty() {
                 self.selection.clear();
-                act(cx, |l| l.trash_all(&targets));
+                state::trash(targets, cx);
             }
             cx.stop_propagation();
             return;
@@ -285,7 +285,7 @@ impl Render for InboxPage {
                                 .item(PopupMenuItem::new(tr("Vorschau")).on_click(move |_, _, cx| super::preview::show(&b, cx)))
                                 .item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&c)))
                                 .separator()
-                                .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| act(cx, |l| l.trash(&d))))
+                                .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| state::trash(vec![d.clone()], cx)))
                         }),
                 );
             }

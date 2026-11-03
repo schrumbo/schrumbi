@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 use rayon::prelude::*;
@@ -163,6 +164,7 @@ fn is_canvas(path: &Path) -> bool {
 
 /// Scans the vault off the main thread; only changed notes are read again.
 pub fn rebuild(root: &Path, exclude: &[String]) {
+    let scan = SCANS.fetch_add(1, Ordering::SeqCst) + 1;
     let root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let files = list_files(&root, exclude);
     let known = std::mem::take(&mut *CACHE.lock().unwrap());
@@ -186,6 +188,9 @@ pub fn rebuild(root: &Path, exclude: &[String]) {
     index.folders = folders;
     *CACHE.lock().unwrap() = index.notes.clone();
     publish(index);
+    if hidden().paths.values().any(|ended| ended.is_some_and(|e| e < scan)) {
+        change_hidden(|hidden| hidden.retain(|_, ended| ended.is_none_or(|e| e >= scan)));
+    }
 }
 
 fn publish(mut index: VaultIndex) {
@@ -365,6 +370,74 @@ pub fn moved(old: &Path, new: &Path) -> Arc<VaultIndex> {
     next.folders = index.folders.clone();
     publish(next);
     current()
+}
+
+/// Files on their way to the trash, kept out of the tree until a scan that started after they were gone.
+#[derive(Debug, Clone, Default)]
+pub struct Hidden {
+    pub generation: u64,
+    /// Path, and the scan count once the trash ended.
+    paths: HashMap<PathBuf, Option<u64>>,
+    /// A folder is among them, so files below it need their parents checked too.
+    folders: bool,
+}
+
+impl Hidden {
+    /// The path or a folder above it is hidden.
+    pub fn hides(&self, path: &Path) -> bool {
+        if self.paths.is_empty() {
+            false
+        } else if self.folders {
+            path.ancestors().any(|a| self.paths.contains_key(a))
+        } else {
+            self.paths.contains_key(path)
+        }
+    }
+}
+
+static HIDDEN: LazyLock<RwLock<Arc<Hidden>>> = LazyLock::new(Default::default);
+static SCANS: AtomicU64 = AtomicU64::new(0);
+
+pub fn hidden() -> Arc<Hidden> {
+    HIDDEN.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+}
+
+fn change_hidden(f: impl FnOnce(&mut HashMap<PathBuf, Option<u64>>)) {
+    let mut guard = HIDDEN.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut next = (**guard).clone();
+    let before: Vec<PathBuf> = next.paths.keys().cloned().collect();
+    f(&mut next.paths);
+    if next.paths.len() != before.len() || before.iter().any(|p| !next.paths.contains_key(p)) {
+        next.generation += 1;
+        next.folders = next.folders && !next.paths.is_empty();
+    }
+    *guard = Arc::new(next);
+}
+
+/// Hides files at once; the index itself stays untouched until the next scan.
+pub fn hide(paths: &[PathBuf]) {
+    let folders = paths.iter().any(|p| p.is_dir());
+    change_hidden(|hidden| hidden.extend(paths.iter().map(|p| (p.clone(), None))));
+    if folders {
+        let mut guard = HIDDEN.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut next = (**guard).clone();
+        next.folders = true;
+        next.generation += 1;
+        *guard = Arc::new(next);
+    }
+}
+
+/// The trash ended: files that are gone stay hidden until a later scan, the rest show again.
+pub fn trash_ended(gone: &[PathBuf], kept: &[PathBuf]) {
+    let scans = SCANS.load(Ordering::SeqCst);
+    change_hidden(|hidden| {
+        for p in kept {
+            hidden.remove(p);
+        }
+        for p in gone {
+            hidden.insert(p.clone(), Some(scans));
+        }
+    });
 }
 
 #[cfg(test)]

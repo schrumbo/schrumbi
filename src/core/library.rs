@@ -290,6 +290,9 @@ pub struct Library {
     pub last_renamed: Option<PathBuf>,
     /// Notes just made here, which open for writing whatever was shown last.
     fresh_notes: std::collections::HashSet<PathBuf>,
+    leaving: HashSet<PathBuf>,
+    leaving_forms: HashMap<PathBuf, PathBuf>,
+    leaving_folder: bool,
     /// A heading whose name is taken was reported once.
     heading_clash: Option<(PathBuf, String)>,
     back_routes: Vec<Route>,
@@ -439,6 +442,9 @@ impl Library {
             split_document: None,
             last_renamed: None,
             fresh_notes: Default::default(),
+            leaving: HashSet::new(),
+            leaving_forms: HashMap::new(),
+            leaving_folder: false,
             heading_clash: None,
             preview_document: None,
             graph_selection: None,
@@ -1369,6 +1375,7 @@ impl Library {
         self.missing_folder_count = r.missing;
         self.listings = r.listings;
         self.inbox = r.inbox;
+        self.hide_leaving();
         self.reevaluate();
     }
 
@@ -1387,6 +1394,7 @@ impl Library {
             self.catalog = catalog;
             self.index_version += 1;
         }
+        self.hide_leaving();
         self.index_count = count;
         self.is_indexing = false;
         self.follow_outside_moves();
@@ -1940,10 +1948,14 @@ impl Library {
         out
     }
 
-    /// The file name of something new in `folder`: notes are called what you call them, other files follow the module's convention.
+    /// The file name of something new in `folder`: notes are called what you call them unless the folder checks names, other files follow the module's convention.
     pub fn note_name(&self, title: &str, folder: &Path, ext: &str) -> String {
         if ext == "md" {
-            return format!("{}.md", title.trim().chars().map(|c| if "\\/:".contains(c) { '-' } else { c }).collect::<String>());
+            let plain = format!("{}.md", title.trim().chars().map(|c| if "\\/:".contains(c) { '-' } else { c }).collect::<String>());
+            return match self.convention_at(&folder.join(&plain)) {
+                Some((naming, a)) => naming.render(title, self.today(), ext, &[], a.week, a.iso_week, None),
+                None => plain,
+            };
         }
         let Some(naming) = self.module_containing(folder).and_then(|m| self.naming(&m.id)) else { return format!("{}.{ext}", Naming::clean(title)) };
         naming.render(title, self.today(), ext, &[], self.lecture_week_containing(self.today()).map(|w| w.index), None, None)
@@ -1989,7 +2001,7 @@ impl Library {
 
     /// Gives a note made here the name of its first heading.
     pub fn follow_heading(&mut self, path: &Path) {
-        if !heading_titled(path) {
+        if !heading_titled(path) || self.is_leaving(path) {
             return;
         }
         let text = match self.buffers.get_mut(path) {
@@ -2002,7 +2014,21 @@ impl Library {
             None => std::fs::read_to_string(path).unwrap_or_default(),
         };
         let Some(title) = super::markdown::first_heading(&text) else { return };
-        let name = format!("{}.md", super::text::safe_file_stem(&title));
+        let name = match self.convention_at(path) {
+            Some((naming, a)) => {
+                let brief = self.parse_brief(&name_of(path), &a.module_id);
+                let old = naming.parse(&name_of(path)).or_else(|| brief.clone());
+                if old.as_ref().is_some_and(|p| p.title == Naming::clean(&title)) {
+                    return;
+                }
+                let date = old.as_ref().and_then(|p| p.date).unwrap_or_else(|| self.today());
+                match brief {
+                    Some(_) => naming.render(&title, date, "md", &[], a.week, a.iso_week, Some(BRIEF_TAG)),
+                    None => naming.render(&title, date, "md", &old.map(|p| p.coauthors).unwrap_or_default(), a.week, a.iso_week, None),
+                }
+            }
+            None => format!("{}.md", super::text::safe_file_stem(&title)),
+        };
         if name == name_of(path) || name == ".md" {
             return;
         }
@@ -2202,6 +2228,9 @@ impl Library {
 
     /// Takes back the latest step and offers to repeat it.
     pub fn undo(&mut self) {
+        if !self.leaving.is_empty() {
+            return;
+        }
         let Some(step) = self.undo_steps.pop() else { return };
         let label = step.label.clone();
         let (inverse, failed) = self.apply_step(step);
@@ -2222,6 +2251,9 @@ impl Library {
 
     /// Repeats the step taken back last and offers to take it back again.
     pub fn redo(&mut self) {
+        if !self.leaving.is_empty() {
+            return;
+        }
         let Some(step) = self.redo_steps.pop() else { return };
         let label = step.label.clone();
         let (inverse, failed) = self.apply_step(step);
@@ -2482,7 +2514,11 @@ impl Library {
         } else {
             naming.render(&title, date, ext, &parsed.map(|p| p.coauthors).unwrap_or_default(), a.week, a.iso_week, None)
         };
-        self.rename(path, &new);
+        if heading_titled(path) {
+            self.rename_titled(path, &new, &title.replace('-', " "), true);
+        } else {
+            self.rename_file(path, &new);
+        }
     }
 
     fn parse_brief(&self, file_name: &str, module_id: &str) -> Option<Parsed> {
@@ -2582,12 +2618,54 @@ impl Library {
         config.current_semester(self.now).or(config.semesters.last()).map(|s| s.id.clone())
     }
 
+    /// A note named after its heading keeps that heading; where a convention applies, the name follows it and the heading stays as typed.
     pub fn rename(&mut self, file: &Path, name: &str) {
         let titled = heading_titled(file);
+        let (name, title, convention) = match titled.then(|| self.convention_at(&file.with_file_name(name))).flatten() {
+            Some((naming, a)) => match naming.parse(name).or_else(|| self.parse_brief(name, &a.module_id)) {
+                Some(p) => (name.to_string(), p.title.replace('-', " "), true),
+                None => {
+                    let old = naming.parse(&name_of(file));
+                    let date = old.as_ref().and_then(|p| p.date).unwrap_or_else(|| self.today());
+                    let title = super::naming::stem(name).to_string();
+                    (naming.render(&title, date, extension(name), &old.map(|p| p.coauthors).unwrap_or_default(), a.week, a.iso_week, None), title, true)
+                }
+            },
+            None => (name.to_string(), super::naming::stem(name).to_string(), false),
+        };
+        if titled {
+            self.rename_titled(file, &name, &title, convention);
+        } else {
+            self.rename_file(file, &name);
+        }
+    }
+
+    /// Renames a note named after its heading and brings the heading along; a convention name only has to say the same title.
+    fn rename_titled(&mut self, file: &Path, name: &str, title: &str, convention: bool) {
         self.rename_file(file, name);
-        let Some(target) = self.last_renamed.clone().filter(|t| titled && t.file_name().is_some_and(|n| n.to_string_lossy() == name)) else { return };
-        let title = Path::new(name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        self.edit_note(&target, "title", tr("Überschrift angepasst"), |text| super::markdown::with_first_heading(text, &title));
+        let Some(target) = self.last_renamed.clone().filter(|t| t.file_name().is_some_and(|n| n.to_string_lossy() == name)) else { return };
+        self.edit_note(&target, "title", tr("Überschrift angepasst"), |text| {
+            let same = super::markdown::first_heading(text).is_some_and(|h| if convention { Naming::clean(&h) == Naming::clean(title) } else { h == title });
+            if same { text.to_string() } else { super::markdown::with_first_heading(text, title) }
+        });
+    }
+
+    /// The convention a file in this place must follow: a checked upload whose folder holds it, the next one due first.
+    fn convention_at(&self, path: &Path) -> Option<(Naming, Assignment)> {
+        self.config.as_ref().filter(|c| c.check_names)?;
+        let name = name_of(path);
+        let raw = path.parent()?.to_path_buf();
+        let settled = dunce::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
+        let root = self.root.clone()?;
+        let settled_root = dunce::canonicalize(&root).unwrap_or_else(|_| root.clone());
+        let holds = |a: &Assignment| {
+            let other = a.folder.strip_prefix(&root).map_or_else(|_| a.folder.clone(), |rest| settled_root.join(rest));
+            [&a.folder, &other].iter().any(|f| [&raw, &settled].iter().any(|d| *d == *f || (a.recursive && d.starts_with(f))))
+        };
+        let fitting: Vec<&Assignment> = self.assignments.iter().filter(|a| a.upload && a.tracks_files() && scanner::matches(&name, &a.file_pattern) && holds(a)).collect();
+        let today = self.today();
+        let a = fitting.iter().filter(|a| day::local_date(a.due) >= today).min_by_key(|a| a.due).or_else(|| fitting.iter().max_by_key(|a| a.due))?;
+        Some((self.naming(&a.module_id)?, (*a).clone()))
     }
 
     fn rename_file(&mut self, file: &Path, name: &str) {
@@ -2738,29 +2816,91 @@ impl Library {
         }
     }
 
-    pub fn trash(&mut self, path: &Path) {
-        match trash_with_copy(path) {
-            Ok(change) => {
-                self.refresh();
-                self.commit(trf("In den Papierkorb: %@", &[&name_of(path)]), "trash-2", vec![change]);
+    /// Drops files on their way to the trash from every list at once; scans until `trashed` keep them out too.
+    /// Returns the paths that may go; a note with unsaved edits that also changed elsewhere stays.
+    pub fn trashing(&mut self, paths: &[PathBuf]) -> Vec<PathBuf> {
+        let mut going = Vec::new();
+        for path in paths {
+            let settled = settled_path(path);
+            let within = |p: &Path| p.starts_with(path) || p.starts_with(&settled);
+            if let Some((stuck, _)) = self.buffers.iter().find(|(p, b)| b.dirty && b.conflict.is_some() && within(p)) {
+                self.last_error = Some(trf("„%@“ wurde auch in einer anderen App geändert. Entscheide zuerst, welche Version bleibt.", &[&name_of(stuck)]));
+                continue;
             }
-            Err(_) => self.last_error = Some(tr("Konnte nicht in den Papierkorb gelegt werden. Prüfe, ob die Datei noch existiert und nicht gerade in einer anderen App offen ist.")),
+            for (p, buffer) in self.buffers.iter_mut() {
+                if buffer.dirty && within(p) {
+                    let _ = buffer.save();
+                }
+            }
+            super::vault::index::hide(&[path.clone(), settled.clone()]);
+            self.leaving.insert(path.clone());
+            self.leaving.insert(settled.clone());
+            self.leaving_folder |= path.is_dir();
+            self.leaving_forms.insert(path.clone(), settled);
+            going.push(path.clone());
         }
+        let open: Vec<PathBuf> = self.open_documents.iter().filter(|d| self.is_leaving(d)).cloned().collect();
+        for d in open {
+            self.close_tab(&d);
+        }
+        self.hide_leaving();
+        self.reevaluate();
+        going
     }
 
-    /// Moves several files to the trash as one undoable step.
-    pub fn trash_all(&mut self, paths: &[PathBuf]) {
-        let mut done: Vec<Change> = Vec::new();
-        for path in paths {
-            match trash_with_copy(path) {
-                Ok(change) => done.push(change),
-                Err(_) => self.last_error = Some(tr("Konnte nicht in den Papierkorb gelegt werden. Prüfe, ob die Datei noch existiert und nicht gerade in einer anderen App offen ist.")),
+    fn is_leaving(&self, path: &Path) -> bool {
+        !self.leaving.is_empty() && if self.leaving_folder { path.ancestors().any(|a| self.leaving.contains(a)) } else { self.leaving.contains(path) }
+    }
+
+    fn hide_leaving(&mut self) {
+        if self.leaving.is_empty() {
+            return;
+        }
+        let leaving = std::mem::take(&mut self.leaving);
+        let folders = self.leaving_folder;
+        let gone = |p: &Path| if folders { p.ancestors().any(|a| leaving.contains(a)) } else { leaving.contains(p) };
+        self.inbox.retain(|p| !gone(p));
+        for files in self.listings.values_mut() {
+            files.retain(|f| !gone(&f.path));
+        }
+        let count = self.catalog.len();
+        self.catalog.retain(|c| !gone(&c.file.path));
+        if self.catalog.len() != count {
+            self.index_version += 1;
+        }
+        self.leaving = leaving;
+    }
+
+    /// Records what `trash_files` did as one undoable step.
+    pub fn trashed(&mut self, results: Vec<(PathBuf, Result<Change>)>) {
+        let mut done: Vec<(PathBuf, Change)> = Vec::new();
+        let (mut gone, mut kept) = (Vec::new(), Vec::new());
+        for (path, result) in results {
+            let settled = self.leaving_forms.remove(&path).unwrap_or_else(|| settled_path(&path));
+            let both = [settled, path.clone()];
+            for p in &both {
+                self.leaving.remove(p);
+            }
+            match result {
+                Ok(change) => {
+                    gone.extend(both);
+                    done.push((path, change));
+                }
+                Err(_) => {
+                    kept.extend(both);
+                    self.last_error = Some(tr("Konnte nicht in den Papierkorb gelegt werden. Prüfe, ob die Datei noch existiert und nicht gerade in einer anderen App offen ist."));
+                }
             }
         }
+        self.leaving_folder &= !self.leaving.is_empty();
+        super::vault::index::trash_ended(&gone, &kept);
         self.refresh();
-        if !done.is_empty() {
-            self.commit(if done.len() == 1 { tr("1 Datei in den Papierkorb") } else { trf("%lld Dateien in den Papierkorb", &[&done.len()]) }, "trash-2", done);
-        }
+        let message = match &done[..] {
+            [] => return,
+            [(path, _)] => trf("In den Papierkorb: %@", &[&name_of(path)]),
+            _ => trf("%lld Dateien in den Papierkorb", &[&done.len()]),
+        };
+        self.commit(message, "trash-2", done.into_iter().map(|(_, c)| c).collect());
     }
 
     pub fn note(&self, id: &str) -> String {
@@ -3141,7 +3281,11 @@ impl Library {
         self.follow_heading(path);
         let settled = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         let renamed = self.last_renamed.clone().filter(|_| !self.open_documents.iter().any(|d| d == path));
-        let path = renamed.as_deref().unwrap_or(&settled);
+        let path = renamed.as_deref().unwrap_or(&settled).to_path_buf();
+        self.close_tab(&path);
+    }
+
+    fn close_tab(&mut self, path: &Path) {
         let Some(i) = self.open_documents.iter().position(|d| d == path) else { return };
         if !self.note_windows.contains(path) {
             self.buffers.remove(path);
@@ -3365,6 +3509,11 @@ fn files_within(path: &Path) -> Vec<PathBuf> {
     walkdir::WalkDir::new(path).into_iter().filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.')).filter_map(Result::ok).filter(|e| e.file_type().is_file()).map(|e| e.into_path()).collect()
 }
 
+/// Puts files in the system trash, each with a copy kept for undo. Slow on Windows, so the app runs it off the main thread.
+pub fn trash_files(paths: &[PathBuf]) -> Vec<(PathBuf, Result<Change>)> {
+    paths.iter().map(|p| (p.clone(), trash_with_copy(p))).collect()
+}
+
 fn trash_with_copy(path: &Path) -> Result<Change> {
     let backup = stash(path)?;
     #[cfg(not(test))]
@@ -3376,6 +3525,11 @@ fn trash_with_copy(path: &Path) -> Result<Change> {
         return Err(e);
     }
     Ok(Change::Restore { path: path.to_path_buf(), backup })
+}
+
+/// The path with its folder resolved, so it compares with open documents; works after the file itself is gone.
+fn settled_path(p: &Path) -> PathBuf {
+    p.parent().and_then(|d| dunce::canonicalize(d).ok()).zip(p.file_name()).map_or_else(|| p.to_path_buf(), |(d, n)| d.join(n))
 }
 
 fn heading_titled(path: &Path) -> bool {

@@ -52,8 +52,11 @@ struct Tree {
     files: BTreeMap<String, Vec<PathBuf>>,
 }
 
+/// Index and hidden-file generations.
+type Generation = (u64, u64);
+
 struct Cache {
-    key: (u64, String, View, Order, Option<String>, Vec<String>, Option<PathBuf>),
+    key: (Generation, String, View, Order, Option<String>, Vec<String>, Option<PathBuf>),
     rows: Rc<Vec<Row>>,
     open_tasks: usize,
 }
@@ -73,7 +76,7 @@ pub struct NotesPage {
     width: f32,
     /// A width drag is under way; it is saved when the drag ends.
     resizing: bool,
-    tree: Option<(u64, Rc<Tree>)>,
+    tree: Option<(Generation, Rc<Tree>)>,
     cache: Option<Cache>,
     focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
@@ -86,9 +89,12 @@ pub struct NotesPage {
 }
 
 /// The file tree, from the vault's own list; the workspace's settings file does not belong in it.
-fn build_tree(vault: &index::VaultIndex) -> Tree {
+fn build_tree(vault: &index::VaultIndex, hidden: &index::Hidden) -> Tree {
     let mut tree = Tree::default();
     for path in &vault.files {
+        if hidden.hides(path) {
+            continue;
+        }
         let Ok(rel) = path.strip_prefix(&vault.root) else { continue };
         let rel = rel.to_string_lossy().replace('\\', "/");
         if rel == crate::core::workspace::CONFIG_NAME || rel == crate::core::workspace::STATE_NAME || vault.config.is_ignored(&rel) {
@@ -104,6 +110,9 @@ fn build_tree(vault: &index::VaultIndex) -> Tree {
         tree.files.entry(parent).or_default().push(path.clone());
     }
     for path in &vault.folders {
+        if hidden.hides(path) {
+            continue;
+        }
         let Ok(rel) = path.strip_prefix(&vault.root) else { continue };
         let rel = rel.to_string_lossy().replace('\\', "/");
         if vault.config.is_ignored(&rel) {
@@ -111,6 +120,9 @@ fn build_tree(vault: &index::VaultIndex) -> Tree {
         }
         let parent = rel.rsplit_once('/').map_or(String::new(), |(up, _)| up.to_string());
         tree.folders.entry(parent).or_default().insert(rel);
+    }
+    for files in tree.files.values_mut() {
+        files.sort_by_cached_key(|p| shown_name(p).to_lowercase());
     }
     tree
 }
@@ -215,7 +227,7 @@ impl NotesPage {
             if let Some(p) = pending.filter(|p| !sorted.contains(p)) {
                 sorted.push(p);
             }
-            sorted.sort_by(|a, b| natural(a, b));
+            sorted.sort_by_cached_key(|s| s.to_lowercase());
             for sub in &sorted {
                 let open = self.open_folders.contains(sub);
                 out.push(Row::Folder { rel: sub.clone(), name: sub.rsplit('/').next().unwrap_or(sub).to_string(), depth, open });
@@ -232,12 +244,9 @@ impl NotesPage {
         }
         if let Some(files) = tree.files.get(folder) {
             let mut sorted: Vec<&PathBuf> = files.iter().collect();
-            match self.order {
-                Order::Name => sorted.sort_by(|a, b| natural(&shown_name(a), &shown_name(b))),
-                Order::Changed => sorted.sort_by(|a, b| {
-                    let time = |p: &PathBuf| vault.notes.get(p.as_path()).map_or(0., |f| f.modified);
-                    time(b).total_cmp(&time(a)).then_with(|| natural(&shown_name(a), &shown_name(b)))
-                }),
+            if self.order == Order::Changed {
+                let time = |p: &PathBuf| vault.notes.get(p.as_path()).map_or(0., |f| f.modified);
+                sorted.sort_by(|a, b| time(b).total_cmp(&time(a)));
             }
             out.extend(sorted.into_iter().map(|p| Self::file_row(p, depth, false, None, vault)));
         }
@@ -296,13 +305,15 @@ impl NotesPage {
     /// Everything the list shows; drawing happens often and only asks this cache.
     fn refresh(&mut self, tag: Option<String>, cx: &App) {
         let vault = index::current();
+        let hidden = index::hidden();
+        let generation = (vault.generation, hidden.generation);
         let filter = self.query.read(cx).value().to_lowercase();
-        let key = (vault.generation, filter.clone(), self.view, self.order, tag.clone(), self.open_folders.iter().cloned().collect::<Vec<_>>(), self.renaming.as_ref().map(|(p, ..)| p.clone()));
+        let key = (generation, filter.clone(), self.view, self.order, tag.clone(), self.open_folders.iter().cloned().collect::<Vec<_>>(), self.renaming.as_ref().map(|(p, ..)| p.clone()));
         if self.cache.as_ref().is_some_and(|c| c.key == key) {
             return;
         }
-        if self.tree.as_ref().is_none_or(|(g, _)| *g != vault.generation) {
-            self.tree = Some((vault.generation, Rc::new(build_tree(&vault))));
+        if self.tree.as_ref().is_none_or(|(g, _)| *g != generation) {
+            self.tree = Some((generation, Rc::new(build_tree(&vault, &hidden))));
         }
         let tree = self.tree.as_ref().map(|(_, t)| t.clone()).unwrap_or_default();
         let open_tasks = Self::visible_tasks(&vault, "").len();
@@ -342,7 +353,7 @@ impl NotesPage {
                     let mut rows = vec![Row::BackToTags];
                     let mut notes = vault.notes_with_tag(selected);
                     notes.sort_by(|a, b| natural(&shown_name(a), &shown_name(b)));
-                    rows.extend(notes.iter().filter(|p| filter.is_empty() || shown_name(p).to_lowercase().contains(&filter)).map(|p| {
+                    rows.extend(notes.iter().filter(|p| !hidden.hides(p) && (filter.is_empty() || shown_name(p).to_lowercase().contains(&filter))).map(|p| {
                         let modified = vault.notes.get(p.as_path()).map(|f| now - f.modified);
                         Self::file_row(p, 0, true, modified, &vault)
                     }));
@@ -688,9 +699,7 @@ impl NotesPage {
                             rename_me.update(cx, |s, cx| s.start_rename(p, window, cx));
                         }))
                         .item(PopupMenuItem::new(tr("In den Papierkorb")).icon(menu_icon("trash-2")).on_click(move |_, _, cx| {
-                            let p = trash_path.clone();
-                            act(cx, |l| l.trash(&p));
-                            state::reindex(cx);
+                            state::trash(vec![trash_path.clone()], cx);
                         }))
                     })
                     .into_any_element()
@@ -722,12 +731,7 @@ impl NotesPage {
                                 m2.update(cx, |s, cx| s.start_rename(p, window, cx));
                             }))
                             .item(PopupMenuItem::new(tr("In den Papierkorb")).icon(menu_icon("trash-2")).on_click(move |_, _, cx| {
-                                let p = x.clone();
-                                act(cx, |l| {
-                                    l.close_document(&p);
-                                    l.trash(&p);
-                                });
-                                state::reindex(cx);
+                                state::trash(vec![x.clone()], cx);
                             }))
                     })
                     .into_any_element()

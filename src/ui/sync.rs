@@ -40,6 +40,8 @@ pub struct Sync {
     pub message: String,
     /// Bumped when a manual sync ended well, for the confirmation at the row.
     pub finished: u64,
+    /// Bumped after every sync that ended well, so lists of saved states can load again.
+    pub saved: u64,
     /// When the running sync started, for showing progress only on long uploads.
     pub started: Option<Instant>,
     /// The last resolution, for taking it back.
@@ -329,6 +331,7 @@ fn finished(result: Result<Report, GitError>, conflicts: Option<(Vec<ConflictFil
     s.step = None;
     match &result {
         Ok(report) => {
+            s.saved += 1;
             s.error = None;
             s.announced = None;
             s.conflicts.clear();

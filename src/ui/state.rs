@@ -140,6 +140,26 @@ pub fn scan(cx: &mut App) {
     .detach();
 }
 
+/// Moves files to the trash off the main thread; they leave every list in the same frame.
+pub fn trash(paths: Vec<PathBuf>, cx: &mut App) {
+    if paths.is_empty() {
+        return;
+    }
+    let paths = act(cx, |l| l.trashing(&paths));
+    if paths.is_empty() {
+        return;
+    }
+    let task = cx.background_spawn(async move { crate::core::library::trash_files(&paths) });
+    cx.spawn(async move |cx| {
+        let results = task.await;
+        cx.update(|cx| {
+            act(cx, |l| l.trashed(results));
+            reindex(cx);
+        });
+    })
+    .detach();
+}
+
 /// Updates the search index and catalog in the background.
 pub fn reindex(cx: &mut App) {
     let lib = lib(cx);
