@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -10,7 +11,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::browser::DraggedFile;
-use super::motion::{Soft, chevron};
+use super::motion::{self, Soft, chevron};
 use super::state::{self, act};
 use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
@@ -55,10 +56,59 @@ struct Tree {
 /// Index and hidden-file generations.
 type Generation = (u64, u64);
 
+/// Everything the rows depend on.
+#[derive(PartialEq)]
+struct Key {
+    generation: Generation,
+    tree: Option<Generation>,
+    filter: String,
+    view: View,
+    order: Order,
+    tag: Option<String>,
+    open: Vec<String>,
+    renaming: Option<PathBuf>,
+}
+
 struct Cache {
-    key: (Generation, String, View, Order, Option<String>, Vec<String>, Option<PathBuf>),
+    key: Key,
     rows: Rc<Vec<Row>>,
     open_tasks: usize,
+    loading: bool,
+}
+
+/// The file tree last worked out, and the one being worked out off the UI thread.
+#[derive(Default)]
+struct Trees {
+    ready: Option<(Generation, Arc<Tree>)>,
+    building: Option<Generation>,
+    job: Option<Task<()>>,
+}
+
+impl Global for Trees {}
+
+/// Works out the file tree for the current vault state in the background, so the notes room never waits for it.
+pub fn prepare_tree(cx: &mut App) {
+    let vault = index::current();
+    let hidden = index::hidden();
+    let generation = (vault.generation, hidden.generation);
+    if cx.try_global::<Trees>().is_some_and(|t| t.building == Some(generation) || t.building.is_none() && t.ready.as_ref().is_some_and(|(g, _)| *g == generation)) {
+        return;
+    }
+    let work = cx.background_spawn(async move { build_tree(&vault, &hidden) });
+    let job = cx.spawn(async move |cx| {
+        let tree = Arc::new(work.await);
+        cx.update(|cx| {
+            cx.update_global::<Trees, _>(|t, _| {
+                if t.building == Some(generation) {
+                    t.ready = Some((generation, tree));
+                    t.building = None;
+                }
+            });
+        });
+    });
+    let trees = cx.default_global::<Trees>();
+    trees.building = Some(generation);
+    trees.job = Some(job);
 }
 
 /// The left side of the notes room: everything in the workspace or vault, with the document beside it.
@@ -76,7 +126,6 @@ pub struct NotesPage {
     width: f32,
     /// A width drag is under way; it is saved when the drag ends.
     resizing: bool,
-    tree: Option<(Generation, Rc<Tree>)>,
     cache: Option<Cache>,
     focus: FocusHandle,
     list_scroll: UniformListScrollHandle,
@@ -103,6 +152,7 @@ fn cancel_on_escape(me: &Entity<NotesPage>) -> impl Fn(&gpui_kit::component::inp
 /// The file tree, from the vault's own list; the workspace's settings file does not belong in it.
 fn build_tree(vault: &index::VaultIndex, hidden: &index::Hidden) -> Tree {
     let mut tree = Tree::default();
+    let mut last_dir: Option<String> = None;
     for path in &vault.files {
         if hidden.hides(path) {
             continue;
@@ -112,14 +162,22 @@ fn build_tree(vault: &index::VaultIndex, hidden: &index::Hidden) -> Tree {
         if rel == crate::core::workspace::CONFIG_NAME || rel == crate::core::workspace::STATE_NAME || vault.config.is_ignored(&rel) {
             continue;
         }
-        let mut parent = String::new();
-        let parts: Vec<&str> = rel.split('/').collect();
-        for part in &parts[..parts.len() - 1] {
-            let full = if parent.is_empty() { part.to_string() } else { format!("{parent}/{part}") };
-            tree.folders.entry(parent.clone()).or_default().insert(full.clone());
-            parent = full;
+        let dir = rel.rsplit_once('/').map_or("", |(up, _)| up);
+        if last_dir.as_deref() != Some(dir) {
+            let mut parent = String::new();
+            for part in dir.split('/').filter(|p| !p.is_empty()) {
+                let full = if parent.is_empty() { part.to_string() } else { format!("{parent}/{part}") };
+                tree.folders.entry(parent.clone()).or_default().insert(full.clone());
+                parent = full;
+            }
+            last_dir = Some(dir.to_string());
         }
-        tree.files.entry(parent).or_default().push(path.clone());
+        match tree.files.get_mut(dir) {
+            Some(files) => files.push(path.clone()),
+            None => {
+                tree.files.insert(dir.to_string(), vec![path.clone()]);
+            }
+        }
     }
     for path in &vault.folders {
         if hidden.hides(path) {
@@ -157,6 +215,7 @@ impl NotesPage {
                     cx.notify();
                 }
             }),
+            cx.observe_global::<Trees>(|_, cx| cx.notify()),
             cx.observe_in(&lib, window, |this, lib, window, cx| {
                 let focus_tree = lib.update(cx, |l, _| std::mem::take(&mut l.focus_explorer));
                 if focus_tree {
@@ -198,7 +257,6 @@ impl NotesPage {
             pending_folder: None,
             width: crate::core::prefs::get().notes_column.unwrap_or(260.),
             resizing: false,
-            tree: None,
             cache: None,
             focus: cx.focus_handle(),
             list_scroll: UniformListScrollHandle::new(),
@@ -209,6 +267,11 @@ impl NotesPage {
             searching: None,
             _subs: subs,
         }
+    }
+
+    /// The explorer's full width, its resize handle included.
+    pub fn outer_width(&self) -> f32 {
+        self.width + space::XS
     }
 
     /// Takes the keyboard, so arrows walk the list.
@@ -316,19 +379,19 @@ impl NotesPage {
     }
 
     /// Everything the list shows; drawing happens often and only asks this cache.
-    fn refresh(&mut self, tag: Option<String>, cx: &App) {
+    fn refresh(&mut self, tag: Option<String>, cx: &mut Context<Self>) {
+        prepare_tree(cx);
         let vault = index::current();
         let hidden = index::hidden();
         let generation = (vault.generation, hidden.generation);
+        let ready = cx.try_global::<Trees>().and_then(|t| t.ready.clone());
         let filter = self.query.read(cx).value().to_lowercase();
-        let key = (generation, filter.clone(), self.view, self.order, tag.clone(), self.open_folders.iter().cloned().collect::<Vec<_>>(), self.renaming.as_ref().map(|(p, ..)| p.clone()));
+        let key = Key { generation, tree: ready.as_ref().map(|(g, _)| *g), filter: filter.clone(), view: self.view, order: self.order, tag: tag.clone(), open: self.open_folders.iter().cloned().collect(), renaming: self.renaming.as_ref().map(|(p, ..)| p.clone()) };
         if self.cache.as_ref().is_some_and(|c| c.key == key) {
             return;
         }
-        if self.tree.as_ref().is_none_or(|(g, _)| *g != generation) {
-            self.tree = Some((generation, Rc::new(build_tree(&vault, &hidden))));
-        }
-        let tree = self.tree.as_ref().map(|(_, t)| t.clone()).unwrap_or_default();
+        let loading = ready.is_none() && self.view == View::Files;
+        let tree = ready.map(|(_, t)| t).unwrap_or_default();
         let open_tasks = Self::visible_tasks(&vault, "").len();
         let now = chrono::Local::now().timestamp() as f64;
         let rows = match self.view {
@@ -392,7 +455,7 @@ impl NotesPage {
             View::Tasks => Self::visible_tasks(&vault, &filter),
             View::Search => self.search_rows.as_ref().clone(),
         };
-        self.cache = Some(Cache { key, rows: Rc::new(rows), open_tasks });
+        self.cache = Some(Cache { key, rows: Rc::new(rows), open_tasks, loading });
     }
 
     fn rows(&self) -> Rc<Vec<Row>> {
@@ -922,7 +985,10 @@ impl Render for NotesPage {
             }));
         let filter = div().flex_none().p(px(space::S)).child(Input::new(&self.query).small());
         let filtered = !self.query.read(cx).value().is_empty() && view != View::Search;
-        let body: AnyElement = if rows.is_empty() {
+        let loading = self.cache.as_ref().is_some_and(|c| c.loading);
+        let body: AnyElement = if rows.is_empty() && loading {
+            div().size_full().flex().items_center().justify_center().child(motion::loading(iconsize::L, t.secondary)).into_any_element()
+        } else if rows.is_empty() {
             let (name, title, detail) = match view {
                 _ if filtered => ("search", tr("Nichts gefunden"), tr("Ändere den Filter.")),
                 View::Search => ("search", tr("Inhalt durchsuchen"), tr("Tippe oben ein Wort oder Suchbefehle wie tag:#x.")),
@@ -946,7 +1012,6 @@ impl Render for NotesPage {
             .into_any_element()
         };
         let _ = active;
-        let width = self.width;
         let accent = t.accent;
         let handle = div().id("explorer-split").occlude().absolute().top_0().bottom_0().right_0().w(px(space::XS)).flex_none().cursor_col_resize().border_r_1().border_color(t.separator).soft(accent.opacity(0.3), 0.).on_drag(ExplorerSplit, |d, _, _, cx| cx.new(|_| d.clone()));
         if self.resizing && !cx.has_active_drag() {
@@ -972,7 +1037,7 @@ impl Render for NotesPage {
                     cx.notify();
                 }
             }))
-            .child(div().w(px(width + space::XS)).h_full().flex().flex_col().bg(t.column).child(header).child(filter).child(div().flex_1().min_h_0().child(body)))
+            .child(div().w(px(self.outer_width())).h_full().flex().flex_col().bg(t.column).child(header).child(filter).child(div().flex_1().min_h_0().child(body)))
             .child(handle)
     }
 }

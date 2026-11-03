@@ -87,6 +87,7 @@ impl Pages {
         let inbox = cx.new(super::inbox::InboxPage::new);
         let subs = vec![
             cx.observe(&lib, |this, lib, cx| {
+                super::notes_page::prepare_tree(cx);
                 let (query, module_query, route) = {
                     let l = lib.read(cx);
                     (l.search_query.clone(), l.module_query.clone(), l.route().clone())
@@ -386,7 +387,9 @@ impl Pages {
         }
         let page = self.notes_page.get_or_insert_with(|| cx.new(|cx| super::notes_page::NotesPage::new(window, cx))).clone();
         let shown = Self::explorer_shown(width);
-        div().size_full().flex().when(shown, |d| d.child(page)).child(div().flex_1().min_w_0().h_full().overflow_hidden().child(body)).into_any_element()
+        let mut slot = div().w(px(page.read(cx).outer_width())).h_full().flex_none();
+        let slot = slot.style().clone();
+        div().size_full().flex().when(shown, |d| d.child(page.cached(slot))).child(div().flex_1().min_w_0().h_full().overflow_hidden().child(body)).into_any_element()
     }
 
     fn document(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
