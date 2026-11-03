@@ -160,7 +160,7 @@ impl Render for TimeField {
             }
         });
         let suffix: Option<AnyElement> = if let Some(why) = why.clone() {
-            Some(div().id("time-invalid").child(icon("circle-alert", iconsize::XS, t.red)).tooltip(tip(why)).into_any_element())
+            Some(div().id("time-invalid").child(icon("circle-alert", iconsize::XS, t.readable(t.red))).into_any_element())
         } else {
             reading.map(|r| div().text_size(px(font::CAPTION)).text_color(t.secondary).child(r).into_any_element())
         };
@@ -173,7 +173,7 @@ impl Render for TimeField {
             .items_center()
             .gap(px(space::XXS))
             .when_some(why, |d, why| {
-                d.child(deferred(div().absolute().top_full().left_0().mt(px(space::XXS)).px(px(space::XS)).rounded(px(radius::SMALL)).bg(t.content).whitespace_nowrap().text_size(px(font::CAPTION)).text_color(t.red).child(why)).with_priority(1))
+                d.child(deferred(div().absolute().top_full().left_0().mt(px(space::XXS)).px(px(space::XS)).py(px(space::XXS)).rounded(px(radius::CONTROL)).bg(t.material).border_1().border_color(t.separator).shadow_md().whitespace_nowrap().text_size(px(font::CAPTION)).text_color(t.readable(t.red)).child(why)).with_priority(1))
             })
             .child(
                 div()
@@ -203,7 +203,7 @@ impl Render for TimeField {
                         }
                     }))
                     .w(px(control::TIME))
-                    .child(Input::new(&self.input).small().when(invalid, |i| i.border_color(t.red).text_color(t.red)).when_some(suffix, Input::suffix))
+                    .child(Input::new(&self.input).small().when(invalid, |i| i.border_color(t.red).text_color(t.readable(t.red))).when_some(suffix, Input::suffix))
                     .tooltip(tip(tr("Tippe z. B. 18, 1830 oder 18:30. ↑↓ in Viertelstunden, mit ⇧ in vollen Stunden."))),
             )
             .child({

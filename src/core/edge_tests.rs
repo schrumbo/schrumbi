@@ -1261,6 +1261,7 @@ fn without_a_convention_nothing_is_flagged_and_new_files_keep_plain_names() {
     assert_eq!(name_of(&made), "TEST.md", "a note in a checked folder keeps the plain name");
     assert_eq!(lib.note_name("Liste", &root.join("M0"), "txt"), "Liste.txt", "other new files too");
     assert_eq!(lib.note_name("meine Übung", &root.join("M0"), "txt"), "meine Übung.txt", "typed as typed");
+    assert_eq!(lib.note_name("Frage? Was ist \"X\".", &root.join("M0"), "txt"), "Frage Was ist X.txt", "nothing Windows refuses");
 
     std::fs::write(&made, "# Neuer Titel\n\nText\n").unwrap();
     lib.follow_heading(&made);
@@ -1292,7 +1293,11 @@ fn without_a_convention_a_role_only_adds_or_takes_out_the_task_word() {
     assert_eq!(plain_role_name("Aufgabe.pdf", Work, ""), "Abgabe.pdf");
     assert_eq!(plain_role_name("Mein Entwurf.pdf", Work, "Muster-M"), "Mein Entwurf.pdf", "already counts as the submission");
     assert_eq!(plain_role_name("Aufgabe.pdf", Material, ""), "Aufgabe.pdf");
-    for (name, role) in [("Mein Entwurf.pdf", Brief), ("Blatt_3_Aufgabe.pdf", Work), ("Notiz", Brief)] {
+    assert_eq!(plain_role_name("Übungsblatt 3.pdf", Work, "Muster-M"), "Übungsblatt 3 Muster-M.pdf", "tagged as own work, nothing removed");
+    assert_eq!(plain_role_name("Übungsblatt 3.pdf", Work, ""), "Übungsblatt 3.pdf");
+    assert_eq!(plain_role_name("_Entwurf.pdf", Brief, "Muster-M"), "_Entwurf Aufgabe.pdf", "own separators stay");
+    assert_eq!(plain_role_name("Entwurf_Muster-M_v2.pdf", Brief, "Muster-M"), "Entwurf_v2 Aufgabe.pdf");
+    for (name, role) in [("Mein Entwurf.pdf", Brief), ("Blatt_3_Aufgabe.pdf", Work), ("Notiz", Brief), ("Übungsblatt 3.pdf", Work), ("Aufgabenstellung.pdf", Work)] {
         let new = plain_role_name(name, role, "Muster-M");
         assert_eq!(FileRole::is_brief(&new, "Muster-M"), role == Brief, "{name} → {new}");
     }
@@ -1324,8 +1329,7 @@ fn a_plain_role_name_takes_out_only_the_author_token_and_only_the_added_word() {
     assert_eq!(plain_role_name("Blatt3.pdf", Work, "Muster-M"), "Blatt3.pdf");
     assert_eq!(plain_role_name("Maximierung.pdf", Brief, "Max"), "Maximierung.pdf", "a name that holds the author stays as it is");
     assert_eq!(plain_role_name("Max Entwurf.pdf", Brief, "Max"), "Entwurf Aufgabe.pdf");
-    assert_eq!(plain_role_name("Übungsblatt 3.pdf", Work, "Muster-M"), "Übungsblatt 3.pdf");
-    assert_eq!(plain_role_name("Lösung,Aufgabe 2.pdf", Work, "Muster-M"), "Lösung,Aufgabe 2.pdf");
+    assert_eq!(plain_role_name("Lösung,Aufgabe 2.pdf", Work, "Muster-M"), "Lösung,Aufgabe 2 Muster-M.pdf");
     assert_eq!(plain_role_name("Blatt-3_Lösung Aufgabe.pdf", Work, "Muster-M"), "Blatt-3_Lösung.pdf");
     assert_eq!(plain_role_name("Aufgabenstellung Aufgabe.pdf", Work, ""), "Aufgabenstellung Aufgabe.pdf", "still reads as a brief");
     for name in ["Mein Entwurf.pdf", "Blatt-3_Lösung.pdf", "Notiz", "Übung 3.pdf"] {

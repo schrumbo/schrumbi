@@ -165,7 +165,6 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Beispiel", Tab::Modules),
     ("Modul", Tab::Modules),
     ("Links", Tab::Modules),
-    ("Dateinamen", Tab::Modules),
     ("Wiederkehrende Deadlines", Tab::Modules),
     ("Stundenplan", Tab::Modules),
     ("Sync", Tab::Sync),
@@ -1490,7 +1489,7 @@ impl Settings {
             .gap(px(space::XL))
             .child(section(Some(tr("Modul")), None, module_rows, t))
             .child(section(Some(tr("Links")), Some(tr("Der Upload-Link öffnet sich beim Hochladen einer Abgabe, daneben erscheinen die Dateien zum Hineinziehen.")), links, t))
-            .child(section(Some(tr("Dateinamen")), Some(if c.naming_convention() { tr("Platzhalter: {code} {yy} {yyyy} {title} {author} {matrikel} {date} {date:yyyy-MM-dd} {w} {kw}") } else { tr("Gilt für alle Module. Eingeschaltet erscheint hier das Muster dieses Moduls.") }), naming_rows, t))
+            .child(section(Some(tr("Namenskonvention")), Some(if c.naming_convention() { tr("Platzhalter: {code} {yy} {yyyy} {title} {author} {matrikel} {date} {date:yyyy-MM-dd} {w} {kw}") } else { tr("Gilt für alle Module. Eingeschaltet erscheint hier das Muster dieses Moduls.") }), naming_rows, t))
             .child(section(Some(tr("Wiederkehrende Deadlines")), Some(tr("Wird für jede Vorlesungswoche erzeugt. Ordner-Platzhalter: {w} Vorlesungswoche, {kw} Kalenderwoche. Ohne Platzhalter zählt eine Datei, deren Datum in den 7 Tagen vor der Deadline liegt.")), rules, t))
             .child(section(Some(tr("Stundenplan")), Some(tr("Erscheint im 7-Tage-Ausblick der Übersicht, nicht in Pausen.")), sessions, t))
     }

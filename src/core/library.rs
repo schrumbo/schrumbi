@@ -1949,7 +1949,7 @@ impl Library {
     }
 
     fn typed_name(title: &str) -> String {
-        title.trim().chars().map(|c| if "\\/:".contains(c) { '-' } else { c }).collect()
+        title.trim().chars().filter(|c| !"*?\"<>|".contains(*c)).map(|c| if "\\/:".contains(c) { '-' } else { c }).collect::<String>().trim_end_matches(['.', ' ']).to_string()
     }
 
     /// The file name of something new in `folder`: notes are called what you call them unless the folder checks names, other files follow the module's convention while there is one.
@@ -3556,8 +3556,8 @@ pub(crate) fn plain_role_name(name: &str, role: FileRole, author: &str) -> Strin
     let separator = |c: char| matches!(c, ' ' | '_' | '-');
     match role {
         FileRole::Brief if !brief => {
-            let own = without_author(stem, author);
-            let own = own.trim_matches(separator);
+            let own = without_author(stem, author).unwrap_or_else(|| stem.to_string());
+            let own = own.as_str();
             let new = if own.is_empty() { dotted(BRIEF_TAG) } else if word(own) { dotted(own) } else { dotted(&format!("{own} {BRIEF_TAG}")) };
             if FileRole::is_brief(&new, author) { new } else { name.to_string() }
         }
@@ -3570,18 +3570,21 @@ pub(crate) fn plain_role_name(name: &str, role: FileRole, author: &str) -> Strin
             match kept {
                 Some("") => dotted(&tr("Abgabe")),
                 Some(rest) if !FileRole::is_brief(rest, "") => dotted(rest),
-                _ => name.to_string(),
+                _ => {
+                    let tagged = dotted(&format!("{stem} {author}"));
+                    if !author.trim().is_empty() && !FileRole::is_brief(&tagged, author) { tagged } else { name.to_string() }
+                }
             }
         }
         _ => name.to_string(),
     }
 }
 
-fn without_author(stem: &str, author: &str) -> String {
+fn without_author(stem: &str, author: &str) -> Option<String> {
     let separator = |c: char| matches!(c, ' ' | '_' | '-');
     let wanted: Vec<String> = fold(author).split(separator).filter(|t| !t.is_empty()).map(str::to_string).collect();
     if wanted.is_empty() {
-        return stem.to_string();
+        return None;
     }
     let mut runs: Vec<(bool, String)> = Vec::new();
     for c in stem.chars() {
@@ -3591,10 +3594,14 @@ fn without_author(stem: &str, author: &str) -> String {
         }
     }
     let words: Vec<usize> = (0..runs.len()).filter(|&i| !runs[i].0).collect();
-    let Some(first) = (0..words.len()).find(|&i| i + wanted.len() <= words.len() && words[i..i + wanted.len()].iter().zip(&wanted).all(|(&r, w)| fold(&runs[r].1) == *w)) else { return stem.to_string() };
-    let from = words[first];
-    let to = words[first + wanted.len() - 1] + 1;
-    runs.iter().enumerate().filter(|(i, _)| *i < from || *i > to).map(|(_, r)| r.1.as_str()).collect()
+    let first = (0..words.len()).find(|&i| i + wanted.len() <= words.len() && words[i..i + wanted.len()].iter().zip(&wanted).all(|(&r, w)| fold(&runs[r].1) == *w))?;
+    let (mut from, mut to) = (words[first], words[first + wanted.len() - 1]);
+    if to + 1 < runs.len() {
+        to += 1;
+    } else {
+        from = from.saturating_sub(1);
+    }
+    Some(runs.iter().enumerate().filter(|(i, _)| *i < from || *i > to).map(|(_, r)| r.1.as_str()).collect())
 }
 
 fn heading_titled(path: &Path) -> bool {
