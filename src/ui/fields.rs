@@ -5,11 +5,14 @@ use gpui_kit::component::date_picker::{DatePickerEvent, DatePickerState};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 
+use super::time_field::{Preset, TimeField};
+
 /// Text and date fields created on demand and kept by key, so forms over changing data keep focus and cursor.
 #[derive(Default)]
 pub struct Fields {
     map: HashMap<String, (Entity<InputState>, Subscription)>,
     dates: HashMap<String, (Entity<DatePickerState>, Subscription)>,
+    times: HashMap<String, Entity<TimeField>>,
     used: HashSet<String>,
     chains: Vec<Subscription>,
 }
@@ -69,6 +72,24 @@ impl Fields {
         state
     }
 
+    /// A typed time of day for `key`, following `value`; `on_commit` gets each new `HH:mm`.
+    pub fn time<V: 'static>(&mut self, key: &str, value: &str, presets: Vec<Preset>, window: &mut Window, cx: &mut Context<V>, on_commit: impl Fn(String, &mut App) + 'static) -> Entity<TimeField> {
+        self.used.insert(key.to_string());
+        if let Some(field) = self.times.get(key) {
+            let field = field.clone();
+            let v = value.to_string();
+            field.update(cx, |f, cx| f.show(&v, presets, window, cx));
+            return field;
+        }
+        let edited = key.to_string();
+        let field = cx.new(|cx| TimeField::new(value, presets, window, cx, move |v, cx| {
+            super::state::set_edited_field(&edited);
+            on_commit(v, cx);
+        }));
+        self.times.insert(key.to_string(), field.clone());
+        field
+    }
+
     /// Makes Enter in each field move on to the next one, like rows in a table.
     pub fn chain<V: 'static>(&mut self, keys: &[String], window: &mut Window, cx: &mut Context<V>) {
         let states: Vec<Entity<InputState>> = keys.iter().filter_map(|k| self.map.get(k).map(|(s, _)| s.clone())).collect();
@@ -90,6 +111,7 @@ impl Fields {
         let used = std::mem::take(&mut self.used);
         self.map.retain(|k, _| used.contains(k));
         self.dates.retain(|k, _| used.contains(k));
+        self.times.retain(|k, _| used.contains(k));
     }
 }
 
