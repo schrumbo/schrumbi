@@ -1171,6 +1171,178 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
     body.into_any_element()
 }
 
+/// What a table cell shows, for measuring it: text runs as bold and italic, and the pictures in between.
+#[derive(Default, Hash)]
+struct CellText {
+    runs: Vec<(String, bool, bool)>,
+    /// Widths of pictures standing in the text, which nothing wraps inside.
+    pictures: Vec<u32>,
+    formulas: Vec<String>,
+}
+
+fn cell_text(inlines: &[Inline], cx: &Ctx, size: f32) -> CellText {
+    let mut out = CellText::default();
+    let mut push = |text: String, bold: bool, italic: bool| out.runs.push((text, bold, italic));
+    let mut pictures = Vec::new();
+    let mut formulas = Vec::new();
+    for i in inlines {
+        match i {
+            Inline::Tag(tag) => push(format!("#{tag}"), false, false),
+            Inline::Text(s, st) => push(s.clone(), st.bold, st.italic),
+            Inline::Link(s, st, url) => push(if is_external(url) { format!("{s} ↗") } else { s.clone() }, st.bold, st.italic),
+            Inline::FootnoteRef(id) => push(superscript(&cx.footnote_order.iter().position(|f| f == id).map_or(0, |p| p + 1).to_string()), false, false),
+            Inline::Image(_, alt, _) => pictures.push(fits_in_line(alt, size).map_or_else(|| image_size(alt).0.unwrap_or(160.), |(w, _)| w + space::XS).ceil() as u32),
+            Inline::Math(source) => formulas.push(source.clone()),
+        }
+    }
+    out.pictures = pictures;
+    out.formulas = formulas;
+    out
+}
+
+/// How wide a cell's text runs on one line, and its longest word, from the position after each byte.
+fn cell_extent(text: &str, x_at: impl Fn(usize) -> f32, objects: &[f32]) -> (f32, f32) {
+    let mut word = 0_f32;
+    let mut at = 0;
+    for piece in text.split_inclusive(char::is_whitespace) {
+        word = word.max(x_at(at + piece.trim_end().len()) - x_at(at));
+        at += piece.len();
+    }
+    let widest = x_at(text.len()) - x_at(0) + objects.iter().sum::<f32>();
+    (widest, objects.iter().copied().fold(word, f32::max))
+}
+
+/// The natural and the narrowest width of each column, padding included; long words may break past `longest_word`.
+fn column_widths(cells: &[Vec<(f32, f32)>], columns: usize, longest_word: f32) -> (Vec<f32>, Vec<f32>) {
+    let pad = space::S * 2. + 1.;
+    let mut natural = vec![pad; columns];
+    let mut least = vec![pad; columns];
+    for row in cells {
+        for (c, (widest, word)) in row.iter().enumerate().take(columns) {
+            natural[c] = natural[c].max((widest + pad).ceil());
+            least[c] = least[c].max((word.min(longest_word) + pad).ceil());
+        }
+    }
+    (natural, least)
+}
+
+/// The natural and the narrowest width of each column.
+type ColumnWidths = Rc<(Vec<f32>, Vec<f32>)>;
+
+thread_local! {
+    static COLUMN_WIDTHS: RefCell<HashMap<u64, ColumnWidths>> = RefCell::new(HashMap::new());
+}
+
+/// A table whose columns take the width their text needs and wrap only when the note is too narrow.
+#[derive(IntoElement)]
+struct Table {
+    id: ElementId,
+    columns: usize,
+    /// Rows of cells, the head first, each drawn and with its text for measuring.
+    cells: Vec<Vec<(AnyElement, CellText)>>,
+    size: f32,
+    border: Hsla,
+    head_bg: Hsla,
+}
+
+impl Table {
+    /// The natural and the narrowest width of each column, measured in the note's font.
+    fn widths(&self, window: &mut Window, cx: &mut App) -> ColumnWidths {
+        use std::hash::{Hash, Hasher};
+        let base = window.text_style().font();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.size.to_bits().hash(&mut hasher);
+        base.family.hash(&mut hasher);
+        for row in &self.cells {
+            row.len().hash(&mut hasher);
+            for (_, text) in row {
+                text.hash(&mut hasher);
+            }
+        }
+        let key = hasher.finish();
+        if let Some(found) = COLUMN_WIDTHS.with(|c| c.borrow().get(&key).cloned()) {
+            return found;
+        }
+        let mut drawn_all = true;
+        let mut measured: Vec<Vec<(f32, f32)>> = Vec::new();
+        for (r, row) in self.cells.iter().enumerate() {
+            let mut sizes = Vec::new();
+            for (_, cell) in row.iter().take(self.columns) {
+                let mut text = String::new();
+                let mut runs = Vec::new();
+                for (part, bold, italic) in &cell.runs {
+                    let mut font = base.clone();
+                    font.weight = if *bold { FontWeight::BOLD } else if r == 0 { FontWeight::SEMIBOLD } else { base.weight };
+                    if *italic {
+                        font.style = FontStyle::Italic;
+                    }
+                    let part = part.replace(['\n', '\r'], " ");
+                    runs.push(TextRun { len: part.len(), font, color: black(), background_color: None, underline: None, strikethrough: None });
+                    text.push_str(&part);
+                }
+                let line = window.text_system().shape_line(text.clone().into(), px(self.size), &runs, None);
+                let mut objects: Vec<f32> = cell.pictures.iter().map(|p| *p as f32).collect();
+                for formula in &cell.formulas {
+                    objects.push(match super::embeds::inline_math(formula, super::theme::note_scale(), cx) {
+                        Some((_, w, _)) => w + space::XS,
+                        None => {
+                            drawn_all = false;
+                            formula.len() as f32 * 7.
+                        }
+                    });
+                }
+                sizes.push(cell_extent(&text, |i| f32::from(line.x_for_index(i)), &objects));
+            }
+            measured.push(sizes);
+        }
+        let (natural, least) = column_widths(&measured, self.columns, self.size * 14.);
+        let widths = Rc::new((natural, least));
+        if drawn_all {
+            COLUMN_WIDTHS.with(|c| {
+                let mut c = c.borrow_mut();
+                if c.len() > 512 {
+                    c.clear();
+                }
+                c.insert(key, widths.clone());
+            });
+        }
+        widths
+    }
+}
+
+impl RenderOnce for Table {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let widths = self.widths(window, cx);
+        let (natural, least) = (&widths.0, &widths.1);
+        let column = |c: usize, element: AnyElement| {
+            let (basis, narrowest) = (natural.get(c).copied().unwrap_or(0.), least.get(c).copied().unwrap_or(0.));
+            let mut d = div().flex().flex_basis(px(narrowest)).flex_shrink_0().min_w(px(narrowest)).max_w(px(basis.max(narrowest)));
+            d.style().flex_grow = Some((basis - narrowest).max(0.));
+            d.child(element)
+        };
+        let border = self.border;
+        let mut rows = self.cells.into_iter().enumerate().map(|(r, row)| {
+            div().flex().when(r > 0, |d| d.border_t_1().border_color(border)).children(row.into_iter().enumerate().map(|(c, (element, _))| column(c, element)).collect::<Vec<_>>())
+        });
+        let head = rows.next().map(|d| d.bg(self.head_bg));
+        let outline = 2.;
+        div().id(self.id).w_full().overflow_x_scroll().child(
+            div()
+                .w_full()
+                .min_w(px(least.iter().sum::<f32>() + outline))
+                .max_w(px(natural.iter().sum::<f32>() + outline))
+                .flex()
+                .flex_col()
+                .rounded(px(radius::CONTROL))
+                .border_1()
+                .border_color(border)
+                .overflow_hidden()
+                .children(head)
+                .children(rows),
+        )
+    }
+}
+
 fn mark_tint(color: MarkColor, t: &Theme) -> Hsla {
     match color {
         MarkColor::Default => t.orange,
@@ -1534,10 +1706,10 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     1 => note_size(font::TITLE),
                     2 => note_size(font::TITLE2),
                     3 => note_size(font::TITLE3),
-                    4 => note_size(font::BODY),
+                    4 | 5 => note_size(font::BODY),
                     _ => note_size(font::CALLOUT),
                 };
-                div().pt(px(if *level <= 2 { space::S } else { space::XS })).font_weight(if *level == 1 { FontWeight::BOLD } else { FontWeight::SEMIBOLD }).child(styled_text(inl, cx, size)).into_any_element()
+                div().pt(px(if *level <= 2 { space::S } else { space::XS })).font_weight(if *level == 1 { FontWeight::BOLD } else { FontWeight::SEMIBOLD }).when(*level >= 5, |d| d.text_color(t.secondary)).child(styled_text(inl, cx, size)).into_any_element()
             }
             Block::Paragraph(inl) => styled_text(inl, cx, note_size(font::BODY)),
             Block::Quote(inner) => div()
@@ -1654,17 +1826,25 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                         .filter(|b| !(folded && matches!(b, Block::List { .. })))
                         .map(|b| {
                             let inner = render_blocks(std::slice::from_ref(b), cx).into_iter().next().unwrap_or_else(|| div().into_any_element());
-                            if matches!(b, Block::List { .. }) { div().border_l_1().border_color(t.separator).pl(px(space::S)).child(inner).into_any_element() } else { inner }
+                            if matches!(b, Block::List { .. }) {
+                                div().border_l_1().border_color(t.separator).pl(px(space::S)).child(inner).into_any_element()
+                            } else if done {
+                                div().text_color(t.secondary).line_through().child(inner).into_any_element()
+                            } else {
+                                inner
+                            }
                         })
                         .collect();
+                    let group = SharedString::from(format!("md-item-{}", item.line));
                     let fold_button = (has_nested && folds.is_some()).then(|| {
                         let line = item.line;
                         div()
                             .id(("md-list-fold", line))
+                            .when(!folded, |d| d.invisible().group_hover(group.clone(), StyleRefinement::visible))
                 .capture_any_mouse_down(|_, _, _| press_control())
                             .absolute()
                             .top(px(space::XS))
-                            .left(px(-16.))
+                            .left(px(space::XS))
                             .size(px(14.))
                             .flex()
                             .items_center()
@@ -1682,36 +1862,26 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     });
                     div()
                         .relative()
+                        .ml(px(-(space::L + space::XS)))
+                        .pl(px(space::L + space::XS))
+                        .group(group)
                         .flex()
                         .items_start()
                         .gap(px(space::S))
                         .children(fold_button)
                         .child(marker)
-                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XS)).when(done, |d| d.text_color(t.secondary).line_through()).children(shown_blocks))
+                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XS)).children(shown_blocks))
                 })
             )
             .into_any_element(),
             Block::Table { head, rows, aligns } => {
-                let width_of = |inl: &Vec<Inline>| {
-                    inl.iter()
-                        .map(|i| match i {
-                            Inline::Image(_, alt, _) => image_size(alt).0.map_or(24., |w| w / 7.),
-                            Inline::Math(source) => source.chars().count() as f32 * 0.8,
-                            _ => plain_text(std::slice::from_ref(i)).chars().count() as f32,
-                        })
-                        .sum::<f32>()
-                };
-                let widths: Vec<f32> = (0..head.len())
-                    .map(|c| rows.iter().filter_map(|r| r.get(c)).chain(head.get(c)).map(width_of).fold(4_f32, f32::max).min(40.))
-                    .collect();
-                let total: f32 = widths.iter().sum::<f32>().max(1.);
+                let size = note_size(font::BODY);
                 let cell = |inl: &Vec<Inline>, row: usize, i: usize, bold: bool| {
-                    let share = widths.get(i).copied().unwrap_or(4.) / total;
                     let order = cx.order.get();
                     cx.order.set(order + 1);
                     cx.cell.set(Some((row, i)));
                     let click = text_click_of(cx);
-                    let d = div().id(("md-cell", order)).flex_none().w(relative(share)).px(px(space::S)).py(px(space::XS)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD));
+                    let d = div().id(("md-cell", order)).flex_1().min_w_0().px(px(space::S)).py(px(space::XS)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD));
                     let d = match aligns.get(i) {
                         Some(pulldown_cmark::Alignment::Center) => d.flex().justify_center(),
                         Some(pulldown_cmark::Alignment::Right) => d.flex().justify_end(),
@@ -1721,7 +1891,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     let drawn = match open {
                         Some(field) => d.child(field),
                         None => {
-                            let body = styled_text(inl, cx, note_size(font::BODY));
+                            let body = styled_text(inl, cx, size);
                             d.when_some(click, |d, click| {
                                 d.capture_any_mouse_down(|_, _, _| press_control()).on_mouse_up(MouseButton::Left, move |_, window, cx| click("", 0, window, cx))
                             })
@@ -1729,24 +1899,13 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                         }
                     };
                     cx.cell.set(None);
-                    drawn
+                    (drawn.into_any_element(), cell_text(inl, cx, size))
                 };
                 let order = cx.order.get();
                 cx.order.set(order + 1);
-                let min_width = px(widths.iter().map(|w| w.min(14.) * 9. + space::M).sum::<f32>());
-                let natural = px(widths.iter().map(|w| w * 7.2 * super::theme::note_scale() + space::M + 4.).sum::<f32>());
-                div().id(("md-table", order)).w_full().overflow_x_scroll().child(div()
-                    .min_w(min_width)
-                    .max_w(natural.max(min_width))
-                    .flex()
-                    .flex_col()
-                    .rounded(px(radius::CONTROL))
-                    .border_1()
-                    .border_color(t.separator)
-                    .overflow_hidden()
-                    .child(div().flex().bg(t.secondary_bg).children(head.iter().enumerate().map(|(i, c)| cell(c, 0, i, true))))
-                    .children(rows.iter().enumerate().map(|(row, r)| div().flex().border_t_1().border_color(t.separator).children(r.iter().enumerate().map(|(i, c)| cell(c, row + 1, i, false)).collect::<Vec<_>>()))))
-                    .into_any_element()
+                let mut cells = vec![head.iter().enumerate().map(|(i, c)| cell(c, 0, i, true)).collect::<Vec<_>>()];
+                cells.extend(rows.iter().enumerate().map(|(row, r)| r.iter().enumerate().map(|(i, c)| cell(c, row + 1, i, false)).collect::<Vec<_>>()));
+                Table { id: ElementId::from(("md-table", order)), columns: head.len(), cells, size, border: t.separator, head_bg: t.secondary_bg }.into_any_element()
             }
         })
         .collect()
@@ -2150,6 +2309,41 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<ListState>, t: &Theme) -
 
 #[cfg(test)]
 mod tests {
+    use super::{cell_extent, column_widths, space};
+
+    fn advance(text: &str) -> impl Fn(usize) -> f32 + '_ {
+        move |i| text.char_indices().take_while(|(at, _)| *at < i).map(|(_, c)| if c == 'z' { 12. } else { 7. }).sum()
+    }
+
+    #[test]
+    fn a_column_is_as_wide_as_its_text_measures_not_as_its_letters_count() {
+        let (widest, word) = cell_extent("Absatz", advance("Absatz"), &[]);
+        assert_eq!((widest, word), (47., 47.));
+        let (natural, least) = column_widths(&[vec![(widest, word)]], 1, 200.);
+        assert!(natural[0] >= 47. + space::S * 2. && least[0] == natural[0]);
+    }
+
+    #[test]
+    fn a_column_wraps_only_between_words() {
+        let text = "Gestalt und Nähe";
+        let (widest, word) = cell_extent(text, advance(text), &[]);
+        assert_eq!(widest, 16. * 7.);
+        assert_eq!(word, 7. * 7.);
+        let (natural, least) = column_widths(&[vec![(widest, word)], vec![(30., 30.)]], 1, 200.);
+        assert!(least[0] < natural[0]);
+        assert_eq!(least[0], (49. + space::S * 2. + 1.).ceil());
+    }
+
+    #[test]
+    fn very_long_words_and_pictures_set_the_narrowest_width() {
+        let long = "Donaudampfschifffahrtsgesellschaftskapitän";
+        let (widest, word) = cell_extent(long, advance(long), &[]);
+        let (_, least) = column_widths(&[vec![(widest, word)]], 1, 180.);
+        assert_eq!(least[0], (180. + space::S * 2. + 1.).ceil());
+        let (widest, word) = cell_extent("a", advance("a"), &[120.]);
+        assert_eq!((widest, word), (127., 120.));
+    }
+
     #[test]
     fn block_at_counts_like_the_parser() {
         use super::{block_at, parse};
