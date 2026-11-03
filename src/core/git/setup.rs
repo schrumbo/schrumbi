@@ -43,6 +43,9 @@ fn missing_ignores(root: &Path) -> Vec<String> {
 }
 
 fn gh(args: &[&str], dir: &Path) -> Option<String> {
+    if crate::core::drive::fenced("network", format!("gh {}", args.join(" "))) {
+        return None;
+    }
     let mut c = Command::new(gh_path()?);
     c.args(args).current_dir(dir).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
     let out = spawn(c, None, NETWORK).ok()?;

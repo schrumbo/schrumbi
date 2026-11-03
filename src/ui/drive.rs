@@ -15,6 +15,7 @@ use crate::core::drive::{self, on};
 
 const KEPT_FRAMES: usize = 200_000;
 const KEPT_SPOTS: usize = 20_000;
+const AWAY: i32 = 12_000;
 
 #[derive(Clone)]
 struct Spot {
@@ -40,9 +41,16 @@ struct Frames {
     times: Vec<(u64, f32)>,
 }
 
+#[derive(Clone, Copy)]
+struct Pointer {
+    at: Point<Pixels>,
+    held: Option<MouseButton>,
+}
+
 thread_local! {
     static WINDOWS: RefCell<HashMap<u64, Drawn>> = RefCell::new(HashMap::new());
     static FRAMES: RefCell<Frames> = RefCell::new(Frames::default());
+    static POINTER: RefCell<HashMap<u64, Pointer>> = RefCell::new(HashMap::new());
 }
 
 /// Lets the driving agent find an element by id, role or label. Without an agent nothing is added.
@@ -85,13 +93,14 @@ fn spot(mut element: Stateful<Div>, role: &'static str, label: Option<SharedStri
 }
 
 /// Called after a window painted its frame, with the frame's CPU time.
-pub fn frame(window: &Window, ms: Option<f32>, title: Option<&SharedString>) {
+pub fn frame(window: &Window, ms: Option<f32>, title: Option<&SharedString>, cx: &mut App) {
     if !on() {
         return;
     }
     let key = window.window_handle().window_id().as_u64();
-    let forced = WINDOWS.with_borrow_mut(|w| {
+    let (forced, first) = WINDOWS.with_borrow_mut(|w| {
         let drawn = w.entry(key).or_default();
+        let first = drawn.last.is_none();
         let forced = std::mem::take(&mut drawn.forced);
         if forced {
             drawn.shown = std::mem::take(&mut drawn.pending);
@@ -102,8 +111,12 @@ pub fn frame(window: &Window, ms: Option<f32>, title: Option<&SharedString>) {
         if let Some(title) = title {
             drawn.title = Some(title.clone());
         }
-        forced
+        (forced, first)
     });
+    if first && drive::away() {
+        let handle = window.window_handle();
+        cx.defer(move |cx| drop(handle.update(cx, |_, window, _| send_away(window))));
+    }
     if let Some(ms) = ms.filter(|_| !forced) {
         FRAMES.with_borrow_mut(|f| {
             if f.times.len() == KEPT_FRAMES {
@@ -216,8 +229,64 @@ fn serve(stream: TcpStream, token: &str, tx: &async_channel::Sender<Call>, last:
 
 fn ask(tx: &async_channel::Sender<Call>, body: Value, wait: Duration) -> Option<Value> {
     let (reply, answer) = mpsc::channel();
-    tx.send_blocking(Call { body, reply, deadline: Instant::now() + wait }).ok()?;
-    answer.recv_timeout(wait).ok()
+    let until = Instant::now() + wait;
+    tx.send_blocking(Call { body, reply, deadline: until }).ok()?;
+    let mut closed = false;
+    loop {
+        match answer.recv_timeout(Duration::from_millis(100)) {
+            Ok(mut out) => {
+                if closed {
+                    out["menu"] = json!("a native menu opened and was closed; native menus cannot be driven");
+                }
+                return Some(out);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < until => {
+                if native_menu::close() {
+                    closed = true;
+                    drive::note("native menu closed".into());
+                }
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod native_menu {
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindowThreadProcessId, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_CANCELMODE};
+
+    unsafe extern "system" fn collect(hwnd: HWND, list: LPARAM) -> BOOL {
+        let mut pid = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+        if pid == std::process::id() {
+            let mut class = [0u16; 16];
+            let n = unsafe { GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32) };
+            let menu = String::from_utf16_lossy(&class[..n.max(0) as usize]) == "#32768";
+            unsafe { (*(list as *mut Vec<(HWND, bool)>)).push((hwnd, menu)) };
+        }
+        TRUE
+    }
+
+    pub fn close() -> bool {
+        let mut list: Vec<(HWND, bool)> = Vec::new();
+        unsafe { EnumWindows(Some(collect), &mut list as *mut _ as LPARAM) };
+        if !list.iter().any(|(_, menu)| *menu) {
+            return false;
+        }
+        for (hwnd, _) in list {
+            let mut result = 0;
+            unsafe { SendMessageTimeoutW(hwnd, WM_CANCELMODE, 0, 0, SMTO_ABORTIFHUNG, 500, &mut result) };
+        }
+        true
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+mod native_menu {
+    pub fn close() -> bool {
+        false
+    }
 }
 
 fn watch(tx: &async_channel::Sender<Call>, last: &Mutex<Instant>) {
@@ -304,7 +373,7 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
         }
         "tree" => {
             let handles = pick_windows(b, cx)?;
-            redraw(&handles, cx).await;
+            redraw(&handles, cx).await?;
             let spots: Vec<Value> = handles.iter().flat_map(|h| shown(*h).into_iter().map(move |s| spot_json(*h, &s))).filter(|s| matches_filter(b, s)).collect();
             Ok(json!({ "spots": spots }))
         }
@@ -327,7 +396,7 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
                 keys.push((k, keystroke));
             }
             for (k, keystroke) in keys {
-                let handled = handle.update(cx, |_, window, cx| window.dispatch_keystroke(keystroke, cx)).map_err(|e| e.to_string())?;
+                let handled = press(handle, keystroke, cx)?;
                 if !handled {
                     drive::note(format!("key {k} not handled"));
                 }
@@ -350,7 +419,7 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
                         c if c.is_uppercase() => Keystroke { modifiers: Modifiers::shift(), key: c.to_lowercase().collect(), key_char: Some(c.to_string()) },
                         c => Keystroke { modifiers: Modifiers::none(), key: c.to_string(), key_char: Some(c.to_string()) },
                     };
-                    handle.update(cx, |_, window, cx| window.dispatch_keystroke(keystroke, cx)).map_err(|e| e.to_string())?;
+                    press(handle, keystroke, cx)?;
                 }
             }
             settle(handle, cx).await;
@@ -359,6 +428,16 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
         "action" => {
             let handle = one_window(b, cx)?;
             let name = b["name"].as_str().unwrap_or_default().to_string();
+            let name = if name.contains("::") {
+                name
+            } else {
+                let full: Vec<String> = cx.update(|cx| cx.all_action_names().iter().filter(|a| a.rsplit("::").next() == Some(name.as_str())).map(|a| a.to_string()).collect());
+                match full.as_slice() {
+                    [one] => one.clone(),
+                    [] => name,
+                    many => return Err(format!("{name} is ambiguous: {}", many.join(", "))),
+                }
+            };
             if !b["clipboard"].as_bool().unwrap_or(false) && ["::Copy", "::Cut", "::Paste"].iter().any(|s| name.ends_with(s)) {
                 return Err(format!("{name} would use the owner's clipboard; pass --clipboard if that is intended"));
             }
@@ -393,6 +472,24 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
         }
         other => Err(format!("unknown command {other:?}")),
     }
+}
+
+fn press(handle: AnyWindowHandle, keystroke: Keystroke, cx: &mut AsyncApp) -> Result<bool, String> {
+    handle
+        .update(cx, |_, window, cx| {
+            let modifiers = keystroke.modifiers;
+            let held = modifiers != Modifiers::none();
+            if held {
+                window.dispatch_event(PlatformInput::ModifiersChanged(ModifiersChangedEvent { modifiers, capslock: Capslock::default() }), cx);
+            }
+            let handled = window.dispatch_keystroke(keystroke.clone(), cx);
+            window.dispatch_event(PlatformInput::KeyUp(KeyUpEvent { keystroke }), cx);
+            if held {
+                window.dispatch_event(PlatformInput::ModifiersChanged(ModifiersChangedEvent { modifiers: Modifiers::none(), capslock: Capslock::default() }), cx);
+            }
+            handled
+        })
+        .map_err(|e| e.to_string())
 }
 
 fn touches_clipboard(k: &Keystroke) -> bool {
@@ -451,6 +548,21 @@ fn native(window: &Window) -> Value {
         _ => Value::Null,
     }
 }
+
+#[cfg(target_os = "windows")]
+fn send_away(window: &Window) {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos};
+    let Some(hwnd) = native(window).as_i64() else { return };
+    let hwnd = hwnd as isize as windows_sys::Win32::Foundation::HWND;
+    let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    if unsafe { GetWindowRect(hwnd, &mut rect) } != 0 {
+        unsafe { SetWindowPos(hwnd, std::ptr::null_mut(), rect.left - AWAY, rect.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) };
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn send_away(_: &Window) {}
 
 #[cfg(target_os = "macos")]
 fn native(window: &Window) -> Value {
@@ -579,10 +691,15 @@ fn matches(target: &str, s: &Value) -> bool {
     }
 }
 
-async fn redraw(handles: &[AnyWindowHandle], cx: &mut AsyncApp) {
+async fn redraw(handles: &[AnyWindowHandle], cx: &mut AsyncApp) -> Result<(), String> {
     for handle in handles {
         next_frame(*handle, true, Duration::from_millis(600), cx).await;
+        let key = handle.window_id().as_u64();
+        if WINDOWS.with_borrow(|w| w.get(&key).is_some_and(|d| d.forced)) {
+            return Err(format!("window {key} did not draw within 0.6 s (hidden, minimized or busy), so its elements would be stale"));
+        }
     }
+    Ok(())
 }
 
 async fn settle(handle: AnyWindowHandle, cx: &mut AsyncApp) {
@@ -630,7 +747,20 @@ fn pump(handle: AnyWindowHandle, cx: &mut AsyncApp) -> bool {
     view.is_some_and(|v| mac::covered(v) && mac::draw(v))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn pump(handle: AnyWindowHandle, cx: &mut AsyncApp) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{IsIconic, SW_SHOWNOACTIVATE, ShowWindow};
+    let Some(hwnd) = handle.update(cx, |_, window, _| native(window)).ok().and_then(|v| v.as_i64()) else { return false };
+    let hwnd = hwnd as isize as windows_sys::Win32::Foundation::HWND;
+    if unsafe { IsIconic(hwnd) } == 0 {
+        return false;
+    }
+    drive::note(format!("restored minimized window {}", handle.window_id().as_u64()));
+    unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+    true
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn pump(_: AnyWindowHandle, _: &mut AsyncApp) -> bool {
     false
 }
@@ -738,10 +868,14 @@ mod mac {
 }
 
 async fn find(b: &Value, cx: &mut AsyncApp) -> Result<(AnyWindowHandle, Spot), String> {
+    lookup(b, cx).await?
+}
+
+async fn lookup(b: &Value, cx: &mut AsyncApp) -> Result<Result<(AnyWindowHandle, Spot), String>, String> {
     let target = b["target"].as_str().ok_or("target missing")?;
     let nth = b["nth"].as_u64().unwrap_or(0) as usize;
     let handles = pick_windows(b, cx)?;
-    redraw(&handles, cx).await;
+    redraw(&handles, cx).await?;
     let mut hits = Vec::new();
     let mut near = Vec::new();
     for handle in &handles {
@@ -757,10 +891,16 @@ async fn find(b: &Value, cx: &mut AsyncApp) -> Result<(AnyWindowHandle, Spot), S
     let query = target.split_once([':', '~']).map_or(target, |(_, q)| q).to_lowercase();
     hits.sort_by_key(|(_, s)| (s.visible.is_none(), s.label.as_ref().is_none_or(|l| l.to_lowercase() != query) && s.id.to_lowercase() != query));
     let count = hits.len();
-    hits.into_iter().nth(nth).ok_or_else(|| {
+    Ok(hits.into_iter().nth(nth).ok_or_else(|| {
         near.truncate(12);
-        if count > 0 { format!("{target}: only {count} matches") } else if near.is_empty() { format!("{target}: no such element; app tree lists them") } else { format!("{target}: no such element; similar: {}", near.join(", ")) }
-    })
+        if count > 0 {
+            format!("{target}: only {count} matches")
+        } else if near.is_empty() {
+            format!("{target}: no such element; app tree lists them, and lists hold only the rows on screen, so scroll first")
+        } else {
+            format!("{target}: no such element; similar: {}", near.join(", "))
+        }
+    }))
 }
 
 async fn wait(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
@@ -768,22 +908,29 @@ async fn wait(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
     let limit = Duration::from_secs_f64(b["timeout"].as_f64().unwrap_or(10.).clamp(0., 3600.));
     let quiet = Duration::from_millis(b["quiet"].as_u64().unwrap_or(300));
     let what = b["for"].as_str().unwrap_or("idle");
+    let mut trouble = None;
     loop {
         let done = match what {
             "idle" => {
                 let last = WINDOWS.with_borrow(|w| w.values().filter_map(|d| d.last).max());
                 started.elapsed() >= quiet && last.is_none_or(|l| l.elapsed() >= quiet)
             }
-            "gone" => find(b, cx).await.is_err(),
             "window" => pick_windows(b, cx).is_ok(),
-            _ => find(b, cx).await.is_ok(),
+            _ => match lookup(b, cx).await {
+                Ok(found) => found.is_ok() == (what != "gone"),
+                Err(e) => {
+                    trouble = Some(e);
+                    false
+                }
+            },
         };
         if done {
             return Ok(json!({ "waited": started.elapsed().as_millis() as u64 }));
         }
         if started.elapsed() > limit {
             let frames = FRAMES.with_borrow(|f| f.times.len());
-            return Err(format!("still not {what} after {:.1} s ({frames} frames so far)", limit.as_secs_f64()));
+            let why = trouble.map_or_else(String::new, |e| format!("; {e}"));
+            return Err(format!("still not {what} after {:.1} s ({frames} frames so far){why}", limit.as_secs_f64()));
         }
         if what == "idle" {
             for handle in cx.update(|cx| cx.windows()) {
@@ -832,6 +979,24 @@ fn send(handle: AnyWindowHandle, event: PlatformInput, cx: &mut AsyncApp) -> Res
     handle.update(cx, |_, window, cx| drop(window.dispatch_event(event, cx))).map_err(|e| e.to_string())
 }
 
+fn tracked(handle: AnyWindowHandle) -> Option<Pointer> {
+    POINTER.with_borrow(|p| p.get(&handle.window_id().as_u64()).copied())
+}
+
+fn track(handle: AnyWindowHandle, at: Point<Pixels>, held: Option<MouseButton>) {
+    POINTER.with_borrow_mut(|p| p.insert(handle.window_id().as_u64(), Pointer { at, held }));
+}
+
+async fn glide(handle: AnyWindowHandle, from: Point<Pixels>, to: Point<Pixels>, steps: u64, held: Option<MouseButton>, modifiers: Modifiers, cx: &mut AsyncApp) -> Result<(), String> {
+    for i in 1..=steps {
+        let position = from + (to - from) * (i as f32 / steps as f32);
+        send(handle, PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: held, modifiers }), cx)?;
+        settle(handle, cx).await;
+    }
+    track(handle, to, held);
+    Ok(())
+}
+
 async fn pointer(cmd: &str, b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
     let os = cx.update(|cx| cx.platform_info().os);
     let modifiers = modifiers(b, os);
@@ -842,25 +1007,48 @@ async fn pointer(cmd: &str, b: &Value, cx: &mut AsyncApp) -> Result<Value, Strin
     };
     let prefix = if cmd == "drag" { "from_" } else { "" };
     let (handle, at, spot) = point_of(b, prefix, cx).await?;
+    let last = tracked(handle);
+    let held = last.and_then(|p| p.held);
+    let from = last.map_or(at, |p| p.at);
+    match (cmd, held) {
+        ("click" | "drag" | "drop" | "down", Some(h)) => return Err(format!("the {h:?} button is still held; app up releases it")),
+        ("up", None) => return Err("no button is held; app down presses one".into()),
+        _ => {}
+    }
+    let steps = b["steps"].as_u64().unwrap_or(if cmd == "drag" { 10 } else { 1 }).max(1);
     let moved = |position, pressed_button| PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button, modifiers });
     let down = |position, click_count| PlatformInput::MouseDown(MouseDownEvent { button, position, modifiers, click_count, first_mouse: false });
-    let up = |position, click_count| PlatformInput::MouseUp(MouseUpEvent { button, position, modifiers, click_count });
+    let up = |button, position, click_count| PlatformInput::MouseUp(MouseUpEvent { button, position, modifiers, click_count });
+    let changed = modifiers != Modifiers::none();
+    if changed {
+        send(handle, PlatformInput::ModifiersChanged(ModifiersChangedEvent { modifiers, capslock: Capslock::default() }), cx)?;
+    }
     match cmd {
-        "move" => send(handle, moved(at, None), cx)?,
-        "down" => send(handle, down(at, 1), cx)?,
-        "up" => send(handle, up(at, 1), cx)?,
+        "move" => glide(handle, from, at, steps, held, modifiers, cx).await?,
+        "down" => {
+            send(handle, moved(at, None), cx)?;
+            settle(handle, cx).await;
+            send(handle, down(at, 1), cx)?;
+            track(handle, at, Some(button));
+        }
+        "up" => {
+            glide(handle, from, at, steps, held, modifiers, cx).await?;
+            send(handle, up(held.unwrap_or(button), at, 1), cx)?;
+            track(handle, at, None);
+        }
         "click" => {
             send(handle, moved(at, None), cx)?;
             settle(handle, cx).await;
             for n in 1..=b["count"].as_u64().unwrap_or(1).max(1) as usize {
                 send(handle, down(at, n), cx)?;
-                send(handle, up(at, n), cx)?;
+                send(handle, up(button, at, n), cx)?;
             }
+            track(handle, at, None);
         }
         "wheel" => {
-            send(handle, moved(at, None), cx)?;
+            send(handle, moved(at, held), cx)?;
+            track(handle, at, held);
             let (dx, dy) = (b["dx"].as_f64().unwrap_or(0.) as f32, b["dy"].as_f64().unwrap_or(0.) as f32);
-            let steps = b["steps"].as_u64().unwrap_or(1).max(1);
             for _ in 0..steps {
                 let delta = if b["pixels"].as_bool().unwrap_or(false) { ScrollDelta::Pixels(point(px(dx), px(dy))) } else { ScrollDelta::Lines(point(dx, dy)) };
                 send(handle, PlatformInput::Scroll(ScrollEvent { position: at, delta, modifiers, touch_phase: TouchPhase::Moved, source: ScrollSource::default() }), cx)?;
@@ -874,6 +1062,7 @@ async fn pointer(cmd: &str, b: &Value, cx: &mut AsyncApp) -> Result<Value, Strin
             send(handle, PlatformInput::FileDrop(FileDropEvent::Pending { position: at }), cx)?;
             settle(handle, cx).await;
             send(handle, PlatformInput::FileDrop(FileDropEvent::Submit { position: at }), cx)?;
+            track(handle, at, None);
         }
         "drag" => {
             let (to_handle, to, _) = point_of(b, "to_", cx).await?;
@@ -883,17 +1072,17 @@ async fn pointer(cmd: &str, b: &Value, cx: &mut AsyncApp) -> Result<Value, Strin
             send(handle, moved(at, None), cx)?;
             settle(handle, cx).await;
             send(handle, down(at, 1), cx)?;
-            let steps = b["steps"].as_u64().unwrap_or(10).max(1);
-            for i in 1..=steps {
-                let f = i as f32 / steps as f32;
-                send(handle, moved(at + (to - at) * f, Some(button)), cx)?;
-                settle(handle, cx).await;
-            }
-            send(handle, up(to, 1), cx)?;
+            glide(handle, at, to, steps, Some(button), modifiers, cx).await?;
+            send(handle, up(button, to, 1), cx)?;
+            track(handle, to, None);
         }
         _ => {}
     }
+    if changed {
+        send(handle, PlatformInput::ModifiersChanged(ModifiersChangedEvent { modifiers: Modifiers::none(), capslock: Capslock::default() }), cx)?;
+    }
     settle(handle, cx).await;
     let at = json!([f32::from(at.x), f32::from(at.y)]);
-    Ok(json!({ "window": handle.window_id().as_u64(), "at": at, "spot": spot.map(|s| spot_json(handle, &s)) }))
+    let held = tracked(handle).and_then(|p| p.held).map(|h| format!("{h:?}").to_lowercase());
+    Ok(json!({ "window": handle.window_id().as_u64(), "at": at, "spot": spot.map(|s| spot_json(handle, &s)), "held": held }))
 }

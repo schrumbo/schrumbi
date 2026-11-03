@@ -44,6 +44,21 @@ pub fn fenced(what: &str, target: impl std::fmt::Display) -> bool {
     on()
 }
 
+/// Whether driven windows open far outside every screen, so the owner never sees or touches them.
+pub fn away() -> bool {
+    on() && std::env::var_os("SCHRUMBI_DRIVE_AWAY").is_some()
+}
+
+/// Where a driven instance puts what the user sends to the trash, instead of the system trash.
+pub fn trash_slot(path: &Path) -> Option<PathBuf> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = dir()?;
+    note(format!("trash {}", path.display()));
+    let slot = dir.join("trash").join(format!("{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    std::fs::create_dir_all(&slot).ok()?;
+    Some(slot.join(path.file_name()?))
+}
+
 /// Everything recorded since the last call.
 pub fn take_events() -> Vec<String> {
     EVENTS.lock().unwrap().drain(..).collect()

@@ -16,6 +16,7 @@ Run `.claude/bin/app help` for the commands, then `app start`. It starts a new i
 
 - Find elements with `app tree` and `app find`, then act on them by target: `app click text:Heute`, `app hover id:sidebar-today hover-today`. Coordinates are logical pixels, the same as screenshot pixels; use them for kit buttons and menus, which have no target.
 - Every input command waits until the frame after it; `app wait <target>` or `app wait idle` waits for more. Never sleep.
+- Drag in parts when the middle matters: `app down <from>`, `app move <to> 8`, `app wheel …` or `app key esc` while held, `app up <to>`. Modifier clicks: `app click <target> shift`. Repeats: `app key down*5`.
 - `app type` types umlauts too. Copy, cut and paste are refused because the clipboard is the owner's; the app's own copy buttons show up in `app events` instead. `app dialog <path>` answers the next file dialog, `app drop <target> <file>` drops files, `app events` shows what the app tried to open, reveal or notify outside.
 - Read each screenshot before acting on it.
 
@@ -33,7 +34,7 @@ Ask of each screen: is the UI good, what is missing, what is too much, what woul
 
 A finding is `Befund` (seen in a screenshot, number or behaviour) or `Prüfen` (suspicion). "Should work" is never evidence. Never claim it feels like Figma; only the owner can confirm that. List what needs their hands as `manual`.
 
-Input goes into the app's own event loop on every OS: the owner's mouse, keyboard and focus are never used and the window stays behind. What this cannot show: real IME composition, native menus and dialogs, and drags that leave the window. List those as `manual`. If a command says the UI thread hangs, that is a finding; add `app sample 3`.
+Input goes into the app's own event loop on every OS: the owner's mouse, keyboard and focus are never used and the window stays behind. What this cannot show: real IME composition, native menus and dialogs (right-click into a text field opens one; the tool closes it and warns), drags that leave the window, and window activation: driven windows never become active, so whatever happens on focus loss or on coming back to the app does not run. List those as `manual`. If a command says the UI thread hangs, that is a finding; add `app sample 3`.
 
 Always finish with `app stop`.
 

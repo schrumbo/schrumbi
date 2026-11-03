@@ -223,7 +223,7 @@ impl Render for UpdateSheet {
             .text_size(px(font::CALLOUT))
             .text_color(t.accent_text)
             .tooltip(tip(tr("Öffnet sich im Browser")))
-            .on_click(move |_, _, _| drop(opener::open(notes_page.as_str())))
+            .on_click(move |_, _, _| crate::core::library::open_path(notes_page.as_str()))
             .child(tr("Alle Änderungen auf der Release-Seite"))
             .child(icon("arrow-up-right", iconsize::XS, t.accent_text));
         let notes = div()

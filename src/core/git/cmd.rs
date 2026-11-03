@@ -195,6 +195,9 @@ impl Git {
     /// Runs a command that talks to the remote, without ever asking on a terminal.
     pub fn run_network(&self, args: &[&str]) -> Result<String, GitError> {
         Self::refuse(args)?;
+        if crate::core::drive::fenced("network", format!("git {}", args.join(" "))) {
+            return Err(GitError::Offline);
+        }
         let mut c = self.command(args);
         if std::env::var_os("GIT_SSH_COMMAND").is_none() && std::env::var_os("GIT_SSH").is_none() && self.run(&["config", "--get", "core.sshCommand"]).is_err() {
             c.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes -oConnectTimeout=15");

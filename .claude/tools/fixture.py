@@ -19,6 +19,6 @@ for sub in ['Übungen/W01','Übungen/W02','Vorlesung','Quiz']: os.makedirs(f'{ca
 open(f'{ca}/Übungen/W01/CA1_26_Blatt1_Test_261009.pdf','wb').write(b'%PDF-1.4\n%%EOF\n')
 for i in range(1,8):
     open(f'{ca}/Vorlesung/Folien {i:02}.pdf','wb').write(b'%PDF-1.4\n%%EOF\n')
-    open(f'{ca}/Vorlesung/Mitschrift {i:02}.md','w',encoding='utf-8').write(f'# Mitschrift {i}\n\nHolomorph? :: komplex differenzierbar {i}\n\n')
+    open(f'{ca}/Vorlesung/Mitschrift {i:02}.md','w',encoding='utf-8',newline='\n').write(f'# Mitschrift {i}\n\nHolomorph? :: komplex differenzierbar {i}\n\n')
 fs=f"{R}/WS26/Festkoerper"
-for i in range(int(sys.argv[2]) if len(sys.argv)>2 else 60): open(f'{fs}/Messung {i:03}.md','w',encoding='utf-8').write(f'# Messung {i}\n')
+for i in range(int(sys.argv[2]) if len(sys.argv)>2 else 60): open(f'{fs}/Messung {i:03}.md','w',encoding='utf-8',newline='\n').write(f'# Messung {i}\n')

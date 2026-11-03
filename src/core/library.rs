@@ -3723,7 +3723,10 @@ pub fn trash_files(paths: &[PathBuf]) -> Vec<(PathBuf, Result<Change>)> {
 fn trash_with_copy(path: &Path) -> Result<Change> {
     let backup = stash(path)?;
     #[cfg(not(test))]
-    let moved = trash::delete(path).map_err(anyhow::Error::from);
+    let moved = match super::drive::trash_slot(path) {
+        Some(slot) => move_path(path, &slot).map_err(anyhow::Error::from),
+        None => trash::delete(path).map_err(anyhow::Error::from),
+    };
     #[cfg(test)]
     let moved = if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) }.map_err(anyhow::Error::from);
     if let Err(e) = moved {

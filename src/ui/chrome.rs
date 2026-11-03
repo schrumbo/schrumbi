@@ -10,7 +10,12 @@ pub const CUSTOM: bool = !cfg!(target_os = "macos");
 
 /// Prepares a window for the custom title bar; on macOS the options stay as they are.
 pub fn window_options(options: WindowOptions, title: impl Into<SharedString>) -> WindowOptions {
-    let options = WindowOptions { focus: options.focus && !crate::core::drive::on(), ..options };
+    let driven = crate::core::drive::on();
+    let options = WindowOptions {
+        focus: options.focus && !driven,
+        inactive_frame_interval: if driven { None } else { options.inactive_frame_interval },
+        ..options
+    };
     if !CUSTOM {
         return options;
     }

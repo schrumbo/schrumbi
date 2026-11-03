@@ -256,6 +256,9 @@ pub fn known_vaults() -> Vec<KnownVault> {
 }
 
 fn obsidian_dir() -> Option<PathBuf> {
+    if crate::core::drive::on() {
+        return None;
+    }
     let base = dirs::config_dir()?;
     [base.join("obsidian"), base.join("Obsidian")].into_iter().find(|d| d.is_dir())
 }

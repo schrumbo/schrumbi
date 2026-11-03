@@ -28,7 +28,16 @@ def base_dir():
     return Path(f"/tmp/schrumbi-agent-{os.getuid()}")
 
 
-TREE = base_dir() / hashlib.sha1(str(ROOT).lower().encode() if WIN else str(ROOT).encode()).hexdigest()[:10]
+BASE = base_dir()
+TREE = BASE / hashlib.sha1(str(ROOT).lower().encode() if WIN else str(ROOT).encode()).hexdigest()[:10]
+SAFE_ROOTS = [Path(tempfile.gettempdir()), BASE] + ([] if WIN else [Path("/tmp"), Path("/private/tmp")])
+
+
+def scratch_only(path, what):
+    real = Path(os.path.realpath(path))
+    if not any(real.is_relative_to(Path(os.path.realpath(r))) for r in SAFE_ROOTS):
+        die(f"{what} {real} is outside the temp folder; a driven instance never touches real files. Copy it into your instance's tmp folder first")
+    return real
 
 
 def die(msg, code=1):
@@ -199,7 +208,7 @@ class Instance:
             lines.append(f"crash log: {crash}")
         return "\n".join(lines)
 
-    def call(self, cmd, timeout=30, **args):
+    def call(self, cmd, timeout=10, **args):
         info_path = self.dir / "drive.json"
         if not self.alive():
             die(f"instance {self.name} is not running (exited or never started).\n{self.log_tail()}")
@@ -227,6 +236,8 @@ class Instance:
                 die(f"instance {self.name} died.\n{self.log_tail()}")
             die(f"instance {self.name} closed the connection")
         out = json.loads(data)
+        if out.get("menu"):
+            print(f"warning: {out['menu']}", file=sys.stderr)
         if not out.get("ok"):
             if out.get("hung"):
                 die(f"{out.get('error')}. The UI thread hangs; `app sample` shows where.", 3)
@@ -249,6 +260,24 @@ def gc(quiet=True):
                 continue
             shutil.rmtree(d, ignore_errors=True)
             removed.append(d.name)
+    for tree in BASE.iterdir() if BASE.exists() else []:
+        if tree == TREE or not tree.is_dir():
+            continue
+        for d in tree.iterdir():
+            meta = d / "meta.json"
+            try:
+                info = json.loads(meta.read_text(encoding="utf-8")) if meta.exists() else {}
+            except (OSError, ValueError):
+                info = {}
+            exe = d / "bin" / EXE
+            found = image(info["pid"]) if info.get("pid") else None
+            if found and os.path.normcase(os.path.realpath(found)) == os.path.normcase(os.path.realpath(exe)):
+                continue
+            if time.time() - d.stat().st_mtime > 86400:
+                shutil.rmtree(d, ignore_errors=True) if d.is_dir() else d.unlink(missing_ok=True)
+                removed.append(f"{tree.name}/{d.name}")
+        if not any(tree.iterdir()):
+            tree.rmdir()
     if not quiet:
         print(f"removed {', '.join(removed)}" if removed else "nothing to clean")
 
@@ -277,6 +306,8 @@ def pick_instance(name):
 
 def claim(name):
     TREE.mkdir(parents=True, exist_ok=True)
+    if not WIN:
+        os.chmod(BASE, 0o700)
     try:
         (TREE / name).mkdir()
         return True
@@ -296,6 +327,8 @@ def stop(inst, quiet=False):
         if inst.alive():
             kill(inst.pid)
             time.sleep(0.3)
+    if not inst.alive():
+        shutil.rmtree(inst.dir / "bin", ignore_errors=True)
     if inst.meta:
         inst.meta["stopped"] = True
         (inst.dir / "meta.json").write_text(json.dumps(inst.meta), encoding="utf-8")
@@ -305,6 +338,8 @@ def stop(inst, quiet=False):
 
 
 def start(opts):
+    if opts["data"]:
+        opts["data"] = str(scratch_only(opts["data"], "--data"))
     gc()
     owner = owner_pid()
     profile = "dev" if opts["debug"] else "perf"
@@ -337,7 +372,7 @@ def start(opts):
     shutil.copy2(target / EXE, inst.exe)
     if WIN and (target / "schrumbi.pdb").exists():
         shutil.copy2(target / "schrumbi.pdb", d / "bin" / "schrumbi.pdb")
-    data = Path(opts["data"]).resolve() if opts["data"] else d / "data"
+    data = scratch_only(opts["data"], "--data") if opts["data"] else d / "data"
     if not opts["data"]:
         if subprocess.run([sys.executable, "-I", str(TOOLS / "fixture.py"), str(data), str(opts["notes"])]).returncode:
             die("fixture failed")
@@ -347,10 +382,18 @@ def start(opts):
         settings["theme"] = opts["theme"]
     if opts["lang"]:
         settings["language"] = opts["lang"]
+    if opts["data"] is None:
+        inst_notes = opts["notes"]
+    else:
+        inst_notes = None
     (d / "home" / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if k not in ("SCHRUMBI_PERF", "SCHRUMBI_SMOKE")}
     env.update(SCHRUMBI_HOME=str(d / "home"), SCHRUMBI_DRIVE=str(d), SCHRUMBI_DRIVE_OWNER=str(owner), SCHRUMBI_DRIVE_TTL=str(opts["ttl"]),
                RUST_BACKTRACE="1", TMP=str(d / "tmp"), TEMP=str(d / "tmp"), TMPDIR=str(d / "tmp"))
+    env.pop("SCHRUMBI_DRIVE_AWAY", None)
+    if WIN and not opts["visible"]:
+        env["SCHRUMBI_DRIVE_AWAY"] = "1"
+    (d / "drive.json").unlink(missing_ok=True)
     before = foreground()
     with open(d / "log", "wb") as log:
         if WIN:
@@ -362,14 +405,15 @@ def start(opts):
                                     startupinfo=si, creationflags=0x08000000 | 0x00000200, close_fds=True)
         else:
             proc = subprocess.Popen([str(inst.exe), str(data)], env=env, cwd=d, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-    inst.meta = {"pid": proc.pid, "owner": owner, "started": time.time(), "profile": profile, "data": str(data), "root": str(ROOT)}
+    inst.meta = {"pid": proc.pid, "owner": owner, "started": time.time(), "profile": profile, "data": str(data), "notes": inst_notes, "root": str(ROOT)}
     (d / "meta.json").write_text(json.dumps(inst.meta), encoding="utf-8")
     deadline = time.time() + opts["timeout"]
-    while not (d / "drive.json").exists():
+    while not channel_of(d, proc.pid):
         if proc.poll() is not None:
             die(f"app exited with {proc.returncode}:\n{inst.log_tail()}")
         if time.time() > deadline:
-            die(f"no drive channel after {opts['timeout']} s:\n{inst.log_tail()}")
+            stop(inst, quiet=True)
+            die(f"no drive channel after {opts['timeout']} s, stopped it:\n{inst.log_tail()}")
         time.sleep(0.05)
     inst.call("wait", timeout=opts["timeout"], **{"for": "idle", "quiet": 300})
     wins = inst.call("windows")["windows"]
@@ -379,6 +423,13 @@ def start(opts):
         print_window(win)
     if before and after and before != after:
         print(f"warning: the foreground window changed from {before} to {after}", file=sys.stderr)
+
+
+def channel_of(d, pid):
+    try:
+        return json.loads((d / "drive.json").read_text(encoding="utf-8")).get("pid") == pid
+    except (OSError, ValueError):
+        return False
 
 
 def print_window(w):
@@ -405,6 +456,13 @@ def point_args(args, prefix=""):
 
 
 MOD_WORDS = {"cmd", "mod", "secondary", "shift", "alt", "option", "ctrl", "control", "platform", "super", "win"}
+
+
+def repeat(key):
+    name, star, count = key.rpartition("*")
+    if star and name and count.isdigit():
+        return [name] * int(count)
+    return [key]
 
 
 def is_mods(s):
@@ -497,6 +555,11 @@ def perf_mark(inst):
     (inst.dir / "perf-from.json").write_text(json.dumps({"next": frames["next"], "cpu": cpu[0] if cpu else 0, "wall": time.time()}), encoding="utf-8")
 
 
+def data_key(inst):
+    notes = inst.meta.get("notes")
+    return f"notes {notes}" if notes is not None else f"data {inst.meta.get('data')}"
+
+
 def perf_measure(inst, scenario):
     try:
         mark = json.loads((inst.dir / "perf-from.json").read_text(encoding="utf-8"))
@@ -514,45 +577,52 @@ def perf_measure(inst, scenario):
     print(f"{scenario}: {line}")
     path = COMMON / "agent-tools" / "perf.log"
     path.parent.mkdir(parents=True, exist_ok=True)
+    key = data_key(inst)
     previous = None
     if path.exists():
         for row in path.read_text(encoding="utf-8", errors="replace").splitlines():
             parts = row.split("\t")
-            if len(parts) == 4 and parts[2] == scenario:
+            if len(parts) == 7 and parts[4] == scenario and parts[5] == key and parts[3] == sys.platform:
                 previous = parts
     if previous:
-        print(f"last ({previous[1]}): {previous[3]}")
+        print(f"last ({previous[1]} on {previous[2]}, {key}): {previous[6]}")
     commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    branch = subprocess.run(["git", "-C", str(ROOT), "branch", "--show-current"], capture_output=True, text=True).stdout.strip() or "detached"
     with open(path, "a", encoding="utf-8") as f:
-        f.write(f"{time.strftime('%Y-%m-%d %H:%M')}\t{commit}\t{scenario}\t{line}\n")
+        f.write(f"{time.strftime('%Y-%m-%d %H:%M')}\t{commit}\t{branch}\t{sys.platform}\t{scenario}\t{key}\t{line}\n")
 
 
 HELP = """\
-app start [--name N] [--light|--dark] [--lang de|en] [--notes N] [--size WxH] [--data DIR] [--debug] [--no-build]
+app start [--name N] [--light|--dark] [--lang de|en] [--notes N] [--size WxH] [--data DIR] [--debug] [--no-build] [--visible]
                                  build, then start a new private instance: scratch data, settings and temp folder;
-                                 --name N restarts your instance N (e.g. after a rebuild)
+                                 --name N restarts your instance N (e.g. after a rebuild); --data only inside the temp folder;
+                                 on Windows its windows open outside every screen unless --visible
 app ps | app gc                  instances of this worktree | remove dead ones
 app stop [--all]                 quit the selected instance (or all of yours)
 app windows                      window id, size, position, scale, theme, title (alias: list)
 app tree [filter]                elements: id role "label" x,y wxh
 app find <target>                one element; error lists similar ones
-app click <target|x y> [n] [right] [mods]
+app click <target|x y> [n] [right|middle] [mods]   e.g. app click id:row-3 shift, app click text:Datei 2
 app hover <target|x y> [name]    move the pointer, wait, screenshot if a name is given
-app move <target|x y>
-app drag <from> <to> [steps]     from and to are targets or x,y
-app wheel <target|x y> <steps> [mods]   positive steps scroll up
-app key <key>... [mods]          esc enter tab space backspace delete left … f12, a, cmd-k, shift-tab;
-                                 copy, cut and paste are refused unless --clipboard: the clipboard is the owner's
+app move <target|x y> [steps]    glides there from the last pointer position; keeps a held button held
+app down <target|x y> [right|middle] [mods] | app up <target|x y> [steps]
+                                 press, then move/wheel/key while it is held, then release: a drag in parts
+app drag <from> <to> [steps]     from and to are targets or x,y; press, glide, release
+app wheel <target|x y> <steps> [mods] [--px]   positive steps scroll up; --px scrolls pixels like a trackpad
+app key <key>... [mods]          esc enter tab space backspace delete left … f12, a, cmd-k, shift-tab, down*5 (five times);
+                                 every key is pressed and released; copy, cut and paste are refused unless --clipboard
 app type <text> [--paste]        types every character as a key (umlauts work); --paste inserts it at once
 app action <Name> [json]         dispatches a registered action; app actions [filter] lists them
-app drop <target|x y> <path>...  drops files from outside, as the file manager would
-app dialog <path>... | --cancel  answers the next file dialog instead of showing it
-app events                       what the app tried to do outside: open, reveal, notify, dialogs, activate
+app drop <target|x y> <path>...  drops files from outside, as the file manager would (temp folder only)
+app dialog <path>... | --cancel  answers the next file dialog instead of showing it (temp folder only)
+app events                       what the app tried to do outside: open, reveal, trash, network, notify, dialogs, menus
 app state                        route, workspace, last error
 app wait [idle|<target>] [--gone] [--window T] [--timeout S]
 app resize <w> <h> | app theme light|dark|system
 app shot <name> [--full]         screenshot of the window, prints the path
 app perf begin | end <scenario> | idle [seconds]
+                                 frame = CPU from render to last paint, without the GPU present (~0.6 ms);
+                                 compared with the last run of that scenario on this OS and data size
 app ping                         is the UI thread responsive? exit 3 when it hangs
 app stats | app sample [seconds] | app log [lines]
 
@@ -563,6 +633,8 @@ plain text (part of id or label; exact matches first). --nth N picks among sever
 Coordinates are logical pixels from the window's top-left, the same on every OS and scale;
 screenshots have the same size unless --full. Input goes straight to the app's event loop:
 the owner's mouse, keyboard and focus are never used, and the window never comes to the front.
+Exit codes: 0 done, 1 error (message on stderr), 3 the UI thread hangs. Native menus cannot be
+driven; one that opens is closed again and reported.
 """
 
 
@@ -588,7 +660,7 @@ def main(argv):
         print(HELP)
         return
     if cmd == "start":
-        opts = {"name": None, "theme": None, "lang": None, "notes": 60, "size": (1360, 860), "data": None, "debug": False, "build": True, "timeout": 90, "ttl": 1800}
+        opts = {"name": None, "theme": None, "lang": None, "notes": 60, "size": (1360, 860), "data": None, "debug": False, "build": True, "timeout": 90, "ttl": 1800, "visible": False}
         a = iter(args)
         for x in a:
             if x == "--name":
@@ -608,12 +680,16 @@ def main(argv):
                 opts["debug"] = True
             elif x == "--no-build":
                 opts["build"] = False
+            elif x == "--visible":
+                opts["visible"] = True
             elif x == "--timeout":
                 opts["timeout"] = float(next(a))
             elif x == "--ttl":
                 opts["ttl"] = int(next(a))
             else:
                 die(f"unknown option {x}")
+        if inst_name and opts["name"] and inst_name != opts["name"]:
+            die(f"-i {inst_name} and --name {opts['name']} name different instances")
         if inst_name:
             opts["name"] = inst_name
         start(opts)
@@ -632,7 +708,7 @@ def main(argv):
         if "--all" in args:
             owner = owner_pid()
             for i in instances():
-                if i.alive() and (not owner or i.meta.get("owner") == owner):
+                if i.alive() and i.meta.get("owner") == owner:
                     stop(i)
             return
         name = inst_name or os.environ.get("APP_INSTANCE")
@@ -659,24 +735,23 @@ def main(argv):
         if not args:
             die("app find <target>")
         show_spot(inst.call("find", target=args[0], **win_arg))
-    elif cmd in ("click", "move", "hover"):
+    elif cmd in ("click", "move", "hover", "down", "up"):
         p, more = point_args(args)
         body = {**p, **win_arg}
-        if cmd == "click":
+        if cmd in ("click", "down", "up", "move"):
             for x in more:
                 if x.isdigit():
-                    body["count"] = int(x)
-                elif x == "right":
-                    body["button"] = "right"
-                elif x == "middle":
-                    body["button"] = "middle"
+                    body["count" if cmd == "click" else "steps"] = int(x)
+                elif x in ("right", "middle") and cmd in ("click", "down"):
+                    body["button"] = x
                 elif is_mods(x):
                     body["mods"] = x
                 else:
-                    die(f"click does not understand {x}")
-        out = inst.call("click" if cmd == "click" else "move", **body)
+                    die(f"{cmd} does not understand {x}")
+        out = inst.call("move" if cmd == "hover" else cmd, **body)
         at = out["at"]
-        print(f"{cmd} {at[0]:g},{at[1]:g}{describe(out.get('spot'))}")
+        held = f"  ({out['held']} button held)" if out.get("held") else ""
+        print(f"{cmd} {at[0]:g},{at[1]:g}{describe(out.get('spot'))}{held}")
         if cmd == "hover":
             inst.call("wait", timeout=5, **{"for": "idle", "quiet": 350})
             if more:
@@ -695,8 +770,15 @@ def main(argv):
             die("app wheel <target|x y> <steps> [mods]")
         steps = int(float(more[0]))
         body = {**p, **win_arg, "dy": 1 if steps > 0 else -1, "steps": abs(steps)}
-        if len(more) > 1:
-            body["mods"] = more[1]
+        for x in more[1:]:
+            if x == "--px":
+                body["pixels"] = True
+                body["dy"] = steps
+                body["steps"] = 1
+            elif is_mods(x):
+                body["mods"] = x
+            else:
+                die(f"wheel does not understand {x}")
         inst.call("wheel", **body)
     elif cmd == "key":
         if not args:
@@ -708,6 +790,7 @@ def main(argv):
         if len(keys) >= 2 and is_mods(keys[-1]) and not is_mods(keys[0]):
             mods = keys.pop().replace("+", "-")
             keys = [f"{mods}-{k}" for k in keys]
+        keys = [part for k in keys for part in repeat(k)]
         inst.call("key", keys=keys, clipboard=clip, **win_arg)
     elif cmd == "type":
         paste = "--paste" in args
@@ -727,9 +810,9 @@ def main(argv):
         p, paths = point_args(args)
         if not paths:
             die("app drop <target|x y> <path>...")
-        inst.call("drop", paths=[str(Path(x).resolve()) for x in paths], **p, **win_arg)
+        inst.call("drop", paths=[str(scratch_only(x, "drop")) for x in paths], **p, **win_arg)
     elif cmd == "dialog":
-        inst.call("dialog", paths=[] if "--cancel" in args else [str(Path(x).resolve()) for x in args])
+        inst.call("dialog", paths=[] if "--cancel" in args else [str(scratch_only(x, "dialog")) for x in args])
         print("cancel" if "--cancel" in args or not args else f"next dialog answers {len(args)} path(s)")
     elif cmd == "events":
         for e in inst.call("events")["events"]:
@@ -752,6 +835,8 @@ def main(argv):
             elif x == "--window":
                 what = "window"
                 body["window"] = next(a)
+            elif x.startswith("--") or "target" in body:
+                die(f"wait does not understand {x}; app wait [idle|<target>] [--gone] [--window T] [--timeout S]")
             else:
                 body["target"] = x
                 what = "gone" if what == "gone" else "target"
