@@ -52,7 +52,7 @@ fn default_time(kind: Kind) -> NaiveTime {
 }
 
 impl QuickAdd {
-    pub fn new(module: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(module: Option<String>, kind: Option<Kind>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let title = cx.new(|cx| InputState::new(window, cx).placeholder(tr("z. B. Kapitel 3 lesen")));
         let due = datetime_picker(window, cx);
         let tomorrow = Local::now().date_naive() + Days::new(1);
@@ -69,7 +69,11 @@ impl QuickAdd {
             }),
             cx.subscribe(&due, |_, _, _: &DatePickerEvent, cx| cx.notify()),
         ];
-        Self { module, kind: Kind::Task, title, clean_title: None, due, optional: false, focused: false, _subs: subs }
+        let mut sheet = Self { module, kind: Kind::Task, title, clean_title: None, due, optional: false, focused: false, _subs: subs };
+        if let Some(kind) = kind {
+            sheet.set_kind(kind, window, cx);
+        }
+        sheet
     }
 
     fn set_kind(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {

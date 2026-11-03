@@ -14,15 +14,20 @@ Ein Semester hat Vorlesungswochen, ein Modul hat einen Ordner. Mehr braucht Schr
 
 Klick auf ein Modul in der Seitenleiste öffnet seine Seite. Links stehen alle {ui:Abgaben} mit ihren Dateien und {ui:Zuletzt geschrieben}, rechts Karten, Termine, Note und Links.
 
-- Was überfällig ist, steht oben. Danach kommen die nächsten zwei Wochen. Spätere und erledigte Abgaben sind eingeklappt.
+- Was überfällig ist, steht oben unter {ui:Braucht Aufmerksamkeit}. Die rote Zahl neben {ui:Abgaben} zählt genau diese Einträge, wie in der Seitenleiste.
+- Danach kommen die nächsten zwei Wochen. Spätere und erledigte Abgaben sind eingeklappt und zeigen die ersten fünf.
+- Erledigtes gleitet aus der Liste, {ui:Erledigt} leuchtet kurz auf.
+- {ui:Neuer Eintrag…} neben {ui:Abgaben} legt eine Abgabe an.
 - {ui:Alle Dateien} zeigt den Modulordner im Dateibaum.
-- Das Suchfeld oben durchsucht auf der Modulseite nur dieses Modul.
+- Das Suchfeld oben durchsucht auf der Modulseite nur dieses Modul. Ein Klick auf das Kürzel daneben sucht überall.
 
 | Taste | Wirkung |
 |---|---|
 | {key:n} | {ui:Neue Notiz} im Modul |
 | {key:f} | {ui:Ablegen} für die nächste offene Abgabe |
 | {key:up} {key:down} | Durch die Einträge gehen |
+| {key:space} | Gewählten Eintrag erledigen, die Auswahl rückt zum nächsten |
+| {key:escape} | Im Suchfeld: erst leeren, dann zurück zur Seite |
 
 ## Modul anlegen
 

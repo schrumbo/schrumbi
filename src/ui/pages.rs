@@ -103,6 +103,7 @@ impl Pages {
                         b.set_scope(Some(id), cx);
                         b.set_query(&module_query, cx);
                     });
+                    this.follow_module(cx);
                 }
                 cx.notify();
             }),
@@ -231,12 +232,37 @@ impl Pages {
             .into_any_element()
     }
 
+    /// Keeps the module page's cursor on a row when the selected one was done, and lets the done list light up.
+    fn follow_module(&mut self, cx: &mut Context<Self>) {
+        let reduce = cx.reduce_motion();
+        let done_before = self.module.done_at;
+        let picked = state::read(cx, |l| {
+            let Route::Module(id) = l.route() else { return None };
+            let m = l.module_by_id(id)?;
+            module_page::follow(l, m, &mut self.module, std::time::Instant::now(), reduce)
+        });
+        if self.module.done_at != done_before {
+            cx.spawn(async move |this, cx| {
+                for wait in [module_page::LEAVE, super::motion::FLASH - module_page::LEAVE] {
+                    cx.background_executor().timer(wait).await;
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        return;
+                    }
+                }
+            })
+            .detach();
+        }
+        if let Some(id) = picked {
+            act(cx, |l| l.select(Some(id)));
+        }
+    }
+
     fn module_key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
         let m = &e.keystroke.modifiers;
         if m.platform || m.control || m.alt {
             return;
         }
-        let Route::Module(id) = state::read(cx, |l| l.route().clone()) else { return };
+        let Some(id) = state::read(cx, |l| if let Route::Module(id) = l.route() && l.module_query.is_empty() { Some(id.clone()) } else { None }) else { return };
         match e.keystroke.key.as_str() {
             "n" => act(cx, |l| l.new_note = Some(crate::core::library::NewNoteRequest { module_id: Some(id), folder: None })),
             "f" => {
@@ -249,13 +275,22 @@ impl Pages {
                     return;
                 }
                 let at = state::read(cx, |l| l.selected().and_then(|s| rows.iter().position(|r| *r == s.id)));
-                let next = match (at, e.keystroke.key.as_str()) {
-                    (None, _) => 0,
-                    (Some(i), "down") => (i + 1).min(rows.len() - 1),
-                    (Some(i), _) => i.saturating_sub(1),
+                let last = rows.len() - 1;
+                let next = match (at, e.keystroke.key.as_str(), self.module.cursor.as_ref().map(|c| c.1)) {
+                    (Some(i), "down", _) => (i + 1).min(last),
+                    (Some(i), _, _) => i.saturating_sub(1),
+                    (None, _, Some(i)) => i.min(last),
+                    (None, "down", None) => 0,
+                    (None, _, None) => last,
                 };
                 let picked = rows[next].clone();
+                self.module.cursor = Some((picked.clone(), next));
+                self.module.reveal.set(true);
                 act(cx, |l| l.select(Some(picked)));
+            }
+            "space" => {
+                let Some(picked) = state::read(cx, |l| l.selected().filter(|a| a.module_id == id).map(|a| a.id.clone())) else { return };
+                act(cx, |l| l.toggle_done(&picked));
             }
             _ => return,
         }
@@ -281,12 +316,14 @@ impl Pages {
             .when_some(focus, |d, f| d.track_focus(&f))
             .key_context("ModulePage")
             .on_key_down(move |e: &KeyDownEvent, _, cx| key_view.update(cx, |p, cx| p.module_key(e, cx)))
+            .when_some(self.module.focus.clone(), |d, f| d.on_mouse_down(MouseButton::Left, move |_, window, cx| if !f.contains_focused(window, cx) {
+                window.focus(&f, cx);
+            }))
             .capture_action(move |_: &super::main_window::Dismiss, window, cx| {
-                let focused = dismiss_view.read(cx).module.focus.as_ref().is_some_and(|f| f.is_focused(window));
-                if focused {
-                    cx.stop_propagation();
-                    act(cx, Library::dismiss_inspector);
-                }
+                let Some(page) = dismiss_view.read(cx).module.focus.clone().filter(|f| f.contains_focused(window, cx) && state::read(cx, |l| l.module_query.is_empty())) else { return };
+                cx.stop_propagation();
+                act(cx, Library::dismiss_inspector);
+                window.focus(&page, cx);
             })
             .size_full()
             .relative()

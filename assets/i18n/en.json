@@ -1435,9 +1435,8 @@
   "%@ von %@ erledigt": "%@ of %@ done",
   "Notiz, Textdatei oder Ordner in %@ anlegen (N)": "Create a note, text file or folder in %@ (N)",
   "Dateien in %@ ablegen (F)": "File documents into %@ (F)",
-  "Eintrag hinzufügen": "Add entry",
   "Modulordner öffnen": "Open module folder",
-  "Noch keine Abgaben": "No deadlines yet",
+  "Noch keine Abgaben": "No submissions yet",
   "Lege eine einzelne Abgabe an, oder eine Regel, die sich jede Vorlesungswoche wiederholt.": "Add a single deadline, or a rule that repeats every lecture week.",
   "Regel anlegen": "Add rule",
   "Schreibe die erste Notiz oder ziehe Dateien hierher.": "Write the first note or drop files here.",
@@ -1601,5 +1600,10 @@
   "Legt in jedem Modul einen Abgabeordner an, sobald du etwas ablegst, und benennt nach Muster.": "Creates a submissions folder in each module once you file something, and names by pattern.",
   "Der Modulordner fehlt. Lege ihn an oder schalte „Ordner anlegen“ ein.": "The module folder is missing. Create it or turn on “Create folders”.",
   "Im Dateibaum zeigen": "Show in the file tree",
-  "Nichts offen in den nächsten zwei Wochen": "Nothing open in the next two weeks"
+  "Nichts offen in den nächsten zwei Wochen": "Nothing open in the next two weeks",
+  "Alle %lld zeigen": "Show all %lld",
+  "In %@ suchen": "Search in %@",
+  "In %@": "In %@",
+  "Überall suchen": "Search everywhere",
+  "Abgabe, Aufgabe oder Prüfung eintragen": "Add a submission, task or exam"
 }
