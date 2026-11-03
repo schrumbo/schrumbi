@@ -168,7 +168,7 @@ pub struct NoteView {
     /// The formula or diagram being written, drawn while it is written.
     live_preview: Option<(String, Rc<ParsedNote>)>,
     /// A block the reader should bring into view once it knows the block.
-    reveal_block: Option<usize>,
+    reveal_line: Option<usize>,
     item_hashes: Vec<u64>,
     split_sync: (f32, f32),
     reparse: Option<Task<()>>,
@@ -345,7 +345,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -359,8 +359,9 @@ impl NoteView {
         let token = self.found.as_ref().map_or(0, |f| f.token + 1);
         let _ = (&window, &cx);
         let block = markdown_view::block_at(text, range.start);
-        self.reveal_block = Some(block);
-        self.found = Some(markdown_view::Found { block, token });
+        let line = text.get(..range.start).unwrap_or_default().matches('\n').count();
+        self.reveal_line = Some(line);
+        self.found = Some(markdown_view::Found { block, line, token });
     }
 
     /// Focuses the editor when editing, otherwise the note itself so its shortcuts work.
@@ -434,7 +435,7 @@ impl NoteView {
         if self.mode == Mode::Live {
             return self.segments.get(item).map_or(0, |s| s.line);
         }
-        self.parsed.as_ref().and_then(|(_, p)| p.sources().get(item).map(|s| s.line)).unwrap_or(0)
+        self.parsed.as_ref().and_then(|(_, p)| p.rows().get(item).map(|r| r.line)).unwrap_or(0)
     }
 
     /// The list item a source line is drawn in.
@@ -442,7 +443,7 @@ impl NoteView {
         if self.mode == Mode::Live {
             return self.segments.iter().position(|s| line < s.line + s.count).map_or(self.segments.len(), |i| i + 1);
         }
-        self.parsed.as_ref().and_then(|(_, p)| p.sources().iter().rposition(|s| s.line <= line)).map_or(1, |i| i + 1)
+        self.parsed.as_ref().map_or(1, |(_, p)| p.row_of_line(line) + 1)
     }
 
     /// The text of the note right now.
@@ -573,7 +574,7 @@ impl NoteView {
             self.definitions = Rc::new(text.split('\n').filter(|l| l.starts_with('[') && l.contains("]:")).collect::<Vec<_>>().join("\n"));
             self.segments.iter().map(|s| s.hash).collect()
         } else {
-            p.sources().iter().map(|s| s.hash).collect()
+            p.rows().iter().map(|r| r.hash).collect()
         };
         self.source_lines = Rc::new(text.split('\n').map(str::to_string).collect());
         self.adopt_items(hashes);
@@ -1370,8 +1371,11 @@ impl NoteView {
         self.link_focus.index = Some(next);
         super::link_card::hide(cx);
         let _ = window;
-        let line = self.parsed.as_ref().and_then(|(_, p)| p.sources().get(links[next].1).map(|s| s.line)).unwrap_or(0);
-        self.reader_list.scroll_to_reveal_item(self.item_of_line(line));
+        let item = match (&self.parsed, self.mode) {
+            (Some((_, p)), Mode::Read) => p.row_of_link(next) + 1,
+            (p, _) => self.item_of_line(p.as_ref().and_then(|(_, p)| p.sources().get(links[next].1).map(|s| s.line)).unwrap_or(0)),
+        };
+        self.reader_list.scroll_to_reveal_item(item);
         cx.notify();
     }
 
@@ -1644,8 +1648,7 @@ impl NoteView {
             let item_ix = (offset.max(0.).trunc() as usize).min(self.reader_list.item_count().saturating_sub(1));
             self.reader_list.scroll_to(ListOffset { item_ix, offset_in_item: px(offset.fract() * 4096.) });
         }
-        if let Some(block) = self.reveal_block.take() {
-            let line = parsed.sources().get(block).map_or(0, |s| s.line);
+        if let Some(line) = self.reveal_line.take() {
             self.reader_list.scroll_to_reveal_item(self.item_of_line(line));
         }
         let path = self.path.clone();
@@ -1721,12 +1724,19 @@ impl NoteView {
             }
             lines
         });
-        let items = if live_mode { (segments.len() + 2).max(if self.live.is_some() { 3 } else { 2 }) } else { parsed.len() + 2 };
+        let items = if live_mode { (segments.len() + 2).max(if self.live.is_some() { 3 } else { 2 }) } else { parsed.rows().len() + 2 };
         let measured = self.reader_list.viewport_bounds().size.width;
         if measured > px(0.) {
             self.reader_width = measured;
         }
-        let footnote_list = self.reader_list.clone();
+        let footnote_back: Rc<dyn Fn(usize) -> usize> = if live_mode {
+            let shown = segments.clone();
+            Rc::new(move |line| shown.iter().position(|s| line < s.line + s.count).map_or(shown.len(), |i| i + 1))
+        } else {
+            let note = parsed.clone();
+            Rc::new(move |line| note.row_of_line(line) + 1)
+        };
+        let footnote_list = (self.reader_list.clone(), footnote_back);
         let full = self.measured_full;
         let left = self.column_left();
         let content = move |inner: AnyElement| reader_column(full, left, inner);
@@ -1755,10 +1765,11 @@ impl NoteView {
                 return content(footer.into_any_element());
             }
             if !live_mode {
-                if hidden.get(i - 1).copied().unwrap_or(false) {
+                let Some(row) = parsed.rows().get(i - 1).copied() else { return div().into_any_element() };
+                if hidden.get(row.block).copied().unwrap_or(false) {
                     return div().into_any_element();
                 }
-                return content(div().id(("read-item", i)).pb(px(space::M)).child(markdown_view::render_block(&parsed, i - 1, base.as_deref(), Some(toggle.clone()), found.as_ref(), Some(&focus), &t)).into_any_element());
+                return content(div().id(("read-item", i)).pb(px(parsed.row_gap(i - 1))).child(markdown_view::render_row(&parsed, &row, base.as_deref(), Some(toggle.clone()), found.as_ref(), Some(&focus), &t)).into_any_element());
             }
             let Some(segment) = segments.get(i - 1).copied() else {
                 let field = me.update(cx, |n, cx| n.live_field(window, cx));
