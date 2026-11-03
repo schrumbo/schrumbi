@@ -89,8 +89,16 @@ pub struct ParsedNote {
     footnote_order: Vec<String>,
 }
 
-fn line_of(src: &str, offset: usize) -> usize {
-    src[..offset.min(src.len())].bytes().filter(|b| *b == b'\n').count()
+struct Breaks(Vec<usize>);
+
+impl Breaks {
+    fn of(src: &str) -> Self {
+        Breaks(src.bytes().enumerate().filter(|(_, b)| *b == b'\n').map(|(i, _)| i).collect())
+    }
+
+    fn line_of(&self, offset: usize) -> usize {
+        self.0.partition_point(|at| *at < offset)
+    }
 }
 
 /// Parses Markdown into blocks with source lines for task items.
@@ -124,8 +132,9 @@ pub fn parse(src: &str) -> ParsedNote {
     let mut last_range = 0..0;
     let mut bare_wikilink = false;
     let mut raised: Option<fn(&str) -> String> = None;
+    let breaks = Breaks::of(src);
     for (event, range) in Parser::new_ext(src, markdown::options()).into_offset_iter() {
-        note_sources(src, &stack, &last_range, &mut sources);
+        note_sources(src, &breaks, &stack, &last_range, &mut sources);
         last_range = range.clone();
         if let Some(buf) = metadata.as_mut() {
             match event {
@@ -174,7 +183,7 @@ pub fn parse(src: &str) -> ParsedNote {
                 }
                 Tag::Item => {
                     flush_inline(&mut stack);
-                    item_meta.push((None, line_of(src, range.start)));
+                    item_meta.push((None, breaks.line_of(range.start)));
                     stack.push((Some(Tag::Item), Vec::new(), Vec::new()));
                 }
                 Tag::List(_) => {
@@ -395,7 +404,7 @@ pub fn parse(src: &str) -> ParsedNote {
         }
     }
     flush_inline(&mut stack);
-    note_sources(src, &stack, &last_range, &mut sources);
+    note_sources(src, &breaks, &stack, &last_range, &mut sources);
     let blocks = stack.pop().map(|s| s.1).unwrap_or_default();
     let mut links = Vec::new();
     for (i, block) in blocks.iter().enumerate() {
@@ -432,6 +441,9 @@ fn wikilink_label(target: &str) -> String {
 
 /// Runs of spaces in the source read as one, as in Obsidian's reading view.
 fn collapse_spaces(text: &str) -> String {
+    if !text.contains("  ") && !text.contains('\t') {
+        return text.to_string();
+    }
     let mut out = String::with_capacity(text.len());
     let mut last_space = false;
     for c in text.chars() {
@@ -455,7 +467,8 @@ fn push_with_autolinks(target: &mut Vec<Inline>, text: &str, style: Style) {
     }
     static URL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"https?://[^\s<>\]\)]+|\bwww\.[a-zA-Z0-9-]+\.[^\s<>\]\)]+|\b[\w.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9.-]+").unwrap());
     let mut copied = 0;
-    for hit in URL.find_iter(text) {
+    let may_link = text.contains("://") || text.contains("www.") || text.contains('@');
+    for hit in may_link.then(|| URL.find_iter(text)).into_iter().flatten() {
         let shown = hit.as_str().trim_end_matches(['.', ',', ';', ':', '!', '?', '\'', '"']);
         if hit.start() > copied {
             target.push(Inline::Text(text[copied..hit.start()].to_string(), style));
@@ -515,14 +528,14 @@ fn join_marks(inlines: &mut Vec<Inline>) {
 }
 
 /// Remembers where newly finished top-level blocks came from.
-fn note_sources<T>(src: &str, stack: &[(T, Vec<Block>, Vec<Inline>)], range: &std::ops::Range<usize>, sources: &mut Vec<BlockSource>) {
+fn note_sources<T>(src: &str, breaks: &Breaks, stack: &[(T, Vec<Block>, Vec<Inline>)], range: &std::ops::Range<usize>, sources: &mut Vec<BlockSource>) {
     use std::hash::{Hash, Hasher};
     let [(_, blocks, _)] = stack else { return };
     while sources.len() < blocks.len() {
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         src.get(range.clone()).unwrap_or_default().hash(&mut hash);
         let text = src.get(range.clone()).unwrap_or_default();
-        let line = line_of(src, range.start);
+        let line = breaks.line_of(range.start);
         sources.push(BlockSource { line, end_line: line + text.trim_end_matches('\n').matches('\n').count() + 1, hash: hash.finish() });
     }
 }
@@ -2466,5 +2479,19 @@ mod reader_tests {
         let Block::List { items, .. } = &parsed.blocks[0] else { panic!() };
         assert!(matches!(items[0].blocks[0], Block::Paragraph(_)), "text comes first");
         assert!(matches!(items[0].blocks[1], Block::Quote(_)));
+    }
+
+    #[test]
+    fn links_spaces_and_lines_read_the_same_in_a_long_note() {
+        use super::Inline;
+        let src = format!("{}Text  mit\tLücken, www.beispiel.de, muster@beispiel.de und https://beispiel.de/a.\n\n- eins\n- zwei\n", "Absatz ohne Adresse.\n\n".repeat(300));
+        let note = parse(&src);
+        let Some(Block::Paragraph(inlines)) = note.blocks.get(300) else { panic!("no paragraph") };
+        let links: Vec<(&str, &str)> = inlines.iter().filter_map(|i| if let Inline::Link(shown, _, to) = i { Some((shown.as_str(), to.as_str())) } else { None }).collect();
+        assert_eq!(links, [("www.beispiel.de", "https://www.beispiel.de"), ("muster@beispiel.de", "mailto:muster@beispiel.de"), ("https://beispiel.de/a", "https://beispiel.de/a")]);
+        assert!(plain_text(inlines).starts_with("Text mit Lücken, "));
+        assert_eq!(note.sources().iter().map(|s| s.line).skip(299).collect::<Vec<_>>(), [598, 600, 602]);
+        let Some(Block::List { items, .. }) = note.blocks.last() else { panic!("no list") };
+        assert_eq!(items.iter().map(|i| i.line).collect::<Vec<_>>(), [602, 603]);
     }
 }

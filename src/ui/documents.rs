@@ -202,6 +202,7 @@ pub struct NoteView {
     place_restored: bool,
     fit: BarFit,
     toc: Rc<Vec<(String, usize)>>,
+    toc_of: Option<(Rc<ParsedNote>, Mode)>,
     path: PathBuf,
     mode: Mode,
     editor: Entity<EditorState>,
@@ -340,7 +341,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_block: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -1699,7 +1700,7 @@ impl NoteView {
                 }
             }
             for i in 1..lines.len() {
-                if source_lines[i].trim().is_empty() && lines[i - 1] {
+                if lines[i - 1] && source_lines[i].trim().is_empty() {
                     lines[i] = true;
                 }
             }
@@ -2363,10 +2364,17 @@ impl Render for NoteView {
             }
         }
         let room = if self.embedded { None } else { Some(self.fit.bar().map_or(Room::OPEN, |w| Room::exact(w - 2. * space::M))) };
-        if let Some(toc) = self.toc_entries()
-            && *self.toc != toc
+        let toc_current = match (&self.toc_of, &self.parsed) {
+            (Some((made, mode)), Some((_, now))) => *mode == self.mode && Rc::ptr_eq(made, now),
+            _ => false,
+        };
+        if !toc_current
+            && let Some(toc) = self.toc_entries()
         {
-            self.toc = Rc::new(toc);
+            self.toc_of = self.parsed.as_ref().map(|(_, p)| (p.clone(), self.mode));
+            if *self.toc != toc {
+                self.toc = Rc::new(toc);
+            }
         }
         let header = self.header(exporting, room, &t, window, cx);
         if self.mode == Mode::Split && !missing {
