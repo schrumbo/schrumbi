@@ -40,6 +40,7 @@ const MAX_SHARP_WIDTH: f32 = 4096.;
 const SHARP_BUDGET: usize = 128 * 1024 * 1024;
 const PREVIEW_BUDGET: usize = 48 * 1024 * 1024;
 const TEXT_PAGES_KEPT: usize = 32;
+const SHARP_SETTLE: Duration = Duration::from_millis(140);
 const LINE_STEP: f32 = 48.;
 const MIN_SCALE: f32 = 0.25;
 const MAX_SCALE: f32 = 6.;
@@ -153,6 +154,7 @@ pub struct PdfView {
     restored: bool,
     save_task: Option<Task<()>>,
     _timer: Option<Task<()>>,
+    settle: Option<Task<()>>,
     _load: Option<Task<()>>,
     _subs: Vec<Subscription>,
 }
@@ -245,6 +247,7 @@ impl PdfView {
             restored: false,
             save_task: None,
             _timer: None,
+            settle: None,
             _load: Some(load),
             _subs: vec![release, library],
         }
@@ -508,9 +511,18 @@ impl PdfView {
     fn set_fit(&mut self, fit: Fit, point: Option<(f32, f32)>, cx: &mut Context<Self>) {
         self.fit = fit;
         self.zoom_point = point;
-        self.sharp_after = Instant::now() + Duration::from_millis(140);
-        self.refresh_after(Duration::from_millis(150), cx);
+        self.hold_sharp(cx);
         cx.notify();
+    }
+
+    /// Waits with sharp renders until the scale has stopped changing, so zooming, resizing and the panel animation
+    /// show the pages already rendered instead of rendering every step.
+    fn hold_sharp(&mut self, cx: &mut Context<Self>) {
+        self.sharp_after = Instant::now() + SHARP_SETTLE;
+        self.settle = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SHARP_SETTLE + Duration::from_millis(10)).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        }));
     }
 
     fn zoom_by(&mut self, factor: f32, point: Option<(f32, f32)>, cx: &mut Context<Self>) {
@@ -1457,7 +1469,11 @@ impl Render for PdfView {
             self.restore_position();
             self.geo.tops.clear();
         }
+        let scale = if self.geo.tops.is_empty() { 0. } else { self.geo.scale };
         self.update_geometry(view);
+        if scale > 0. && (self.geo.scale - scale).abs() >= 0.0005 {
+            self.hold_sharp(cx);
+        }
         self.apply_pending();
         if self.restored
             && let Some(index) = self.hit_to_reveal.take()
