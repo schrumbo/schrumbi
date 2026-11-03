@@ -9,7 +9,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::Sizable;
+use gpui_kit::component::{Selectable, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -32,6 +32,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 const GAP: f32 = space::M;
 const PADDING: f32 = space::L;
 const PANEL_WIDTH: f32 = 240.;
+const FLOAT_BELOW: f32 = 2. * PANEL_WIDTH;
 const MARK_COLORS: [&str; 4] = ["yellow", "green", "blue", "pink"];
 const MARK_BAR_WIDTH: f32 = 148.;
 const PREVIEW: u16 = 2;
@@ -128,6 +129,7 @@ pub struct PdfView {
     focused_once: bool,
     panel_open: bool,
     panel_tab: PanelTab,
+    bar: super::bar_fit::BarFit,
     thumbs: UniformListScrollHandle,
     thumb_range: Range<usize>,
     followed_page: usize,
@@ -220,6 +222,7 @@ impl PdfView {
             focused_once: true,
             panel_open: false,
             panel_tab: PanelTab::Thumbnails,
+            bar: Default::default(),
             thumbs: UniformListScrollHandle::new(),
             thumb_range: 0..0,
             followed_page: usize::MAX,
@@ -859,6 +862,10 @@ impl PdfView {
         self.ensure_inputs(window, cx);
         if let Some(input) = self.search_input.clone() {
             input.update(cx, |s, cx| s.focus(window, cx));
+            let query = input.read(cx).value().trim().to_string();
+            if !query.is_empty() && self.hits.is_empty() {
+                self.start_search(query, cx);
+            }
         }
         cx.notify();
     }
@@ -1002,6 +1009,10 @@ impl PdfView {
         cx.notify();
     }
 
+    fn floating(&self) -> bool {
+        self.bar.bar().is_some_and(|w| w < FLOAT_BELOW)
+    }
+
     fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
         if self.editing_page || self.editing_zoom {
             self.editing_page = false;
@@ -1009,6 +1020,9 @@ impl PdfView {
             window.focus(&self.focus, cx);
         } else if self.search_active {
             self.close_search(window, cx);
+        } else if self.panel_open && self.floating() {
+            self.panel_open = false;
+            window.focus(&self.focus, cx);
         } else if self.active_mark.take().is_none() && self.selection.take().is_none() {
             cx.propagate();
         }
@@ -1089,11 +1103,18 @@ impl PdfView {
         format!("{} %", (self.geo.scale * 100.).round())
     }
 
-    fn toolbar(&self, cx: &mut Context<Self>, t: &Theme) -> Div {
+    fn toolbar(&self, window: &Window, cx: &mut Context<Self>, t: &Theme) -> Div {
         let me = cx.entity();
         let count = self.page_count();
         let current = self.current_page() + 1;
         let (m1, m2, m3, m4, m5, m6, m7) = (me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me);
+        let page_label = trf("Seite %lld von %lld", &[&current, &count]);
+        let text = |s: &str| super::bar_fit::text_width(s, font::CALLOUT, FontWeight::NORMAL, window);
+        let back_w = if self.history.is_empty() { 0. } else { control::S };
+        let fields = [text(&page_label) + 2. * space::S, control::S, (space::XXL + space::L).max(text(&self.zoom_label())), control::S, control::S];
+        let spacers = 2. * space::S;
+        let needed = super::bar_fit::row(&[&[self.navigator_width(), back_w][..], &fields[..]].concat(), space::S) + spacers + 2. * space::S;
+        let compact = self.bar.bar().is_some_and(|w| w < needed);
         let pager: AnyElement = match (&self.page_input, self.editing_page) {
             (Some(input), true) => div().w(px(space::XXL * 2.)).child(Input::new(input).small()).into_any_element(),
             _ => div()
@@ -1107,7 +1128,7 @@ impl PdfView {
                 .font_features(tabular())
                 .text_size(px(font::CALLOUT))
                 .tooltip(tip(tr("Zu Seite springen")))
-                .child(trf("Seite %lld von %lld", &[&current, &count]))
+                .child(page_label)
                 .on_click(move |_, window, cx| m1.update(cx, |v, cx| v.start_editing(false, window, cx)))
                 .into_any_element(),
         };
@@ -1133,16 +1154,15 @@ impl PdfView {
         div()
             .h(px(control::SUBBAR))
             .flex_none()
+            .relative()
             .flex()
             .items_center()
             .gap(px(space::S))
             .px(px(space::S))
             .border_b_1()
             .border_color(t.separator)
-            .child(Button::new("pdf-panel").ghost().small().icon(menu_icon("panel-left")).tooltip(tr("Seitenleiste")).on_click(move |_, _, cx| m3.update(cx, |v, cx| {
-                v.panel_open = !v.panel_open;
-                cx.notify();
-            })))
+            .child(self.bar.measure_bar())
+            .child(if compact { self.navigator_menu(m3).into_any_element() } else { self.navigator(m3, t).into_any_element() })
             .when(!self.history.is_empty(), |d| {
                 let back = m4.clone();
                 d.child(Button::new("pdf-back").ghost().small().icon(menu_icon("arrow-left")).tooltip(tr("Zurück zur vorherigen Stelle")).on_click(move |_, _, cx| back.update(cx, |v, cx| v.go_back(cx))))
@@ -1160,31 +1180,79 @@ impl PdfView {
             }))
     }
 
+    fn navigator_picks(&self) -> Vec<(PanelTab, String, &'static str)> {
+        [(PanelTab::Thumbnails, tr("Seiten"), "gallery-vertical-end"), (PanelTab::Outline, tr("Inhalt"), "list-tree"), (PanelTab::Search, tr("Suche"), "search"), (PanelTab::Marks, tr("Marker"), "highlighter")]
+            .into_iter()
+            .filter(|(value, ..)| *value != PanelTab::Outline || !self.meta.outline.is_empty())
+            .collect()
+    }
+
+    fn navigator_width(&self) -> f32 {
+        2. * space::XXS + self.navigator_picks().len() as f32 * control::S
+    }
+
+    fn navigator_menu(&self, view: Entity<PdfView>) -> impl IntoElement + use<> {
+        let open = self.panel_open;
+        let shown = self.panel_tab;
+        let picks = self.navigator_picks();
+        let icon_name = picks.iter().find(|(v, ..)| open && *v == shown).map_or("gallery-vertical-end", |(_, _, i)| *i);
+        Button::new("pdf-navigator").ghost().small().icon(menu_icon(icon_name)).selected(open).tooltip(tr("Seitenleiste")).dropdown_menu(move |mut menu, _, _| {
+            for (value, label, icon_name) in picks.iter().cloned() {
+                let v = view.clone();
+                menu = menu.item(PopupMenuItem::new(label).icon(menu_icon(icon_name)).checked(open && value == shown).on_click(move |_, window, cx| v.update(cx, |v, cx| v.navigate(value, window, cx))));
+            }
+            menu
+        })
+    }
+
+    fn navigator(&self, view: Entity<PdfView>, t: &Theme) -> Stateful<Div> {
+        let mut row = div().id("pdf-navigator").flex().flex_none().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS));
+        for (value, label, icon_name) in self.navigator_picks() {
+            let shown = self.panel_open && self.panel_tab == value;
+            let v = view.clone();
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("pdf-nav-{icon_name}")))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(px(control::S))
+                    .h(px(control::S - 2. * space::XXS))
+                    .rounded(px(radius::SMALL))
+                    .cursor_pointer()
+                    .key_nav()
+                    .when(!shown, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
+                    .when(shown, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm())
+                    .child(icon(icon_name, iconsize::XS, if shown { t.primary } else { t.secondary }))
+                    .tooltip(tip(if shown { trf("%@ ausblenden", &[&label]) } else { label }))
+                    .on_click(move |_, window, cx| v.update(cx, |v, cx| v.navigate(value, window, cx))),
+            );
+        }
+        row
+    }
+
+    fn navigate(&mut self, value: PanelTab, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = self.panel_open && self.panel_tab == value;
+        match (value, shown) {
+            (PanelTab::Search, true) => self.close_search(window, cx),
+            (PanelTab::Search, false) => self.open_search(window, cx),
+            (_, true) => self.panel_open = false,
+            (_, false) => {
+                if self.panel_tab == PanelTab::Search {
+                    self.search_generation.fetch_add(1, Ordering::Relaxed);
+                    self.hits.clear();
+                    self.current_hit = None;
+                    self.search_active = false;
+                }
+                self.panel_open = true;
+                self.panel_tab = value;
+            }
+        }
+        cx.notify();
+    }
+
     fn panel(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
         self.ensure_inputs(window, cx);
-        let me = cx.entity();
-        let tab = |id: &'static str, label: String, value: PanelTab, active: bool, view: Entity<PdfView>| {
-            div()
-                .id(id)
-                .flex_1()
-                .flex()
-                .justify_center()
-                .py(px(space::XS))
-                .rounded(px(radius::INNER))
-                .cursor_pointer()
-                .key_nav()
-                .text_size(px(font::CALLOUT))
-                .when(active, |d| d.bg(t.ink.opacity(0.08)).font_weight(FontWeight::MEDIUM))
-                .soft(t.ink.opacity(0.05), radius::INNER)
-                .child(label)
-                .on_click(move |_, window, cx| view.update(cx, |v, cx| {
-                    v.panel_tab = value;
-                    if value == PanelTab::Search {
-                        v.open_search(window, cx);
-                    }
-                    cx.notify();
-                }))
-        };
         let body: AnyElement = match self.panel_tab {
             PanelTab::Thumbnails => self.thumbnails(cx).into_any_element(),
             PanelTab::Outline => self.outline(cx, t).into_any_element(),
@@ -1204,16 +1272,6 @@ impl PdfView {
                     .h_full()
                     .flex()
                     .flex_col()
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(space::XS))
-                            .p(px(space::S))
-                            .child(tab("pdf-tab-thumbs", tr("Seiten"), PanelTab::Thumbnails, self.panel_tab == PanelTab::Thumbnails, me.clone()))
-                            .child(tab("pdf-tab-outline", tr("Inhalt"), PanelTab::Outline, self.panel_tab == PanelTab::Outline, me.clone()))
-                            .child(tab("pdf-tab-search", tr("Suche"), PanelTab::Search, self.panel_tab == PanelTab::Search, me.clone()))
-                            .child(tab("pdf-tab-marks", tr("Marker"), PanelTab::Marks, self.panel_tab == PanelTab::Marks, me)),
-                    )
                     .child(div().flex_1().min_h_0().child(body)),
             )
     }
@@ -1327,7 +1385,7 @@ impl PdfView {
             .size_full()
             .flex()
             .flex_col()
-            .child(div().px(px(space::S)).children(self.search_input.as_ref().map(|i| Input::new(i).small())))
+            .child(div().px(px(space::S)).pt(px(space::S)).children(self.search_input.as_ref().map(|i| Input::new(i).small())))
             .child(
                 div()
                     .flex()
@@ -1442,7 +1500,9 @@ impl Render for PdfView {
             self.ensure_inputs(window, cx);
         }
         let panel_width = motion::follow("pdf-panel-width", if self.panel_open { PANEL_WIDTH } else { 0. }, motion::MEDIUM, window, cx);
+        let floating = self.floating();
         let panel = (panel_width > 0.).then(|| self.panel(panel_width, window, cx, &t));
+        let (docked, floated) = if floating { (None, panel.map(|p| p.absolute().top_0().left_0().bottom_0().bg(t.material).shadow_lg().occlude())) } else { (panel, None) };
         if let Some(key) = self.marks_key.clone() {
             self.marks = super::state::read(cx, |l| l.highlights_of(&key));
         }
@@ -1489,11 +1549,20 @@ impl Render for PdfView {
                     v.select_page(cx);
                 }
             }))
-            .child(self.toolbar(cx, &t))
+            .child(self.toolbar(window, cx, &t))
             .child(
-                div().flex_1().min_h_0().flex().children(panel).child(
+                div().flex_1().min_h_0().flex().relative().children(docked).child(
                     div()
                         .relative()
+                        .when(floating && self.panel_open, |d| d.capture_any_mouse_down(cx.listener(|v, _, window, cx| {
+                            cx.stop_propagation();
+                            if v.panel_tab == PanelTab::Search {
+                                v.close_search(window, cx);
+                            } else {
+                                v.panel_open = false;
+                                cx.notify();
+                            }
+                        })))
                         .flex_1()
                         .min_w_0()
                         .h_full()
@@ -1539,7 +1608,7 @@ impl Render for PdfView {
                             })
                         }))
                         .children(badge),
-                ),
+                ).children(floated),
             )
             .into_any_element()
     }

@@ -375,13 +375,17 @@ impl Pages {
     }
 
     /// The notes room: the workspace's files beside whatever note is shown.
+    fn explorer_shown(width: f32) -> bool {
+        !crate::core::prefs::get().notes_explorer_hidden && width >= 620.
+    }
+
     fn with_explorer(&mut self, body: AnyElement, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let route = state::read(cx, |l| l.route().clone());
         if !matches!(route, Route::Doc(_) | Route::Notes) {
             return body;
         }
         let page = self.notes_page.get_or_insert_with(|| cx.new(|cx| super::notes_page::NotesPage::new(window, cx))).clone();
-        let shown = !crate::core::prefs::get().notes_explorer_hidden && width >= 620.;
+        let shown = Self::explorer_shown(width);
         div().size_full().flex().when(shown, |d| d.child(page)).child(div().flex_1().min_w_0().h_full().overflow_hidden().child(body)).into_any_element()
     }
 
@@ -591,6 +595,12 @@ impl Render for Pages {
         let view = cx.entity();
         let width = self.width;
         let route = lib.read(cx).route().clone();
+        if !Self::explorer_shown(width) && lib.read(cx).rename_request.is_some() {
+            lib.update(cx, |l, _| {
+                l.rename_request = None;
+                l.focus_document = true;
+            });
+        }
         let on_inbox = route == Route::Inbox;
         let focus_back = state::take_page_focus_request(cx);
         self.doc_needs_focus |= focus_back;
