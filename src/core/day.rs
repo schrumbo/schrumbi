@@ -31,6 +31,8 @@ pub fn local_date(t: DateTime<Local>) -> NaiveDate {
 const WEEKDAYS: [&str; 7] = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"];
 const WEEKDAYS_SHORT: [&str; 7] = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
 const MONTHS: [&str; 12] = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+const MONTHS_SHORT: [&str; 12] = ["Jan", "Feb", "März", "Apr", "Mai", "Juni", "Juli", "Aug", "Sept", "Okt", "Nov", "Dez"];
+const MONTHS_SHORT_EN: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WEEKDAYS_EN: [&str; 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const WEEKDAYS_SHORT_EN: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MONTHS_EN: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -136,6 +138,57 @@ pub fn hm(t: DateTime<Local>) -> String {
     }
 }
 
+/// "Diese Woche", "Vor 2 Wochen", "In 3 Monaten", "Vor 1 Jahr" for the week holding `d`.
+pub fn week_relative(d: NaiveDate, today: NaiveDate) -> String {
+    use super::i18n::{tr, trf};
+    let weeks = (monday(d) - monday(today)).num_days() / 7;
+    let past = weeks < 0;
+    let n = weeks.unsigned_abs();
+    let months = ((n * 7) as f64 / 30.44).round() as u64;
+    let years = (((n * 7) as f64 / 365.25).round() as u64).max(1);
+    match (n, months, past) {
+        (0, _, _) => tr("Diese Woche"),
+        (1, _, true) => tr("Letzte Woche"),
+        (1, _, false) => tr("Nächste Woche"),
+        (..8, _, true) => trf("Vor %lld Wochen", &[&n]),
+        (..8, _, false) => trf("In %lld Wochen", &[&n]),
+        (_, ..12, true) => trf("Vor %lld Monaten", &[&months]),
+        (_, ..12, false) => trf("In %lld Monaten", &[&months]),
+        _ if years == 1 => tr(if past { "Vor 1 Jahr" } else { "In 1 Jahr" }),
+        _ => trf(if past { "Vor %lld Jahren" } else { "In %lld Jahren" }, &[&years]),
+    }
+}
+
+/// "3.–9. Nov", "27. Okt – 2. Nov", with the year when the week lies outside this year.
+pub fn week_range(d: NaiveDate, today: NaiveDate) -> String {
+    let (a, b) = (monday(d), monday(d) + Days::new(6));
+    let year = (a.year() != today.year() && b.year() != today.year()).then_some(b.year());
+    let month = |x: NaiveDate| if en() { MONTHS_SHORT_EN[x.month0() as usize] } else { MONTHS_SHORT[x.month0() as usize] };
+    let span_years = a.year() != b.year() && year.is_some();
+    let range = match (en(), a.month() == b.month()) {
+        (false, true) => format!("{}.–{}. {}", a.day(), b.day(), month(b)),
+        (false, false) if span_years => format!("{}. {} {} – {}. {}", a.day(), month(a), a.year(), b.day(), month(b)),
+        (false, false) => format!("{}. {} – {}. {}", a.day(), month(a), b.day(), month(b)),
+        (true, true) => format!("{} {}–{}", month(a), a.day(), b.day()),
+        (true, false) if span_years => format!("{} {}, {} – {} {}", month(a), a.day(), a.year(), month(b), b.day()),
+        (true, false) => format!("{} {} – {} {}", month(a), a.day(), month(b), b.day()),
+    };
+    match (year, en()) {
+        (Some(y), false) => format!("{range} {y}"),
+        (Some(y), true) => format!("{range}, {y}"),
+        (None, _) => range,
+    }
+}
+
+/// "W07 · KW45": the lecture week, if any, and the calendar week of `d`.
+pub fn week_codes(lecture: Option<u32>, d: NaiveDate) -> String {
+    let kw = super::i18n::trf("KW%@", &[&format!("{:02}", iso_week(d))]);
+    match lecture {
+        Some(w) => format!("W{w:02} · {kw}"),
+        None => kw,
+    }
+}
+
 fn relative_day(d: NaiveDate, today: NaiveDate) -> Option<String> {
     match (d - today).num_days() {
         0 => Some(super::i18n::tr("Heute")),
@@ -229,6 +282,58 @@ mod tests {
     #[test]
     fn formats_long_dates() {
         assert_eq!(long(NaiveDate::from_ymd_opt(2026, 10, 29).unwrap()), "Donnerstag, 29. Oktober");
+    }
+
+    fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn names_weeks_relative_to_today() {
+        let today = ymd(2026, 11, 3);
+        assert_eq!(week_relative(ymd(2026, 11, 8), today), "Diese Woche");
+        assert_eq!(week_relative(ymd(2026, 11, 2), today), "Diese Woche");
+        assert_eq!(week_relative(ymd(2026, 11, 1), today), "Letzte Woche");
+        assert_eq!(week_relative(ymd(2026, 11, 9), today), "Nächste Woche");
+        assert_eq!(week_relative(ymd(2026, 10, 20), today), "Vor 2 Wochen");
+        assert_eq!(week_relative(ymd(2026, 9, 14), today), "Vor 7 Wochen");
+        assert_eq!(week_relative(ymd(2026, 9, 7), today), "Vor 2 Monaten");
+        assert_eq!(week_relative(ymd(2026, 11, 23), today), "In 3 Wochen");
+        assert_eq!(week_relative(ymd(2027, 2, 1), today), "In 3 Monaten");
+        assert_eq!(week_relative(ymd(2025, 11, 4), today), "Vor 1 Jahr");
+        assert_eq!(week_relative(ymd(2025, 12, 1), today), "Vor 11 Monaten");
+        assert_eq!(week_relative(ymd(2024, 11, 5), today), "Vor 2 Jahren");
+        assert_eq!(week_relative(ymd(2027, 11, 2), today), "In 1 Jahr");
+    }
+
+    #[test]
+    fn counts_weeks_across_year_boundaries() {
+        assert_eq!(week_relative(ymd(2026, 12, 30), ymd(2027, 1, 5)), "Letzte Woche");
+        assert_eq!(week_relative(ymd(2027, 1, 4), ymd(2026, 12, 31)), "Nächste Woche");
+        assert_eq!(week_relative(ymd(2027, 1, 3), ymd(2026, 12, 28)), "Diese Woche");
+        assert_eq!(week_relative(ymd(2026, 12, 21), ymd(2027, 1, 11)), "Vor 3 Wochen");
+    }
+
+    #[test]
+    fn formats_week_ranges() {
+        let today = ymd(2026, 11, 3);
+        assert_eq!(week_range(ymd(2026, 11, 3), today), "2.–8. Nov");
+        assert_eq!(week_range(ymd(2026, 10, 28), today), "26. Okt – 1. Nov");
+        assert_eq!(week_range(ymd(2026, 12, 30), today), "28. Dez – 3. Jan");
+        assert_eq!(week_range(ymd(2026, 12, 30), ymd(2027, 1, 2)), "28. Dez – 3. Jan");
+        assert_eq!(week_range(ymd(2025, 11, 4), today), "3.–9. Nov 2025");
+        assert_eq!(week_range(ymd(2025, 12, 30), today), "29. Dez – 4. Jan");
+        assert_eq!(week_range(ymd(2025, 12, 30), ymd(2027, 6, 1)), "29. Dez 2025 – 4. Jan 2026");
+        assert_eq!(week_range(ymd(2027, 3, 3), today), "1.–7. März 2027");
+    }
+
+    #[test]
+    fn codes_weeks_by_lecture_and_iso_week() {
+        assert_eq!(week_codes(Some(7), ymd(2026, 11, 3)), "W07 · KW45");
+        assert_eq!(week_codes(None, ymd(2026, 12, 28)), "KW53");
+        assert_eq!(week_codes(Some(12), ymd(2027, 1, 4)), "W12 · KW01");
+        assert_eq!(week_codes(None, ymd(2027, 12, 27)), "KW52");
+        assert_eq!(week_codes(None, ymd(2025, 12, 29)), "KW01");
     }
 
     #[test]

@@ -310,7 +310,7 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
         })
         .child(div().w(px(16.)).flex().justify_center().child(if force_open { div().size(px(8.)).rounded_full().bg(t.accent).into_any_element() } else { chevron(open, t).into_any_element() }))
         .child(div().w(px(36.)).font_weight(FontWeight::SEMIBOLD).child(slot.lecture.map_or("–".into(), |w| w.label())))
-        .child(div().text_color(t.secondary).child(format!("{} – {}", day::short_date(slot.monday), day::short_date(slot.monday + Days::new(6)))))
+        .child(div().min_w_0().truncate().text_color(t.secondary).child(day::week_range(slot.monday, lib.today())))
         .when(is_current, |d| d.child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).text_color(t.accent_text).child(tr("Diese Woche"))))
         .child(div().flex_1())
         .when(!open, |d| {

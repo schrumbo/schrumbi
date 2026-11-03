@@ -17,6 +17,9 @@ use super::motion::{self, Soft};
 use super::theme::{Theme, control, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::catalog::{self, CatalogFile, FileKind, Query};
+use crate::core::day;
+use crate::core::model::{LectureWeek, StudyConfig};
+use crate::core::schedule;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library, NewNoteRequest};
 use crate::core::markdown;
@@ -34,7 +37,7 @@ pub struct Item {
 
 #[derive(Clone, PartialEq)]
 enum GroupKind {
-    Week(Option<u32>),
+    Week(Option<u32>, Option<NaiveDate>),
     Folder(Option<String>, Vec<String>),
     Date(String),
 }
@@ -48,10 +51,44 @@ struct Group {
 impl Group {
     fn id(&self) -> String {
         match &self.kind {
-            GroupKind::Week(w) => w.map_or("none".into(), |w| format!("w{w}")),
+            GroupKind::Week(w, m) => w.map_or("none".into(), |w| format!("w{w}{}", m.map(|m| format!("-{m}")).unwrap_or_default())),
             GroupKind::Folder(m, p) => format!("f:{}/{}", m.clone().unwrap_or_default(), p.join("/")),
             GroupKind::Date(d) => format!("d:{d}"),
         }
+    }
+}
+
+/// Where each lecture week starts, in the semester of the file's own module.
+#[derive(Clone, Default, PartialEq)]
+struct WeekStarts {
+    by_semester: HashMap<String, Vec<LectureWeek>>,
+    semester_of: HashMap<String, String>,
+    shown: Vec<LectureWeek>,
+    today: NaiveDate,
+}
+
+impl WeekStarts {
+    fn new(l: &Library, config: &StudyConfig) -> Self {
+        Self {
+            by_semester: config.semesters.iter().map(|s| (s.id.clone(), schedule::lecture_weeks(s))).collect(),
+            semester_of: config.modules.iter().map(|m| (m.id.clone(), m.semester.clone())).collect(),
+            shown: l.weeks(),
+            today: l.today(),
+        }
+    }
+
+    fn shown_monday(&self, w: u32) -> Option<NaiveDate> {
+        self.shown.iter().find(|x| x.index == w).map(|x| x.monday)
+    }
+
+    fn monday(&self, f: &CatalogFile) -> Option<NaiveDate> {
+        let w = f.week?;
+        let list = f.module_id.as_ref().and_then(|m| self.semester_of.get(m)).and_then(|s| self.by_semester.get(s)).unwrap_or(&self.shown);
+        list.iter().find(|x| x.index == w).map(|x| x.monday)
+    }
+
+    fn in_shown(&self, f: &CatalogFile) -> bool {
+        f.week.is_some_and(|w| self.monday(f).is_none_or(|m| Some(m) == self.shown_monday(w)))
     }
 }
 
@@ -84,6 +121,7 @@ pub struct FileBrowser {
     kind: FileKind,
     module_filter: Option<String>,
     week_filter: Option<u32>,
+    week_starts: WeekStarts,
     pub selected: Option<PathBuf>,
     picked: HashSet<PathBuf>,
     range_start: Option<PathBuf>,
@@ -118,6 +156,7 @@ impl FileBrowser {
             kind: FileKind::from_key(&prefs::get().file_kind),
             module_filter: None,
             week_filter: None,
+            week_starts: WeekStarts::default(),
             selected: None,
             picked: HashSet::new(),
             range_start: None,
@@ -169,21 +208,24 @@ impl FileBrowser {
     /// Recomputes the list when its inputs changed; name matches are instant, content matches arrive from a background query.
     fn reload(&mut self, cx: &mut Context<Self>) {
         let lib = state::lib(cx);
-        let key = self.key(lib.read(cx));
-        if key == self.key {
+        let l = lib.read(cx);
+        let key = self.key(l);
+        let starts = l.config.as_ref().map(|c| WeekStarts::new(l, c)).unwrap_or_default();
+        if key == self.key && starts == self.week_starts {
             return;
         }
         let was_searching = self.results.searching;
         self.key = key;
-        let l = lib.read(cx);
         let Some(config) = l.config.clone() else { return };
         let weeks = l.weeks();
         let current = current_week(l);
         let q = Query::parse(&self.query, &config.modules, &weeks);
         let module = self.scope_module.clone().or(q.module_id.clone()).or(self.module_filter.clone());
         let week = q.week.or(self.week_filter);
+        let picked_week = q.week.is_none() && week.is_some();
         let searching = !q.terms.is_empty();
-        let scoped: Vec<CatalogFile> = l.catalog.iter().filter(|f| module.as_ref().is_none_or(|m| f.module_id.as_ref() == Some(m)) && week.is_none_or(|w| f.week == Some(w))).cloned().collect();
+        let scoped: Vec<CatalogFile> = l.catalog.iter().filter(|f| module.as_ref().is_none_or(|m| f.module_id.as_ref() == Some(m)) && week.is_none_or(|w| f.week == Some(w) && (!picked_week || starts.in_shown(f)))).cloned().collect();
+        self.week_starts = starts.clone();
         let mut items: Vec<Item> = if searching {
             scoped.iter().filter_map(|f| catalog::score(f, &q.terms, current).map(|s| Item { file: f.clone(), spots: Vec::new(), score: s })).collect()
         } else {
@@ -204,7 +246,7 @@ impl FileBrowser {
             matching.sort_by(|a, b| if a.score == b.score { b.file.date.cmp(&a.file.date) } else { b.score.total_cmp(&a.score) });
             let best: Vec<Item> = if searching && week.is_none() && matching.len() > 8 { matching[..5].to_vec() } else { Vec::new() };
             let rest = matching[best.len()..].to_vec();
-            Results { best, groups: group(rest, searching, grouping, today, &module_order), total: matching.len(), other_kinds: if searching { other_kinds } else { 0 }, searching, query: q.clone(), loaded: true }
+            Results { best, groups: group(rest, searching, grouping, today, &module_order, &starts), total: matching.len(), other_kinds: if searching { other_kinds } else { 0 }, searching, query: q.clone(), loaded: true }
         };
         self.query_error = None;
         if searching && vault_query::is_structured(&self.query) {
@@ -293,7 +335,9 @@ impl FileBrowser {
     fn is_expanded(&self, g: &Group, current: Option<u32>) -> bool {
         let base = if self.results.searching || self.week_filter.is_some() || self.results.groups.len() <= 3 {
             true
-        } else if let (GroupKind::Week(Some(w)), Some(c)) = (&g.kind, current) {
+        } else if let GroupKind::Week(Some(_), Some(m)) = &g.kind {
+            *m + Days::new(7) >= day::monday(self.week_starts.today)
+        } else if let (GroupKind::Week(Some(w), None), Some(c)) = (&g.kind, current) {
             *w + 1 >= c
         } else {
             self.results.groups.iter().position(|x| x.id() == g.id()).unwrap_or(99) < 3
@@ -440,14 +484,13 @@ impl FileBrowser {
         let me = cx.entity();
         let lib = state::lib(cx);
         let l = lib.read(cx);
-        let current = current_week(l);
         let show_module = self.scope_module.is_none();
         let content = match self.lines.get(ix).copied() {
             Some(Line::BestHeader) => div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).py(px(space::XS)).child(tr("Beste Treffer")).into_any_element(),
             Some(Line::Best(i)) => self.row(&self.results.best[i], show_module, true, l, &unsaved, &t, &me),
             Some(Line::Group(g)) => {
                 let group = &self.results.groups[g];
-                self.group_header(group, self.is_expanded(group, current), l, current, &t, &me)
+                self.group_header(group, self.is_expanded(group, current_week(l)), l, &t, &me)
             }
             Some(Line::Row(g, i)) => self.row(&self.results.groups[g].items[i], show_module, false, l, &unsaved, &t, &me),
             Some(Line::OtherKinds) => {
@@ -522,14 +565,14 @@ pub fn current_week(l: &Library) -> Option<u32> {
     l.current_week().map(|w| w.index).or_else(|| l.weeks().iter().rev().find(|w| w.monday <= l.today()).map(|w| w.index))
 }
 
-fn group(items: Vec<Item>, searching: bool, grouping: FileGrouping, today: NaiveDate, order: &HashMap<String, usize>) -> Vec<Group> {
+fn group(items: Vec<Item>, searching: bool, grouping: FileGrouping, today: NaiveDate, order: &HashMap<String, usize>, starts: &WeekStarts) -> Vec<Group> {
     match grouping {
         FileGrouping::Week => {
-            let mut map: BTreeMap<i64, Vec<Item>> = BTreeMap::new();
+            let mut map: BTreeMap<(Option<NaiveDate>, i64), Vec<Item>> = BTreeMap::new();
             for i in items {
-                map.entry(i.file.week.map_or(-1, |w| w as i64)).or_default().push(i);
+                map.entry((starts.monday(&i.file), i.file.week.map_or(-1, |w| w as i64))).or_default().push(i);
             }
-            map.into_iter().rev().map(|(w, items)| Group { kind: GroupKind::Week((w >= 0).then_some(w as u32)), items }).collect()
+            map.into_iter().rev().map(|((m, w), items)| Group { kind: GroupKind::Week((w >= 0).then_some(w as u32), m), items }).collect()
         }
         FileGrouping::Folder => {
             let mut map: HashMap<(Option<String>, Vec<String>), Vec<Item>> = HashMap::new();
@@ -552,7 +595,7 @@ fn group(items: Vec<Item>, searching: bool, grouping: FileGrouping, today: Naive
                 .collect()
         }
         FileGrouping::Date => {
-            let monday = crate::core::day::monday(today);
+            let monday = day::monday(today);
             let bucket = |d: NaiveDate| -> (u8, String) {
                 if d >= today {
                     (0, tr("Heute"))
@@ -585,12 +628,18 @@ fn group(items: Vec<Item>, searching: bool, grouping: FileGrouping, today: Naive
     }
 }
 
-fn badge(text: String, prominent: bool, t: &Theme) -> Div {
-    div().px(px(space::S)).py(px(space::XXS)).rounded_full().text_size(px(font::CAPTION2)).font_weight(FontWeight::SEMIBOLD).bg(if prominent { t.accent } else { t.ink.opacity(0.08) }).text_color(if prominent { t.on_accent } else { t.secondary }).child(text)
-}
-
-pub fn week_badge(text: String, prominent: bool, t: &Theme) -> Div {
-    badge(text, prominent, t)
+/// A week as people say it: "Letzte Woche", then its days and its codes.
+pub fn week_title(d: NaiveDate, lecture: Option<u32>, today: NaiveDate, t: &Theme) -> Div {
+    let current = day::monday(d) == day::monday(today);
+    div()
+        .flex()
+        .items_baseline()
+        .gap(px(space::S))
+        .min_w_0()
+        .overflow_hidden()
+        .child(div().flex_shrink_0().whitespace_nowrap().font_weight(FontWeight::SEMIBOLD).when(current, |x| x.text_color(t.accent_text)).child(day::week_relative(d, today)))
+        .child(div().flex_shrink_0().whitespace_nowrap().text_color(t.secondary).child(day::week_range(d, today)))
+        .child(div().truncate().text_size(px(font::CAPTION)).font_features(tabular()).text_color(t.secondary).child(day::week_codes(lecture, d)))
 }
 
 /// Text with every search term bold and tinted.
@@ -634,6 +683,7 @@ impl FileBrowser {
         let terms = self.results.query.terms.clone();
         let (sel, open, reveal, preview, menu_path) = (path.clone(), path.clone(), path.clone(), path.clone(), path.clone());
         let week_filter = self.week_filter;
+        let same_semester = self.week_starts.in_shown(f);
         let module_filter = self.module_filter.clone();
         let scoped = self.scope_module.is_some();
         let f2 = f.clone();
@@ -643,7 +693,7 @@ impl FileBrowser {
             meta = meta.child(module_tag(&m.badge(), t.palette(&m.color)));
         }
         if let (true, Some(w)) = (show_week, f.week) {
-            meta = meta.child(format!("W{w:02}"));
+            meta = meta.child(self.week_starts.monday(f).map_or_else(|| format!("W{w:02}"), |m| day::week_relative(m, lib.today())));
         }
         if !f.place.is_empty() && (prefs::get().file_grouping != prefs::FileGrouping::Folder || !self.query.is_empty() || show_week) {
             meta = meta.child(div().truncate().child(f.place.join(" › ")));
@@ -736,7 +786,7 @@ impl FileBrowser {
             .child(
                 div()
                     .relative()
-                    .child(div().group_hover("file-row", |s| s.invisible()).text_size(px(font::CAPTION)).text_color(t.secondary).child(crate::core::day::day_label(crate::core::day::at(f.date, chrono::NaiveTime::MIN).unwrap_or(lib.now), lib.now)))
+                    .child(div().group_hover("file-row", Styled::invisible).text_size(px(font::CAPTION)).text_color(t.secondary).child(day::day_label(day::at(f.date, chrono::NaiveTime::MIN).unwrap_or(lib.now), lib.now)))
                     .child(
                         div()
                             .absolute()
@@ -777,9 +827,9 @@ impl FileBrowser {
                         .item(PopupMenuItem::new(tr("Als Notiz öffnen")).on_click(move |_, _, cx| super::note_window::open(&n, cx)))
                         .item(PopupMenuItem::new(tr("Als PDF exportieren")).on_click(move |_, _, cx| super::pdf::export(&e, None, cx)));
                 }
-                if let Some(w) = f2.week.filter(|w| week_filter != Some(*w)) {
+                if let Some(w) = f2.week.filter(|w| week_filter != Some(*w) && same_semester) {
                     let e = entity.clone();
-                    menu = menu.separator().item(PopupMenuItem::new(trf("Alles aus W%@ zeigen", &[&format!("{w:02}")])).on_click(move |_, _, cx| e.update(cx, |b, cx| {
+                    menu = menu.separator().item(PopupMenuItem::new(tr("Alles aus derselben Woche zeigen")).on_click(move |_, _, cx| e.update(cx, |b, cx| {
                         b.week_filter = Some(w);
                         b.reload(cx);
                     })));
@@ -800,23 +850,14 @@ impl FileBrowser {
             .into_any_element()
     }
 
-    fn group_header(&self, g: &Group, expanded: bool, lib: &Library, current: Option<u32>, t: &Theme, entity: &Entity<Self>) -> AnyElement {
+    fn group_header(&self, g: &Group, expanded: bool, lib: &Library, t: &Theme, entity: &Entity<Self>) -> AnyElement {
         let entity = entity.clone();
         let id = g.id();
         let mut title = div().flex().items_center().gap(px(space::S)).min_w_0();
         match &g.kind {
-            GroupKind::Week(Some(w)) => {
-                title = title.child(div().font_weight(FontWeight::SEMIBOLD).child(format!("W{w:02}")));
-                if let Some(iso) = lib.weeks().iter().find(|x| x.index == *w).map(|x| x.iso_week) {
-                    title = title.child(div().text_color(t.secondary).child(format!("KW{iso:02}")));
-                }
-                if current == Some(*w) {
-                    title = title.child(badge(tr("Diese Woche"), true, t));
-                } else if current.is_some_and(|c| c == w + 1) {
-                    title = title.child(badge(tr("Letzte Woche"), false, t));
-                }
-            }
-            GroupKind::Week(None) => title = title.child(div().font_weight(FontWeight::SEMIBOLD).child(tr("Ohne Woche"))),
+            GroupKind::Week(Some(w), Some(m)) => title = title.child(week_title(*m, Some(*w), lib.today(), t)),
+            GroupKind::Week(Some(w), None) => title = title.child(div().font_weight(FontWeight::SEMIBOLD).child(format!("W{w:02}"))),
+            GroupKind::Week(None, _) => title = title.child(div().font_weight(FontWeight::SEMIBOLD).child(tr("Ohne Woche"))),
             GroupKind::Folder(m, place) => {
                 if let Some(m) = m.as_deref().and_then(|id| lib.module_by_id(id)).filter(|_| self.scope_module.is_none()) {
                     title = title.child(module_chip(&m.badge(), t.palette(&m.color)));
@@ -888,7 +929,8 @@ impl FileBrowser {
             let title = active.as_deref().and_then(|id| lib.module_by_id(id)).map_or_else(|| tr("Alle Module"), |m| m.code.clone());
             let modules: Vec<(String, String)> = lib.semester_modules().iter().map(|m| (m.id.clone(), m.code.clone())).collect();
             bar = bar.child(filter_menu("module-filter", title, active.is_some(), typed.is_some(), e.clone(), move |b| b.module_filter = None, move |menu, e| {
-                let mut menu = menu.item(PopupMenuItem::new(tr("Alle Module")).on_click({
+                let active = active.clone();
+                let mut menu = menu.item(PopupMenuItem::new(tr("Alle Module")).checked(active.is_none()).on_click({
                     let e = e.clone();
                     move |_, _, cx| e.update(cx, |b, cx| {
                         b.module_filter = None;
@@ -898,7 +940,8 @@ impl FileBrowser {
                 menu = menu.separator();
                 for (id, code) in &modules {
                     let (e, id) = (e.clone(), id.clone());
-                    menu = menu.item(PopupMenuItem::new(code.clone()).on_click(move |_, _, cx| e.update(cx, |b, cx| {
+                    let checked = active.as_ref() == Some(&id);
+                    menu = menu.item(PopupMenuItem::new(code.clone()).checked(checked).on_click(move |_, _, cx| e.update(cx, |b, cx| {
                         b.module_filter = Some(id.clone());
                         b.reload(cx);
                     })));
@@ -935,8 +978,12 @@ impl FileBrowser {
         }));
         let typed_week = self.results.query.week;
         let active_week = typed_week.or(self.week_filter);
-        let weeks: Vec<(u32, u32)> = lib.weeks().iter().filter(|w| current.is_none_or(|c| w.index <= c)).rev().map(|w| (w.index, w.iso_week)).collect();
-        bar = bar.child(filter_menu("week-filter", active_week.map_or_else(|| tr("Alle Wochen"), |w| format!("W{w:02}")), active_week.is_some(), typed_week.is_some(), e.clone(), |b| b.week_filter = None, move |menu, e| {
+        let today = lib.today();
+        let all_weeks = lib.weeks();
+        let weeks: Vec<(u32, NaiveDate)> = all_weeks.iter().filter(|w| current.is_none_or(|c| w.index <= c)).rev().map(|w| (w.index, w.monday)).collect();
+        let week_name = |w: u32| all_weeks.iter().find(|x| x.index == w).map_or_else(|| format!("W{w:02}"), |x| day::week_relative(x.monday, today));
+        let (secondary, accent) = (t.secondary, t.accent_text);
+        bar = bar.child(filter_menu("week-filter", active_week.map_or_else(|| tr("Alle Wochen"), week_name), active_week.is_some(), typed_week.is_some(), e.clone(), |b| b.week_filter = None, move |menu, e| {
             let set = |w: Option<u32>| {
                 let e = e.clone();
                 move |_: &ClickEvent, _: &mut Window, cx: &mut App| e.update(cx, |b, cx| {
@@ -944,16 +991,21 @@ impl FileBrowser {
                     b.reload(cx);
                 })
             };
-            let mut menu = menu.item(PopupMenuItem::new(tr("Alle Wochen")).on_click(set(None)));
-            if let Some(c) = current {
-                menu = menu.item(PopupMenuItem::new(tr("Diese Woche")).on_click(set(Some(c))));
-                if c > 1 {
-                    menu = menu.item(PopupMenuItem::new(tr("Letzte Woche")).on_click(set(Some(c - 1))));
-                }
-            }
-            menu = menu.separator();
-            for (w, iso) in &weeks {
-                menu = menu.item(PopupMenuItem::new(format!("W{w:02} · KW{iso:02}")).on_click(set(Some(*w))));
+            let mut menu = menu.item(PopupMenuItem::new(tr("Alle Wochen")).checked(active_week.is_none()).on_click(set(None))).separator();
+            for (w, monday) in &weeks {
+                let (w, monday) = (*w, *monday);
+                let current = day::monday(monday) == day::monday(today);
+                let (name, range, codes) = (day::week_relative(monday, today), day::week_range(monday, today), day::week_codes(Some(w), monday));
+                menu = menu.item(PopupMenuItem::element(move |_, _| {
+                    div()
+                        .flex()
+                        .items_baseline()
+                        .gap(px(space::L))
+                        .w_full()
+                        .child(div().flex_1().whitespace_nowrap().when(current, |x| x.text_color(accent)).child(name.clone()))
+                        .child(div().whitespace_nowrap().text_color(secondary).child(range.clone()))
+                        .child(div().whitespace_nowrap().text_size(px(font::CAPTION)).font_features(tabular()).text_color(secondary).child(codes.clone()))
+                }).checked(active_week == Some(w)).on_click(set(Some(w))));
             }
             menu
         }, t));
@@ -1115,5 +1167,66 @@ impl Render for FileBrowser {
                 .child(Button::new("browser-trash").small().ghost().icon(menu_icon("trash-2")).label(tr("In den Papierkorb")).on_click(move |_, _, cx| e.update(cx, |b, cx| b.trash_targets(cx))))
         });
         div().size_full().flex().flex_col().child(bar).children(query_error).child(div().flex_1().min_h_0().flex().flex_col().child(body)).children(footer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    use chrono::NaiveDate;
+
+    use super::{CatalogFile, FileGrouping, GroupKind, Item, LectureWeek, WeekStarts, group};
+
+    fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    fn file(module: Option<&str>, week: Option<u32>) -> CatalogFile {
+        CatalogFile {
+            file: crate::core::search_index::IndexedFile { path: PathBuf::from("x.md"), name: "x.md".into(), modified: chrono::Local::now() },
+            module_id: module.map(String::from),
+            week,
+            place: Vec::new(),
+            date: ymd(2026, 11, 3),
+            is_brief: false,
+            in_project: false,
+            haystack: String::new(),
+            folded_name: String::new(),
+            title: None,
+        }
+    }
+
+    fn starts() -> WeekStarts {
+        let ws26 = vec![LectureWeek { index: 3, monday: ymd(2026, 10, 19), iso_week: 43 }];
+        let ws25 = vec![LectureWeek { index: 3, monday: ymd(2025, 10, 20), iso_week: 43 }];
+        WeekStarts {
+            by_semester: HashMap::from([("ws26".to_string(), ws26.clone()), ("ws25".to_string(), ws25)]),
+            semester_of: HashMap::from([("now".to_string(), "ws26".to_string()), ("old".to_string(), "ws25".to_string())]),
+            shown: ws26,
+            today: ymd(2026, 11, 3),
+        }
+    }
+
+    #[test]
+    fn dates_a_week_in_the_semester_of_its_own_module() {
+        let s = starts();
+        assert_eq!(s.monday(&file(Some("now"), Some(3))), Some(ymd(2026, 10, 19)));
+        assert_eq!(s.monday(&file(Some("old"), Some(3))), Some(ymd(2025, 10, 20)));
+        assert_eq!(s.monday(&file(None, Some(3))), Some(ymd(2026, 10, 19)));
+        assert_eq!(s.monday(&file(Some("now"), Some(9))), None);
+        assert!(s.in_shown(&file(Some("now"), Some(3))));
+        assert!(!s.in_shown(&file(Some("old"), Some(3))));
+        assert!(!s.in_shown(&file(Some("now"), None)));
+    }
+
+    #[test]
+    fn groups_the_same_week_number_of_two_semesters_apart() {
+        let s = starts();
+        let item = |m: &str| Item { file: file(Some(m), Some(3)), spots: Vec::new(), score: 0. };
+        let groups = group(vec![item("old"), item("now")], false, FileGrouping::Week, s.today, &HashMap::new(), &s);
+        let kinds: Vec<GroupKind> = groups.into_iter().map(|g| g.kind).collect();
+        assert!(kinds == vec![GroupKind::Week(Some(3), Some(ymd(2026, 10, 19))), GroupKind::Week(Some(3), Some(ymd(2025, 10, 20)))]);
     }
 }

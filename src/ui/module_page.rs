@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
-use chrono::Days;
+use chrono::{Days, NaiveDate};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::Sizable;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::browser::week_badge;
+use super::browser::week_title;
 use super::pages::Pages;
 use super::state::act;
 use super::motion::{self, Soft};
@@ -170,9 +170,9 @@ pub fn deadline_order(lib: &Library, m: &Module, st: &ModuleState) -> Vec<String
     let horizon = monday + Days::new(14);
     let d = |a: &Assignment| day::local_date(a.due);
     let mut out: Vec<String> = items.iter().rev().filter(|a| d(a) < monday && !lib.is_done(a)).map(|a| a.id.clone()).collect();
-    let mut groups: BTreeMap<u32, Vec<&Assignment>> = BTreeMap::new();
+    let mut groups: BTreeMap<NaiveDate, Vec<&Assignment>> = BTreeMap::new();
     for a in items.iter().filter(|a| d(a) >= monday && d(a) < horizon) {
-        groups.entry(lib.due_week(a).unwrap_or(0)).or_default().push(a);
+        groups.entry(day::monday(d(a))).or_default().push(a);
     }
     out.extend(groups.into_values().flatten().map(|a| a.id.clone()));
     if st.show_later {
@@ -194,11 +194,11 @@ pub fn deadlines(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     let soon: Vec<_> = items.iter().filter(|a| d(a) >= monday && d(a) < horizon).copied().collect();
     let later: Vec<_> = items.iter().filter(|a| d(a) >= horizon).copied().collect();
     let past: Vec<_> = items.iter().filter(|a| d(a) < monday && lib.is_done(a)).copied().collect();
-    let mut groups: BTreeMap<u32, Vec<&Assignment>> = BTreeMap::new();
+    let mut groups: BTreeMap<NaiveDate, Vec<&Assignment>> = BTreeMap::new();
     for a in &soon {
-        groups.entry(lib.due_week(a).unwrap_or(0)).or_default().push(a);
+        groups.entry(day::monday(d(a))).or_default().push(a);
     }
-    let current = lib.current_week().map(|w| w.index);
+    let weeks = lib.weeks();
     let mut col = div().flex().flex_col().px(px(space::L)).py(px(space::S));
     if items.is_empty() {
         col = col.child(div().flex().items_center().gap(px(space::S)).py(px(space::S)).text_color(t.secondary).child(icon("inbox", iconsize::S, t.secondary)).child(tr("Noch keine Einträge. Wiederkehrende Abgaben unter Einstellungen → Module anlegen oder mit + einen Eintrag hinzufügen.")));
@@ -210,20 +210,8 @@ pub fn deadlines(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
         }
     }
     for (week, entries) in groups {
-        let mut header = div().flex().items_center().gap(px(space::S)).mt(px(space::S)).py(px(space::XS));
-        if week > 0 {
-            header = header.child(div().font_weight(FontWeight::SEMIBOLD).child(format!("W{week:02}")));
-            if let Some(kw) = entries.first().and_then(|a| a.iso_week) {
-                header = header.child(div().text_color(t.secondary).child(format!("KW{kw:02}")));
-            }
-            if current == Some(week) {
-                header = header.child(week_badge(tr("Diese Woche"), true, t));
-            } else if current.is_some_and(|c| c + 1 == week) {
-                header = header.child(week_badge(tr("Nächste Woche"), false, t));
-            }
-        } else {
-            header = header.child(div().font_weight(FontWeight::SEMIBOLD).child(tr("Ohne Vorlesungswoche")));
-        }
+        let lecture = weeks.iter().find(|w| w.monday == week).map(|w| w.index);
+        let header = div().flex().items_center().gap(px(space::S)).mt(px(space::S)).py(px(space::XS)).child(week_title(week, lecture, lib.today(), t));
         col = col.child(motion::flip(format!("week-{week}"), header));
         for a in entries {
             col = col.child(entry(lib, a, st, view.clone(), t));

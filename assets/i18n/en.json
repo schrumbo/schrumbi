@@ -545,7 +545,6 @@
   "Alle einblenden": "Show All",
   "Alle umbenennen": "Rename all",
   "Alle zurücksetzen": "Reset All",
-  "Alles aus W%@ zeigen": "Show everything from W%@",
   "Alles auswählen": "Select All",
   "Alles in Ordnung": "All good",
   "Allgemein": "General",
@@ -926,7 +925,6 @@
   "Office": "Office",
   "Ohne Kurs": "No course",
   "Ohne Semester": "No semester",
-  "Ohne Vorlesungswoche": "No lecture week",
   "Ohne Woche": "No week",
   "Optional": "Optional",
   "Optional – nicht jede Woche": "Optional – not every week",
@@ -1541,5 +1539,14 @@
   "Die Karten gehören zu einem anderen Ordner und bleiben, wie sie sind.": "These cards belong to another folder and stay as they are.",
   "Die Karten wurden seither geändert und bleiben, wie sie sind.": "These cards changed since and stay as they are.",
   "Sie zählen nicht mehr als neu und kommen als Wiederholungen, verteilt auf die nächsten Wochen. Pausierte Karten bleiben, wie sie sind.": "They no longer count as new and come back as reviews, spread over the coming weeks. Paused cards stay as they are.",
-  "%@ – %@": "%@ – %@"
+  "%@ – %@": "%@ – %@",
+  "Vor %lld Wochen": "%lld weeks ago",
+  "In %lld Wochen": "In %lld weeks",
+  "Vor %lld Monaten": "%lld months ago",
+  "In %lld Monaten": "In %lld months",
+  "Vor 1 Jahr": "A year ago",
+  "In 1 Jahr": "In a year",
+  "Vor %lld Jahren": "%lld years ago",
+  "In %lld Jahren": "In %lld years",
+  "Alles aus derselben Woche zeigen": "Show everything from the same week"
 }
