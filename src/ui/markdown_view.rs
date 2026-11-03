@@ -89,7 +89,6 @@ pub struct ParsedNote {
     footnote_order: Vec<String>,
 }
 
-/// Where each line break of a text sits, to find the line of a byte without counting from the start.
 struct Breaks(Vec<usize>);
 
 impl Breaks {

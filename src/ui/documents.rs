@@ -202,7 +202,6 @@ pub struct NoteView {
     place_restored: bool,
     fit: BarFit,
     toc: Rc<Vec<(String, usize)>>,
-    /// The parse and mode the table of contents was made from.
     toc_of: Option<(Rc<ParsedNote>, Mode)>,
     path: PathBuf,
     mode: Mode,
