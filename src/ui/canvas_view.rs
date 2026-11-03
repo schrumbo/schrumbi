@@ -1053,6 +1053,8 @@ impl Render for CanvasView {
         let edge_hint = self.edge_mode.then(|| div().absolute().top(px(space::M)).right(px(space::M)).px(px(space::S)).py(px(space::XS)).rounded(px(radius::CONTROL)).bg(t.column).border_1().border_color(accent).text_size(px(font::CALLOUT)).child(tr("Kante: Tab wählt das Ziel")));
         let empty = doc.nodes.is_empty();
         let hand_over = super::vault_tools::in_vault(&self.path, cx).then(|| super::vault_tools::obsidian_button("canvas-obsidian", self.path.clone()));
+        let actions = if hand_over.is_some() { super::bar_fit::button_width("Obsidian", window) } else { 0. };
+        super::documents::actions_fold(&self.path, &[actions], 0, window, cx);
         let bar = super::documents::document_bar(&self.path, div().children(hand_over).into_any_element(), &t, window, cx);
         let surface = div()
             .id("canvas-page")
