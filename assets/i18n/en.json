@@ -1563,5 +1563,20 @@
   "Tippe z. B. 18, 1830 oder 18:30. ↑↓ in Viertelstunden, mit ⇧ in vollen Stunden.": "Type e.g. 18, 1830 or 18:30. ↑↓ step by quarter hours, with ⇧ by full hours.",
   "Keine Schnellauswahl für diese Uhrzeit": "No quick choices for this time",
   "Einklappen": "Collapse",
-  "Ausklappen": "Expand"
+  "Ausklappen": "Expand",
+  "Schrumbi-Anleitung": "Schrumbi Guide",
+  "Los geht’s": "Get started",
+  "Semester & Abgaben": "Semester & deadlines",
+  "Notizen & Lernen": "Notes & learning",
+  "Ergebnis": "Result",
+  "Markdown": "Markdown",
+  "Kopiert": "Copied",
+  "Markdown kopieren": "Copy Markdown",
+  "In der Anleitung suchen": "Search the guide",
+  "Nichts zu „%@“. Versuch ein anderes Wort, zum Beispiel Karten, Sync oder Tabelle.": "Nothing for “%@”. Try another word, for example cards, sync or table.",
+  "1 Treffer": "1 result",
+  "%lld Treffer": "%lld results",
+  "Vorherige Seite": "Previous page",
+  "Nächste Seite": "Next page",
+  "ohne Kürzel": "no shortcut"
 }

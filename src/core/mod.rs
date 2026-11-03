@@ -3,6 +3,7 @@ pub mod catalog;
 pub mod clock;
 pub mod crash;
 pub mod day;
+pub mod docs;
 pub mod cards;
 pub mod filing;
 pub mod folders;

@@ -1398,6 +1398,9 @@ fn link_exists(url: &str, base: Option<&Path>) -> bool {
 
 /// Web links open in the browser; everything else is a link inside the vault, created if it is missing.
 pub fn link_action(url: &str, base: Option<&Path>) -> LinkAction {
+    if base.is_some_and(super::help::is_sample) {
+        return Rc::new(|_| {});
+    }
     let url = url.to_string();
     if url.starts_with("obsidian://") {
         return Rc::new(move |cx| {
