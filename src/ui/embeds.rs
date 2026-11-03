@@ -106,6 +106,12 @@ pub fn inline_math(source: &str, scale: f32, cx: &mut App) -> Option<(Arc<Image>
     }
 }
 
+/// Whether a formula for inside a sentence is still being drawn.
+pub fn inline_math_pending(source: &str, cx: &App) -> bool {
+    let slot = (format!("imath:{source}"), Theme::get(cx).dark);
+    PICTURES.with(|c| !matches!(c.borrow().get(&slot), Some(Painted::Done(..) | Painted::Failed(_))))
+}
+
 pub fn math(source: &str, id: u64, _: &Theme) -> AnyElement {
     Formula { source: source.to_string(), id, scale: super::theme::note_scale() }.into_any_element()
 }
@@ -123,7 +129,7 @@ impl RenderOnce for Diagram {
         let links = render::mermaid_links(&self.code);
         let spot_links = links.clone();
         let spot_key = (self.code.clone(), dark);
-        let painted = picture(format!("mermaid:{code}"), dark, move || render::mermaid_svg(&code, dark).map(|svg| {
+        let painted = picture(format!("mermaid:{}:{code}", crate::core::i18n::is_english()), dark, move || render::mermaid_svg(&code, dark).map(|svg| {
             let (w, h) = svg_size(&svg);
             DIAGRAM_SPOTS.lock().unwrap().insert(spot_key, render::mermaid_link_spots(&svg, &spot_links));
             (svg, w, h)

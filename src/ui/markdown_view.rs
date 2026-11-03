@@ -305,7 +305,11 @@ pub fn parse(src: &str) -> ParsedNote {
                                 let shown = if bare_wikilink { wikilink_label(&s) } else { s };
                                 target.push(Inline::Link(shown, style, url.clone()));
                             }
-                            None => push_with_autolinks(target, &collapse_spaces(&s), style),
+                            None => {
+                                let spaced = collapse_spaces(&s);
+                                let after_space = !style.code && matches!(target.last(), Some(Inline::Text(t, st)) if !st.code && t.ends_with(' '));
+                                push_with_autolinks(target, if after_space { spaced.trim_start_matches(' ') } else { &spaced }, style);
+                            }
                         },
                         Run::Mark(s, color) => target.push(Inline::Text(s, Style { mark: Some(color), ..style })),
                         Run::Tag(s) => match &link {
@@ -1177,6 +1181,8 @@ struct CellText {
     runs: Vec<(String, bool, bool)>,
     /// Widths of pictures standing in the text, which nothing wraps inside.
     pictures: Vec<u32>,
+    /// Widths of pictures too big for a line, standing between the lines.
+    figures: Vec<u32>,
     formulas: Vec<String>,
 }
 
@@ -1184,6 +1190,7 @@ fn cell_text(inlines: &[Inline], cx: &Ctx, size: f32) -> CellText {
     let mut out = CellText::default();
     let mut push = |text: String, bold: bool, italic: bool| out.runs.push((text, bold, italic));
     let mut pictures = Vec::new();
+    let mut figures = Vec::new();
     let mut formulas = Vec::new();
     for i in inlines {
         match i {
@@ -1191,17 +1198,21 @@ fn cell_text(inlines: &[Inline], cx: &Ctx, size: f32) -> CellText {
             Inline::Text(s, st) => push(s.clone(), st.bold, st.italic),
             Inline::Link(s, st, url) => push(if is_external(url) { format!("{s} ↗") } else { s.clone() }, st.bold, st.italic),
             Inline::FootnoteRef(id) => push(superscript(&cx.footnote_order.iter().position(|f| f == id).map_or(0, |p| p + 1).to_string()), false, false),
-            Inline::Image(_, alt, _) => pictures.push(fits_in_line(alt, size).map_or_else(|| image_size(alt).0.unwrap_or(160.), |(w, _)| w + space::XS).ceil() as u32),
+            Inline::Image(_, alt, _) => match fits_in_line(alt, size) {
+                Some((w, _)) => pictures.push((w + space::XS).ceil() as u32),
+                None => figures.push(image_size(alt).0.unwrap_or(FIGURE_WIDTH).ceil() as u32),
+            },
             Inline::Math(source) => formulas.push(source.clone()),
         }
     }
     out.pictures = pictures;
+    out.figures = figures;
     out.formulas = formulas;
     out
 }
 
 /// How wide a cell's text runs on one line, and its longest word, from the position after each byte.
-fn cell_extent(text: &str, x_at: impl Fn(usize) -> f32, objects: &[f32]) -> (f32, f32) {
+fn cell_extent(text: &str, x_at: impl Fn(usize) -> f32, objects: &[f32], figures: &[f32]) -> (f32, f32) {
     let mut word = 0_f32;
     let mut at = 0;
     for piece in text.split_inclusive(char::is_whitespace) {
@@ -1209,12 +1220,13 @@ fn cell_extent(text: &str, x_at: impl Fn(usize) -> f32, objects: &[f32]) -> (f32
         at += piece.len();
     }
     let widest = x_at(text.len()) - x_at(0) + objects.iter().sum::<f32>();
-    (widest, objects.iter().copied().fold(word, f32::max))
+    let figure = figures.iter().copied().fold(0., f32::max);
+    (widest.max(figure), objects.iter().copied().fold(word, f32::max).max(figure))
 }
 
 /// The natural and the narrowest width of each column, padding included; long words may break past `longest_word`.
 fn column_widths(cells: &[Vec<(f32, f32)>], columns: usize, longest_word: f32) -> (Vec<f32>, Vec<f32>) {
-    let pad = space::S * 2. + 1.;
+    let pad = space::S * 2. + TABLE_RULE;
     let mut natural = vec![pad; columns];
     let mut least = vec![pad; columns];
     for row in cells {
@@ -1225,6 +1237,15 @@ fn column_widths(cells: &[Vec<(f32, f32)>], columns: usize, longest_word: f32) -
     }
     (natural, least)
 }
+
+/// The width of a table's rules.
+const TABLE_RULE: f32 = 1.;
+/// About how wide a letter of a formula is while it is not drawn yet.
+const FORMULA_LETTER: f32 = 7.;
+/// The longest word, in font sizes, that a table column keeps whole when the note is narrow.
+const LONGEST_UNBROKEN: f32 = 14.;
+/// The width a picture without a stated size is given in a table.
+const FIGURE_WIDTH: f32 = 160.;
 
 /// The natural and the narrowest width of each column.
 type ColumnWidths = Rc<(Vec<f32>, Vec<f32>)>;
@@ -1281,21 +1302,25 @@ impl Table {
                     text.push_str(&part);
                 }
                 let line = window.text_system().shape_line(text.clone().into(), px(self.size), &runs, None);
+                let glyphs: Vec<(usize, f32)> = line.runs.iter().flat_map(|run| run.glyphs.iter().map(|g| (g.index, f32::from(g.position.x)))).collect();
+                let end = f32::from(line.width);
+                let x_at = |i: usize| glyphs.get(glyphs.partition_point(|(at, _)| *at < i)).map_or(end, |(_, x)| *x);
                 let mut objects: Vec<f32> = cell.pictures.iter().map(|p| *p as f32).collect();
                 for formula in &cell.formulas {
                     objects.push(match super::embeds::inline_math(formula, super::theme::note_scale(), cx) {
                         Some((_, w, _)) => w + space::XS,
                         None => {
-                            drawn_all = false;
-                            formula.len() as f32 * 7.
+                            drawn_all &= !super::embeds::inline_math_pending(formula, cx);
+                            formula.len() as f32 * FORMULA_LETTER
                         }
                     });
                 }
-                sizes.push(cell_extent(&text, |i| f32::from(line.x_for_index(i)), &objects));
+                let figures: Vec<f32> = cell.figures.iter().map(|f| *f as f32).collect();
+                sizes.push(cell_extent(&text, x_at, &objects, &figures));
             }
             measured.push(sizes);
         }
-        let (natural, least) = column_widths(&measured, self.columns, self.size * 14.);
+        let (natural, least) = column_widths(&measured, self.columns, self.size * LONGEST_UNBROKEN);
         let widths = Rc::new((natural, least));
         if drawn_all {
             COLUMN_WIDTHS.with(|c| {
@@ -1325,7 +1350,7 @@ impl RenderOnce for Table {
             div().flex().when(r > 0, |d| d.border_t_1().border_color(border)).children(row.into_iter().enumerate().map(|(c, (element, _))| column(c, element)).collect::<Vec<_>>())
         });
         let head = rows.next().map(|d| d.bg(self.head_bg));
-        let outline = 2.;
+        let outline = TABLE_RULE * 2.;
         div().id(self.id).w_full().overflow_x_scroll().child(
             div()
                 .w_full()
@@ -1843,14 +1868,15 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                             .when(!folded, |d| d.invisible().group_hover(group.clone(), StyleRefinement::visible))
                 .capture_any_mouse_down(|_, _, _| press_control())
                             .absolute()
-                            .top(px(space::XS))
-                            .left(px(space::XS))
-                            .size(px(14.))
+                            .top_0()
+                            .left_0()
+                            .size(px(iconsize::L))
                             .flex()
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
                             .soft(t.ink.opacity(0.06), radius::SMALL)
+                            .tooltip(super::widgets::tip(tr(if folded { "Ausklappen" } else { "Einklappen" })))
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
                                 if let Some(f) = &folds {
@@ -1903,9 +1929,14 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                 };
                 let order = cx.order.get();
                 cx.order.set(order + 1);
-                let mut cells = vec![head.iter().enumerate().map(|(i, c)| cell(c, 0, i, true)).collect::<Vec<_>>()];
-                cells.extend(rows.iter().enumerate().map(|(row, r)| r.iter().enumerate().map(|(i, c)| cell(c, row + 1, i, false)).collect::<Vec<_>>()));
-                Table { id: ElementId::from(("md-table", order)), columns: head.len(), cells, size, border: t.separator, head_bg: t.secondary_bg }.into_any_element()
+                let columns = rows.iter().map(Vec::len).chain(std::iter::once(head.len())).max().unwrap_or(0);
+                let filled = |mut row: Vec<(AnyElement, CellText)>| {
+                    row.resize_with(columns, || (div().into_any_element(), CellText::default()));
+                    row
+                };
+                let mut cells = vec![filled(head.iter().enumerate().map(|(i, c)| cell(c, 0, i, true)).collect())];
+                cells.extend(rows.iter().enumerate().map(|(row, r)| filled(r.iter().enumerate().map(|(i, c)| cell(c, row + 1, i, false)).collect())));
+                Table { id: ElementId::from(("md-table", order)), columns, cells, size, border: t.separator, head_bg: t.secondary_bg }.into_any_element()
             }
         })
         .collect()
@@ -2317,7 +2348,7 @@ mod tests {
 
     #[test]
     fn a_column_is_as_wide_as_its_text_measures_not_as_its_letters_count() {
-        let (widest, word) = cell_extent("Absatz", advance("Absatz"), &[]);
+        let (widest, word) = cell_extent("Absatz", advance("Absatz"), &[], &[]);
         assert_eq!((widest, word), (47., 47.));
         let (natural, least) = column_widths(&[vec![(widest, word)]], 1, 200.);
         assert!(natural[0] >= 47. + space::S * 2. && least[0] == natural[0]);
@@ -2326,7 +2357,7 @@ mod tests {
     #[test]
     fn a_column_wraps_only_between_words() {
         let text = "Gestalt und Nähe";
-        let (widest, word) = cell_extent(text, advance(text), &[]);
+        let (widest, word) = cell_extent(text, advance(text), &[], &[]);
         assert_eq!(widest, 16. * 7.);
         assert_eq!(word, 7. * 7.);
         let (natural, least) = column_widths(&[vec![(widest, word)], vec![(30., 30.)]], 1, 200.);
@@ -2337,11 +2368,13 @@ mod tests {
     #[test]
     fn very_long_words_and_pictures_set_the_narrowest_width() {
         let long = "Donaudampfschifffahrtsgesellschaftskapitän";
-        let (widest, word) = cell_extent(long, advance(long), &[]);
+        let (widest, word) = cell_extent(long, advance(long), &[], &[]);
         let (_, least) = column_widths(&[vec![(widest, word)]], 1, 180.);
         assert_eq!(least[0], (180. + space::S * 2. + 1.).ceil());
-        let (widest, word) = cell_extent("a", advance("a"), &[120.]);
+        let (widest, word) = cell_extent("a", advance("a"), &[120.], &[]);
         assert_eq!((widest, word), (127., 120.));
+        let (widest, word) = cell_extent("ein Foto", advance("ein Foto"), &[], &[300.]);
+        assert_eq!((widest, word), (300., 300.));
     }
 
     #[test]
@@ -2372,7 +2405,14 @@ mod tests {
 
 #[cfg(test)]
 mod reader_tests {
-    use super::{Block, html_text, parse};
+    use super::{Block, html_text, parse, plain_text};
+
+    #[test]
+    fn a_hidden_comment_leaves_one_space() {
+        let note = parse("und <!-- verborgen --> sichtbar, <kbd>K</kbd> und `a  b`\n");
+        let Some(Block::Paragraph(inlines)) = note.blocks.first() else { panic!("no paragraph") };
+        assert_eq!(plain_text(inlines), "und sichtbar, K und a  b");
+    }
 
     fn kinds(src: &str) -> Vec<&'static str> {
         parse(src)

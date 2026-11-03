@@ -93,7 +93,7 @@ fn xml_escaped(text: &str) -> String {
 
 /// About how wide text is in the diagram font, for laying out the legend.
 fn text_width(text: &str, size: f32) -> f32 {
-    text.chars().map(|c| if c.is_uppercase() || c == 'm' || c == 'w' { 0.72 } else if c == ' ' || c == 'i' || c == 'l' || c == '.' || c == ',' { 0.3 } else { 0.58 }).sum::<f32>() * size
+    text.chars().map(|c| if (c as u32) >= 0x1100 && !matches!(c as u32, 0x2000..=0x206F) { 1. } else if c.is_uppercase() || c == 'm' || c == 'w' { 0.72 } else if c == ' ' || c == 'i' || c == 'l' || c == '.' || c == ',' { 0.3 } else { 0.58 }).sum::<f32>() * size
 }
 
 fn shortened(text: &str, most: usize) -> String {
@@ -154,9 +154,10 @@ fn pie_svg(title: Option<&str>, show_data: bool, slices: &[(String, f32)], dark:
     let top = if title.is_some() { title_size * 1.4 + 16. } else { 0. };
     let body = (outer * 2.).max(legend_height);
     let pad = 4_f32;
-    let width = pad * 2. + outer * 2. + 32. + legend_width;
+    let content = outer * 2. + 32. + legend_width;
+    let width = (pad * 2. + content).max(title.map_or(0., |t| text_width(&shortened(t, 60), title_size) + pad * 2.));
     let height = pad * 2. + top + body;
-    let (cx, cy) = (pad + outer, pad + top + body / 2.);
+    let (cx, cy) = ((width - content) / 2. + outer, pad + top + body / 2.);
     let font = r#"font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Inter, 'Segoe UI', Arial, sans-serif""#;
     let mut svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" {font}>"#);
     if let Some(title) = title {
@@ -192,7 +193,7 @@ fn pie_svg(title: Option<&str>, show_data: bool, slices: &[(String, f32)], dark:
         start = end;
     }
     svg.push_str(&marks);
-    let left = pad + outer * 2. + 32.;
+    let left = cx + outer + 32.;
     let first = cy - legend_height / 2.;
     for (i, label) in labels.iter().enumerate() {
         let middle = first + row * (i as f32 + 0.5);
@@ -346,6 +347,14 @@ mod tests {
         assert_eq!(svg.matches("<path").count(), 8);
         assert!(svg.contains(">S11<") && svg.contains(">S5<") && !svg.contains(">S4<"));
         assert!(svg.contains(&format!(">{}<", crate::core::i18n::tr("Andere"))));
+    }
+
+    #[test]
+    fn a_long_pie_title_widens_the_picture() {
+        let svg = super::mermaid_svg("pie title Lernzeit pro Woche im Wintersemester nach Fach und Thema\n  \"A\" : 1\n  \"B\" : 1", false).unwrap();
+        let width: f32 = svg.split("width=\"").nth(1).and_then(|w| w.split('"').next()).and_then(|w| w.parse().ok()).unwrap();
+        assert!(width >= super::text_width("Lernzeit pro Woche im Wintersemester nach Fach und Thema", 15.));
+        assert!(super::text_width("数学", 13.) >= 26.);
     }
 
     #[test]

@@ -1541,5 +1541,7 @@
   "Die Karten gehören zu einem anderen Ordner und bleiben, wie sie sind.": "These cards belong to another folder and stay as they are.",
   "Die Karten wurden seither geändert und bleiben, wie sie sind.": "These cards changed since and stay as they are.",
   "Sie zählen nicht mehr als neu und kommen als Wiederholungen, verteilt auf die nächsten Wochen. Pausierte Karten bleiben, wie sie sind.": "They no longer count as new and come back as reviews, spread over the coming weeks. Paused cards stay as they are.",
+  "Einklappen": "Collapse",
+  "Ausklappen": "Expand",
   "%@ – %@": "%@ – %@"
 }
