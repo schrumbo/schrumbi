@@ -262,6 +262,11 @@ def pick_instance(name):
         return inst
     live = [i for i in instances() if i.alive()]
     if not live:
+        owner = owner_pid()
+        dead = [i for i in instances() if owner and i.meta.get("owner") == owner]
+        if dead:
+            gone = max(dead, key=lambda i: i.meta.get("started", 0))
+            die(f"instance {gone.name} exited without app stop:\n{gone.log_tail()}")
         die("no instance is running; use: app start")
     if len(live) == 1:
         return live[0]
@@ -537,6 +542,7 @@ app wait [idle|<target>] [--gone] [--window T] [--timeout S]
 app resize <w> <h> | app theme light|dark|system
 app shot <name> [--full]         screenshot of the window, prints the path
 app perf begin | end <scenario> | idle [seconds]
+app ping                         is the UI thread responsive? exit 3 when it hangs
 app stats | app sample [seconds] | app log [lines]
 
 Options for every command: -i NAME (or APP_INSTANCE) picks the instance, -w WINDOW a window
@@ -627,7 +633,12 @@ def main(argv):
         return
 
     inst = pick_instance(inst_name)
-    if cmd in ("windows", "list"):
+    if cmd == "ping":
+        out = inst.call("ping")
+        if not out["ui"]:
+            die(f"pid {out['pid']} answers, but its UI thread hangs; `app sample` shows where", 3)
+        print(f"pid {out['pid']} answers, UI thread responsive")
+    elif cmd in ("windows", "list"):
         for w in inst.call("windows")["windows"]:
             print_window(w)
     elif cmd == "tree":
@@ -726,11 +737,10 @@ def main(argv):
                 pass
             elif x == "--window":
                 what = "window"
+                body["window"] = next(a)
             else:
                 body["target"] = x
                 what = "gone" if what == "gone" else "target"
-        if what == "window":
-            body["window"] = body.get("target") or window
         out = inst.call("wait", timeout=timeout, **{"for": what}, **body)
         print(f"waited {out['waited']} ms")
     elif cmd == "resize":

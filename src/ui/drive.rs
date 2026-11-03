@@ -31,6 +31,7 @@ struct Drawn {
     shown: Vec<Spot>,
     last: Option<Instant>,
     forced: bool,
+    title: Option<SharedString>,
 }
 
 #[derive(Default)]
@@ -84,7 +85,7 @@ fn spot(mut element: Stateful<Div>, role: &'static str, label: Option<SharedStri
 }
 
 /// Called after a window painted its frame, with the frame's CPU time.
-pub fn frame(window: &Window, ms: Option<f32>) {
+pub fn frame(window: &Window, ms: Option<f32>, title: Option<&SharedString>) {
     if !on() {
         return;
     }
@@ -93,6 +94,9 @@ pub fn frame(window: &Window, ms: Option<f32>) {
         let drawn = w.entry(key).or_default();
         drawn.shown = std::mem::take(&mut drawn.pending);
         drawn.last = Some(Instant::now());
+        if let Some(title) = title {
+            drawn.title = Some(title.clone());
+        }
         std::mem::take(&mut drawn.forced)
     });
     if let Some(ms) = ms.filter(|_| !forced) {
@@ -123,6 +127,7 @@ pub fn activate(cx: &mut App) {
 struct Call {
     body: Value,
     reply: mpsc::Sender<Value>,
+    deadline: Instant,
 }
 
 /// Opens the automation channel when `SCHRUMBI_DRIVE` is set: a local port and token in `drive.json`.
@@ -158,6 +163,9 @@ pub fn init(cx: &mut App) {
     std::mem::forget(cx.background_executor().prevent_app_nap("driven by an agent"));
     cx.spawn(async move |cx| {
         while let Ok(call) = rx.recv().await {
+            if Instant::now() > call.deadline {
+                continue;
+            }
             cx.spawn(async move |cx| {
                 let out = respond(&call.body, cx).await;
                 let _ = call.reply.send(out);
@@ -194,7 +202,7 @@ fn serve(stream: TcpStream, token: &str, tx: &async_channel::Sender<Call>, last:
 
 fn ask(tx: &async_channel::Sender<Call>, body: Value, wait: Duration) -> Option<Value> {
     let (reply, answer) = mpsc::channel();
-    tx.send_blocking(Call { body, reply }).ok()?;
+    tx.send_blocking(Call { body, reply, deadline: Instant::now() + wait }).ok()?;
     answer.recv_timeout(wait).ok()
 }
 
@@ -383,11 +391,14 @@ fn windows(cx: &mut App) -> Vec<Value> {
             handle
                 .update(cx, |_, window, cx| {
                     let b = window.bounds();
+                    let main = super::main_window::is_main(handle.window_id(), cx);
+                    let title = WINDOWS.with_borrow(|w| w.get(&handle.window_id().as_u64()).and_then(|d| d.title.clone())).map_or_else(|| window.window_title(), |t| t.to_string());
+                    let title = if title.is_empty() && main { "Schrumbi".to_string() } else { title };
                     let v = window.viewport_size();
                     json!({
                         "id": handle.window_id().as_u64(),
-                        "title": window.window_title(),
-                        "main": super::main_window::is_main(handle.window_id(), cx),
+                        "title": title,
+                        "main": main,
                         "active": window.is_window_active(),
                         "x": f32::from(b.origin.x), "y": f32::from(b.origin.y),
                         "w": f32::from(v.width), "h": f32::from(v.height),
@@ -460,11 +471,15 @@ fn pick_windows(b: &Value, cx: &mut AsyncApp) -> Result<Vec<AnyWindowHandle>, St
         let want = want.as_str().unwrap_or_default().to_lowercase();
         cx.update(|cx| {
             all.into_iter()
-                .filter(|h| if want == "main" { super::main_window::is_main(h.window_id(), cx) } else { h.update(cx, |_, w, _| w.window_title().to_lowercase().contains(&want)).unwrap_or(false) })
+                .filter(|h| if want == "main" { super::main_window::is_main(h.window_id(), cx) } else { title_of(*h, cx).to_lowercase().contains(&want) })
                 .collect()
         })
     };
     if found.is_empty() { Err(format!("no window {want}")) } else { Ok(found) }
+}
+
+fn title_of(handle: AnyWindowHandle, cx: &mut App) -> String {
+    WINDOWS.with_borrow(|w| w.get(&handle.window_id().as_u64()).and_then(|d| d.title.clone())).map_or_else(|| handle.update(cx, |_, w, _| w.window_title()).unwrap_or_default(), |t| t.to_string())
 }
 
 fn one_window(b: &Value, cx: &mut AsyncApp) -> Result<AnyWindowHandle, String> {

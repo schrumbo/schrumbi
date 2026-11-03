@@ -25,7 +25,7 @@ os.environ["CARGO_TERM_COLOR"] = "never"
 
 
 def git(*args, env=None):
-    return subprocess.run(["git", *args], capture_output=True, text=True, check=True, env=env).stdout.strip()
+    return subprocess.run(["git", *args], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, env=env).stdout.strip()
 
 
 def snapshot():
@@ -67,7 +67,7 @@ def clippy(scope):
     args = ["cargo", "clippy", "--all-targets", "--message-format=json", "--"]
     for lint in LINTS:
         args += ["-W", f"clippy::{lint}"]
-    run = subprocess.run(args, capture_output=True, text=True)
+    run = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
     errors, warnings = [], []
     for row in run.stdout.splitlines():
         try:
@@ -96,7 +96,7 @@ def clippy(scope):
 def tests():
     run = subprocess.run(
         ["cargo", "nextest", "run", "--status-level", "fail", "--failure-output", "final", "--no-input-handler"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if run.returncode == 0:
         return []
@@ -217,10 +217,10 @@ def ui_lint(scope):
 
 def deep():
     out = []
-    machete = subprocess.run(["cargo", "machete"], capture_output=True, text=True)
+    machete = subprocess.run(["cargo", "machete"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     if machete.returncode:
         out += [f"machete: {r}" for r in machete.stdout.splitlines() if r.startswith(("\t", " "))][:10]
-    deny = subprocess.run(["cargo", "deny", "check", "bans", "sources"], capture_output=True, text=True)
+    deny = subprocess.run(["cargo", "deny", "check", "bans", "sources"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     if deny.returncode:
         out += ["cargo deny: " + r for r in deny.stderr.splitlines() if r.startswith("error")][:10]
     return out
