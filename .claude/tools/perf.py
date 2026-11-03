@@ -10,7 +10,12 @@ with open(log, "rb") as f:
     text = f.read().decode("utf-8", "replace")
 times = sorted(float(v) for v in re.findall(r"^PERF ([\d.]+)$", text, re.M))
 pid = os.environ["PID"]
-cpu, rss = subprocess.run(["ps", "-o", "%cpu=,rss=", "-p", pid], capture_output=True, text=True).stdout.split()
+if os.name == "nt":
+    cpu_ms, rss = subprocess.run([os.environ["GUI"], "stats", pid], capture_output=True, text=True).stdout.split()
+    from_cpu, from_wall = (float(v) for v in (os.environ.get("CPU_FROM") or f"{cpu_ms} {time.time() * 1000}").split())
+    cpu = f"{(float(cpu_ms) - from_cpu) / max(time.time() * 1000 - from_wall, 1) * 100:.1f}"
+else:
+    cpu, rss = subprocess.run(["ps", "-o", "%cpu=,rss=", "-p", pid], capture_output=True, text=True).stdout.split()
 rss_mb = int(rss) // 1024
 
 

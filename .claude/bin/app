@@ -2,25 +2,42 @@
 set -u
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel) || exit 1
 COMMON=$(cd "$ROOT" && cd "$(git rev-parse --git-common-dir)" && pwd)
-GUI="$COMMON/agent-tools/gui"
 WORK="${TMPDIR:-/tmp}/schrumbi-agent/$(printf '%s' "$ROOT" | shasum | cut -c1-10)"
 PIDFILE="$WORK/pid"
+WIN=0
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) WIN=1 ;; esac
+if [ "$WIN" = 1 ]; then GUI="$COMMON/agent-tools/gui.exe"; else GUI="$COMMON/agent-tools/gui"; fi
+
+native() {
+  if [ "$WIN" = 1 ]; then cygpath -w "$1"; else printf '%s\n' "$1"; fi
+}
 
 gui_tool() {
-  if [ ! -x "$GUI" ] || [ "$ROOT/.claude/tools/gui.swift" -nt "$GUI" ]; then
+  if [ "$WIN" = 1 ]; then
+    if [ ! -f "$GUI" ] || [ "$ROOT/.claude/tools/gui.cs" -nt "$GUI" ]; then
+      mkdir -p "$(dirname "$GUI")"
+      "$(cygpath "$WINDIR")/Microsoft.NET/Framework64/v4.0.30319/csc.exe" -nologo -optimize -platform:x64 -r:System.Drawing.dll \
+        -out:"$(native "$GUI")" "$(native "$ROOT/.claude/tools/gui.cs")" >&2 || exit 1
+    fi
+    export GUI_PREV; GUI_PREV=$(cat "$WORK/prev" 2>/dev/null || echo 0)
+  elif [ ! -x "$GUI" ] || [ "$ROOT/.claude/tools/gui.swift" -nt "$GUI" ]; then
     mkdir -p "$(dirname "$GUI")"
     swiftc -O "$ROOT/.claude/tools/gui.swift" -o "$GUI" || exit 1
   fi
 }
 
+alive() {
+  if [ "$WIN" = 1 ]; then "$GUI" alive "$1"; else kill -0 "$1" 2>/dev/null; fi
+}
+
 pid() {
-  [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null || { echo "app is not running; use: app start" >&2; exit 1; }
+  [ -f "$PIDFILE" ] && alive "$(cat "$PIDFILE")" || { echo "app is not running; use: app start" >&2; exit 1; }
   cat "$PIDFILE"
 }
 
 stop() {
   if [ -f "$PIDFILE" ]; then
-    kill "$(cat "$PIDFILE")" 2>/dev/null
+    if [ "$WIN" = 1 ]; then "$GUI" kill "$(cat "$PIDFILE")"; else kill "$(cat "$PIDFILE")" 2>/dev/null; fi
     rm -f "$PIDFILE"
   fi
 }
@@ -28,13 +45,28 @@ stop() {
 shot() {
   local p id out
   p=$(pid) || exit 1
-  id=$("$GUI" list "$p" | head -1 | cut -d' ' -f1)
-  [ -n "$id" ] || { echo "no window for pid $p" >&2; exit 1; }
   out="$WORK/shots/$1.png"
   mkdir -p "$WORK/shots"
-  screencapture -x -o -l "$id" "$out" || exit 1
-  sips -Z 1500 "$out" >/dev/null
-  echo "$out"
+  if [ "$WIN" = 1 ]; then
+    "$GUI" shot "$p" "$(native "$out")" || exit 1
+  else
+    id=$("$GUI" list "$p" | head -1 | cut -d' ' -f1)
+    [ -n "$id" ] || { echo "no window for pid $p" >&2; exit 1; }
+    screencapture -x -o -l "$id" "$out" || exit 1
+    sips -Z 1500 "$out" >/dev/null
+  fi
+  native "$out"
+}
+
+mark() {
+  wc -c < "$WORK/log" | tr -d ' ' > "$WORK/perf-from"
+  if [ "$WIN" = 1 ]; then echo "$("$GUI" stats "$1" | cut -d' ' -f1) $(date +%s%3N)" > "$WORK/perf-cpu"; fi
+}
+
+measure() {
+  COMMIT=$(git -C "$ROOT" rev-parse --short HEAD) LOGFILE="$(native "$COMMON/agent-tools/perf.log")" PID="$1" \
+    GUI="$(native "$GUI")" CPU_FROM="$(cat "$WORK/perf-cpu" 2>/dev/null || echo)" \
+    python3 -I "$(native "$ROOT/.claude/tools/perf.py")" "$(native "$WORK/log")" "$(cat "$WORK/perf-from" 2>/dev/null || echo 0)" "$2"
 }
 
 gui_tool
@@ -42,12 +74,12 @@ cmd="${1:-help}"
 [ $# -gt 0 ] && shift
 case "$cmd" in
   start)
-    profile=perf; extra=(); notes=60; build=1
+    profile=perf; extra=(); notes=60; build=1; theme=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --debug) profile=dev ;;
         --no-build) build=0 ;;
-        --light) extra+=(-NSRequiresAquaSystemAppearance YES) ;;
+        --light) if [ "$WIN" = 1 ]; then theme=',"theme":"light"'; else extra+=(-NSRequiresAquaSystemAppearance YES); fi ;;
         --notes) notes="$2"; shift ;;
       esac
       shift
@@ -57,36 +89,44 @@ case "$cmd" in
     dir=$profile; [ "$profile" = dev ] && dir=debug
     rm -rf "$WORK/home" "$WORK/data"
     mkdir -p "$WORK/home"
-    python3 -I "$ROOT/.claude/tools/fixture.py" "$WORK/data" "$notes" || exit 1
-    printf '{"mainWindow":[100,80,1360,860]}' > "$WORK/home/settings.json"
+    python3 -I "$(native "$ROOT/.claude/tools/fixture.py")" "$(native "$WORK/data")" "$notes" || exit 1
+    printf '{"mainWindow":[100,80,1360,860]%s}' "$theme" > "$WORK/home/settings.json"
     : > "$WORK/log"
-    SCHRUMBI_PERF=1 SCHRUMBI_HOME="$WORK/home" RUST_BACKTRACE=1 nohup "$ROOT/target/$dir/schrumbi" "$WORK/data" ${extra[@]+"${extra[@]}"} >> "$WORK/log" 2>&1 &
-    echo $! > "$PIDFILE"
-    for _ in $(seq 1 120); do
-      [ -n "$("$GUI" list "$(cat "$PIDFILE")" | head -1)" ] && break
-      kill -0 "$(cat "$PIDFILE")" 2>/dev/null || { echo "app exited:" >&2; tail -20 "$WORK/log" >&2; exit 1; }
-      perl -e 'select(undef,undef,undef,0.25)'
-    done
-    echo "pid $(cat "$PIDFILE"), data $WORK/data, notes $notes, profile $profile"
+    if [ "$WIN" = 1 ]; then
+      started=$(SCHRUMBI_PERF=1 SCHRUMBI_HOME="$(native "$WORK/home")" RUST_BACKTRACE=1 \
+        "$GUI" start "$(native "$WORK/log")" "$(native "$ROOT/target/$dir/schrumbi.exe")" "$(native "$WORK/data")" < /dev/null) || { tail -20 "$WORK/log" >&2; exit 1; }
+      echo "${started% *}" > "$PIDFILE"
+      echo "${started#* }" > "$WORK/prev"
+      GUI_PREV=$(cat "$WORK/prev")
+    else
+      SCHRUMBI_PERF=1 SCHRUMBI_HOME="$WORK/home" RUST_BACKTRACE=1 nohup "$ROOT/target/$dir/schrumbi" "$WORK/data" ${extra[@]+"${extra[@]}"} >> "$WORK/log" 2>&1 &
+      echo $! > "$PIDFILE"
+      for _ in $(seq 1 120); do
+        [ -n "$("$GUI" list "$(cat "$PIDFILE")" | head -1)" ] && break
+        kill -0 "$(cat "$PIDFILE")" 2>/dev/null || { echo "app exited:" >&2; tail -20 "$WORK/log" >&2; exit 1; }
+        perl -e 'select(undef,undef,undef,0.25)'
+      done
+    fi
+    echo "pid $(cat "$PIDFILE"), data $(native "$WORK/data"), notes $notes, profile $profile"
     "$GUI" list "$(cat "$PIDFILE")" | head -1
     ;;
   perf)
     p=$(pid) || exit 1
     sub="${1:-}"; [ $# -gt 0 ] && shift
     case "$sub" in
-      begin) wc -c < "$WORK/log" | tr -d ' ' > "$WORK/perf-from" ;;
-      end)
-        COMMIT=$(git -C "$ROOT" rev-parse --short HEAD) LOGFILE="$COMMON/agent-tools/perf.log" PID="$p" \
-          python3 -I "$ROOT/.claude/tools/perf.py" "$WORK/log" "$(cat "$WORK/perf-from" 2>/dev/null || echo 0)" "${1:?scenario}"
-        ;;
+      begin) mark "$p" ;;
+      end) measure "$p" "${1:?scenario}" ;;
       idle)
-        wc -c < "$WORK/log" | tr -d ' ' > "$WORK/perf-from"
+        mark "$p"
         sleep "${1:-3}"
-        COMMIT=$(git -C "$ROOT" rev-parse --short HEAD) LOGFILE="$COMMON/agent-tools/perf.log" PID="$p" \
-          python3 -I "$ROOT/.claude/tools/perf.py" "$WORK/log" "$(cat "$WORK/perf-from")" idle
+        measure "$p" idle
         ;;
       *) echo "app perf begin | end <scenario> | idle [seconds]" >&2; exit 1 ;;
     esac
+    ;;
+  sample)
+    p=$(pid) || exit 1
+    if [ "$WIN" = 1 ]; then "$GUI" sample "$p" "${1:-3}"; else sample "$p" "${1:-3}"; fi
     ;;
   stop) stop ;;
   shot) shot "${1:?name}" ;;
@@ -108,18 +148,24 @@ app start [--debug] [--no-build] [--light] [--notes N]
 app perf begin                    start measuring; then drive the app
 app perf end <scenario>           frames, p50, p95, max, over budget, CPU, memory, last result
 app perf idle [seconds]           an idle app should draw no frames
+app sample [seconds]              where the UI thread spends its time
 app stop                          close only the instance started here
 app shot <name>                   screenshot, prints the path
 app hover <x> <y> <name>          move the pointer, wait, screenshot
 app click <x> <y> [n] [right] [cmd|shift|alt|ctrl]
 app move <x> <y>
-app key <keycode> [cmd+shift]     QWERTZ: keycode 16 is Z, 6 is Y; 36 Enter, 48 Tab, 53 Esc
+app key <key> [cmd+shift]
 app type <text>
-app wheel <x> <y> <steps> [mods]
+app wheel <x> <y> <steps> [mods]  positive steps scroll up
 app list                          window id x y w h title
 app log [lines]
-Coordinates are points inside the window. Input is refused unless the app is frontmost.
-Screenshots are 1500 px wide: point = pixel * window width / 1500 (app list gives the width).
+macOS: coordinates are points inside the window. Input is refused unless the app is frontmost.
+  Screenshots are 1500 px wide: point = pixel * window width / 1500 (app list gives the width).
+  Keys are keycodes, QWERTZ: 16 is Z, 6 is Y; 36 Enter, 48 Tab, 53 Esc.
+Windows: coordinates are pixels of the client area; screenshots have the same pixels up to 1500 wide.
+  Input goes to the window in the background and never takes the owner's focus; cmd means ctrl.
+  Keys are names (esc enter tab space backspace delete left right up down home end pageup pagedown f1-f12),
+  a letter or digit (z, 1), or a virtual-key number.
 EOF
     ;;
 esac

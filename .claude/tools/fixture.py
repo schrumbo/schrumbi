@@ -12,13 +12,13 @@ mods=[
  dict(id='long',code='EXT',name='Experimentelle Festkörperphysik und angewandte Materialwissenschaften für Fortgeschrittene',semester='s1',folder='WS26/Festkoerper',color='orange',naming='{code}_{title}',passed=False,
       rules=[rule('r3','Protokoll','PR',1,'Protokolle')],sessions=[dict(id='s3',title='Praktikum',weekday=1,start='08:00',end='12:00',location='Labor')],links=[],components=[]),
 ]
-json.dump(dict(name='Modultest',author='Test',version=1,semesters=[dict(id='s1',name='WS 2026/27',start='2026-10-05',end='2027-02-07',breaks=[],holidays=[])],modules=mods,inbox='Inbox'),open(f'{R}/schrumbi.json','w'),ensure_ascii=False,indent=1)
+json.dump(dict(name='Modultest',author='Test',version=1,semesters=[dict(id='s1',name='WS 2026/27',start='2026-10-05',end='2027-02-07',breaks=[],holidays=[])],modules=mods,inbox='Inbox'),open(f'{R}/schrumbi.json','w',encoding='utf-8'),ensure_ascii=False,indent=1)
 for m in mods: os.makedirs(f"{R}/{m['folder']}",exist_ok=True)
 ca=f"{R}/WS26/Complex Analysis 1"
 for sub in ['Übungen/W01','Übungen/W02','Vorlesung','Quiz']: os.makedirs(f'{ca}/{sub}',exist_ok=True)
 open(f'{ca}/Übungen/W01/CA1_26_Blatt1_Test_261009.pdf','wb').write(b'%PDF-1.4\n%%EOF\n')
 for i in range(1,8):
     open(f'{ca}/Vorlesung/Folien {i:02}.pdf','wb').write(b'%PDF-1.4\n%%EOF\n')
-    open(f'{ca}/Vorlesung/Mitschrift {i:02}.md','w').write(f'# Mitschrift {i}\n\nHolomorph? :: komplex differenzierbar {i}\n\n')
+    open(f'{ca}/Vorlesung/Mitschrift {i:02}.md','w',encoding='utf-8').write(f'# Mitschrift {i}\n\nHolomorph? :: komplex differenzierbar {i}\n\n')
 fs=f"{R}/WS26/Festkoerper"
-for i in range(int(sys.argv[2]) if len(sys.argv)>2 else 60): open(f'{fs}/Messung {i:03}.md','w').write(f'# Messung {i}\n')
+for i in range(int(sys.argv[2]) if len(sys.argv)>2 else 60): open(f'{fs}/Messung {i:03}.md','w',encoding='utf-8').write(f'# Messung {i}\n')

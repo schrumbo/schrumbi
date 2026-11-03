@@ -21,7 +21,7 @@ For each area the change touches, at normal and at huge data:
 
 1. `app perf idle`
 2. `app perf begin`, drive the real task (scroll, type, switch, open), `app perf end <stable scenario name>`; each result is compared with the last run of that name
-3. Over budget or worse than last time: find where the time goes with `sample <pid> 3` and read the heaviest stacks
+3. Over budget or worse than last time: find where the time goes with `app sample 3` while the slow task runs, and read the heaviest stacks
 
 Always finish with `app stop`.
 

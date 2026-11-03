@@ -32,4 +32,4 @@ The owner works on this repo on a Mac (`ssh mac`) and a Windows PC (`ssh windows
 - Never park work in `git stash`; commit it instead, unpushed commits can still be amended. Never pull with a merge commit, never force, never rewrite commits that are on origin.
 - When stopping at a stable point, state how many commits are unpushed so the owner can push before switching machines.
 - Untracked plans (`POLISH_PLAN.md`, `OBSIDIAN_ROADMAP.md`, `BUGS.md`) and claude-mem work state exist per machine. If one is missing or older here, copy it from the other machine, e.g. `scp mac:Developer/schrumbi-rs/POLISH_PLAN.md .` or `scp windows:Documents/projects/schrumbi/POLISH_PLAN.md .`
-- `.claude/bin/app`, `ux-tester` and the gui tool are macOS-only. On Windows, UI and perf verification waits for the Mac; say so instead of skipping it silently.
+- `.claude/bin/app`, `ux-tester` and `perf-tester` work on both machines: the gui tool is `gui.swift` on the Mac and `gui.cs` on Windows. On Windows input reaches the window in the background and never takes the owner's focus.
