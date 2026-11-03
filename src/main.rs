@@ -48,6 +48,7 @@ fn main() {
         ui::sync::init(cx);
         ui::history::init(cx);
         ui::link_card::init(cx);
+        ui::help::prepare_samples(cx);
         ui::app::init(cx);
         if let Some(path) = workspace {
             ui::state::open_workspace(&path, cx);

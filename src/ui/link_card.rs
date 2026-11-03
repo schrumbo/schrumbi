@@ -29,7 +29,7 @@ pub fn init(cx: &mut App) {
 }
 
 fn resolve(url: &str, base: Option<&PathBuf>) -> Option<(PathBuf, links::LinkTarget)> {
-    if url.contains("://") || url.starts_with("mailto:") {
+    if url.contains("://") || url.starts_with("mailto:") || markdown_view::is_sample_base(base.map(PathBuf::as_path)) {
         return None;
     }
     let decoded = markdown::percent_decode(url);
@@ -125,4 +125,15 @@ pub fn overlay(cx: &App) -> Option<AnyElement> {
         .with_priority(3)
         .into_any_element(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve;
+
+    #[test]
+    fn a_link_in_a_guide_example_resolves_to_nothing() {
+        let base = crate::ui::help::sample_dir();
+        assert!(resolve("Beispiel", Some(&base)).is_none());
+    }
 }

@@ -1097,6 +1097,7 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
     let mut hovers: Vec<(std::ops::Range<usize>, String)> = Vec::new();
     let mut slots: Vec<InlineSlot> = Vec::new();
     let mut pills: Vec<std::ops::Range<usize>> = Vec::new();
+    let sample = is_sample_base(cx.base);
     for i in inlines {
         match i {
             Inline::Tag(tag) => {
@@ -1104,7 +1105,9 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                 text.push('#');
                 text.push_str(tag);
                 let name = tag.clone();
-                links.push((start..text.len(), Rc::new(move |cx| super::state::act(cx, |l| l.show_tag(&name)))));
+                if !sample {
+                    links.push((start..text.len(), Rc::new(move |cx| super::state::act(cx, |l| l.show_tag(&name)))));
+                }
                 pills.push(start..text.len());
                 highlights.push((start..text.len(), HighlightStyle { color: Some(t.accent_text), ..Default::default() }));
             }
@@ -1117,8 +1120,10 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                     if is_external(url) {
                         text.push_str(" ↗");
                     }
-                    links.push((start..text.len(), link_action(url, cx.base)));
-                    hovers.push((start..text.len(), url.clone()));
+                    if !sample {
+                        links.push((start..text.len(), link_action(url, cx.base)));
+                        hovers.push((start..text.len(), url.clone()));
+                    }
                     if let Some(focus) = cx.focus {
                         let index = cx.links_seen.get();
                         cx.links_seen.set(index + 1);

@@ -96,11 +96,19 @@ fn expanded(cx: &App) -> Vec<String> {
     PAGES.iter().map(|p| docs::expand(p.source(lang), &|name| key_text(name, cx))).collect()
 }
 
+static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn write_samples() {
+    let _writing = WRITING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !WRITTEN.load(Ordering::Acquire) {
         write_files();
         WRITTEN.store(true, Ordering::Release);
     }
+}
+
+/// Writes the sample files in the background, so they are ready before the guide is first opened.
+pub fn prepare_samples(cx: &mut App) {
+    cx.background_executor().spawn(async { write_samples() }).detach();
 }
 
 fn write_files() {
@@ -294,7 +302,12 @@ impl Help {
         self.flash = section.filter(|s| *s > 0).map(|s| (self.page, s));
         self.flash_task = self.flash.map(|lit| cx.spawn(async move |this, cx| {
             cx.background_executor().timer(motion::FLASH).await;
-            let _ = this.update(cx, |h, _| if h.flash == Some(lit) { h.flash = None });
+            let _ = this.update(cx, |h, cx| {
+                if h.flash == Some(lit) {
+                    h.flash = None;
+                    cx.notify();
+                }
+            });
         }));
         cx.notify();
     }
@@ -389,7 +402,7 @@ impl Help {
         let k = &e.keystroke;
         let secondary = k.modifiers.secondary(cx);
         let typing = window.context_stack().iter().any(|c| c.contains("Input"));
-        let on_control = window.focused(cx).is_some_and(|f| f != self.focus);
+        let on_control = window.focused(cx).is_some_and(|f| f != self.focus && !self.rows.contains(&f));
         let row = self.rows.iter().position(|h| h.is_focused(window)).filter(|_| !k.modifiers.modified());
         let handled = match k.key.as_str() {
             "down" | "up" if row.is_some() => {
@@ -642,7 +655,7 @@ impl Help {
                     let _ = copy_entity.update(cx, |h, cx| h.copy(index, source, cx));
                 });
                 if !self.ready {
-                    return div().w_full().flex().justify_center().px(px(space::XXL)).child(div().w_full().max_w(px(MEASURE)).pb(px(space::L)).child(div().h(px(PENDING)).rounded(px(radius::CARD)).border_1().border_color(t.separator))).into_any_element();
+                    return div().w_full().flex().justify_center().px(px(space::XXL)).child(div().w_full().max_w(px(MEASURE)).pb(px(space::L)).child(div().h(px(PENDING)).flex().items_center().justify_center().child(motion::loading(iconsize::M, t.tertiary)))).into_any_element();
                 }
                 let id = self.page * 1000 + index;
                 div()
