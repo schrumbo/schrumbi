@@ -240,25 +240,44 @@ pub fn parse(src: &str) -> ParsedNote {
                     }
                 }
                 TagEnd::Heading(level) => {
-                    let (_, inner, mut inl) = stack.pop().unwrap();
+                    let (_, mut inner, mut inl) = stack.pop().unwrap();
+                    let mut head = match inner.first() {
+                        None => std::mem::take(&mut inl),
+                        Some(Block::Paragraph(_)) => match inner.remove(0) {
+                            Block::Paragraph(first) => first,
+                            _ => Vec::new(),
+                        },
+                        Some(_) => Vec::new(),
+                    };
+                    join_marks(&mut head);
                     join_marks(&mut inl);
-                    stack.last_mut().unwrap().1.push(Block::Heading(markdown::heading_number(level), inl));
+                    if !inl.is_empty() {
+                        inner.push(Block::Paragraph(inl));
+                    }
+                    if !inner.is_empty() {
+                        trim_inlines(&mut head, false);
+                        trim_beside_math(&mut inner);
+                    }
+                    stack.last_mut().unwrap().1.push(Block::Heading(markdown::heading_number(level), head));
                     stack.last_mut().unwrap().1.extend(inner);
                 }
                 TagEnd::BlockQuote(_) => {
                     flush_inline(&mut stack);
-                    let (_, blocks, _) = stack.pop().unwrap();
+                    let (_, mut blocks, _) = stack.pop().unwrap();
+                    trim_beside_math(&mut blocks);
                     stack.last_mut().unwrap().1.push(into_callout(blocks));
                 }
                 TagEnd::FootnoteDefinition => {
                     flush_inline(&mut stack);
-                    if let (Some(Tag::FootnoteDefinition(id)), blocks, _) = stack.pop().unwrap() {
+                    if let (Some(Tag::FootnoteDefinition(id)), mut blocks, _) = stack.pop().unwrap() {
+                        trim_beside_math(&mut blocks);
                         footnotes.push((id.to_string(), blocks));
                     }
                 }
                 TagEnd::Item => {
                     flush_inline(&mut stack);
                     let (_, mut blocks, _) = stack.pop().unwrap();
+                    trim_beside_math(&mut blocks);
                     if let Some(Block::Paragraph(inl)) = blocks.iter_mut().find(|b| matches!(b, Block::Paragraph(_))) {
                         strip_block_id(inl);
                     }
@@ -2050,6 +2069,12 @@ impl ParsedNote {
         self.sources.iter().take(self.blocks.len()).take_while(|s| s.line == 0).count()
     }
 
+    /// How many blocks from `i` on come from the same source lines, like text with display math in its middle.
+    pub fn blocks_sharing(&self, i: usize) -> usize {
+        let Some(first) = self.sources.get(i).filter(|_| i < self.blocks.len()) else { return 0 };
+        self.sources.iter().take(self.blocks.len()).skip(i).take_while(|s| s.line == first.line && s.end_line == first.end_line).count()
+    }
+
     /// How far below a block's top the middle of its first line of text is; `None` when it has no text line to meet, like a formula.
     pub fn first_line_middle(&self, i: usize) -> Option<f32> {
         let line = |size: f32| note_size(size) * 1.5 / 2.;
@@ -2362,7 +2387,7 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
         None => render_blocks(std::slice::from_ref(block), &cx).into_iter().next().unwrap_or_else(|| div().into_any_element()),
     };
     let element = match (block, focus) {
-        (Block::Heading(..), Some(focus)) if together.is_none() => {
+        (Block::Heading(..), Some(focus)) => {
             let key = format!("h{}", note.sources.get(i).map_or(0, |s| s.line) + live.line);
             let is_open = !focus.folds.borrow().contains(&key);
             let folds = focus.folds.clone();
@@ -2572,6 +2597,38 @@ mod reader_tests {
         assert_eq!(parse("Text davor $$a$$ Text danach.\n\n[x]: https://beispiel.de\n").line_blocks(), 3);
         assert_eq!(parse("Nur Text\n\n[a] b ]: c\n").line_blocks(), 1);
         assert_eq!(parse("").line_blocks(), 0);
+    }
+
+    #[test]
+    fn a_paragraph_with_display_math_draws_every_block_of_its_lines() {
+        let note = parse("Formel $x$ und\n$$y$$ danach\n\nNext\n");
+        assert_eq!(kinds("Formel $x$ und\n$$y$$ danach\n"), ["paragraph", "math", "paragraph"]);
+        assert_eq!(note.blocks_sharing(0), 3);
+        assert_eq!(note.blocks_sharing(3), 1);
+        assert_eq!(note.blocks_sharing(9), 0);
+    }
+
+    #[test]
+    fn a_heading_keeps_its_text_before_display_math() {
+        assert_eq!(kinds("# Titel $$x$$ mehr\n"), ["heading", "math", "paragraph"]);
+        let note = parse("# Titel $$x$$ mehr\n");
+        let Block::Heading(_, title) = &note.blocks[0] else { panic!() };
+        assert_eq!(plain_text(title), "Titel");
+        let Block::Paragraph(rest) = &note.blocks[2] else { panic!() };
+        assert_eq!(plain_text(rest), "mehr");
+        assert!(note.has_margin_control(0));
+    }
+
+    #[test]
+    fn tight_items_and_quotes_have_no_stray_space_beside_display_math() {
+        let item = parse("- a $$x$$ b\n");
+        let Block::List { items, .. } = &item.blocks[0] else { panic!() };
+        let texts: Vec<String> = items[0].blocks.iter().filter_map(|b| if let Block::Paragraph(inl) = b { Some(plain_text(inl)) } else { None }).collect();
+        assert_eq!(texts, ["a", "b"]);
+        let quote = parse("> a $$x$$ b\n");
+        let Block::Quote(inner) = &quote.blocks[0] else { panic!() };
+        let texts: Vec<String> = inner.iter().filter_map(|b| if let Block::Paragraph(inl) = b { Some(plain_text(inl)) } else { None }).collect();
+        assert_eq!(texts, ["a", "b"]);
     }
 
     #[test]

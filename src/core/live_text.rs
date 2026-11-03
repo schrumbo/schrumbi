@@ -97,6 +97,14 @@ pub fn drawn_line(line: &str, continues: bool) -> &str {
     if continues && slashes % 2 == 1 { bare.strip_suffix('\\').unwrap_or(bare) } else { bare }
 }
 
+/// Whether the line after `line` goes on with its paragraph, so a backslash ending `line` is a hard break.
+pub fn continues_paragraph(line: &str, next: &str) -> bool {
+    let bare = line.trim_start();
+    let hashes = bare.chars().take_while(|c| *c == '#').count();
+    let heading = (1..=6).contains(&hashes) && bare[hashes..].chars().next().is_none_or(char::is_whitespace);
+    !heading && !next.trim().is_empty() && !next.trim_start().starts_with(['#', '>', '`', '~', '|']) && prefix_len(next) == 0
+}
+
 /// The marks a line starts with: indent, heading signs, list marker, task box, quote sign.
 pub fn prefix_len(line: &str) -> usize {
     static PREFIX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:#{1,6}\s+|[-*+]\s+(?:\[.\]\s+)?|\d{1,9}[.)]\s+(?:\[.\]\s+)?|>\s?)").unwrap());
@@ -524,6 +532,19 @@ mod tests {
         assert_eq!(drawn_line("zwei \\\\", true), "zwei \\\\");
         assert_eq!(drawn_line("  - eingerückt", false), "- eingerückt");
         assert_eq!(drawn_line("    eingerückter Code", true), "eingerückter Code");
+    }
+
+    #[test]
+    fn only_a_line_that_goes_on_loses_its_backslash() {
+        assert!(continues_paragraph("Zeile\\", "weiter"));
+        assert!(!continues_paragraph("Zeile\\", ""));
+        assert!(!continues_paragraph("Pfad C:\\Daten\\", "- Punkt"));
+        assert!(!continues_paragraph("Pfad C:\\Daten\\", "1. Punkt"));
+        for next in ["# Titel", "> Zitat", "```rust", "~~~", "| a | b |"] {
+            assert!(!continues_paragraph("Pfad\\", next), "{next}");
+        }
+        assert!(!continues_paragraph("# Titel\\", "weiter"));
+        assert!(continues_paragraph("#Tag\\", "weiter"));
     }
 
     #[test]

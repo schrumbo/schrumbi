@@ -1785,7 +1785,7 @@ impl NoteView {
                 SegmentKind::Raw => (div().text_size(px(note_size(font::CALLOUT))).line_height(relative(1.5)).text_color(t.tertiary).child(source_lines.get(line).cloned().unwrap_or_default()).into_any_element(), 0., Some(raw_middle), false, None),
                 SegmentKind::Line { depth } => {
                     let written = source_lines.get(line).map_or("", |s| s.as_str());
-                    let continues = source_lines.get(line + 1).is_some_and(|next| !next.trim().is_empty());
+                    let continues = source_lines.get(line + 1).is_some_and(|next| live_text::continues_paragraph(written, next));
                     let shown = live_text::drawn_line(written, continues);
                     let fragment = {
                         let mut known = fragments.borrow_mut();
@@ -1813,7 +1813,7 @@ impl NoteView {
                     if live_item == Some(i - 1) {
                         (div().into_any_element(), 0., middle, fold, None)
                     } else {
-                        let drawn = markdown_view::render_live(&parsed, block, base.as_deref(), Some(toggle.clone()), found.as_ref(), Some(&focus), markdown_view::LiveDraw { item: Some(i - 1), ..Default::default() }, &t);
+                        let drawn = markdown_view::render_live(&parsed, block, base.as_deref(), Some(toggle.clone()), found.as_ref(), Some(&focus), markdown_view::LiveDraw { item: Some(i - 1), count: parsed.blocks_sharing(block), ..Default::default() }, &t);
                         let fence = source_lines.get(line).map_or("", |l| l.trim_start().trim_start_matches('`').trim());
                         if ["mermaid", "query", "base"].contains(&fence) && source_lines.get(line).is_some_and(|l| l.trim_start().starts_with("```")) {
                             let edit_me = me.clone();
