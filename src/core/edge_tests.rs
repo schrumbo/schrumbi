@@ -1482,6 +1482,21 @@ fn a_note_made_for_a_deadline_belongs_to_it_and_so_does_its_pdf() {
 }
 
 #[test]
+fn a_pdf_exported_outside_the_workspace_belongs_to_nothing() {
+    let (root, mut lib) = workspace("links-export-out", &shared_config());
+    let a = upcoming(&lib);
+    let note = lib.create_assignment_note(&a.id).unwrap();
+    let outside = std::env::temp_dir().join("schrumbi-links-export-out.pdf");
+    std::fs::write(&outside, "x").unwrap();
+    let linked = lib.state.linked_files.clone();
+    lib.record_export(&outside, None, &note);
+    assert_eq!(lib.state.linked_files, linked);
+    assert!(!lib.evaluation(&a).files.contains(&outside));
+    let _ = std::fs::remove_file(outside);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn links_follow_a_rename_and_leave_with_the_trash() {
     let (root, mut lib) = workspace("links-move", &shared_config());
     let a = upcoming(&lib);
