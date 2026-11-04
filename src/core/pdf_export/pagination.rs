@@ -8,29 +8,29 @@ use typst_layout::PagedDocument;
 
 use super::{NoteWorld, Options, THEME, build, file_id};
 
-struct Page {
-    lines: Vec<(f64, String)>,
-    images: Vec<(f64, f64)>,
-    height: f64,
+pub(super) struct Page {
+    pub(super) lines: Vec<(f64, String)>,
+    pub(super) images: Vec<(f64, f64, f64, f64)>,
+    pub(super) height: f64,
 }
 
 fn options() -> Options {
     Options { accent: "#0EA5E9".into(), header: false, page_numbers: false, lang: "de".into(), properties: false }
 }
 
-fn walk(frame: &Frame, origin: Point, texts: &mut Vec<(f64, f64, String)>, images: &mut Vec<(f64, f64)>) {
+fn walk(frame: &Frame, origin: Point, texts: &mut Vec<(f64, f64, String)>, images: &mut Vec<(f64, f64, f64, f64)>) {
     for (pos, item) in frame.items() {
         let at = origin + *pos;
         match item {
             FrameItem::Group(g) => walk(&g.frame, at, texts, images),
             FrameItem::Text(t) => texts.push((at.y.to_pt(), at.x.to_pt(), t.text.to_string())),
-            FrameItem::Image(_, size, _) => images.push((at.y.to_pt(), size.y.to_pt())),
+            FrameItem::Image(_, size, _) => images.push((at.x.to_pt(), at.y.to_pt(), size.x.to_pt(), size.y.to_pt())),
             _ => {}
         }
     }
 }
 
-fn paginate(markdown: &str, base: &Path) -> Vec<Page> {
+pub(super) fn paginate(markdown: &str, base: &Path) -> Vec<Page> {
     let (text, images) = build(markdown, base, None, &options(), false);
     let mut files = HashMap::new();
     files.insert(file_id("/theme.tmTheme"), Bytes::new(THEME.as_bytes().to_vec()));
@@ -40,7 +40,8 @@ fn paginate(markdown: &str, base: &Path) -> Vec<Page> {
     }
     let world = NoteWorld { main: Source::new(file_id("/main.typ"), text), files };
     let doc: PagedDocument = typst::compile(&world).output.unwrap_or_else(|e| panic!("{}", e.iter().map(|d| d.message.to_string()).collect::<Vec<_>>().join("; ")));
-    doc.pages()
+    let pages: Vec<Page> = doc
+        .pages()
         .iter()
         .map(|page| {
             let mut texts = Vec::new();
@@ -56,22 +57,28 @@ fn paginate(markdown: &str, base: &Path) -> Vec<Page> {
             }
             Page { lines, images: pictures, height: page.frame.height().to_pt() }
         })
-        .collect()
+        .collect();
+    for (i, page) in pages.iter().enumerate() {
+        if let Some((y, line)) = page.lines.iter().find(|(y, _)| *y > page.height - 56.0 + 1.0) {
+            panic!("page {i}: text past the bottom margin at {y}: {line}");
+        }
+    }
+    pages
 }
 
-fn page_of(pages: &[Page], marker: &str) -> usize {
+pub(super) fn page_of(pages: &[Page], marker: &str) -> usize {
     pages.iter().position(|p| p.lines.iter().any(|(_, l)| l.contains(marker))).unwrap_or_else(|| panic!("{marker} missing"))
 }
 
-fn count(pages: &[Page], marker: &str) -> usize {
-    pages.iter().map(|p| p.lines.iter().filter(|(_, l)| l.contains(marker)).count()).sum()
+pub(super) fn count(pages: &[Page], marker: &str) -> usize {
+    pages.iter().map(|p| p.lines.iter().filter(|(y, l)| *y <= p.height - 56.0 && l.contains(marker)).count()).sum()
 }
 
-fn filler(n: usize) -> String {
+pub(super) fn filler(n: usize) -> String {
     (0..n).map(|i| format!("Fuell{i}\n\n")).collect()
 }
 
-const SHIFTS: std::ops::RangeInclusive<usize> = 0..=38;
+pub(super) const SHIFTS: std::ops::RangeInclusive<usize> = 0..=38;
 
 fn words(marker: &str, n: usize) -> String {
     (0..n).map(|i| format!("{marker}{i}")).collect::<Vec<_>>().join(" ")
@@ -105,7 +112,7 @@ fn tall_svg(dir: &Path, name: &str, height: u32) {
     std::fs::write(dir.join(name), format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"{height}\"><rect width=\"100\" height=\"{height}\" fill=\"#888\"/></svg>")).unwrap();
 }
 
-fn scratch(name: &str) -> std::path::PathBuf {
+pub(super) fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("schrumbi-pagination-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -218,7 +225,7 @@ fn long_blocks_split_at_lines_and_every_line_is_kept() {
     assert_eq!(pages.iter().map(|p| p.images.len()).sum::<usize>(), 1, "{:?}", pages.iter().map(|p| p.images.clone()).collect::<Vec<_>>());
     assert!(pages.iter().all(|p| !p.lines.is_empty() || !p.images.is_empty()), "empty page");
     for p in &pages {
-        for (y, h) in &p.images {
+        for (_, y, _, h) in &p.images {
             assert!(y + h <= p.height + 0.5, "picture runs off the page: {y} + {h}");
         }
     }

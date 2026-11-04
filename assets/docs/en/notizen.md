@@ -96,7 +96,7 @@ Right-click another tab → {ui:Daneben öffnen} shows it next to the current no
 | {ui:Verlauf} | Compare and restore older versions, when sync is set up |
 | {ui:Als Folien zeigen} | Parts split by `---` become slides |
 
-In the PDF headings stay with their text; short tables, code blocks, callouts, quotes and list items are not split across two pages, long tables repeat their header row.
+In the PDF headings stay with their text; short tables, code blocks, callouts, quotes and list items are not split across two pages, long tables repeat their header row. Pictures appear as large as in the view, never wider than the text and never taller than about half a page; a caption stays with its picture.
 
 If an earlier export already lies next to the note, Schrumbi asks before replacing it. {ui:Rückgängig} in the message afterwards brings the old PDF back.
 
