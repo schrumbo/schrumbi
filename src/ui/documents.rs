@@ -435,6 +435,9 @@ impl NoteView {
                 self.sync_find(&text, true, true, window, cx);
             }
             FindEvent::Step(forward) => {
+                if self.find.pending.is_some() {
+                    return;
+                }
                 self.sync_find(&text, false, false, window, cx);
                 self.find.current = crate::core::find::step(self.find.current, self.find.matches.len(), *forward);
                 self.paint_find(&text, cx);
@@ -458,13 +461,19 @@ impl NoteView {
         let reveal = reveal || self.find.mode.is_some_and(|seen| seen != mode);
         self.find.mode = Some(mode);
         let signature = (crate::core::find::fingerprint(text), query, exact);
+        if self.find.signature.as_ref() == Some(&signature) {
+            self.find.pending = None;
+            self.find.task = None;
+        }
         if later && text.len() > FIND_IN_BACKGROUND_FROM && self.find.signature.as_ref() != Some(&signature) {
-            if self.find.pending.as_ref() != Some(&signature) {
+            if self.find.pending.as_ref() != Some(&signature) || reveal {
                 self.find_in_background(text, signature, reveal, cx);
             }
             return;
         }
         if self.find.signature.as_ref() != Some(&signature) || reveal {
+            self.find.pending = None;
+            self.find.task = None;
             let anchor = self.find.anchor.take().or_else(|| self.find.matches.get(self.find.current).map(|m| m.start)).unwrap_or(0);
             let found = crate::core::find::matches(text, &signature.1, exact);
             self.find.current = crate::core::find::first_from(&found, anchor).unwrap_or(0);
@@ -480,7 +489,7 @@ impl NoteView {
     }
 
     fn find_in_background(&mut self, text: &str, signature: (u64, String, bool), reveal: bool, cx: &mut Context<Self>) {
-        let anchor = self.find.anchor.take().or_else(|| self.find.matches.get(self.find.current).map(|m| m.start)).unwrap_or(0);
+        let anchor = self.find.anchor.or_else(|| self.find.matches.get(self.find.current).map(|m| m.start)).unwrap_or(0);
         self.find.pending = Some(signature.clone());
         let (owned, query, exact) = (text.to_string(), signature.1.clone(), signature.2);
         self.find.task = Some(cx.spawn(async move |this, cx| {
@@ -495,6 +504,7 @@ impl NoteView {
                     return;
                 }
                 n.find.pending = None;
+                n.find.anchor = None;
                 n.find.current = crate::core::find::first_from(&found, anchor).unwrap_or(0);
                 n.find.matches = found;
                 n.find.signature = Some(signature);

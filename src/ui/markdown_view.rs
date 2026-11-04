@@ -2766,7 +2766,8 @@ pub fn reveal_item_in_context(list: &ListState, ix: usize) {
     if list.bounds_for_item(ix).is_some_and(|b| b.top() >= view.top() && b.bottom() <= view.bottom()) {
         return;
     }
-    list.scroll_to(ListOffset { item_ix: ix.saturating_sub(1), offset_in_item: px(0.) });
+    let context = ix.checked_sub(1).filter(|k| list.bounds_for_item(*k).is_some_and(|b| b.size.height < view.size.height / 3.));
+    list.scroll_to(ListOffset { item_ix: context.unwrap_or(ix), offset_in_item: px(0.) });
 }
 
 /// Scrolls a list so an item shows: not at all when it already does, just enough when it is near, else to its top, since rows not yet drawn have no height to count.
