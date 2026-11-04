@@ -1375,7 +1375,7 @@ impl NoteView {
             (Some((_, p)), mode) if mode != Mode::Live => p.row_of_link(next) + 1,
             (p, _) => self.item_of_line(p.as_ref().and_then(|(_, p)| p.sources().get(links[next].1).map(|s| s.line)).unwrap_or(0)),
         };
-        self.reader_list.scroll_to_reveal_item(item);
+        markdown_view::reveal_item(&self.reader_list, item);
         cx.notify();
     }
 
@@ -1649,7 +1649,7 @@ impl NoteView {
             self.reader_list.scroll_to(ListOffset { item_ix, offset_in_item: px(offset.fract() * 4096.) });
         }
         if let Some(line) = self.reveal_line.take() {
-            self.reader_list.scroll_to_reveal_item(self.item_of_line(line));
+            markdown_view::reveal_item(&self.reader_list, self.item_of_line(line));
         }
         let path = self.path.clone();
         let toggle: markdown_view::OnToggle = Rc::new(move |line, cx: &mut App| {

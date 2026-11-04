@@ -1273,7 +1273,7 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
             Inline::Text(s, st) | Inline::Link(s, st, _) => {
                 let start = text.len();
                 text.push_str(s);
-                let mut unresolved = false;
+                let (mut unresolved, mut focused) = (false, false);
                 if let Inline::Link(_, _, url) = i {
                     unresolved = !is_external(url) && !link_exists(url, cx.base);
                     if is_external(url) {
@@ -1286,9 +1286,7 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                     if let Some(focus) = cx.focus {
                         let index = cx.links_seen.get();
                         cx.links_seen.set(index + 1);
-                        if focus.index == Some(index) {
-                            highlights.push((start..text.len(), HighlightStyle { background_color: Some(t.accent.opacity(0.28)), ..Default::default() }));
-                        }
+                        focused = focus.index == Some(index);
                     }
                 }
                 let mut h = HighlightStyle::default();
@@ -1324,6 +1322,9 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                     h.color = Some(t.accent_text);
                     h.underline = Some(UnderlineStyle { thickness: px(1.), color: Some(t.accent_text.opacity(0.4)), wavy: false });
                 }
+                if focused {
+                    h.background_color = Some(t.accent.opacity(0.28));
+                }
                 if h != HighlightStyle::default() {
                     highlights.push((start..text.len(), h));
                 }
@@ -1334,7 +1335,7 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                 text.push_str(&superscript(&n.to_string()));
                 highlights.push((start..text.len(), HighlightStyle { color: Some(t.accent_text), ..Default::default() }));
                 if let Some(list) = cx.focus.and_then(|f| f.list.clone()) {
-                    links.push((start..text.len(), Rc::new(move |_| list.scroll_to_reveal_item(list.item_count().saturating_sub(1)))));
+                    links.push((start..text.len(), Rc::new(move |_| reveal_item(&list, list.item_count().saturating_sub(1)))));
                 }
             }
             Inline::Image(src, alt, target) => {
@@ -2655,6 +2656,17 @@ pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_to
 }
 
 /// The footnotes a note refers to, as they appear at its end, each with a way back.
+/// Scrolls a list so an item shows: just enough when it is on screen, else to its top, since rows not yet drawn have no height to count.
+pub fn reveal_item(list: &ListState, ix: usize) {
+    let (top, bottom) = (list.logical_scroll_top().item_ix, list.viewport_bounds().bottom());
+    let near = ix <= top || (top..=ix).all(|k| list.bounds_for_item(k).is_some_and(|b| k == ix || b.bottom() < bottom));
+    if near {
+        list.scroll_to_reveal_item(ix);
+    } else {
+        list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(0.) });
+    }
+}
+
 /// `list` scrolls back to the row a footnote is referred from, found by its source line.
 pub fn render_footnotes(note: &ParsedNote, list: Option<(ListState, Rc<dyn Fn(usize) -> usize>)>, t: &Theme) -> Option<AnyElement> {
     let used: Vec<_> = note.footnote_order.iter().filter_map(|id| note.footnotes.iter().find(|(f, _)| f == id)).collect();
@@ -2682,7 +2694,7 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<(ListState, Rc<dyn Fn(us
                     .tooltip(super::widgets::tip(tr("Zurück zum Text")))
                     .on_click(move |_, _, _| {
                         if let Some((l, item_of_line)) = &list {
-                            l.scroll_to_reveal_item(item_of_line(home));
+                            reveal_item(l, item_of_line(home));
                         }
                     })
                     .child("↩"),
