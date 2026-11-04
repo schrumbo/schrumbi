@@ -322,6 +322,10 @@ impl Shortcut {
             ("return", false) => "Enter".into(),
             ("delete", false) => "Backspace".into(),
             ("escape", false) => "Esc".into(),
+            ("pageup", true) => "⇞".into(),
+            ("pagedown", true) => "⇟".into(),
+            ("pageup", false) => "PgUp".into(),
+            ("pagedown", false) => "PgDn".into(),
             (k, _) => k.to_uppercase(),
         };
         parts.push(key);

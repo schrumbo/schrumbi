@@ -303,6 +303,11 @@ impl Theme {
         fill
     }
 
+    /// A color stored in a document, shown as it is in both themes.
+    pub fn document(color: u32) -> Hsla {
+        rgb(color).into()
+    }
+
     /// Module color by palette name, as in the Swift `Palette`.
     pub fn palette(&self, name: &str) -> Hsla {
         if let Some(color) = self.palette_of_theme(name) {

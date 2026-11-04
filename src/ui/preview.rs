@@ -13,6 +13,7 @@ use super::widgets::*;
 use crate::core::i18n::tr;
 use crate::core::library;
 use crate::core::markdown;
+use crate::core::office;
 use crate::core::naming::extension;
 
 const IMAGES: [&str; 9] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "svg", "heic"];
@@ -32,6 +33,7 @@ pub struct FilePreview {
     content: Content,
     load: Option<Task<()>>,
     pdf: Option<Entity<super::pdf_view::PdfView>>,
+    sheet: Option<Entity<super::sheet_view::SheetView>>,
     /// Shows the header with title, path and actions.
     pub header: bool,
 }
@@ -42,7 +44,7 @@ fn ext(path: &Path) -> String {
 
 impl FilePreview {
     pub fn new(header: bool) -> Self {
-        Self { path: None, content: Content::Other, load: None, pdf: None, header }
+        Self { path: None, content: Content::Other, load: None, pdf: None, sheet: None, header }
     }
 
     /// Gives the keyboard to an image, so its zoom keys work.
@@ -63,6 +65,7 @@ impl FilePreview {
         }
         self.path = path.clone();
         self.pdf = None;
+        self.sheet = None;
         let Some(path) = path else {
             self.content = Content::Other;
             cx.notify();
@@ -71,6 +74,16 @@ impl FilePreview {
         let e = ext(&path);
         if e == "pdf" {
             self.pdf = Some(cx.new(|cx| super::pdf_view::PdfView::new(&path, cx)));
+            self.content = Content::Other;
+            cx.notify();
+            return;
+        }
+        if let Some(kind) = office::kind(&path) {
+            if kind == office::Kind::Sheet {
+                self.sheet = Some(cx.new(|cx| super::sheet_view::SheetView::new(&path, cx)));
+            } else {
+                self.pdf = Some(cx.new(|cx| super::pdf_view::PdfView::office(&path, cx)));
+            }
             self.content = Content::Other;
             cx.notify();
             return;
@@ -111,6 +124,8 @@ impl Render for FilePreview {
         let (reveal, open, default_app) = (path.clone(), path.clone(), path.clone());
         let body: AnyElement = if let Some(pdf) = &self.pdf {
             pdf.clone().into_any_element()
+        } else if let Some(sheet) = &self.sheet {
+            sheet.clone().into_any_element()
         } else {
             match &self.content {
             Content::Loading => div().size_full().flex().items_center().justify_center().child(super::motion::loading(iconsize::L, t.secondary)).into_any_element(),

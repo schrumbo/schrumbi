@@ -1644,5 +1644,22 @@
   "Noch keine Termine in diesem Semester": "No events this semester yet",
   "Wartet auf deinen Studienordner": "Waiting for your study folder",
   "Der Kalender „Schrumbi“ ist schreibgeschützt. Schalte den Abgleich aus und wieder ein, um ihn neu anzulegen.": "The calendar “Schrumbi” is read-only. Turn syncing off and on again to create it anew.",
-  "Das Konto mit dem Kalender „Schrumbi“ fehlt auf diesem Mac. Schalte den Abgleich aus und wieder ein, um ihn neu anzulegen.": "The account holding the calendar “Schrumbi” is missing on this Mac. Turn syncing off and on again to create it anew."
+  "Das Konto mit dem Kalender „Schrumbi“ fehlt auf diesem Mac. Schalte den Abgleich aus und wieder ein, um ihn neu anzulegen.": "The account holding the calendar “Schrumbi” is missing on this Mac. Turn syncing off and on again to create it anew.",
+  "In diesem Blatt suchen": "Search this sheet",
+  "Suche …": "Searching …",
+  "Suche schließen": "Close search",
+  "Zoom": "Zoom",
+  "Mit Passwort geschützt": "Password protected",
+  "Schrumbi kann verschlüsselte Dateien nicht anzeigen. Öffne sie in der Standard-App.": "Schrumbi can't show encrypted files. Open it in the default app.",
+  "Datei konnte nicht geöffnet werden": "Couldn't open the file",
+  "Die Datei ist beschädigt oder hat ein unbekanntes Format.": "The file is damaged or has an unknown format.",
+  "Folie %lld": "Slide %lld",
+  "Folie %lld von %lld": "Slide %lld of %lld",
+  "Dieses Blatt ist leer": "This sheet is empty",
+  "Zu Folie springen": "Go to slide",
+  "Folie einpassen": "Fit slide",
+  "Folien": "Slides",
+  "Durchsuche Folie %lld von %lld": "Searching slide %lld of %lld",
+  "Dieses Blatt konnte nicht gelesen werden": "This sheet could not be read",
+  "Die anderen Blätter bleiben verfügbar.": "The other sheets are still available."
 }

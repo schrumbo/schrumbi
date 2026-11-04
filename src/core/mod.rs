@@ -36,6 +36,7 @@ pub mod pdf_render;
 pub mod edit_ops;
 pub mod errors;
 pub mod pdf_export;
+pub mod office;
 pub mod update;
 #[cfg(test)]
 mod edge_tests;

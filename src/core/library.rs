@@ -234,9 +234,9 @@ impl IndexJob {
     }
 }
 
-const IN_APP_TYPES: [&str; 53] = [
-    "base", "canvas", "md", "markdown", "mdown", "pdf", "txt", "rtf", "rtfd", "csv", "json", "html", "htm", "xml", "css", "js", "ts", "swift", "java", "py", "c", "cpp", "h", "yml", "yaml", "tex", "doc", "docx", "ppt",
-    "pptx", "xls", "xlsx", "pages", "key", "numbers", "odt", "ods", "odp", "png", "jpg", "jpeg", "heic", "gif", "webp", "tiff", "svg", "bmp", "mp4", "mov", "m4v", "mp3", "m4a", "wav",
+const IN_APP_TYPES: [&str; 57] = [
+    "base", "canvas", "md", "markdown", "mdown", "pdf", "txt", "rtf", "rtfd", "csv", "json", "html", "htm", "xml", "css", "js", "ts", "swift", "java", "py", "c", "cpp", "h", "yml", "yaml", "tex", "doc", "docx", "docm", "ppt",
+    "pptx", "pptm", "xls", "xlsx", "xlsm", "xlsb", "pages", "key", "numbers", "odt", "ods", "odp", "png", "jpg", "jpeg", "heic", "gif", "webp", "tiff", "svg", "bmp", "mp4", "mov", "m4v", "mp3", "m4a", "wav",
 ];
 const MATERIAL_WORDS: [&str; 12] = ["unterlagen", "material", "folien", "skript", "slides", "handout", "literatur", "vorlesung", "lecture", "docs", "mitschrift", "notes"];
 const NOTE_WORDS: [&str; 4] = ["mitschrift", "notiz", "notes", "note"];

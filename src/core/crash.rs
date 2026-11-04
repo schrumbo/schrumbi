@@ -1,4 +1,9 @@
+use std::cell::Cell;
 use std::path::PathBuf;
+
+thread_local! {
+    static CAUGHT: Cell<bool> = const { Cell::new(false) };
+}
 
 fn log_path() -> Option<PathBuf> {
     super::prefs::data_dir().map(|d| d.join("crash.log"))
@@ -8,6 +13,9 @@ fn log_path() -> Option<PathBuf> {
 pub fn install() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        if CAUGHT.get() {
+            return;
+        }
         if let Some(path) = log_path() {
             let thread = std::thread::current();
             let report = format!(
@@ -26,6 +34,19 @@ pub fn install() {
         }
         previous(info);
     }));
+}
+
+/// Runs work that may panic on a broken file; such a panic is expected, so it is neither logged nor printed.
+pub fn caught<R>(work: impl FnOnce() -> R) -> Option<R> {
+    let before = CAUGHT.replace(true);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).ok();
+    CAUGHT.set(before);
+    result
+}
+
+/// A thread pool whose panics count as caught, for libraries that spread work over rayon.
+pub fn caught_pool() -> Option<rayon::ThreadPool> {
+    rayon::ThreadPoolBuilder::new().start_handler(|_| CAUGHT.set(true)).build().ok()
 }
 
 /// The log of a crash in the previous run, once; it is kept as `crash-last.log` for sending it on.

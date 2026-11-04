@@ -19,6 +19,7 @@ use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::highlights::{Highlight, HighlightPart};
 use crate::core::i18n::{tr, trf};
+use crate::core::office::{self, OpenError};
 use crate::core::pdf_render::{LinkTarget, PageRect, PageText, PdfMeta};
 use crate::core::prefs::{self, PdfPosition};
 
@@ -99,9 +100,12 @@ type Caret = (usize, usize);
 /// and only pages in view are rendered.
 pub struct PdfView {
     path: PathBuf,
+    source: pdf_worker::Source,
+    slides: bool,
+    stamp: Option<(std::time::SystemTime, u64)>,
     sizes: Vec<(f32, f32)>,
     max_size: (f32, f32),
-    failed: bool,
+    failed: Option<Option<OpenError>>,
     cache: HashMap<PageKey, Cached>,
     tick: u64,
     queue: Arc<RenderQueue>,
@@ -152,6 +156,7 @@ pub struct PdfView {
     editing_page: bool,
     editing_zoom: bool,
     restored: bool,
+    reloading: bool,
     save_task: Option<Task<()>>,
     _timer: Option<Task<()>>,
     settle: Option<Task<()>>,
@@ -172,8 +177,18 @@ impl PdfView {
     }
 
     pub fn new(path: &Path, cx: &mut Context<Self>) -> Self {
+        Self::with_source(pdf_worker::Source::Pdf(path.to_path_buf()), false, cx)
+    }
+
+    /// A Word or PowerPoint file, laid out as pages off the main thread.
+    pub fn office(path: &Path, cx: &mut Context<Self>) -> Self {
+        let slides = office::kind(path) == Some(office::Kind::Slides);
+        Self::with_source(pdf_worker::Source::Office(path.to_path_buf()), slides, cx)
+    }
+
+    fn connect(source: pdf_worker::Source, cx: &mut Context<Self>) -> (Arc<RenderQueue>, async_channel::Sender<TextJob>, Arc<AtomicU64>, Task<()>) {
         let (result_tx, result_rx) = async_channel::unbounded();
-        let (queue, jobs, search_generation) = pdf_worker::start(path.to_path_buf(), result_tx);
+        let (queue, jobs, search_generation) = pdf_worker::start(source, result_tx);
         let load = cx.spawn(async move |this, cx| {
             while let Ok(message) = result_rx.recv().await {
                 if this.update(cx, |v, cx| v.receive(message, cx)).is_err() {
@@ -181,21 +196,34 @@ impl PdfView {
                 }
             }
         });
-        let closing = queue.clone();
+        (queue, jobs, search_generation, load)
+    }
+
+    fn with_source(source: pdf_worker::Source, slides: bool, cx: &mut Context<Self>) -> Self {
+        let path = match &source {
+            pdf_worker::Source::Pdf(p) | pdf_worker::Source::Office(p) => p.clone(),
+        };
+        let (queue, jobs, search_generation, load) = Self::connect(source.clone(), cx);
         let release = cx.on_release(move |this: &mut Self, cx| {
-            closing.close();
+            this.queue.close();
             this.search_generation.fetch_add(1, Ordering::Relaxed);
             this.save_position();
             for (_, c) in this.cache.drain() {
                 let _ = cx.drop_image(c.image, None);
             }
         });
-        let library = cx.observe(&super::state::lib(cx), |_, _, cx| cx.notify());
+        let library = cx.observe(&super::state::lib(cx), |v: &mut Self, _, cx| {
+            v.reload_if_changed(cx);
+            cx.notify();
+        });
         Self {
-            path: path.to_path_buf(),
+            stamp: stamp(&path),
+            path,
+            source,
+            slides,
             sizes: Vec::new(),
             max_size: (1., 1.),
-            failed: false,
+            failed: None,
             cache: HashMap::new(),
             tick: 0,
             queue,
@@ -245,6 +273,7 @@ impl PdfView {
             editing_page: false,
             editing_zoom: false,
             restored: false,
+            reloading: false,
             save_task: None,
             _timer: None,
             settle: None,
@@ -253,14 +282,49 @@ impl PdfView {
         }
     }
 
+    /// Starts over when the file changed on disk, keeping the place in it.
+    fn reload_if_changed(&mut self, cx: &mut Context<Self>) {
+        let now = stamp(&self.path);
+        if now.is_none() || now == self.stamp {
+            return;
+        }
+        self.stamp = now;
+        self.queue.close();
+        self.search_generation.fetch_add(1, Ordering::Relaxed);
+        let (queue, jobs, search_generation, load) = Self::connect(self.source.clone(), cx);
+        self.queue = queue;
+        self.jobs = jobs;
+        self.search_generation = search_generation;
+        self._load = Some(load);
+        self.reloading = true;
+    }
+
     fn receive(&mut self, message: Message, cx: &mut Context<Self>) {
         match message {
+            Message::Opened(sizes) if std::mem::take(&mut self.reloading) => {
+                for (_, c) in self.cache.drain() {
+                    let _ = cx.drop_image(c.image, None);
+                }
+                self.texts.clear();
+                self.text_requested.clear();
+                self.last_wanted.clear();
+                self.hits.clear();
+                self.current_hit = None;
+                self.selection = None;
+                self.failed = None;
+                self.max_size = sizes.iter().fold((1., 1.), |m, s| (f32::max(m.0, s.0), f32::max(m.1, s.1)));
+                self.sizes = sizes;
+                self.geo.tops.clear();
+            }
             Message::Opened(sizes) => {
                 self.max_size = sizes.iter().fold((1., 1.), |m, s| (f32::max(m.0, s.0), f32::max(m.1, s.1)));
                 self.sizes = sizes;
             }
             Message::Key(key) => self.marks_key = Some(key),
-            Message::Failed => self.failed = true,
+            Message::Failed(why) => {
+                self.reloading = false;
+                self.failed = Some(why);
+            }
             Message::Page(key, image) => {
                 let size = image.size(0);
                 let bytes = size.width.0 as usize * size.height.0 as usize * 4;
@@ -823,7 +887,7 @@ impl PdfView {
                         .flex()
                         .flex_col()
                         .gap(px(space::XXS))
-                        .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).child(trf("Seite %lld", &[&(page + 1)])))
+                        .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).child(page_word(self.slides, page + 1)))
                         .child(div().text_size(px(font::CALLOUT)).line_clamp(3).child(h.text.clone())),
                 )
                 .child(
@@ -1118,9 +1182,10 @@ impl PdfView {
     fn toolbar(&self, window: &Window, cx: &mut Context<Self>, t: &Theme) -> Div {
         let me = cx.entity();
         let count = self.page_count();
+        let slides = self.slides;
         let current = self.current_page() + 1;
         let (m1, m2, m3, m4, m5, m6, m7) = (me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me);
-        let page_label = trf("Seite %lld von %lld", &[&current, &count]);
+        let page_label = if self.slides { trf("Folie %lld von %lld", &[&current, &count]) } else { trf("Seite %lld von %lld", &[&current, &count]) };
         let text = |s: &str| super::bar_fit::text_width(s, font::CALLOUT, FontWeight::NORMAL, window);
         let back_w = if self.history.is_empty() { 0. } else { control::S };
         let fields = [text(&page_label) + 2. * space::S, control::S, (space::XXL + space::L).max(text(&self.zoom_label())), control::S, control::S];
@@ -1139,7 +1204,7 @@ impl PdfView {
                 .soft(t.ink.opacity(0.06), radius::INNER)
                 .font_features(tabular())
                 .text_size(px(font::CALLOUT))
-                .tooltip(tip(tr("Zu Seite springen")))
+                .tooltip(tip(if self.slides { tr("Zu Folie springen") } else { tr("Zu Seite springen") }))
                 .child(page_label)
                 .on_click(move |_, window, cx| m1.update(cx, |v, cx| v.start_editing(false, window, cx)))
                 .into_any_element(),
@@ -1188,12 +1253,12 @@ impl PdfView {
             .child(Button::new("pdf-fit").ghost().small().icon(menu_icon("chevron-down")).tooltip(tr("Einpassen")).dropdown_menu(move |menu, _, _| {
                 let entry = |label: String, fit: Fit, view: Entity<PdfView>| PopupMenuItem::new(label).on_click(move |_, _, cx| view.update(cx, |v, cx| v.set_fit(fit, None, cx)));
                 let v = m7.clone();
-                menu.item(entry(tr("Breite einpassen"), Fit::Width, v.clone())).item(entry(tr("Seite einpassen"), Fit::Page, v.clone())).separator().item(entry("50 %".into(), Fit::Scale(0.5), v.clone())).item(entry("100 %".into(), Fit::Scale(1.), v.clone())).item(entry("150 %".into(), Fit::Scale(1.5), v.clone())).item(entry("200 %".into(), Fit::Scale(2.), v))
+                menu.item(entry(tr("Breite einpassen"), Fit::Width, v.clone())).item(entry(if slides { tr("Folie einpassen") } else { tr("Seite einpassen") }, Fit::Page, v.clone())).separator().item(entry("50 %".into(), Fit::Scale(0.5), v.clone())).item(entry("100 %".into(), Fit::Scale(1.), v.clone())).item(entry("150 %".into(), Fit::Scale(1.5), v.clone())).item(entry("200 %".into(), Fit::Scale(2.), v))
             }))
     }
 
     fn navigator_picks(&self) -> Vec<(PanelTab, String, &'static str)> {
-        [(PanelTab::Thumbnails, tr("Seiten"), "gallery-vertical-end"), (PanelTab::Outline, tr("Inhalt"), "list-tree"), (PanelTab::Search, tr("Suche"), "search"), (PanelTab::Marks, tr("Marker"), "highlighter")]
+        [(PanelTab::Thumbnails, if self.slides { tr("Folien") } else { tr("Seiten") }, "gallery-vertical-end"), (PanelTab::Outline, tr("Inhalt"), "list-tree"), (PanelTab::Search, tr("Suche"), "search"), (PanelTab::Marks, tr("Marker"), "highlighter")]
             .into_iter()
             .filter(|(value, ..)| *value != PanelTab::Outline || !self.meta.outline.is_empty())
             .collect()
@@ -1383,10 +1448,11 @@ impl PdfView {
     }
 
     fn search_panel(&mut self, cx: &mut Context<Self>, t: &Theme) -> Div {
+        let slides = self.slides;
         let total = self.page_count();
         let running = self.search_progress < total && self.search_input.as_ref().is_some_and(|i| !i.read(cx).value().trim().is_empty());
         let summary = if self.hits.is_empty() {
-            if running { trf("Durchsuche Seite %lld von %lld", &[&self.search_progress, &total]) } else if self.search_input.as_ref().is_some_and(|i| !i.read(cx).value().trim().is_empty()) { tr("Keine Treffer") } else { String::new() }
+            if running && slides { trf("Durchsuche Folie %lld von %lld", &[&self.search_progress, &total]) } else if running { trf("Durchsuche Seite %lld von %lld", &[&self.search_progress, &total]) } else if self.search_input.as_ref().is_some_and(|i| !i.read(cx).value().trim().is_empty()) { tr("Keine Treffer") } else { String::new() }
         } else {
             let at = self.current_hit.map_or(0, |c| c + 1);
             trf("%lld von %lld", &[&at, &self.hits.len()])
@@ -1415,7 +1481,7 @@ impl PdfView {
                     uniform_list(
                         "pdf-hits",
                         self.hits.len(),
-                        cx.processor(|this, range: Range<usize>, _, cx| {
+                        cx.processor(move |this, range: Range<usize>, _, cx| {
                             let t = Theme::get(cx);
                             let me = cx.entity();
                             range
@@ -1436,7 +1502,7 @@ impl PdfView {
                                         .key_nav()
                                         .when(selected, |d| d.bg(t.accent.opacity(0.15)))
                                         .soft(t.ink.opacity(0.05), 0.)
-                                        .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.secondary).child(trf("Seite %lld", &[&(hit.page + 1)])))
+                                        .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.secondary).child(page_word(slides, hit.page + 1)))
                                         .child(div().text_size(px(font::CALLOUT)).line_clamp(2).child(hit.excerpt.clone()))
                                         .on_click(move |_, _, cx| view.update(cx, |v, cx| v.select_hit(i, cx)))
                                         .into_any_element()
@@ -1454,8 +1520,12 @@ impl PdfView {
 impl Render for PdfView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
-        if self.failed {
-            return unavailable("file-question", tr("PDF konnte nicht geöffnet werden"), tr("Die Datei ist beschädigt oder mit einem Passwort geschützt."), &t).into_any_element();
+        if let Some(why) = self.failed {
+            let (title, body) = match why {
+                Some(e) => e.describe(),
+                None => (tr("PDF konnte nicht geöffnet werden"), tr("Die Datei ist beschädigt oder mit einem Passwort geschützt.")),
+            };
+            return unopenable(&self.path, why == Some(OpenError::Locked), title, body, &t).into_any_element();
         }
         if self.sizes.is_empty() {
             return div().size_full().flex().items_center().justify_center().child(motion::loading(iconsize::L, t.secondary)).into_any_element();
@@ -1628,4 +1698,13 @@ impl Render for PdfView {
             )
             .into_any_element()
     }
+}
+
+fn page_word(slides: bool, page: usize) -> String {
+    if slides { trf("Folie %lld", &[&page]) } else { trf("Seite %lld", &[&page]) }
+}
+
+fn stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
 }

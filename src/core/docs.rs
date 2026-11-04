@@ -194,7 +194,7 @@ pub fn expand(source: &str, keys: &dyn Fn(&str) -> Option<String>) -> String {
         .into_owned()
 }
 
-const KEYS: [&str; 9] = ["return", "escape", "tab", "space", "up", "down", "left", "right", "delete"];
+const KEYS: [&str; 11] = ["return", "escape", "tab", "space", "up", "down", "left", "right", "delete", "pageup", "pagedown"];
 
 /// A key written like `return`, `h` or `cmd-shift-a`, as this platform writes it; `None` for anything else.
 pub fn plain_key(name: &str) -> Option<String> {
