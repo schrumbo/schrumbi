@@ -359,11 +359,23 @@ impl NoteView {
         let Some(range) = search_index::occurrences(text, term).into_iter().nth(nth) else { return };
         self.editor.update(cx, |s, cx| s.set_selected_range(range.clone(), cx));
         let token = self.found.as_ref().map_or(0, |f| f.token + 1);
-        let _ = (&window, &cx);
         let block = markdown_view::block_at(text, range.start);
         let line = text.get(..range.start).unwrap_or_default().matches('\n').count();
         self.reveal_line = Some(line);
-        self.found = Some(markdown_view::Found { block, line, token });
+        let still = cx.reduce_motion();
+        self.found = Some(markdown_view::Found { block, line, token, still });
+        if still {
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(markdown_view::FOUND_HOLD).await;
+                let _ = this.update(cx, |n, cx| {
+                    if n.found.as_ref().is_some_and(|f| f.token == token) {
+                        n.found = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
     }
 
     /// Focuses the editor when editing, otherwise the note itself so its shortcuts work.

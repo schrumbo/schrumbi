@@ -2519,7 +2519,14 @@ pub struct Found {
     /// The source line of the match.
     pub line: usize,
     pub token: usize,
+    /// Drawn without fading, for reduced motion; the note clears it after `FOUND_HOLD`.
+    pub still: bool,
 }
+
+/// How long a search match takes to fade.
+const FOUND_FADE: std::time::Duration = std::time::Duration::from_millis(1800);
+/// How long a search match stays marked when motion is reduced and nothing fades.
+pub const FOUND_HOLD: std::time::Duration = std::time::Duration::from_millis(3000);
 
 /// Renders a parsed note; task boxes call `on_toggle` with their source line.
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
@@ -2632,11 +2639,12 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
 fn found_mark(element: AnyElement, found: Option<&Found>, t: &Theme) -> AnyElement {
     let accent = t.accent;
     match found {
+        Some(f) if f.still => div().rounded(px(radius::INNER)).bg(accent.opacity(0.25)).child(element).into_any_element(),
         Some(f) => div()
             .id(("md-found", f.token))
             .rounded(px(radius::INNER))
             .child(element)
-            .with_animation(("md-found-mark", f.token), Animation::new(std::time::Duration::from_millis(1800)).with_easing(ease_in_out), move |d, delta| d.bg(accent.opacity(0.25 * (1. - delta))))
+            .with_animation(("md-found-mark", f.token), Animation::new(FOUND_FADE).with_easing(ease_in_out), move |d, delta| d.bg(accent.opacity(0.25 * (1. - delta))))
             .into_any_element(),
         None => element,
     }
