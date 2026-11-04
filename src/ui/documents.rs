@@ -2734,7 +2734,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
     let split = is_split(current, cx);
     let fit = bar_fit::slot(split);
     if split {
-        let (title, is_preview, focused) = state::read(cx, |l| (l.note_title(current), l.preview_document.as_deref() == Some(current), l.beside_active));
+        let (title, is_preview, focused) = state::read(cx, |l| (l.note_title(current), l.is_preview(current), l.beside_active));
         let close = current.to_path_buf();
         return div()
             .relative()
@@ -2756,16 +2756,16 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis_middle()
-                    .when(is_preview, Styled::italic)
                     .text_size(px(font::CALLOUT))
                     .tooltip(tip(if is_preview { format!("{title}\n{}", tr("Vorschau: Die nächste Datei, die du öffnest, ersetzt diesen Tab. Doppelklick oder Schreiben behält ihn.")) } else { title.clone() }))
                     .context_menu(move |m, _, _| {
                         let (pin, shut) = (close.clone(), close.clone());
                         m.when(is_preview, |m| m.item(PopupMenuItem::new(tr("Tab behalten")).icon(menu_icon("bookmark")).on_click(move |_, _, cx| act(cx, |l| l.pin_document(&pin)))))
                             .item(PopupMenuItem::new(tr("Tab schließen")).on_click(move |_, _, cx| close_tab(&shut, cx)))
+                            .separator()
                             .item(PopupMenuItem::new(tr("Geteilte Ansicht schließen")).icon(menu_icon("columns-2")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))))
                     })
-                    .child(title),
+                    .child(div().when(is_preview, Styled::italic).child(title)),
             )
             .child(div().flex_none().child(actions))
             .child(Button::new("split-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Geteilte Ansicht schließen")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))));
@@ -2809,9 +2809,9 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
         let (open, close, menu, middle, target) = (doc.clone(), doc.clone(), doc.clone(), doc.clone(), doc.clone());
         let accent = t.accent;
         let is_dirty = dirty[i];
-        let hover = t.ink.opacity(0.05);
+        let hover = t.ink.opacity(0.04);
         let rel = state::read(cx, |l| l.relative_path(doc));
-        let is_preview = preview.as_ref() == Some(doc);
+        let is_preview = preview.as_ref() == Some(doc) && state::read(cx, |l| l.is_preview(doc));
         let is_beside = beside.as_ref() == Some(doc);
         let hint = if is_preview {
             format!("{rel}\n{}", tr("Vorschau: Die nächste Datei, die du öffnest, ersetzt diesen Tab. Doppelklick oder Schreiben behält ihn."))
@@ -2858,7 +2858,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                 .rounded(px(radius::INNER))
                 .cursor_pointer().key_nav()
                 .when(active, |d| d.bg(t.ink.opacity(0.1)))
-                .when(is_beside, |d| d.bg(t.ink.opacity(0.04)).soft(t.ink.opacity(0.03), radius::INNER))
+                .when(is_beside, |d| d.bg(t.ink.opacity(0.04)).soft(t.ink.opacity(0.02), radius::INNER))
                 .when(!active && !is_beside, |d| d.soft(hover, radius::INNER))
                 .tooltip(tip(hint))
                 .on_click(move |e, _, cx| {

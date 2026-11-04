@@ -921,6 +921,11 @@ impl Library {
         open
     }
 
+    /// A tab the next opened file may still replace: the preview, as long as nothing was written in it.
+    pub fn is_preview(&self, path: &Path) -> bool {
+        self.preview_document.as_deref() == Some(path) && !self.buffers.get(path).is_some_and(|b| b.touched)
+    }
+
     /// Keeps a preview tab open for good; Back no longer swaps it out.
     pub fn pin_document(&mut self, path: &Path) {
         if self.preview_document.as_deref() == Some(path) {
@@ -997,7 +1002,7 @@ impl Library {
 
     fn step_tab(&mut self, backwards: bool) -> bool {
         let Route::Doc(current) = self.route.clone() else { return false };
-        if self.preview_document.as_ref() != Some(&current) || self.buffers.get(&current).is_some_and(|b| b.touched) {
+        if !self.is_preview(&current) {
             return false;
         }
         let Some((mut back, mut forward)) = self.tab_trails.remove(&current) else { return false };
@@ -1015,7 +1020,7 @@ impl Library {
 
     fn tab_can_step(&self, backwards: bool) -> bool {
         let Route::Doc(current) = &self.route else { return false };
-        self.preview_document.as_ref() == Some(current) && self.tab_trails.get(current).is_some_and(|(b, f)| !if backwards { b } else { f }.is_empty())
+        self.is_preview(current) && self.tab_trails.get(current).is_some_and(|(b, f)| !if backwards { b } else { f }.is_empty())
     }
 
     /// Today's daily note from the vault's settings, created from its template if needed.
@@ -1536,8 +1541,12 @@ impl Library {
         }
     }
 
+    fn reachable(&self, r: &Route) -> bool {
+        *r != self.route && self.route_exists(r)
+    }
+
     pub fn can_go_back(&self) -> bool {
-        self.tab_can_step(true) || self.back_routes.iter().any(|r| self.route_exists(r))
+        self.tab_can_step(true) || self.back_routes.iter().any(|r| self.reachable(r))
     }
 
     /// A note reached through the history becomes the shown tab; the note it leaves goes right when it was the right one.
@@ -1552,7 +1561,7 @@ impl Library {
     }
 
     pub fn can_go_forward(&self) -> bool {
-        self.tab_can_step(false) || self.forward_routes.iter().any(|r| self.route_exists(r))
+        self.tab_can_step(false) || self.forward_routes.iter().any(|r| self.reachable(r))
     }
 
     pub fn go_forward(&mut self) {
@@ -1560,7 +1569,7 @@ impl Library {
             return;
         }
         while let Some(r) = self.forward_routes.pop() {
-            if self.route_exists(&r) {
+            if self.reachable(&r) {
                 self.land(&r);
                 let from = std::mem::replace(&mut self.route, r);
                 self.arrived(&from);
@@ -3686,7 +3695,7 @@ impl Library {
             return;
         }
         while let Some(r) = self.back_routes.pop() {
-            if self.route_exists(&r) {
+            if self.reachable(&r) {
                 self.land(&r);
                 let from = std::mem::replace(&mut self.route, r);
                 self.arrived(&from);

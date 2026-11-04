@@ -220,3 +220,30 @@ fn cycling_tabs_skips_the_right_note() {
     lib.cycle_document(1);
     assert_eq!(lib.active_document, Some(p[0].clone()));
 }
+
+#[test]
+fn a_preview_changed_from_outside_is_kept_and_offers_no_dead_steps() {
+    let (_, p) = notes("touched-steps", &["a.md", "b.md"]);
+    let mut lib = Library::new();
+    lib.open_preview(&p[0]);
+    lib.follow_path(&p[1], None);
+    lib.go_back();
+    assert!(lib.can_go_forward());
+    lib.buffer(&p[0]).restore("neu".into()).unwrap();
+    assert!(!lib.is_preview(&p[0]), "a changed note no longer looks like a preview");
+    assert!(!lib.can_go_forward(), "Forward is off when it would do nothing");
+}
+
+#[test]
+fn back_and_forward_never_stop_on_the_page_already_shown() {
+    let (_, p) = notes("dead-step", &["a.md", "b.md"]);
+    let mut lib = opened(&p);
+    lib.open_document(&p[0]);
+    lib.close_document(&p[1]);
+    let before = lib.route().clone();
+    lib.go_back();
+    assert_ne!(*lib.route(), before, "Back always shows something else");
+    lib.go_forward();
+    assert_eq!(*lib.route(), before);
+    assert!(!lib.can_go_forward(), "nothing left ahead");
+}
