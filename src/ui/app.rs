@@ -271,14 +271,18 @@ pub fn cmd(k: &str) -> String {
     format!("{}-{k}", if cfg!(target_os = "macos") { "cmd" } else { "ctrl" })
 }
 
+static BOUND: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
 /// Binds the app's keys on top of the component library's, using the user's custom shortcuts.
 /// Later bindings win, so rebinding after a settings change overrides the earlier ones.
 pub fn bind_keys(cx: &mut App) {
-    let mut b: Vec<KeyBinding> = ShortcutAction::ALL
-        .into_iter()
-        .filter(|a| a.group() != Group::Editor && a.shortcut().as_ref() != Some(&a.default_shortcut()))
-        .map(|a| kb(a.default_shortcut().keystroke(), NoAction, None))
-        .collect();
+    let mut bound = BOUND.lock().unwrap_or_else(|e| e.into_inner());
+    for a in ShortcutAction::ALL.into_iter().filter(|a| a.group() != Group::Editor) {
+        bound.insert(a.default_shortcut().keystroke());
+        bound.extend(a.shortcut().map(|s| s.keystroke()));
+    }
+    let mut b: Vec<KeyBinding> = bound.iter().map(|k| kb(k.clone(), NoAction, None)).collect();
+    drop(bound);
     b.extend([
         kb(cmd("q"), Quit, None),
         kb(cmd("k"), CommandPalette, None),

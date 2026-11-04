@@ -716,13 +716,8 @@ impl Library {
         if self.config.as_ref() == Some(&c) {
             return false;
         }
-        let recheck = self.config.as_ref().map(|c| c.check_names) != Some(c.check_names);
         self.config = Some(c);
-        if recheck {
-            self.reevaluate();
-        } else {
-            self.changed();
-        }
+        self.changed();
         true
     }
 
@@ -1882,17 +1877,6 @@ impl Library {
         [c.name.clone(), author].into_iter().chain(c.modules.iter().flat_map(|m| [m.code.clone(), m.name.clone()])).chain(["Name", "Seite", "Lehrwoche"].map(String::from)).collect()
     }
 
-    /// Convention name for an existing file, keeping its title, co-authors and date where recognizable.
-    pub fn suggested_name(&self, file: &Path, a: &Assignment) -> Option<String> {
-        let naming = self.naming(&a.module_id)?;
-        let facts = FileFacts::read(file);
-        let namings = self.namings();
-        let parsed = namings.iter().find_map(|n| n.parse(&name_of(file)));
-        let title = parsed.as_ref().map(|p| p.title.clone()).or_else(|| filing::title_suggestions(&facts, &namings, &self.title_ignore_words()).first().map(|s| s.title.clone())).unwrap_or_else(|| "Titel".into());
-        let date = parsed.as_ref().and_then(|p| p.date).or(facts.name_date).unwrap_or_else(|| day::local_date(facts.created.min(a.due)));
-        Some(naming.render(&title, date, extension(&name_of(file)), &parsed.map(|p| p.coauthors).unwrap_or_default(), a.week, a.iso_week, None))
-    }
-
     pub fn module_containing(&self, path: &Path) -> Option<&Module> {
         let rel = super::text::slash_path(&self.below_root(path)?);
         self.config.as_ref()?.modules.iter().filter(|m| rel == m.folder || rel.starts_with(&format!("{}/", m.folder))).max_by_key(|m| m.folder.len())
@@ -2771,9 +2755,9 @@ impl Library {
     fn convention_target(&self, file: &Path) -> Option<(Option<Assignment>, String)> {
         self.config.as_ref().filter(|c| c.naming_convention())?;
         let linked = self.deadlines_of(file);
-        let deadline = linked.iter().find(|a| a.upload).or(linked.first()).cloned().or_else(|| self.fitting_deadline(file));
-        let module_id = deadline.as_ref().map(|a| a.module_id.clone()).or_else(|| self.module_containing(file).map(|m| m.id.clone()))?;
-        Some((deadline, module_id))
+        let deadline = linked.iter().find(|a| a.upload).or(linked.first()).cloned().or_else(|| self.fitting_deadline(file))?;
+        let module_id = deadline.module_id.clone();
+        Some((Some(deadline), module_id))
     }
 
     /// Renames a note named after its heading and brings the heading along; a convention name only has to say the same title.
@@ -2784,21 +2768,6 @@ impl Library {
             let same = super::markdown::first_heading(text).is_some_and(|h| if convention { Naming::clean(&h) == Naming::clean(title) } else { h == title });
             if same { text.to_string() } else { super::markdown::with_first_heading(text, title) }
         });
-    }
-
-    /// The convention a file in this place must follow: a checked upload it belongs to or whose folder holds it, the next one due first.
-    fn convention_at(&self, path: &Path) -> Option<(Naming, Assignment)> {
-        self.convention_for(path, path)
-    }
-
-    /// Like `convention_at`, for a file that is about to be at `place`: its links still sit on `file`.
-    fn convention_for(&self, file: &Path, place: &Path) -> Option<(Naming, Assignment)> {
-        self.config.as_ref().filter(|c| c.check_names)?;
-        if let Some(a) = self.deadlines_of(file).into_iter().find(|a| a.upload) {
-            return Some((self.naming(&a.module_id)?, a));
-        }
-        let a = self.fitting_deadline(place)?;
-        Some((self.naming(&a.module_id)?, a))
     }
 
     /// The upload whose folder holds `path` and whose pattern fits its name, the next one due first.

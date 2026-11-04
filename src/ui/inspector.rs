@@ -169,7 +169,7 @@ fn status_color(s: Status, t: &Theme) -> Hsla {
     }
 }
 
-fn file_line(path: &std::path::Path, warning: bool, extra: Vec<(String, Box<dyn Fn(&mut App)>)>, t: &Theme) -> impl IntoElement {
+fn file_line(path: &std::path::Path, extra: Vec<(String, Box<dyn Fn(&mut App)>)>, t: &Theme) -> impl IntoElement {
     let (open, menu_path) = (path.to_path_buf(), path.to_path_buf());
     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let extra = std::rc::Rc::new(extra);
@@ -189,7 +189,6 @@ fn file_line(path: &std::path::Path, warning: bool, extra: Vec<(String, Box<dyn 
         })
         .child(file_icon(path, iconsize::M))
         .child(div().flex_1().min_w_0().truncate().child(name))
-        .when(warning, |d| d.child(icon("triangle-alert", iconsize::XS, t.orange)))
         .context_menu(move |menu, _, _| {
             let mut menu = file_menu(menu, menu_path.clone());
             if !extra.is_empty() {
@@ -333,31 +332,18 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
                 .child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(icon("clipboard-list", iconsize::XS, t.secondary)).child(tr("Aufgabenstellung")));
             for p in &e.briefs {
                 let (p2, id2) = (p.clone(), id.clone());
-                briefs = briefs.child(file_line(p, false, vec![(tr("Ist meine Abgabe"), Box::new(move |cx: &mut App| act(cx, |l| l.set_role(FileRole::Work, &p2, &id2))))], t));
+                briefs = briefs.child(file_line(p, vec![(tr("Ist meine Abgabe"), Box::new(move |cx: &mut App| act(cx, |l| l.set_role(FileRole::Work, &p2, &id2))))], t));
             }
             files = files.child(briefs);
         }
         for p in &e.files {
-            let warn = e.misnamed.contains(p);
             let (p2, id2) = (p.clone(), id.clone());
             let mut extra: Vec<(String, Box<dyn Fn(&mut App)>)> = vec![(tr("Ist die Aufgabenstellung"), Box::new(move |cx: &mut App| act(cx, |l| l.set_role(FileRole::Brief, &p2, &id2))))];
             if l.is_linked(p, &id) {
                 let (p3, id3) = (p.clone(), id.clone());
                 extra.push((tr("Zuordnung lösen"), Box::new(move |cx: &mut App| act(cx, |l| l.unlink(&p3, &id3)))));
             }
-            files = files.child(file_line(p, warn, extra, t));
-            if warn && let Some(s) = l.suggested_name(p, a) {
-                let (p4, s2) = (p.clone(), s.clone());
-                files = files.child(
-                    div()
-                        .flex()
-                        .items_start()
-                        .gap(px(space::S))
-                        .pl(px(space::XL))
-                        .child(div().flex_1().text_size(px(font::CAPTION)).font_family(Theme::mono_family()).text_color(t.secondary).line_clamp(2).child(s))
-                        .child(Button::new(SharedString::from(format!("rename-{}", p.display()))).small().label(tr("Umbenennen")).on_click(move |_, _, cx| act(cx, |l| l.rename(&p4, &s2)))),
-                );
-            }
+            files = files.child(file_line(p, extra, t));
         }
         for (i, p) in e.missing.iter().enumerate() {
             let (p2, id2) = (p.clone(), id.clone());

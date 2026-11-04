@@ -141,10 +141,9 @@ pub fn evaluate(assignments: &[Assignment], listings: &Listings, config: &StudyC
         let briefs: Vec<PathBuf> = matched.iter().filter(|p| FileRole::is_brief(file_name(p), &config.author)).cloned().collect();
         matched.retain(|p| !briefs.contains(p));
         let naming = namings.get(a.module_id.as_str());
-        let misnamed: Vec<PathBuf> = if a.upload && config.check_names { matched.iter().filter(|p| !naming.is_none_or(|n| n.is_valid(file_name(p)))).cloned().collect() } else { Vec::new() };
         let mut e = if let Some(o) = override_ {
             let on_time = o.date <= a.due || matched.is_empty() || matched.iter().any(|p| file_date(p) <= a.due);
-            Evaluation { status: o.status, files: matched, misnamed, is_override: true, completed_on_time: o.status.is_closed().then_some(on_time), briefs, missing, ..Evaluation::empty() }
+            Evaluation { status: o.status, files: matched, is_override: true, completed_on_time: o.status.is_closed().then_some(on_time), briefs, missing, ..Evaluation::empty() }
         } else {
             let (status, on_time) = if matched.is_empty() {
                 (
@@ -160,9 +159,9 @@ pub fn evaluate(assignments: &[Assignment], listings: &Listings, config: &StudyC
             } else if !a.upload {
                 (Status::Done, Some(matched.iter().any(|p| file_date(p) <= a.due)))
             } else {
-                (if misnamed.len() < matched.len() { Status::Ready } else { Status::InProgress }, None)
+                (Status::Ready, None)
             };
-            Evaluation { status, files: matched, misnamed, is_override: false, completed_on_time: on_time, briefs, missing, ..Evaluation::empty() }
+            Evaluation { status, files: matched, is_override: false, completed_on_time: on_time, briefs, missing, ..Evaluation::empty() }
         };
         if !e.status.is_closed() && !a.owns_folder() {
             e.suggested = suggestions(a, own, listings, &claimed, naming, config);

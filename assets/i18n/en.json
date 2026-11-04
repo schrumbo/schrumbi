@@ -613,7 +613,6 @@
   "Dateien in der Inbox": "Files in the inbox",
   "Dateien zum Hochladen bereitstellen. Tipp: Moodle-Link in den Moduleinstellungen hinterlegen.": "Have the files ready for uploading. Tip: add the Moodle link in the module settings.",
   "Dateiname": "File name",
-  "Dateiname entspricht nicht der Konvention": "File name doesn’t follow the convention",
   "Dateiname, Ordner, „w3“ …": "File name, folder, “w3” …",
   "Datum": "Date",
   "Der Status (.schrumbi-state.json) ist beschädigt. Änderungen werden nicht gespeichert, damit nichts überschrieben wird.": "The status file (.schrumbi-state.json) is damaged. Changes are not saved so nothing gets overwritten.",
@@ -1463,8 +1462,6 @@
   "Schrumbi hilft beim Ordnen": "Schrumbi helps keep order",
   "Meine eigene Struktur": "My own structure",
   "Eigene Auswahl": "Custom",
-  "Beim Ablegen umbenennen": "Rename when filing",
-  "Dateinamen prüfen": "Check file names",
   "Ordner anlegen": "Create folders",
   "Schrumbi benennt und verschiebt nie etwas von selbst. Ohne „Ordner anlegen“ landen Dateien nur in Ordnern, die es schon gibt.": "Schrumbi never renames or moves anything on its own. Without “Create folders”, files only go into folders that already exist.",
   "Lässt sich jederzeit in den Einstellungen ändern, auch einzeln.": "Can be changed any time in Settings, also one by one.",
@@ -1634,6 +1631,5 @@
   "Vorschau: Die nächste Datei, die du öffnest, ersetzt diesen Tab. Doppelklick oder Schreiben behält ihn.": "Preview: the next file you open replaces this tab. Double-click or start writing to keep it.",
   "Rechts geöffnet": "Open on the right",
   "Tab behalten": "Keep Tab",
-  "Navigation": "Navigation",
-  "Modul %lld": "Module %lld"
+  "Navigation": "Navigation"
 }

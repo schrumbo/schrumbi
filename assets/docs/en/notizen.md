@@ -89,7 +89,7 @@ If another app changed the file, you see a notice. Nothing is lost until you cho
 - A click on a file opens it as a preview with a slanted title. The next file replaces it.
 - Double-click, start writing or right-click → {ui:Tab behalten} to turn the preview into a kept tab.
 - A link opens its target as a preview; the note with the link stays open.
-- Drag a tab to change the order. {key:ReopenTab} brings a tab back to its old place.
+- Drag a tab to change the order. {key:reopenTab} brings a tab back to its old place.
 
 ### Side by side
 

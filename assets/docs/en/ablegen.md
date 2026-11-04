@@ -45,7 +45,7 @@ P1_26_Stakeholder-Radar_Muster-M_Mueller-C_261028.pdf
 
 A task description is then named `P1_26_Infografik_Aufgabe_261028.pdf`.
 
-Whatever you create or rename keeps the name you type. A file gets the pattern only when you ask for it. The command only appears once {ui:Nach einem Muster benennen} is switched on:
+Whatever you create or rename keeps the name you type. A file gets the pattern only when you ask for it. The command only appears once {ui:Nach einem Muster benennen} is switched on, and only for files in a submission folder:
 
 1. {ui:Mehr} or right-click the file → {ui:Nach Konvention benennen…}, or {key:CommandPalette} and the same command
 2. Check the suggestion and change it if needed. Below it you see whether it follows the pattern.

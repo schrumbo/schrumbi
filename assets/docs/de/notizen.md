@@ -89,7 +89,7 @@ Hat eine andere App die Datei geändert, siehst du einen Hinweis. Nichts geht ve
 - Ein Klick auf eine Datei öffnet sie als Vorschau mit schrägem Titel. Die nächste Datei ersetzt sie.
 - Doppelklick, Schreiben oder Rechtsklick → {ui:Tab behalten} macht aus der Vorschau einen festen Tab.
 - Ein Link öffnet sein Ziel als Vorschau, die Notiz mit dem Link bleibt offen.
-- Tab ziehen ändert die Reihenfolge. {key:ReopenTab} bringt den Tab an seinen alten Platz zurück.
+- Tab ziehen ändert die Reihenfolge. {key:reopenTab} bringt den Tab an seinen alten Platz zurück.
 
 ### Nebeneinander
 

@@ -112,7 +112,7 @@ const SYNONYMS: &[(&str, &str)] = &[
 ];
 
 /// Settings shown only while there is a naming convention; search leads to its switch instead.
-const NEEDS_CONVENTION: &[&str] = &["Matrikelnummer", "Mitautor:innen", "Beim Ablegen umbenennen", "Dateinamen prüfen", "Muster", "Beispiel"];
+const NEEDS_CONVENTION: &[&str] = &["Matrikelnummer", "Mitautor:innen", "Muster", "Beispiel"];
 
 /// Every labelled setting and the tab it lives on, for the search field.
 const SEARCHABLE: &[(&str, Tab)] = &[
@@ -128,8 +128,6 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Abgabeordner", Tab::General),
     ("Namenskonvention", Tab::General),
     ("Nach einem Muster benennen", Tab::General),
-    ("Beim Ablegen umbenennen", Tab::General),
-    ("Dateinamen prüfen", Tab::General),
     ("Ordner anlegen", Tab::General),
     ("Noten", Tab::General),
     ("Notensystem", Tab::General),
@@ -493,8 +491,6 @@ fn filing_sections(c: &StudyConfig, extra: Vec<AnyElement>, submissions: AnyElem
     let on = c.naming_convention();
     let mut naming = vec![detail_row(tr("Nach einem Muster benennen"), naming_detail(on), naming_switch("g-naming", c), t)];
     if on {
-        naming.push(sub_row(tr("Beim Ablegen umbenennen"), switch("g-rename", c.rename_on_filing, |c, v| c.rename_on_filing = v), t));
-        naming.push(sub_row(tr("Dateinamen prüfen"), switch("g-check-names", c.check_names, |c, v| c.check_names = v), t));
         naming.extend(extra);
     }
     let folders = vec![

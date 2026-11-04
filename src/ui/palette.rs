@@ -440,7 +440,8 @@ impl Render for ShortcutSheet {
         ];
         general.extend(group(Group::General));
         let mut navigation = group(Group::Navigation);
-        navigation.extend((7..=9).map(|n| shortcut_row(trf("Modul %lld", &[&(n - 6)]), fixed_parts(&n.to_string()), &t)));
+        let modules = state::read(cx, |l| l.semester_modules().iter().take(3).map(|m| m.display_name()).collect::<Vec<_>>());
+        navigation.extend(modules.into_iter().enumerate().map(|(i, name)| shortcut_row(name, fixed_parts(&(i + 7).to_string()), &t)));
         let close = cx.entity();
         div()
             .w_full()

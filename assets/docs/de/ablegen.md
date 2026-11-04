@@ -45,7 +45,7 @@ P1_26_Stakeholder-Radar_Muster-M_Mueller-C_261028.pdf
 
 Eine Aufgabenstellung heißt dann `P1_26_Infografik_Aufgabe_261028.pdf`.
 
-Was du anlegst oder umbenennst, heißt so, wie du es tippst. Nach dem Muster benennst du eine Datei nur auf Wunsch. Der Befehl erscheint erst, wenn {ui:Nach einem Muster benennen} eingeschaltet ist:
+Was du anlegst oder umbenennst, heißt so, wie du es tippst. Nach dem Muster benennst du eine Datei nur auf Wunsch. Der Befehl erscheint erst, wenn {ui:Nach einem Muster benennen} eingeschaltet ist, und nur für Dateien in einem Abgabeordner:
 
 1. {ui:Mehr} oder Rechtsklick auf die Datei → {ui:Nach Konvention benennen…}, oder {key:CommandPalette} und denselben Befehl
 2. Den Vorschlag prüfen, bei Bedarf ändern. Darunter steht, ob er zum Muster passt.
