@@ -56,6 +56,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Lesen / Bearbeiten wechseln} | {key:togglePreview} |
 | {ui:Geteilte Ansicht} | {key:splitPreview} |
 | {ui:Als PDF exportieren} | {key:exportPDF} |
+| {ui:In Notiz suchen} | {key:findInNote} |
 
 ## Editor
 

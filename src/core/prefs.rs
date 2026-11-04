@@ -171,6 +171,8 @@ pub struct Prefs {
     pub notes_column: Option<f32>,
     pub notes_explorer_hidden: bool,
     pub spell_check: bool,
+    /// Words the spell check should not mark, sorted.
+    pub spell_words: Vec<String>,
     /// Notes use the whole pane width instead of a centered reading column.
     pub reader_full_width: bool,
     /// How notes are written. Stored under a new name, so everyone starts on the code editor once.
@@ -258,6 +260,7 @@ impl Default for Prefs {
             notes_column: None,
             notes_explorer_hidden: false,
             spell_check: true,
+            spell_words: Vec::new(),
             reader_full_width: true,
             note_editor: NoteEditor::default(),
             note_folds: HashMap::new(),

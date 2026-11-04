@@ -7,7 +7,7 @@
 | {ui:Allgemein} | Erscheinungsbild, Sprache, Namensmuster, Seitenleiste, Erinnerungen |
 | {ui:Semester} | Vorlesungszeit, Pausen, Feiertage |
 | {ui:Module} | Kürzel, Ordner, Links, wiederkehrende Deadlines, Stundenplan |
-| {ui:Notizen} | Editor, Schriftgröße, Sichern, PDF-Export, Obsidian |
+| {ui:Notizen} | Editor, Schriftgröße, eigenes Wörterbuch, Sichern, PDF-Export, Obsidian |
 | {ui:Karten} | Erinnerungsziel, neue Karten und Wiederholungen pro Tag |
 | {ui:Sync} | Online-Speicher, Automatik, Ausschalten |
 | {ui:Tastenkürzel} | Die meisten Kürzel ändern |

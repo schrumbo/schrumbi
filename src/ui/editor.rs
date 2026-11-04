@@ -2,6 +2,7 @@ use gpui_kit::{Action, KeyBinding};
 
 use super::app::kb;
 use super::documents::*;
+use super::find_bar::{CloseFind, FindInNote, ReplaceInNote};
 use crate::core::shortcuts::ShortcutAction as S;
 
 fn bind<A: Action>(a: S, action: A) -> Option<KeyBinding> {
@@ -29,7 +30,12 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         bind(S::ZoomIn, ZoomIn),
         bind(S::ZoomOut, ZoomOut),
         bind(S::ZoomReset, ZoomReset),
-        Some(kb(super::app::cmd("alt-f"), gpui_kit::component::input::Replace, ctx)),
+        bind(S::FindInNote, FindInNote),
+        bind(S::SearchFiles, super::app::SearchFiles),
+        Some(kb(super::app::cmd("alt-f"), ReplaceInNote, ctx)),
+        #[cfg(not(target_os = "macos"))]
+        Some(kb("ctrl-h".into(), ReplaceInNote, ctx)),
+        Some(kb("escape".into(), CloseFind, Some("FindOpen"))),
         Some(kb("enter".into(), ListNewline, ctx)),
         Some(kb("shift-enter".into(), PlainNewline, ctx)),
         Some(kb(super::app::cmd("shift-x"), Strike, ctx)),

@@ -12,7 +12,9 @@ use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use super::find_bar::{CloseFind, FindEvent, FindInNote, FindState, ReplaceInNote};
 use super::markdown_view::{self, ParsedNote};
+use super::spell_card::{self, AddWordAtCaret, AddWordUnderPointer, SpellHover, SpellState};
 use super::pdf_view::PdfView;
 use super::preview::FilePreview;
 use super::state::{self, act};
@@ -40,6 +42,14 @@ actions!(
 );
 
 const NOTE_PLACES: usize = 500;
+fn editor_viewport(s: &EditorState) -> Option<Bounds<Pixels>> {
+    let mut view = s.text_bounds()?;
+    view.origin.y -= s.scroll_offset().y;
+    Some(view)
+}
+
+const FIND_IN_BACKGROUND_FROM: usize = 200_000;
+const FIND_MARKS_AROUND: usize = 1000;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -191,6 +201,8 @@ pub struct NoteView {
     editor_kind: prefs::NoteEditor,
     reader_width: Pixels,
     spell_task: Option<Task<()>>,
+    spell: SpellState,
+    find: FindState,
     /// Where writing last happened in this note.
     last_line: Option<usize>,
     /// Whether this view has looked for changes it inherited, as after an outside move.
@@ -345,7 +357,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -373,6 +385,260 @@ impl NoteView {
                 });
             })
             .detach();
+        }
+    }
+
+    fn find_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<super::find_bar::FindBar> {
+        if let Some(bar) = &self.find.bar {
+            return bar.clone();
+        }
+        let bar = cx.new(|cx| super::find_bar::FindBar::new(window, cx));
+        self._subs.push(cx.subscribe_in(&bar, window, |this, _, e: &FindEvent, window, cx| this.on_find(e, window, cx)));
+        self.find.bar = Some(bar.clone());
+        bar
+    }
+
+    /// Opens the find bar, searching for the selected text if there is a short one, and puts the caret in it.
+    fn open_find(&mut self, replacing: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let bar = self.find_bar(window, cx);
+        let seed = matches!(self.mode, Mode::Source | Mode::Split).then(|| self.editor.read(cx).selected_text().to_string()).filter(|s| !s.trim().is_empty() && !s.contains('\n') && s.chars().count() <= 100);
+        if !self.find.open {
+            self.find.open = true;
+            self.find.anchor = matches!(self.mode, Mode::Source | Mode::Split).then(|| self.editor.read(cx).selected_range().start);
+        }
+        let can_replace = self.mode != Mode::Read;
+        let (count, current) = (self.find.matches.len(), self.find.current);
+        bar.update(cx, |b, cx| {
+            b.show(count, current, can_replace, cx);
+            b.open(seed.clone(), replacing, window, cx);
+        });
+        if seed.is_some() {
+            self.find.signature = None;
+        }
+        let text = self.current_text(cx);
+        self.sync_find(&text, true, true, window, cx);
+        cx.notify();
+    }
+
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find = FindState { bar: self.find.bar.take(), marks: self.find.marks.take(), ..FindState::default() };
+        self.paint_find("", cx);
+        if matches!(self.mode, Mode::Source | Mode::Split) {
+            self.editor.update(cx, |s, cx| s.focus(window, cx));
+        } else {
+            window.focus(&self.focus, cx);
+        }
+        cx.notify();
+    }
+
+    fn on_find(&mut self, event: &FindEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.current_text(cx);
+        match event {
+            FindEvent::Query => {
+                self.find.signature = None;
+                self.sync_find(&text, true, true, window, cx);
+            }
+            FindEvent::Step(forward) => {
+                if self.find.pending.is_some() {
+                    return;
+                }
+                self.sync_find(&text, false, false, window, cx);
+                self.find.current = crate::core::find::step(self.find.current, self.find.matches.len(), *forward);
+                self.paint_find(&text, cx);
+                self.reveal_find(&text, cx);
+                let (count, current, can_replace) = (self.find.matches.len(), self.find.current, self.mode != Mode::Read);
+                if let Some(bar) = self.find.bar.clone() {
+                    bar.update(cx, |b, cx| b.show(count, current, can_replace, cx));
+                }
+            }
+            FindEvent::Replace => self.replace_found(false, window, cx),
+            FindEvent::ReplaceAll => self.replace_found(true, window, cx),
+            FindEvent::Close => self.close_find(window, cx),
+        }
+    }
+
+    /// Finds the matches again when the text or the query changed; `reveal` also brings the current one into view.
+    fn sync_find(&mut self, text: &str, reveal: bool, later: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(bar) = self.find.bar.clone().filter(|_| self.find.open) else { return };
+        let (query, exact) = bar.read_with(cx, |b, cx| (b.text(cx), b.exact()));
+        let mode = std::mem::discriminant(&self.mode);
+        let reveal = reveal || self.find.mode.is_some_and(|seen| seen != mode);
+        self.find.mode = Some(mode);
+        let signature = (crate::core::find::fingerprint(text), query, exact);
+        if self.find.signature.as_ref() == Some(&signature) {
+            self.find.pending = None;
+            self.find.task = None;
+        }
+        if later && text.len() > FIND_IN_BACKGROUND_FROM && self.find.signature.as_ref() != Some(&signature) {
+            if self.find.pending.as_ref() != Some(&signature) || reveal {
+                self.find_in_background(text, signature, reveal, cx);
+            }
+            return;
+        }
+        if self.find.signature.as_ref() != Some(&signature) || reveal {
+            self.find.pending = None;
+            self.find.task = None;
+            let anchor = self.find.anchor.take().or_else(|| self.find.matches.get(self.find.current).map(|m| m.start)).unwrap_or(0);
+            let found = crate::core::find::matches(text, &signature.1, exact);
+            self.find.current = crate::core::find::first_from(&found, anchor).unwrap_or(0);
+            self.find.matches = found;
+            self.find.signature = Some(signature);
+            self.paint_find(text, cx);
+            if reveal {
+                self.reveal_find(text, cx);
+            }
+        }
+        let (count, current, can_replace) = (self.find.matches.len(), self.find.current, self.mode != Mode::Read);
+        bar.update(cx, |b, cx| b.show(count, current, can_replace, cx));
+    }
+
+    fn find_in_background(&mut self, text: &str, signature: (u64, String, bool), reveal: bool, cx: &mut Context<Self>) {
+        let anchor = self.find.anchor.or_else(|| self.find.matches.get(self.find.current).map(|m| m.start)).unwrap_or(0);
+        self.find.pending = Some(signature.clone());
+        let (owned, query, exact) = (text.to_string(), signature.1.clone(), signature.2);
+        self.find.task = Some(cx.spawn(async move |this, cx| {
+            let (found, owned) = cx
+                .background_spawn(async move {
+                    let found = crate::core::find::matches(&owned, &query, exact);
+                    (found, owned)
+                })
+                .await;
+            let _ = this.update(cx, |n, cx| {
+                if n.find.pending.as_ref() != Some(&signature) {
+                    return;
+                }
+                n.find.pending = None;
+                n.find.anchor = None;
+                n.find.current = crate::core::find::first_from(&found, anchor).unwrap_or(0);
+                n.find.matches = found;
+                n.find.signature = Some(signature);
+                n.paint_find(&owned, cx);
+                if reveal {
+                    n.reveal_find(&owned, cx);
+                }
+                let (count, current, can_replace) = (n.find.matches.len(), n.find.current, n.mode != Mode::Read);
+                if let Some(bar) = n.find.bar.clone() {
+                    bar.update(cx, |b, cx| b.show(count, current, can_replace, cx));
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Marks the matches in the editor and in the reader.
+    fn paint_find(&mut self, text: &str, cx: &mut Context<Self>) {
+        let t = Theme::get(cx);
+        let current = self.find.current;
+        let in_editor = matches!(self.mode, Mode::Source | Mode::Split);
+        let decorations: Vec<TextDecoration> = self.find.matches.iter().enumerate().skip(current.saturating_sub(FIND_MARKS_AROUND)).take(2 * FIND_MARKS_AROUND).filter(|_| in_editor).map(|(i, r)| TextDecoration::new(r.clone(), HighlightStyle { background_color: Some(markdown_view::find_fill(i == current, &t)), ..Default::default() })).collect();
+        match &self.find.marks {
+            Some(known) => known.set(decorations, cx),
+            None if decorations.is_empty() => {}
+            None => {
+                let made = self.editor.update(cx, |e, cx| e.create_decorations_collection(decorations, cx));
+                self.find.marks = Some(made);
+            }
+        }
+        let query = self.find.bar.as_ref().map(|b| b.read_with(cx, |b, cx| (b.text(cx), b.exact())));
+        self.link_focus.find = match (query, self.find.matches.get(current)) {
+            _ if self.mode == Mode::Source => None,
+            (Some((query, exact)), Some(at)) if self.find.open => {
+                let starts = markdown_view::block_starts(text);
+                let block_of = |offset: usize| starts.partition_point(|s| *s <= offset).saturating_sub(1);
+                let block = block_of(at.start);
+                let block_start = starts.get(block).copied().unwrap_or(0);
+                let before = &self.find.matches[..current];
+                let nth = before.iter().rev().take_while(|m| m.start >= block_start).count();
+                let line_start = text.get(..at.start).and_then(|t| t.rfind('\n')).map_or(0, |i| i + 1);
+                let line = text.get(..at.start).unwrap_or_default().matches('\n').count();
+                let line_nth = before.iter().rev().take_while(|m| m.start >= line_start).count();
+                Some(Rc::new(markdown_view::FindMarks { query, exact, block, nth, line, line_nth }))
+            }
+            (Some((query, exact)), None) if self.find.open => Some(Rc::new(markdown_view::FindMarks { query, exact, block: usize::MAX, nth: 0, line: usize::MAX, line_nth: 0 })),
+            _ => None,
+        };
+    }
+
+    fn center_find(&mut self, cx: &mut Context<Self>) {
+        if self.find.center == 0 {
+            return;
+        }
+        let Some(at) = self.find.matches.get(self.find.current).cloned() else { return };
+        let done = self.editor.update(cx, |s, cx| {
+            let (Some(b), Some(view)) = (s.range_to_bounds(&at), editor_viewport(s)) else { return false };
+            if b.top() < view.top() || b.bottom() > view.bottom() {
+                return false;
+            }
+            let off = b.center().y - view.center().y;
+            if off.abs() > view.size.height / 6. {
+                let mut o = s.scroll_offset();
+                o.y -= off;
+                s.set_scroll_offset(o, cx);
+            }
+            true
+        });
+        self.find.center = if done { 0 } else { self.find.center - 1 };
+        if !done {
+            cx.notify();
+        }
+    }
+
+    /// Selects the current match in the editor and brings it into view there and in the reader.
+    fn reveal_find(&mut self, text: &str, cx: &mut Context<Self>) {
+        let Some(at) = self.find.matches.get(self.find.current).cloned() else { return };
+        if matches!(self.mode, Mode::Source | Mode::Split) {
+            self.editor.update(cx, |s, cx| {
+                let shown = s.range_to_bounds(&at).zip(editor_viewport(s)).is_some_and(|(b, view)| b.top() >= view.top() && b.bottom() <= view.bottom());
+                s.set_selected_range(at.clone(), cx);
+                if !shown {
+                    self.find.center = 8;
+                }
+            });
+        }
+        if self.mode != Mode::Source {
+            self.reveal_line = Some(text.get(..at.start).unwrap_or_default().matches('\n').count());
+        }
+        cx.notify();
+    }
+
+    fn replace_found(&mut self, all: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(bar) = self.find.bar.clone().filter(|_| self.find.open && self.mode != Mode::Read && self.find.pending.is_none()) else { return };
+        let text = self.current_text(cx);
+        self.find.signature = None;
+        self.sync_find(&text, false, false, window, cx);
+        let replacement = bar.read(cx).replacement(cx);
+        let (new, next) = if all {
+            (crate::core::find::replace_all(&text, &self.find.matches, &replacement), 0)
+        } else {
+            let Some(at) = self.find.matches.get(self.find.current).cloned() else { return };
+            (crate::core::find::replace_all(&text, std::slice::from_ref(&at), &replacement), at.start + replacement.len())
+        };
+        if new == text {
+            return;
+        }
+        self.change_text(&text, new.clone(), window, cx);
+        self.find.anchor = Some(next);
+        self.find.signature = None;
+        self.sync_find(&new, true, true, window, cx);
+    }
+
+    /// Changes the note's text in one undoable step, in whichever editor is in use.
+    fn change_text(&mut self, old: &str, new: String, window: &mut Window, cx: &mut Context<Self>) {
+        let (changed, inserted) = edit_ops::minimal_change(old, &new);
+        if self.mode == Mode::Live {
+            self.finish_block(cx);
+            let line = old.get(..changed.start).unwrap_or_default().matches('\n').count();
+            self.history.push((old.to_string(), line));
+            self.future.clear();
+            self.last_snapshot = None;
+            self.put_text(new, cx);
+            self.schedule_autosave(cx);
+        } else {
+            let inserted = inserted.to_string();
+            self.editor.update(cx, |s, cx| {
+                s.set_selected_range(changed, cx);
+                s.replace(inserted, window, cx);
+            });
         }
     }
 
@@ -421,6 +687,7 @@ impl NoteView {
         }
         let keep_line = self.top_line();
         self.finish_block(cx);
+        self.drop_spell_marks(cx);
         if matches!(mode, Mode::Source | Mode::Split) {
             let text = state::read(cx, |l| l.buffers.get(&self.path).map(|b| b.text.clone()).unwrap_or_default());
             self.syncing = true;
@@ -432,7 +699,10 @@ impl NoteView {
         self.reader_list.reset(0);
         self.keep_line = Some(keep_line);
         self.mode = mode;
-        if matches!(mode, Mode::Source | Mode::Split) {
+        if let Some(bar) = self.find.bar.clone().filter(|_| self.find.open) {
+            self.find.signature = None;
+            bar.update(cx, |b, cx| b.focus_query(window, cx));
+        } else if matches!(mode, Mode::Source | Mode::Split) {
             self.editor.update(cx, |s, cx| s.focus(window, cx));
         } else {
             window.focus(&self.focus, cx);
@@ -521,6 +791,7 @@ impl NoteView {
     }
 
     fn fill_field(&mut self, value: String, selection: std::ops::Range<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        self.drop_spell_marks(cx);
         self.syncing = true;
         self.block.update(cx, |b, cx| {
             b.set_value(value, window, cx);
@@ -598,6 +869,7 @@ impl NoteView {
     /// Closes what is being written; the note is drawn fresh from what is in it now.
     fn finish_block(&mut self, cx: &mut Context<Self>) {
         if let Some(live) = self.live.take() {
+            self.drop_spell_marks(cx);
             self.last_line = Some(live.first_line);
             self.reader_list.remeasure();
             cx.notify();
@@ -1214,37 +1486,132 @@ impl NoteView {
 
     /// Marks unknown words a moment after typing stops.
     fn schedule_spelling(&mut self, cx: &mut Context<Self>) {
+        self.spell.hover = None;
+        self.spell.hide = None;
+        if !prefs::get().spell_check {
+            self.clear_spelling(cx);
+            return;
+        }
+        self.spell_after(Duration::from_millis(500), cx);
+    }
+
+    fn spell_after(&mut self, delay: Duration, cx: &mut Context<Self>) {
+        let field = self.target();
+        self.spell_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update(cx, |n, cx| n.mark_misspelled(&field, cx));
+        }));
+    }
+
+    fn mark_misspelled(&mut self, field: &Entity<EditorState>, cx: &mut Context<Self>) {
         if !prefs::get().spell_check {
             return;
         }
+        let words = prefs::get().spell_words;
+        let text = field.read(cx).value().to_string();
+        self.spell.words_seen = Some(words.clone());
+        let found = crate::core::dictionary::unknown(&words, &text, super::spelling::misspelled(&text));
+        let wavy = HighlightStyle { underline: Some(UnderlineStyle { thickness: px(1.), color: Some(Theme::get(cx).orange), wavy: true }), ..Default::default() };
+        let decorations: Vec<TextDecoration> = found.into_iter().map(|r| TextDecoration::new(r, wavy)).collect();
+        match &self.spell.marks {
+            Some((id, known)) if *id == field.entity_id() => known.set(decorations, cx),
+            _ => {
+                if let Some((_, old)) = self.spell.marks.take() {
+                    old.clear(cx);
+                }
+                let made = field.update(cx, |e, cx| e.create_decorations_collection(decorations, cx));
+                self.spell.marks = Some((field.entity_id(), made));
+            }
+        }
+    }
+
+    fn drop_spell_marks(&mut self, cx: &mut Context<Self>) {
+        if let Some((_, marks)) = &self.spell.marks {
+            marks.clear(cx);
+        }
+        self.spell.hover = None;
+        self.spell.pending = None;
+        self.spell.show = None;
+        self.spell.hide = None;
+        self.spell.card_hot = false;
+        self.spell.words_seen = None;
+        spell_card::set_pointer_word(None, cx);
+    }
+
+    fn clear_spelling(&mut self, cx: &mut Context<Self>) {
+        if let Some((_, old)) = self.spell.marks.take() {
+            old.clear(cx);
+        }
+        self.spell.hover = None;
+        self.spell.words_seen = None;
+        spell_card::set_pointer_word(None, cx);
+    }
+
+    fn spell_pointer(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         let field = self.target();
-        self.spell_task = Some(cx.spawn(async move |_, cx| {
-            cx.background_executor().timer(Duration::from_millis(500)).await;
-            cx.update(|cx| {
-                field.update(cx, |s, cx| {
-                    let text = s.value().to_string();
-                    let position = |byte: usize| {
-                        let before = &text[..byte];
-                        let start = before.rfind('\n').map_or(0, |i| i + 1);
-                        lsp_types::Position { line: before.matches('\n').count() as u32, character: before[start..].encode_utf16().count() as u32 }
-                    };
-                    let found: Vec<lsp_types::Diagnostic> = super::spelling::misspelled(&text)
-                        .into_iter()
-                        .map(|r| lsp_types::Diagnostic {
-                            range: lsp_types::Range { start: position(r.start), end: position(r.end) },
-                            severity: Some(lsp_types::DiagnosticSeverity::HINT),
-                            message: tr("Unbekanntes Wort"),
-                            ..Default::default()
-                        })
-                        .collect();
-                    if let Some(set) = s.diagnostics_mut() {
-                        set.clear();
-                        set.extend(found);
-                    }
+        let Some((_, marks)) = self.spell.marks.clone().filter(|(id, _)| *id == field.entity_id()) else {
+            spell_card::set_pointer_word(None, cx);
+            return;
+        };
+        let ranges = marks.get_ranges(cx);
+        let under = field.read_with(cx, |s, _| {
+            ranges.into_iter().find_map(|r| {
+                let b = s.range_to_bounds(&r)?;
+                b.contains(&at).then(|| (s.value().get(r.clone()).map(str::to_string), r, b.bottom_left()))
+            })
+        });
+        let Some((Some(word), range, anchor)) = under else {
+            spell_card::set_pointer_word(None, cx);
+            self.spell.pending = None;
+            if self.spell.hover.is_some() && !self.spell.card_hot && self.spell.hide.is_none() {
+                self.spell_hide_later(cx);
+            }
+            return;
+        };
+        spell_card::set_pointer_word(Some(word.clone()), cx);
+        self.spell.hide = None;
+        if self.spell.hover.as_ref().is_some_and(|h| h.range == range) || self.spell.pending.as_ref() == Some(&range) {
+            return;
+        }
+        self.spell.pending = Some(range.clone());
+        let delay = if self.spell.hover.is_some() { 0 } else { 350 };
+        self.spell.show = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(delay)).await;
+            let _ = this.update(cx, |n, cx| {
+                if n.spell.pending.take().as_ref() == Some(&range) {
+                    n.spell.hover = Some(SpellHover { range, word, at: anchor });
                     cx.notify();
-                })
+                }
             });
         }));
+    }
+
+    fn spell_hide_later(&mut self, cx: &mut Context<Self>) {
+        self.spell.hide = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(250)).await;
+            let _ = this.update(cx, |n, cx| {
+                if !n.spell.card_hot {
+                    n.spell.hover = None;
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    fn add_marked_word(&mut self, word: Option<String>, cx: &mut Context<Self>) {
+        let Some(word) = word else { return };
+        self.spell.hover = None;
+        self.spell.card_hot = false;
+        spell_card::add_word(&word, cx);
+        cx.notify();
+    }
+
+    fn word_at_caret(&self, cx: &App) -> Option<String> {
+        let field = self.target();
+        let (_, marks) = self.spell.marks.as_ref().filter(|(id, _)| *id == field.entity_id())?;
+        let s = field.read(cx);
+        let caret = s.selected_range().start;
+        marks.get_ranges(cx).into_iter().find(|r| r.start <= caret && caret <= r.end).and_then(|r| s.value().get(r).map(str::to_string))
     }
 
     fn schedule_autosave(&mut self, cx: &mut Context<Self>) {
@@ -1391,9 +1758,13 @@ impl NoteView {
         cx.notify();
     }
 
+    fn find_has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.find.open && self.find.bar.as_ref().is_some_and(|b| b.read(cx).has_focus(window, cx))
+    }
+
     /// Enter follows the focused link, Space shows the preview, Escape ends.
     fn link_keys(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.mode, Mode::Source) || self.live.is_some() || window.has_active_dialog(cx) {
+        if !reader_owns_keys(self.mode, self.live.is_some(), window.has_active_dialog(cx), self.find_has_focus(window, cx)) {
             return;
         }
         let k = &e.keystroke;
@@ -1533,6 +1904,7 @@ impl NoteView {
         let live_editor = self.editor_kind == prefs::NoteEditor::Live;
         let source_me = me.clone();
         let modes_me = me.clone();
+        let find_me = me.clone();
         let embedded = self.embedded;
         let in_vault = super::vault_tools::in_vault(&self.path, cx);
         let list = self.reader_list.clone();
@@ -1592,6 +1964,10 @@ impl NoteView {
                 if modes_out || toc_out || pdf_out {
                     menu = menu.separator();
                 }
+                let finder = find_me.clone();
+                menu = menu.item(PopupMenuItem::new(format!("{}{}", tr("In Notiz suchen"), ShortcutAction::FindInNote.hint())).icon(menu_icon("search")).on_click(move |_, window, cx| finder.update(cx, |n, cx| n.open_find(false, window, cx))));
+                let replacer = find_me.clone();
+                menu = menu.item(PopupMenuItem::new(tr("In Notiz ersetzen")).icon(menu_icon("replace")).on_click(move |_, window, cx| replacer.update(cx, |n, cx| n.open_find(true, window, cx))));
                 if embedded {
                     menu = menu.item(PopupMenuItem::new(tr("In eigenem Fenster öffnen")).icon(menu_icon("app-window")).on_click(move |_, _, cx| {
                         super::note_window::open(&a, cx);
@@ -1666,7 +2042,7 @@ impl NoteView {
             self.reader_list.scroll_to(ListOffset { item_ix, offset_in_item: px(offset.fract() * 4096.) });
         }
         if let Some(line) = self.reveal_line.take() {
-            markdown_view::reveal_item(&self.reader_list, self.item_of_line(line));
+            markdown_view::reveal_item_in_context(&self.reader_list, self.item_of_line(line));
         }
         let path = self.path.clone();
         let toggle: markdown_view::OnToggle = Rc::new(move |line, cx: &mut App| {
@@ -1993,7 +2369,31 @@ impl NoteView {
         div()
             .w_full()
             .when(self.live.is_none(), |d| d.h_full())
+            .id("note-editor")
             .key_context("NoteEditor")
+            .on_mouse_move(cx.listener(|n, e: &MouseMoveEvent, _, cx| n.spell_pointer(e.position, cx)))
+            .on_hover(cx.listener(|n, on: &bool, _, cx| {
+                if !*on {
+                    spell_card::set_pointer_word(None, cx);
+                    n.spell.pending = None;
+                    if n.spell.hover.is_some() && !n.spell.card_hot && n.spell.hide.is_none() {
+                        n.spell_hide_later(cx);
+                    }
+                }
+            }))
+            .on_scroll(cx.listener(|n, _: &ScrollEvent, _, cx| {
+                if n.spell.hover.take().is_some() {
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|n, _: &AddWordUnderPointer, _, cx| {
+                let word = spell_card::take_menu_word(cx);
+                n.add_marked_word(word, cx)
+            }))
+            .on_action(cx.listener(|n, _: &AddWordAtCaret, _, cx| {
+                let word = n.word_at_caret(cx);
+                n.add_marked_word(word, cx)
+            }))
             .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(accent.opacity(0.08)))
             .on_drop(cx.listener(|n, paths: &ExternalPaths, window, cx| {
                 let paths = paths.paths().to_vec();
@@ -2352,6 +2752,33 @@ impl Focusable for NoteView {
     }
 }
 
+/// Whether the note's own keys (typing opens a line, Enter follows a link) apply, which they never do while the find bar or a dialog has the keyboard.
+fn reader_owns_keys(mode: Mode, line_open: bool, dialog: bool, find_focused: bool) -> bool {
+    !matches!(mode, Mode::Source) && !line_open && !dialog && !find_focused
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::{Mode, reader_owns_keys};
+
+    #[test]
+    fn nothing_typed_in_the_find_bar_reaches_the_note_in_any_mode() {
+        for mode in [Mode::Source, Mode::Live, Mode::Read, Mode::Split] {
+            assert!(!reader_owns_keys(mode, false, false, true));
+            assert!(!reader_owns_keys(mode, true, false, true));
+        }
+    }
+
+    #[test]
+    fn the_reader_keeps_its_keys_when_the_find_bar_is_closed() {
+        assert!(reader_owns_keys(Mode::Live, false, false, false));
+        assert!(reader_owns_keys(Mode::Read, false, false, false));
+        assert!(!reader_owns_keys(Mode::Source, false, false, false));
+        assert!(!reader_owns_keys(Mode::Live, true, false, false));
+        assert!(!reader_owns_keys(Mode::Live, false, true, false));
+    }
+}
+
 /// Estimated rows of soft-wrapped monospaced text in an editor column of `width`, gutter included.
 
 /// The search match waiting to be shown in this file, if any.
@@ -2368,6 +2795,13 @@ impl Render for NoteView {
             self.activate(window, cx);
         }
         let settings = prefs::get();
+        if !settings.spell_check && self.spell.marks.is_some() {
+            self.clear_spelling(cx);
+        }
+        if settings.spell_check && self.spell.words_seen.as_ref() != Some(&settings.spell_words) {
+            self.spell.words_seen = Some(settings.spell_words.clone());
+            self.spell_after(Duration::ZERO, cx);
+        }
         let full = settings.reader_full_width;
         if self.measured_scale != note_scale() || self.measured_full != full {
             self.measured_scale = note_scale();
@@ -2398,6 +2832,8 @@ impl Render for NoteView {
         if let Some((term, nth)) = request {
             self.reveal(&term, nth, &text, window, cx);
         }
+        self.sync_find(&text, false, true, window, cx);
+        self.center_find(cx);
         let exporting = lib.read(cx).exporting_pdfs.contains(&self.path);
         if !self.embedded {
             let (title, relative, dirty) = state::read(cx, |l| {
@@ -2446,14 +2882,35 @@ impl Render for NoteView {
             div().relative().overflow_hidden().h(px(control::SUBBAR)).flex_none().flex().items_center().justify_center().border_b_1().border_color(t.separator).child(self.fit.measure_bar()).child(header)
         };
         let hover_card = (!self.embedded).then(|| super::link_card::overlay(cx)).flatten();
+        let spell_card = self.spell.hover.as_ref().map(|h| {
+            let (add, hot) = (cx.entity(), cx.entity());
+            let word = h.word.clone();
+            spell_card::card(
+                h,
+                move |_, cx| add.update(cx, |n, cx| n.add_marked_word(Some(word.clone()), cx)),
+                move |on, _, cx| {
+                    hot.update(cx, |n, cx| {
+                        n.spell.card_hot = on;
+                        if on {
+                            n.spell.hide = None;
+                        } else {
+                            n.spell_hide_later(cx);
+                        }
+                    })
+                },
+                &t,
+            )
+        });
+        let note_context = format!("NoteView{}{}", if !matches!(self.mode, Mode::Source) && self.live.is_none() { " WalkItems" } else { "" }, if self.find.open { " FindOpen" } else { "" });
         let view = div()
             .relative()
             .size_full()
             .flex()
             .flex_col()
             .children(hover_card)
+            .children(spell_card)
             .track_focus(&self.focus)
-            .key_context("NoteView")
+            .key_context(note_context.as_str())
             .capture_action(cx.listener(|n, _: &super::app::Undo, w, cx| {
                 if n.mode == Mode::Live && !n.history.is_empty() {
                     cx.stop_propagation();
@@ -2480,7 +2937,12 @@ impl Render for NoteView {
             .on_action(cx.listener(|n, _: &super::app::ExportPdf, window, cx| n.export(window, cx)))
             .on_action(cx.listener(|n, _: &super::app::Save, _, cx| n.save(cx)))
             .on_key_down(cx.listener(|n, e: &KeyDownEvent, window, cx| n.link_keys(e, window, cx)))
-            .when(!matches!(self.mode, Mode::Source) && self.live.is_none(), |d| d.key_context("WalkItems"))
+            .on_action(cx.listener(|n, _: &FindInNote, w, cx| n.open_find(false, w, cx)))
+            .on_action(cx.listener(|n, _: &gpui_kit::component::input::Search, w, cx| n.open_find(false, w, cx)))
+            .on_action(cx.listener(|n, _: &ReplaceInNote, w, cx| n.open_find(true, w, cx)))
+            .on_action(cx.listener(|n, _: &gpui_kit::component::input::Replace, w, cx| n.open_find(true, w, cx)))
+            .on_action(cx.listener(|n, _: &CloseFind, w, cx| n.close_find(w, cx)))
+            .on_action(cx.listener(|n, _: &gpui_kit::component::input::Escape, w, cx| if n.find.open { n.close_find(w, cx) } else { cx.propagate() }))
             .on_action(cx.listener(|n, _: &super::canvas_view::NextItem, window, cx| n.step_link(false, window, cx)))
             .on_action(cx.listener(|n, _: &super::canvas_view::PreviousItem, window, cx| n.step_link(true, window, cx)))
             .when(!self.embedded, |d| {
@@ -2488,6 +2950,7 @@ impl Render for NoteView {
                     .on_action(|_: &super::app::CloseWindow, window, cx| super::note_window::request_close(window, cx))
             })
             .child(top)
+            .children(self.find.bar.clone().filter(|_| self.find.open))
             .child(self.conflict_notice(conflict, &t))
             .child(div().flex_1().min_h_0().child(content));
         let view = view.child(wheel);
@@ -3018,7 +3481,11 @@ fn plugin_notice(name: &str, path: &Path, t: &Theme) -> AnyElement {
 /// The right-click menu of a writing field.
 fn writing_menu(field: Editor) -> Editor {
     use gpui_kit::component::input::{Copy, Cut, Paste};
-    field.context_menu(|menu, _, _| {
+    field.context_menu(|menu, _, cx| {
+        let menu = match spell_card::menu_opened(cx) {
+            Some(_) => menu.menu(tr("Zum Wörterbuch hinzufügen"), Box::new(AddWordUnderPointer)).separator(),
+            None => menu,
+        };
         menu.menu(tr("Ausschneiden"), Box::new(Cut))
             .menu(tr("Kopieren"), Box::new(Copy))
             .menu(tr("Einfügen"), Box::new(Paste))

@@ -1639,5 +1639,17 @@
   "Dazu %@, Alt oder %@ halten": "Hold %@, Alt or %@ too",
   "Klick auf ein Kürzel und drück die neuen Tasten. %@ bricht ab, %@ entfernt das Kürzel.": "Click a shortcut and press the new keys. %@ cancels, %@ removes the shortcut.",
   "%@ bricht ab, %@ entfernt das Kürzel": "%@ cancels, %@ removes the shortcut",
-  "Nach Muster benennen… (erst einer Abgabe zuordnen)": "Name by pattern… (assign to a submission first)"
+  "Nach Muster benennen… (erst einer Abgabe zuordnen)": "Name by pattern… (assign to a submission first)",
+  "In dieser Notiz suchen": "Search in this note",
+  "Ersetzen durch": "Replace with",
+  "Ersetzen ein-/ausblenden": "Show or hide replace",
+  "Groß-/Kleinschreibung beachten": "Match case",
+  "Alle ersetzen": "Replace all",
+  "In Notiz suchen": "Find in note",
+  "In Notiz ersetzen": "Replace in note",
+  "Zum Wörterbuch hinzufügen": "Add to dictionary",
+  "Eigenes Wörterbuch": "Personal dictionary",
+  "Noch keine Wörter": "No words yet",
+  "Aus dem Wörterbuch entfernen": "Remove from dictionary",
+  "Diese Wörter markiert die Rechtschreibung nicht. Hinzufügen: in einer Notiz auf ein unterstrichenes Wort zeigen.": "Spell check does not mark these words. To add one, point at an underlined word in a note."
 }

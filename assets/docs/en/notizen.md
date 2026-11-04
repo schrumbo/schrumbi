@@ -59,6 +59,24 @@ Edit in the default app: ⋯ → {ui:Mit Standard-App öffnen}. When it saves, S
 
 You choose the editor in {key:OpenSettings} → {ui:Notizen}: {ui:Live: Text bleibt gezeichnet} or {ui:Code-Editor: Quelltext mit Zeilennummern}.
 
+## Find in a Note
+
+| Shortcut | Effect |
+|---|---|
+| {key:findInNote} | Open search, selected text is filled in |
+| {key:return} / {key:shift-return} | Next / previous match |
+| {key:escape} | Close search |
+
+All matches are marked, the current one stronger. Case and umlauts do not matter until you choose {ui:Groß-/Kleinschreibung beachten}.
+
+{ui:In Notiz ersetzen} (arrow on the left of the search) shows the replace row. {key:return} replaces one match, {ui:Alle ersetzen} all of them. One {key:Undo} takes it back. Reading mode has no replace.
+
+## Spelling
+
+Unknown words are underlined. Point at one, then {ui:Zum Wörterbuch hinzufügen}, also in the right-click menu. Without a mouse: {ui:Zum Wörterbuch hinzufügen} in the {key:CommandPalette} adds the word at the caret.
+
+The words are listed in the settings under {ui:Eigenes Wörterbuch}; the cross removes one. All open notes pick it up at once.
+
 ## Saving
 
 Schrumbi saves after a 2 second typing pause, adjustable under {ui:Notizen} → {ui:Sichern}. {key:Save} saves at once, closing always saves.

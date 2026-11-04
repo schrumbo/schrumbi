@@ -1,0 +1,211 @@
+use std::ops::Range;
+
+fn fold_into(c: char, out: &mut String) {
+    match c {
+        '\n' | '\r' | '\t' | '\u{a0}' => out.push(' '),
+        'ß' | 'ẞ' => out.push_str("ss"),
+        c => out.extend(c.to_lowercase()),
+    }
+}
+
+/// Byte ranges of `query` in `text`, left to right and never overlapping. Unless `exact`, capitals do not matter and ß matches ss.
+pub fn matches(text: &str, query: &str, exact: bool) -> Vec<Range<usize>> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    if exact {
+        return text.match_indices(query).map(|(at, m)| at..at + m.len()).collect();
+    }
+    let mut needle = String::with_capacity(query.len());
+    query.chars().for_each(|c| fold_into(c, &mut needle));
+    let mut folded = String::with_capacity(text.len());
+    let mut shifts: Vec<Shift> = Vec::new();
+    for (at, c) in text.char_indices() {
+        let before = folded.len();
+        fold_into(c, &mut folded);
+        if folded.len() - before != c.len_utf8() || folded[before..].chars().count() != 1 {
+            shifts.push(Shift { folded: before, folded_len: folded.len() - before, text: at, text_len: c.len_utf8() });
+        }
+    }
+    let to_text = |at: usize, end: bool| match shifts.partition_point(|s| s.folded <= at).checked_sub(1).map(|i| &shifts[i]) {
+        None => at,
+        Some(s) if at < s.folded + s.folded_len => {
+            if end && at > s.folded {
+                s.text + s.text_len
+            } else {
+                s.text
+            }
+        }
+        Some(s) => s.text + s.text_len + (at - s.folded - s.folded_len),
+    };
+    let mut found: Vec<Range<usize>> = Vec::new();
+    let mut from = 0;
+    while let Some(i) = folded[from..].find(&needle) {
+        let at = from + i;
+        let range = to_text(at, false)..to_text(at + needle.len(), true);
+        if found.last().is_none_or(|prev| prev.end <= range.start) {
+            found.push(range);
+            from = at + needle.len();
+        } else {
+            from = at + folded[at..].chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    found
+}
+
+struct Shift {
+    folded: usize,
+    folded_len: usize,
+    text: usize,
+    text_len: usize,
+}
+
+/// A fast fingerprint of `text`, to tell whether it changed since the last look.
+pub fn fingerprint(text: &str) -> u64 {
+    let mut hash = text.len() as u64;
+    let mut chunks = text.as_bytes().chunks_exact(8);
+    for chunk in chunks.by_ref() {
+        let word = u64::from_le_bytes(chunk.try_into().unwrap_or_default());
+        hash = (hash ^ word).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(29);
+    }
+    for byte in chunks.remainder() {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(29);
+    }
+    hash ^ (text.len() as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+}
+
+/// The first match at or after `offset`, wrapping to the first one; `None` without matches.
+pub fn first_from(found: &[Range<usize>], offset: usize) -> Option<usize> {
+    if found.is_empty() {
+        return None;
+    }
+    Some(found.iter().position(|m| m.start >= offset).unwrap_or(0))
+}
+
+/// The match after or before `current`, wrapping around the ends.
+pub fn step(current: usize, count: usize, forward: bool) -> usize {
+    match (count, forward) {
+        (0, _) => 0,
+        (_, true) => (current + 1) % count,
+        (_, false) => (current + count - 1) % count,
+    }
+}
+
+/// `text` with every range in `found` replaced by `replacement`.
+pub fn replace_all(text: &str, found: &[Range<usize>], replacement: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for m in found {
+        out.push_str(&text[at..m.start]);
+        out.push_str(replacement);
+        at = m.end;
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn found<'a>(text: &'a str, query: &str, exact: bool) -> Vec<&'a str> {
+        matches(text, query, exact).into_iter().map(|r| &text[r]).collect()
+    }
+
+    #[test]
+    fn a_part_of_a_folded_letter_never_gives_overlapping_matches() {
+        assert_eq!(matches("Maß", "s", false), vec![2..4]);
+        assert_eq!(matches("saßas", "sas", false), vec![0..4]);
+        assert_eq!(replace_all("Maß", &matches("Maß", "s", false), "x"), "Max");
+    }
+
+    #[test]
+    fn folded_matches_keep_their_places_around_changed_letters() {
+        let text = "ÄÖ Maß groß GROSS äö ß";
+        assert_eq!(found(text, "gross", false), vec!["groß", "GROSS"]);
+        assert_eq!(found(text, "äö", false), vec!["ÄÖ", "äö"]);
+        assert_eq!(found(text, "ss g", false), vec!["ß g", "ß G"]);
+        assert_eq!(found(text, "ß", false), vec!["ß", "ß", "SS", "ß"]);
+    }
+
+    #[test]
+    fn a_dropped_overlap_does_not_hide_a_later_match() {
+        assert_eq!(matches("saßasas", "sas", false), vec![0..4, 5..8]);
+        assert_eq!(matches("ẞ", "ss", false), vec![0..3]);
+    }
+
+    #[test]
+    fn the_fingerprint_tells_short_texts_apart() {
+        assert_ne!(fingerprint(""), fingerprint("\u{1}"));
+        assert_ne!(fingerprint("a"), fingerprint("h\0\0\0\0\0\0\0"));
+    }
+
+    #[test]
+    fn the_fingerprint_changes_with_every_edit() {
+        let base = "eins zwei drei vier fünf";
+        assert_eq!(fingerprint(base), fingerprint(&base.to_string()));
+        for edited in ["eins zwei drei vier fünF", "Eins zwei drei vier fünf", "eins zwei drei vier fün", "eins zwei drei vier fünf "] {
+            assert_ne!(fingerprint(base), fingerprint(edited));
+        }
+    }
+
+    #[test]
+    fn capitals_do_not_matter_unless_asked() {
+        assert_eq!(found("Test test TEST", "test", false), ["Test", "test", "TEST"]);
+        assert_eq!(found("Test test TEST", "test", true), ["test"]);
+    }
+
+    #[test]
+    fn empty_query_finds_nothing() {
+        assert!(matches("abc", "", false).is_empty());
+        assert!(matches("abc", "", true).is_empty());
+    }
+
+    #[test]
+    fn matches_never_overlap() {
+        assert_eq!(matches("aaaa", "aa", false), [0..2, 2..4]);
+        assert_eq!(matches("aaa", "aa", true), [0..2]);
+    }
+
+    #[test]
+    fn umlauts_and_sharp_s_keep_their_byte_ranges() {
+        let text = "Größe der Übung, GROSS";
+        assert_eq!(found(text, "übung", false), ["Übung"]);
+        assert_eq!(found(text, "größe", false), ["Größe"]);
+        assert_eq!(found(text, "gross", false), ["GROSS"]);
+        assert_eq!(found("Maß", "mass", false), ["Maß"]);
+        assert_eq!(found("Maß", "ß", false), ["ß"]);
+    }
+
+    #[test]
+    fn a_line_break_matches_a_space() {
+        assert_eq!(found("ein\nWort", "ein wort", false), ["ein\nWort"]);
+    }
+
+    #[test]
+    fn the_first_match_from_a_position_wraps() {
+        let m = [2..4, 10..12, 20..22];
+        assert_eq!(first_from(&m, 0), Some(0));
+        assert_eq!(first_from(&m, 3), Some(1));
+        assert_eq!(first_from(&m, 10), Some(1));
+        assert_eq!(first_from(&m, 21), Some(0));
+        assert_eq!(first_from(&[], 5), None);
+    }
+
+    #[test]
+    fn stepping_wraps_both_ways() {
+        assert_eq!(step(2, 3, true), 0);
+        assert_eq!(step(0, 3, false), 2);
+        assert_eq!(step(1, 3, true), 2);
+        assert_eq!(step(0, 0, true), 0);
+        assert_eq!(step(0, 1, false), 0);
+    }
+
+    #[test]
+    fn replacing_all_keeps_the_rest() {
+        let text = "ab Test cd test";
+        assert_eq!(replace_all(text, &matches(text, "test", false), "X"), "ab X cd X");
+        assert_eq!(replace_all(text, &[], "X"), text);
+        assert_eq!(replace_all("aa", &matches("aa", "a", true), ""), "");
+    }
+}
