@@ -199,8 +199,12 @@ impl Element for SelectableStyled {
     fn request_layout(&mut self, global_id: Option<&GlobalElementId>, inspector_id: Option<&InspectorElementId>, window: &mut Window, cx: &mut App) -> (LayoutId, TextSelectionHandle) {
         let line_height = self.make_room(window, cx);
         let text = self.text.to_string();
-        let handle = window.with_element_state(global_id.expect("selectable text has an id"), |kept: Option<TextSelectionHandle>, _| {
-            let handle = kept.unwrap_or_else(|| TextSelectionHandle::new(text, cx));
+        let handle = window.with_element_state(global_id.expect("selectable text has an id"), |kept: Option<TextSelectionHandle>, window| {
+            let handle = kept.unwrap_or_else(|| {
+                let made = TextSelectionHandle::new(text, cx);
+                made.refresh_window_on_change(window, cx).detach();
+                made
+            });
             (handle.clone(), handle)
         });
         let refinement = line_height.map(|h| TextStyleRefinement { line_height: Some(h.into()), ..Default::default() });
@@ -227,11 +231,6 @@ impl Element for SelectableStyled {
     fn paint(&mut self, global_id: Option<&GlobalElementId>, inspector_id: Option<&InspectorElementId>, bounds: Bounds<Pixels>, handle: &mut TextSelectionHandle, hitbox: &mut Hitbox, window: &mut Window, cx: &mut App) {
         let layout = self.styled.layout().clone();
         let projection = handle.update_runs(&[TextSelectionRun::new(self.text.clone(), layout.clone(), bounds).with_document_order(self.order)], cx);
-        let painted = projection.ranges().first().cloned().flatten();
-        let changed = window.with_element_state(global_id.expect("selectable text has an id"), |before: Option<Option<Range<usize>>>, _| (before.map_or(painted.is_some(), |b| b != painted), painted));
-        if changed {
-            window.refresh();
-        }
         for range in projection.ranges().iter().flatten().cloned() {
             if let (Some(start), Some(end)) = (layout.position_for_index(range.start), layout.position_for_index(range.end)) {
                 for quad in selection_quads(start, end, layout.bounds(), layout.line_height()) {

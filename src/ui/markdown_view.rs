@@ -1436,7 +1436,7 @@ struct Table {
     id: ElementId,
     columns: usize,
     /// The rows drawn, the head first when it is drawn.
-    cells: Vec<Vec<AnyElement>>,
+    cells: Vec<Vec<Div>>,
     /// The text of every row of the whole table, the head first, for measuring.
     measure: Rc<Vec<Vec<CellText>>>,
     /// Names what `measure` holds, so the widths are found without reading it.
@@ -1530,11 +1530,11 @@ impl RenderOnce for Table {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let widths = self.widths(window, cx);
         let (natural, least) = (&widths.0, &widths.1);
-        let column = |c: usize, element: AnyElement| {
+        let column = |c: usize, cell: Div| {
             let (basis, narrowest) = (natural.get(c).copied().unwrap_or(0.), least.get(c).copied().unwrap_or(0.));
-            let mut d = div().flex().flex_basis(px(narrowest)).flex_shrink_0().min_w(px(narrowest)).max_w(px(basis.max(narrowest)));
+            let mut d = cell.flex_basis(px(narrowest)).flex_shrink_0().min_w(px(narrowest)).max_w(px(basis.max(narrowest)));
             d.style().flex_grow = Some((basis - narrowest).max(0.));
-            d.child(element)
+            d
         };
         let border = self.border;
         let (with_head, (top, bottom)) = (self.with_head, self.ends);
@@ -2038,11 +2038,10 @@ fn table(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>], aligns: &[pulldown_cma
     let t = cx.t;
     let size = note_size(font::BODY);
     let cell = |inl: &Vec<Inline>, row: usize, i: usize, bold: bool| {
-        let order = cx.order.get();
-        cx.order.set(order + 1);
+        cx.order.set(cx.order.get() + 1);
         cx.cell.set(Some((row, i)));
         let click = text_click_of(cx);
-        let d = div().id(("md-cell", order)).flex_1().min_w_0().px(px(space::S)).py(px(space::XS)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD));
+        let d = div().px(px(space::S)).py(px(space::XS)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD));
         let d = match aligns.get(i) {
             Some(pulldown_cmark::Alignment::Center) => d.flex().justify_center(),
             Some(pulldown_cmark::Alignment::Right) => d.flex().justify_end(),
@@ -2060,13 +2059,13 @@ fn table(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>], aligns: &[pulldown_cma
             }
         };
         cx.cell.set(None);
-        drawn.into_any_element()
+        drawn
     };
     let order = cx.order.get();
     cx.order.set(order + 1);
     let columns = rows.iter().map(Vec::len).chain(std::iter::once(head.len())).max().unwrap_or(0);
-    let filled = |mut row: Vec<AnyElement>| {
-        row.resize_with(columns, || div().into_any_element());
+    let filled = |mut row: Vec<Div>| {
+        row.resize_with(columns, div);
         row
     };
     let (from, to) = part.map_or((0, rows.len()), |(from, to, _)| (from, to));
