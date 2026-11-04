@@ -1,4 +1,5 @@
 use gpui_kit::component::WindowExt;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -7,6 +8,7 @@ use super::filing_form::{FilingEvent, FilingForm};
 use super::palette::{Palette, ShortcutSheet};
 use super::quick::{Dismissed, NewNote, QuickAdd, QuickOpen};
 use super::wizards::{ImportCalendar, Reschedule, Setup};
+use crate::core::i18n::tr;
 use crate::core::library::Library;
 
 /// Opens the sheet the library asks for (filing, quick add, quick open, new note, setup, import, reschedule).
@@ -101,6 +103,26 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
         let view = cx.new(|cx| QuickOpen::new(window, cx));
         show(view, 620., window, cx);
     }
+}
+
+/// Asks before a change that cannot simply be taken back. Focus starts on Abbrechen and Enter only clicks the focused button, so Enter alone never runs `ok`.
+pub fn ask(window: &mut Window, cx: &mut App, title: String, message: String, ok_text: String, danger: bool, ok: impl Fn(&mut App) + 'static) {
+    let ok = std::rc::Rc::new(ok);
+    let cancel = cx.focus_handle();
+    let first = cancel.clone();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        let ok = ok.clone();
+        let confirm = Button::new("alert-ok").label(ok_text.clone()).on_click(move |_, window, cx| {
+            window.close_dialog(cx);
+            ok(cx);
+        });
+        alert.title(title.clone()).description(message.clone()).on_ok(pass_enter).footer(
+            gpui_kit::component::dialog::DialogFooter::new()
+                .child(Button::new("alert-cancel").label(tr("Abbrechen")).track_focus(&cancel).on_click(|_, window, cx| window.close_dialog(cx)))
+                .child(if danger { confirm.danger() } else { confirm.primary() }),
+        )
+    });
+    first.focus(window, cx);
 }
 
 /// Lets Enter reach the focused field, button or link instead of closing the dialog around it.

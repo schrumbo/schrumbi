@@ -1294,15 +1294,7 @@ impl Settings {
 
 /// Asks before a destructive change.
 fn confirm(window: &mut Window, cx: &mut App, title: String, message: String, ok: impl Fn(&mut App) + 'static) {
-    use gpui_kit::component::WindowExt;
-    let ok = std::rc::Rc::new(ok);
-    window.open_alert_dialog(cx, move |alert, _, _| {
-        let ok = ok.clone();
-        alert.title(title.clone()).description(message.clone()).show_cancel(true).cancel_text(tr("Abbrechen")).on_ok(move |_, _, cx| {
-            ok(cx);
-            true
-        })
-    });
+    super::sheets::ask(window, cx, title, message, tr("Löschen"), true, ok);
 }
 
 impl Settings {
