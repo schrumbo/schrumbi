@@ -4,7 +4,7 @@
 
 | Seite | Hier stellst du ein |
 |---|---|
-| {ui:Allgemein} | Erscheinungsbild, Sprache, Namenskonvention, Seitenleiste, Erinnerungen |
+| {ui:Allgemein} | Erscheinungsbild, Sprache, Namensmuster, Seitenleiste, Erinnerungen |
 | {ui:Semester} | Vorlesungszeit, Pausen, Feiertage |
 | {ui:Module} | Kürzel, Ordner, Links, wiederkehrende Deadlines, Stundenplan |
 | {ui:Notizen} | Editor, Schriftgröße, Sichern, PDF-Export, Obsidian |
@@ -38,7 +38,7 @@ Semester in der Liste wählen, dann das Kopier-Symbol unter der Liste: {ui:Folge
 
 | Was | Wo |
 |---|---|
-| Semester, Module, Regeln, Name, Namenskonvention | `schrumbi.json` in deinem Ordner |
+| Semester, Module, Regeln, Name, Namensmuster | `schrumbi.json` in deinem Ordner |
 | Darstellung, Kürzel, Sprache | Bei Schrumbi auf diesem Gerät |
 
 Deine Dateien gehen nur an deinen eigenen Sync-Speicher. Gelesen werden nur dein Ordner und ein verbundener Obsidian-Vault.

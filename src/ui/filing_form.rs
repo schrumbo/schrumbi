@@ -945,7 +945,7 @@ impl Render for FilingForm {
                         .items_center()
                         .gap(px(space::S))
                         .text_size(px(font::CAPTION))
-                        .child(tr("Nach Konvention benennen"))
+                        .child(tr("Nach Muster benennen"))
                         .child(Switch::new("rename").small().checked(self.rename && module_id.is_some()).on_click(move |v, _, cx| {
                             let v = *v;
                             e.update(cx, |f, cx| {

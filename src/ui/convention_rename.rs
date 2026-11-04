@@ -18,7 +18,7 @@ const FORBIDDEN: &str = "\\/:*?\"<>|";
 
 /// Whether a file can be renamed by its module's convention; never offered while no naming convention is switched on in the settings.
 pub fn available(path: &Path, cx: &App) -> bool {
-    state::read(cx, |l| l.config.as_ref().is_some_and(|c| c.naming_convention()) && l.can_name_by_convention(path))
+    state::read(cx, |l| l.can_name_by_convention(path))
 }
 
 /// Works out the convention name off the UI thread, then lets the user check and change it before renaming.
@@ -140,14 +140,11 @@ impl Render for ConventionRename {
         let t = Theme::get(cx);
         let verdict = &self.verdict;
         let edited = self.name(cx) != self.suggested;
-        let context = match &self.plan.deadline {
-            Some(d) => trf("Muster von %@ · für %@", &[&self.plan.module, d]),
-            None => trf("Muster von %@", &[&self.plan.module]),
-        };
+        let context = trf("Muster von %@ · für %@", &[&self.plan.module, &self.plan.deadline]);
         let note = |name: &str, tint: Hsla, label: String| div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(tint).child(icon(name, iconsize::XS, tint)).child(div().min_w_0().child(label));
         let status = match verdict {
-            Verdict::Fits => note("circle-check", t.green_text, tr("Passt zur Namenskonvention")),
-            Verdict::Off => note("info", t.secondary, tr("Weicht von der Namenskonvention ab")),
+            Verdict::Fits => note("circle-check", t.green_text, tr("Passt zum Namensmuster")),
+            Verdict::Off => note("info", t.secondary, tr("Weicht vom Namensmuster ab")),
             Verdict::Same => note("info", t.secondary, tr("Die Datei heißt schon so")),
             Verdict::Taken => note("triangle-alert", t.red, tr("Diesen Namen gibt es hier schon. Wähle einen anderen.")),
             Verdict::Forbidden => note("triangle-alert", t.red, trf("Diese Zeichen gehen nicht: %@", &[&"\\ / : * ? \" < > |".to_string()])),
@@ -160,7 +157,7 @@ impl Render for ConventionRename {
             .flex()
             .flex_col()
             .on_action(cx.listener(|s, _: &Confirm, window, cx| if super::sheets::typing(window) { s.confirm(cx) } else { cx.propagate() }))
-            .child(div().px(px(space::XL)).pt(px(space::L)).flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(tr("Nach Konvention benennen"))).child(caption(context, &t).truncate()))
+            .child(div().px(px(space::XL)).pt(px(space::L)).flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(tr("Nach Muster benennen"))).child(caption(context, &t).truncate()))
             .child(
                 div()
                     .px(px(space::XL))

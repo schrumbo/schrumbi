@@ -29,7 +29,7 @@ pub fn new_id() -> String {
 
 /// Workspace configuration stored as `schrumbi.json` in the workspace root.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase", remote = "Self")]
 pub struct StudyConfig {
     pub version: u32,
     pub name: String,
@@ -54,6 +54,55 @@ pub struct StudyConfig {
     /// Folder inside each module where files for its deadlines go; empty = the module folder itself.
     #[serde(default = "submissions")]
     pub submission_folder: String,
+}
+
+struct Whole<'a>(&'a StudyConfig);
+
+impl Serialize for Whole<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        StudyConfig::serialize(self.0, serializer)
+    }
+}
+
+struct WholeOwned(StudyConfig);
+
+impl<'de> Deserialize<'de> for WholeOwned {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        StudyConfig::deserialize(deserializer).map(Self)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Written<'a> {
+    #[serde(flatten)]
+    config: Whole<'a>,
+    check_names: bool,
+    check_folders: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Read {
+    #[serde(flatten)]
+    config: WholeOwned,
+    #[serde(default)]
+    check_names: bool,
+}
+
+/// `checkNames` and `checkFolders` are written as mirrors for older builds; reading, `checkNames` only keeps a naming pattern that was on.
+impl Serialize for StudyConfig {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Written { config: Whole(self), check_names: self.rename_on_filing, check_folders: false }.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for StudyConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let Read { config: WholeOwned(mut config), check_names } = Read::deserialize(deserializer)?;
+        config.rename_on_filing |= check_names;
+        Ok(config)
+    }
 }
 
 impl Default for StudyConfig {

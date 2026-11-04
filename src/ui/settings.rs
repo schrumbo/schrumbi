@@ -96,10 +96,10 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("moodle", "Kalender abonnieren"),
     ("spell", "Rechtschreibung prüfen"),
     ("ects", "Bezeichnung der Punkte"),
-    ("naming", "Namenskonvention"),
-    ("dateiname", "Namenskonvention"),
-    ("umbenennen", "Namenskonvention"),
-    ("muster", "Namenskonvention"),
+    ("naming", "Namensmuster"),
+    ("dateiname", "Namensmuster"),
+    ("umbenennen", "Namensmuster"),
+    ("muster", "Namensmuster"),
     ("note", "Notensystem"),
     ("flashcard", "Lernen"),
     ("karteikarten", "Lernen"),
@@ -126,7 +126,7 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Mitautor:innen", Tab::General),
     ("Ablegen und Ordner", Tab::General),
     ("Abgabeordner", Tab::General),
-    ("Namenskonvention", Tab::General),
+    ("Namensmuster", Tab::General),
     ("Nach einem Muster benennen", Tab::General),
     ("Ordner anlegen", Tab::General),
     ("Noten", Tab::General),
@@ -498,7 +498,7 @@ fn filing_sections(c: &StudyConfig, extra: Vec<AnyElement>, submissions: AnyElem
         row(tr("Ordner anlegen"), switch("g-create-folders", c.create_folders, |c, v| c.create_folders = v), t),
     ];
     (
-        section(Some(tr("Namenskonvention")), on.then(|| tr("Das Muster steht in den Einstellungen jedes Moduls.")), naming, t),
+        section(Some(tr("Namensmuster")), on.then(|| tr("Das Muster steht in den Einstellungen jedes Moduls.")), naming, t),
         section(Some(tr("Ablegen und Ordner")), Some(tr("Schrumbi benennt und verschiebt nie etwas von selbst. Ohne „Ordner anlegen“ landen Dateien nur in Ordnern, die es schon gibt.")), folders, t),
     )
 }
@@ -1541,7 +1541,7 @@ impl Settings {
             .gap(px(space::XL))
             .child(section(Some(tr("Modul")), None, module_rows, t))
             .child(section(Some(tr("Links")), Some(tr("Der Upload-Link öffnet sich beim Hochladen einer Abgabe, daneben erscheinen die Dateien zum Hineinziehen.")), links, t))
-            .child(section(Some(tr("Namenskonvention")), Some(if c.naming_convention() { tr("Platzhalter: {code} {yy} {yyyy} {title} {author} {matrikel} {date} {date:yyyy-MM-dd} {w} {kw}") } else { tr("Gilt für alle Module. Eingeschaltet erscheint hier das Muster dieses Moduls.") }), naming_rows, t))
+            .child(section(Some(tr("Namensmuster")), Some(if c.naming_convention() { tr("Platzhalter: {code} {yy} {yyyy} {title} {author} {matrikel} {date} {date:yyyy-MM-dd} {w} {kw}") } else { tr("Gilt für alle Module. Eingeschaltet erscheint hier das Muster dieses Moduls.") }), naming_rows, t))
             .child(section(Some(tr("Wiederkehrende Deadlines")), Some(tr("Wird für jede Vorlesungswoche erzeugt. Eine Datei gehört dazu, wenn du sie dort ablegst, dafür eine Notiz anlegst oder sie zuordnest.")), rules, t))
             .child(section(Some(tr("Stundenplan")), Some(tr("Erscheint im 7-Tage-Ausblick der Übersicht, nicht in Pausen.")), sessions, t))
     }

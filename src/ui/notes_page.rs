@@ -984,7 +984,7 @@ impl NotesPage {
                             }))
                             .when(super::convention_rename::available(&menu, cx), |m| {
                                 let n = menu.clone();
-                                m.item(PopupMenuItem::new(tr("Nach Konvention benennen…")).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| super::convention_rename::open(n.clone(), window, cx)))
+                                m.item(PopupMenuItem::new(tr("Nach Muster benennen…")).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| super::convention_rename::open(n.clone(), window, cx)))
                             })
                             .item(PopupMenuItem::new(tr("In den Papierkorb")).icon(menu_icon("trash-2")).on_click(move |_, _, cx| {
                                 state::trash(vec![x.clone()], cx);

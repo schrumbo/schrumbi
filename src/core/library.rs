@@ -2737,10 +2737,10 @@ impl Library {
             ignore: self.title_ignore_words(),
             weeks: self.weeks(),
             module: module.code.clone(),
-            deadline: deadline.as_ref().map(deadline_label),
-            due: deadline.as_ref().map(|a| a.due),
-            week: deadline.as_ref().and_then(|a| a.week),
-            iso_week: deadline.as_ref().and_then(|a| a.iso_week),
+            deadline: deadline_label(&deadline),
+            due: deadline.due,
+            week: deadline.week,
+            iso_week: deadline.iso_week,
             brief: brief.is_some().then(|| self.brief_naming(&module_id)).flatten(),
             parsed,
             heading,
@@ -2752,12 +2752,12 @@ impl Library {
         self.convention_target(file).is_some_and(|(_, m)| self.naming(&m).is_some())
     }
 
-    fn convention_target(&self, file: &Path) -> Option<(Option<Assignment>, String)> {
+    fn convention_target(&self, file: &Path) -> Option<(Assignment, String)> {
         self.config.as_ref().filter(|c| c.naming_convention())?;
         let linked = self.deadlines_of(file);
         let deadline = linked.iter().find(|a| a.upload).or(linked.first()).cloned().or_else(|| self.fitting_deadline(file))?;
         let module_id = deadline.module_id.clone();
-        Some((Some(deadline), module_id))
+        Some((deadline, module_id))
     }
 
     /// Renames a note named after its heading and brings the heading along; a convention name only has to say the same title.
@@ -3882,8 +3882,8 @@ pub struct ConventionPlan {
     ignore: Vec<String>,
     weeks: Vec<LectureWeek>,
     pub module: String,
-    pub deadline: Option<String>,
-    due: Option<DateTime<Local>>,
+    pub deadline: String,
+    due: DateTime<Local>,
     week: Option<u32>,
     iso_week: Option<u32>,
     brief: Option<Naming>,
@@ -3897,7 +3897,7 @@ impl ConventionPlan {
         let facts = FileFacts::read(file);
         let heading = self.heading.clone().or_else(|| super::markdown::is_markdown(file).then(|| std::fs::read_to_string(file).ok()).flatten().and_then(|t| super::markdown::first_heading(&t)));
         let title = heading.or_else(|| self.parsed.as_ref().map(|p| p.title.replace('-', " "))).or_else(|| filing::title_suggestions(&facts, &self.namings, &self.ignore).first().map(|s| s.title.clone())).unwrap_or_else(|| super::naming::stem(&name_of(file)).to_string());
-        let created = self.due.map_or(facts.created, |due| facts.created.min(due));
+        let created = facts.created.min(self.due);
         let date = self.parsed.as_ref().and_then(|p| p.date).or(facts.name_date).unwrap_or_else(|| created.date_naive());
         let ext = extension(&name_of(file)).to_string();
         let week = self.week.or_else(|| self.weeks.iter().find(|w| w.monday == day::monday(date)).map(|w| w.index));

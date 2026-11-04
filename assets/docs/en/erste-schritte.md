@@ -17,7 +17,7 @@ Four short steps, {key:return} moves on.
 
 | Step | You set |
 |---|---|
-| {ui:Willkommen} | Degree program, naming convention and whether Schrumbi creates submission folders |
+| {ui:Willkommen} | Degree program, naming pattern and whether Schrumbi creates submission folders |
 | {ui:Semester} | Name, lecture start, lecture end |
 | {ui:Module} | Which folders are modules, with code and name |
 | {ui:Abgaben} | Moodle calendar and a weekly submission, both optional |

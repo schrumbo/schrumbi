@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use super::i18n::tr;
 use super::prefs::{self, Shortcut};
 
@@ -12,6 +14,11 @@ pub enum ShortcutAction {
     GoCards,
     GoForward,
     ShowGraph,
+    GoModule1,
+    GoModule2,
+    GoModule3,
+    OpenOtherWorkspace,
+    ToggleFullscreen,
     ReopenTab,
     QuickOpen,
     SearchFiles,
@@ -78,7 +85,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 42] = [
+    pub const ALL: [ShortcutAction; 47] = [
         Self::GoToday,
         Self::GoGrid,
         Self::GoRecord,
@@ -87,6 +94,11 @@ impl ShortcutAction {
         Self::GoCards,
         Self::GoForward,
         Self::ShowGraph,
+        Self::GoModule1,
+        Self::GoModule2,
+        Self::GoModule3,
+        Self::OpenOtherWorkspace,
+        Self::ToggleFullscreen,
         Self::ReopenTab,
         Self::QuickOpen,
         Self::SearchFiles,
@@ -134,6 +146,11 @@ impl ShortcutAction {
             Self::GoCards => "goCards",
             Self::GoForward => "goForward",
             Self::ShowGraph => "showGraph",
+            Self::GoModule1 => "goModule1",
+            Self::GoModule2 => "goModule2",
+            Self::GoModule3 => "goModule3",
+            Self::OpenOtherWorkspace => "openOtherWorkspace",
+            Self::ToggleFullscreen => "toggleFullscreen",
             Self::ReopenTab => "reopenTab",
             Self::QuickOpen => "quickOpen",
             Self::SearchFiles => "searchFiles",
@@ -171,9 +188,17 @@ impl ShortcutAction {
         }
     }
 
+    /// The actions for the first modules in sidebar order.
+    pub const MODULES: [ShortcutAction; 3] = [Self::GoModule1, Self::GoModule2, Self::GoModule3];
+
+    /// The action for the module at `index` in sidebar order; later modules have none.
+    pub fn for_module(index: usize) -> Option<ShortcutAction> {
+        Self::MODULES.get(index).copied()
+    }
+
     pub fn group(self) -> Group {
         match self {
-            Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::ShowGraph | Self::GoBack | Self::SearchFiles => Group::Navigation,
+            Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::ShowGraph | Self::GoModule1 | Self::GoModule2 | Self::GoModule3 | Self::OpenOtherWorkspace | Self::ToggleFullscreen | Self::GoBack | Self::SearchFiles => Group::Navigation,
             Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::Refresh => Group::General,
             Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf => Group::Documents,
             _ => Group::Editor,
@@ -190,6 +215,11 @@ impl ShortcutAction {
             Self::GoCards => "Karten",
             Self::GoForward => "Vorwärts",
             Self::ShowGraph => "Graph zeigen",
+            Self::GoModule1 => "Modul 1",
+            Self::GoModule2 => "Modul 2",
+            Self::GoModule3 => "Modul 3",
+            Self::OpenOtherWorkspace => "Anderen Ordner öffnen…",
+            Self::ToggleFullscreen => "Vollbild",
             Self::ReopenTab => "Geschlossenen Tab wieder öffnen",
             Self::QuickOpen => "Datei schnell öffnen",
             Self::SearchFiles => "In allen Dateien suchen",
@@ -233,6 +263,7 @@ impl ShortcutAction {
                 Self::GoBack => return s("left", false, false, true, false),
                 Self::GoForward => return s("right", false, false, true, false),
                 Self::Refresh => return s("f5", false, false, false, false),
+                Self::ToggleFullscreen => return s("f11", false, false, false, false),
                 Self::ToggleInspector => return s("i", true, true, false, false),
                 _ => {}
             }
@@ -246,6 +277,11 @@ impl ShortcutAction {
             Self::GoCards => s("6", true, false, false, false),
             Self::GoForward => s("-", false, true, false, true),
             Self::ShowGraph => s("g", true, false, false, false),
+            Self::GoModule1 => s("7", true, false, false, false),
+            Self::GoModule2 => s("8", true, false, false, false),
+            Self::GoModule3 => s("9", true, false, false, false),
+            Self::OpenOtherWorkspace => s("o", true, true, false, false),
+            Self::ToggleFullscreen => s("f", true, false, false, true),
             Self::ReopenTab => s("t", true, true, false, false),
             Self::QuickOpen => s("o", true, false, false, false),
             Self::SearchFiles => s("f", true, true, false, false),
@@ -343,6 +379,31 @@ impl ShortcutAction {
     }
 }
 
+/// The same keystroke with modifiers in one fixed order, so `shift-cmd-f` and `cmd-shift-f` compare equal.
+fn canonical(keystroke: &str) -> String {
+    let (modifiers, key) = match keystroke.strip_suffix('-') {
+        Some(rest) => (rest.strip_suffix('-').unwrap_or(rest), "-"),
+        None => keystroke.rsplit_once('-').unwrap_or(("", keystroke)),
+    };
+    let mut modifiers: Vec<&str> = modifiers.split('-').filter(|m| !m.is_empty()).collect();
+    modifiers.sort_unstable();
+    modifiers.dedup();
+    modifiers.into_iter().chain([key]).collect::<Vec<_>>().join("-")
+}
+
+impl ShortcutAction {
+    /// The keystrokes of every effective app shortcut outside the editor.
+    pub fn bound_keystrokes() -> BTreeSet<String> {
+        Self::ALL.into_iter().filter(|a| a.group() != Group::Editor).filter_map(|a| a.shortcut()).map(|s| canonical(&s.keystroke())).collect()
+    }
+}
+
+/// Keystrokes bound before but not now and not in `reserved`; they need an explicit unbinding because key bindings only accumulate.
+pub fn released_keystrokes(before: &BTreeSet<String>, now: &BTreeSet<String>, reserved: &[String]) -> Vec<String> {
+    let reserved: BTreeSet<String> = reserved.iter().map(|k| canonical(k)).collect();
+    before.iter().filter(|k| !now.contains(*k) && !reserved.contains(*k)).cloned().collect()
+}
+
 impl Shortcut {
     /// The modifier and key labels in this platform's order, e.g. ⇧ ⌘ E or Ctrl Shift E.
     pub fn parts(&self) -> Vec<String> {
@@ -412,5 +473,48 @@ impl Shortcut {
         };
         parts.push(key);
         parts.join("-")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set(keys: &[&str]) -> BTreeSet<String> {
+        keys.iter().map(|k| canonical(k)).collect()
+    }
+
+    #[test]
+    fn only_keys_that_were_bound_and_are_free_now_are_released() {
+        let before = set(&["cmd-1", "cmd-2", "cmd-shift-f", "ctrl-shift--"]);
+        let now = set(&["cmd-2", "cmd-x"]);
+        let released = released_keystrokes(&before, &now, &["shift-cmd-f".to_string()]);
+        assert_eq!(released.len(), 2);
+        assert!(released.contains(&canonical("cmd-1")) && released.contains(&canonical("ctrl-shift--")));
+        assert!(released_keystrokes(&BTreeSet::new(), &now, &[]).is_empty(), "the first call releases nothing");
+        assert!(released_keystrokes(&now, &now, &[]).is_empty());
+    }
+
+    #[test]
+    fn modifier_order_does_not_matter() {
+        assert_eq!(canonical("shift-cmd-f"), canonical("cmd-shift-f"));
+        assert_eq!(canonical("f11"), "f11");
+        assert_eq!(canonical("ctrl--"), "ctrl--");
+        assert_eq!(canonical("-"), "-");
+    }
+
+    #[test]
+    fn rebinding_a_page_to_a_module_key_is_a_conflict() {
+        assert_eq!(ShortcutAction::for_module(0), Some(ShortcutAction::GoModule1));
+        assert_eq!(ShortcutAction::for_module(3), None);
+        for a in ShortcutAction::MODULES.into_iter().chain([ShortcutAction::OpenOtherWorkspace, ShortcutAction::ToggleFullscreen]) {
+            assert_eq!(a.group(), Group::Navigation);
+        }
+        let seven = ShortcutAction::GoModule1.default_shortcut();
+        ShortcutAction::GoNotes.set(Some(seven));
+        let conflicts = ShortcutAction::GoNotes.conflicts();
+        ShortcutAction::GoNotes.reset();
+        assert_eq!(conflicts, vec![ShortcutAction::GoModule1]);
+        assert!(ShortcutAction::GoNotes.conflicts().is_empty());
     }
 }

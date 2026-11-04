@@ -123,7 +123,7 @@ fn commands(cx: &App) -> Vec<Command> {
         }
         for (i, m) in l.semester_modules().into_iter().enumerate() {
             let route = Route::Module(m.id.clone());
-            add(&go, m.display_name(), "book-open", (i < 3).then(|| fixed_keys(&(i + 7).to_string())), Run::Call(Rc::new(move |cx| act(cx, |l| l.set_route(route.clone())))));
+            add(&go, m.display_name(), "book-open", S::for_module(i).and_then(keys), Run::Call(Rc::new(move |cx| act(cx, |l| l.set_route(route.clone())))));
         }
     });
     add(&new, S::NewEntry.label(), "calendar-plus", keys(S::NewEntry), Run::Action(Box::new(app::NewEntry)));
@@ -133,13 +133,13 @@ fn commands(cx: &App) -> Vec<Command> {
     add(&file, tr("Kalender exportieren (.ics)…"), "calendar", None, Run::Action(Box::new(app::ExportCalendar)));
     add(&file, tr("Studium als ZIP exportieren…"), "archive", None, Run::Action(Box::new(app::ExportArchive)));
     add(&file, super::platform::reveal_workspace_label(), "folder", None, Run::Action(Box::new(app::RevealWorkspace)));
-    add(&file, tr("Anderen Ordner öffnen…"), "folder-open", Some(fixed_shift_keys("O")), Run::Action(Box::new(app::OpenOtherWorkspace)));
+    add(&file, S::OpenOtherWorkspace.label(), "folder-open", keys(S::OpenOtherWorkspace), Run::Action(Box::new(app::OpenOtherWorkspace)));
     if state::read(cx, |l| l.inspector_kind().is_some()) {
         add(&view, S::ToggleInspector.label(), "panel-right", keys(S::ToggleInspector), Run::Action(Box::new(app::ToggleInspector)));
     }
     add(&view, tr("Seitenleiste ein-/ausblenden"), "panel-left", Some(fixed_keys("B")), Run::Action(Box::new(super::main_window::ToggleSidebar)));
     add(&view, S::Refresh.label(), "refresh-cw", keys(S::Refresh), Run::Action(Box::new(app::Refresh)));
-    add(&view, tr("Vollbild"), "maximize", Some(if cfg!(target_os = "macos") { "⌃⌘F".to_string() } else { "F11".to_string() }), Run::Action(Box::new(app::ToggleFullscreen)));
+    add(&view, S::ToggleFullscreen.label(), "maximize", keys(S::ToggleFullscreen), Run::Action(Box::new(app::ToggleFullscreen)));
     if active.is_some() {
         add(&view, S::TogglePreview.label(), "book-open", keys(S::TogglePreview), Run::NoteAction(Box::new(app::TogglePreview)));
         if crate::core::prefs::get().note_editor == crate::core::prefs::NoteEditor::Code {
@@ -157,7 +157,7 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&view, tr("Tab behalten"), "bookmark", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.pin_document(&doc)))));
     }
     if let Some(doc) = state::read(cx, |l| l.active_document.clone()).filter(|p| in_document && super::convention_rename::available(p, cx)) {
-        add(&file, tr("Nach Konvention benennen…"), "wand-sparkles", None, Run::WindowCall(Rc::new(move |window, cx| super::convention_rename::open(doc.clone(), window, cx))));
+        add(&file, tr("Nach Muster benennen…"), "wand-sparkles", None, Run::WindowCall(Rc::new(move |window, cx| super::convention_rename::open(doc.clone(), window, cx))));
     }
     if in_document && state::read(cx, |l| l.split_document.is_some()) {
         add(&view, tr("Geteilte Ansicht schließen"), "columns-2", None, Run::Call(Rc::new(|cx| act(cx, |l| l.set_split(None)))));
@@ -427,7 +427,7 @@ impl Render for ShortcutSheet {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
         let section = |title: String, rows: Vec<Div>| div().flex().flex_col().gap(px(space::XS)).child(div().pb(px(space::XS)).font_weight(FontWeight::SEMIBOLD).child(title)).children(rows);
-        let group = |g: Group| -> Vec<Div> { S::ALL.into_iter().filter(|a| a.group() == g).filter_map(|a| a.shortcut().map(|s| shortcut_row(a.label(), s.parts(), &t))).collect() };
+        let group = |g: Group| -> Vec<Div> { S::ALL.into_iter().filter(|a| a.group() == g && !S::MODULES.contains(a)).filter_map(|a| a.shortcut().map(|s| shortcut_row(a.label(), s.parts(), &t))).collect() };
         let mut general = vec![
             shortcut_row(tr("Befehl suchen …"), fixed_parts("K"), &t),
             shortcut_row(tr("Tastenkürzel anzeigen"), fixed_parts("/"), &t),
@@ -435,13 +435,11 @@ impl Render for ShortcutSheet {
             shortcut_row(tr("Suchen"), vec!["/".to_string()], &t),
             shortcut_row(tr("Seitenleiste ein-/ausblenden"), fixed_parts("B"), &t),
             shortcut_row(tr("Widerrufen"), fixed_parts("Z"), &t),
-            shortcut_row(tr("Anderen Ordner öffnen…"), if cfg!(target_os = "macos") { vec!["⇧".to_string(), "⌘".to_string(), "O".to_string()] } else { vec!["Ctrl".to_string(), "Shift".to_string(), "O".to_string()] }, &t),
-            shortcut_row(tr("Vollbild"), if cfg!(target_os = "macos") { vec!["⌃".to_string(), "⌘".to_string(), "F".to_string()] } else { vec!["F11".to_string()] }, &t),
         ];
         general.extend(group(Group::General));
         let mut navigation = group(Group::Navigation);
         let modules = state::read(cx, |l| l.semester_modules().iter().take(3).map(|m| m.display_name()).collect::<Vec<_>>());
-        navigation.extend(modules.into_iter().enumerate().map(|(i, name)| shortcut_row(name, fixed_parts(&(i + 7).to_string()), &t)));
+        navigation.extend(modules.into_iter().enumerate().filter_map(|(i, name)| S::for_module(i).and_then(|a| a.shortcut()).map(|s| shortcut_row(name, s.parts(), &t))));
         let close = cx.entity();
         div()
             .w_full()

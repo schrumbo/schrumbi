@@ -17,7 +17,7 @@ Vier kurze Schritte, {key:return} geht weiter.
 
 | Schritt | Du legst fest |
 |---|---|
-| {ui:Willkommen} | Studiengang, Namenskonvention und ob Schrumbi Abgabeordner anlegt |
+| {ui:Willkommen} | Studiengang, Namensmuster und ob Schrumbi Abgabeordner anlegt |
 | {ui:Semester} | Name, Vorlesungsbeginn, Vorlesungsende |
 | {ui:Module} | Welche Ordner Module sind, mit Kürzel und Name |
 | {ui:Abgaben} | Moodle-Kalender und eine Abgabe jede Woche, beides freiwillig |

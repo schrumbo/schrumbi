@@ -22,7 +22,7 @@ Under {ui:Was ist das?} you switch between {ui:Meine Abgabe}, {ui:Aufgabenstellu
 > [!note] Move or copy
 > Files from your study folder are moved. Files from outside are copied, the original stays. Files dragged into the {ui:Inbox} are always copied.
 
-## Naming Convention
+## Naming Pattern
 
 With {ui:Nach einem Muster benennen}, submissions get uniform names.
 
@@ -47,7 +47,7 @@ A task description is then named `P1_26_Infografik_Aufgabe_261028.pdf`.
 
 Whatever you create or rename keeps the name you type. A file gets the pattern only when you ask for it. The command only appears once {ui:Nach einem Muster benennen} is switched on, and only for files in a submission folder:
 
-1. {ui:Mehr} or right-click the file → {ui:Nach Konvention benennen…}, or {key:CommandPalette} and the same command
+1. {ui:Mehr} or right-click the file → {ui:Nach Muster benennen…}, or {key:CommandPalette} and the same command
 2. Check the suggestion and change it if needed. Below it you see whether it follows the pattern.
 3. {key:return} or {ui:Umbenennen}. {key:escape} cancels.
 

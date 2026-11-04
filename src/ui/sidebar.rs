@@ -77,9 +77,12 @@ pub fn set_hidden(key: &str, hidden: bool, cx: &mut App) {
     super::state::lib(cx).update(cx, |_, cx| cx.notify());
 }
 
-/// The first three modules answer to ⌘7 to ⌘9, in sidebar order.
+/// The first three modules answer to their own shortcuts, in sidebar order.
 fn module_help(name: String, index: usize) -> String {
-    if index < 3 { format!("{name}  {}", shortcut_label(&(index + 7).to_string())) } else { name }
+    match ShortcutAction::for_module(index).and_then(|a| a.shortcut()) {
+        Some(s) => format!("{name}  {}", s.display()),
+        None => name,
+    }
 }
 
 fn shortcut_label(key: &str) -> String {
@@ -281,7 +284,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
                 let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 menu = menu.item(PopupMenuItem::new(name).checked(current.as_ref() == Some(p)).on_click(move |_, window, cx| window.dispatch_action(Box::new(super::app::OpenRecent(i)), cx)));
             }
-            menu.separator().item(PopupMenuItem::new(tr("Anderen Ordner öffnen…")).on_click(|_, window, cx| window.dispatch_action(Box::new(super::app::OpenOtherWorkspace), cx)))
+            menu.separator().item(PopupMenuItem::new(format!("{}{}", tr("Anderen Ordner öffnen…"), ShortcutAction::OpenOtherWorkspace.hint())).on_click(|_, window, cx| window.dispatch_action(Box::new(super::app::OpenOtherWorkspace), cx)))
         }))))
         .child(tab("tab-settings".into(), false, true, icon("settings", iconsize::L, fg).into_any_element(), tr("Einstellungen"), None, wide, format!("{}  {}", tr("Einstellungen"), shortcut_label(",")), t).on_click(|_, _, cx| super::settings::open(cx)));
     div()

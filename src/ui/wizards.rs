@@ -493,7 +493,7 @@ impl Render for Setup {
                                 .flex()
                                 .flex_col()
                                 .gap(px(space::S))
-                                .child(section_title(tr("Namenskonvention")))
+                                .child(section_title(tr("Namensmuster")))
                                 .child(
                                     grouped(&t)
                                         .child(
@@ -520,7 +520,7 @@ impl Render for Setup {
                                 div()
                                     .flex()
                                     .gap(px(space::M))
-                                    .child(order_choice("setup-order-help", "wand-sparkles", tr("Schrumbi hilft beim Ordnen"), tr("Legt in jedem Modul einen Abgabeordner an, sobald du etwas ablegst, und benennt nach Muster."), folders, help, &t))
+                                    .child(order_choice("setup-order-help", "wand-sparkles", tr("Schrumbi hilft beim Ordnen"), tr("Legt in jedem Modul einen Abgabeordner an, sobald du etwas ablegst."), folders, help, &t))
                                     .child(order_choice("setup-order-own", "folder-tree", tr("Meine eigene Struktur"), tr("Schrumbi liest nur. Dateien landen dort, wo du sie hinlegst."), !folders, own, &t)),
                             )
                             .child(caption(tr("Lässt sich jederzeit in den Einstellungen ändern, auch einzeln."), &t)),

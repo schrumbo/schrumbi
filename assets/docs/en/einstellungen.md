@@ -4,7 +4,7 @@
 
 | Page | Here you set |
 |---|---|
-| {ui:Allgemein} | Appearance, language, naming convention, sidebar, reminders |
+| {ui:Allgemein} | Appearance, language, naming pattern, sidebar, reminders |
 | {ui:Semester} | Lecture period, breaks, holidays |
 | {ui:Module} | Codes, folders, links, recurring deadlines, timetable |
 | {ui:Notizen} | Editor, font size, saving, PDF export, Obsidian |
@@ -38,7 +38,7 @@ Choose a semester in the list, then the copy icon under the list: {ui:Folgesemes
 
 | What | Where |
 |---|---|
-| Semesters, modules, rules, name, naming convention | `schrumbi.json` in your folder |
+| Semesters, modules, rules, name, naming pattern | `schrumbi.json` in your folder |
 | Appearance, shortcuts, language | With Schrumbi on this device |
 
 Your files go only to your own sync storage. Only your folder and a connected Obsidian vault are read.

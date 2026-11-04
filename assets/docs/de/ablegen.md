@@ -22,7 +22,7 @@ Unter {ui:Was ist das?} stellst du um zwischen {ui:Meine Abgabe}, {ui:Aufgabenst
 > [!note] Verschieben oder kopieren
 > Dateien aus deinem Studienordner werden verschoben. Dateien von außerhalb werden kopiert, das Original bleibt. In die {ui:Inbox} gezogene Dateien werden immer kopiert.
 
-## Namenskonvention
+## Namensmuster
 
 Mit {ui:Nach einem Muster benennen} bekommen Abgaben einheitliche Namen.
 
@@ -47,7 +47,7 @@ Eine Aufgabenstellung heißt dann `P1_26_Infografik_Aufgabe_261028.pdf`.
 
 Was du anlegst oder umbenennst, heißt so, wie du es tippst. Nach dem Muster benennst du eine Datei nur auf Wunsch. Der Befehl erscheint erst, wenn {ui:Nach einem Muster benennen} eingeschaltet ist, und nur für Dateien in einem Abgabeordner:
 
-1. {ui:Mehr} oder Rechtsklick auf die Datei → {ui:Nach Konvention benennen…}, oder {key:CommandPalette} und denselben Befehl
+1. {ui:Mehr} oder Rechtsklick auf die Datei → {ui:Nach Muster benennen…}, oder {key:CommandPalette} und denselben Befehl
 2. Den Vorschlag prüfen, bei Bedarf ändern. Darunter steht, ob er zum Muster passt.
 3. {key:return} oder {ui:Umbenennen}. {key:escape} bricht ab.
 

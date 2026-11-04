@@ -11,7 +11,6 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Tastenkürzel anzeigen} | {key:ShowShortcuts} |
 | {ui:Einstellungen} | {key:OpenSettings} |
 | {ui:Datei schnell öffnen} | {key:quickOpen} |
-| {ui:Anderen Ordner öffnen…} | {key:cmd-shift-o} |
 | {ui:In allen Dateien suchen} | {key:searchFiles} |
 | {ui:Neuer Eintrag} | {key:newEntry} |
 | {ui:Neue Notiz, Datei oder Ordner} | {key:newFile} |
@@ -31,10 +30,12 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Inbox} | {key:goInbox} |
 | {ui:Notizen} | {key:goNotes} |
 | {ui:Karten} | {key:goCards} |
-| Erstes, zweites, drittes Modul | {key:cmd-7}, {key:cmd-8}, {key:cmd-9} |
+| Erstes, zweites, drittes Modul | {key:goModule1}, {key:goModule2}, {key:goModule3} |
 | {ui:Zurück} | {key:goBack} |
 | {ui:Vorwärts} | {key:goForward} |
 | {ui:Graph zeigen} | {key:showGraph} |
+| {ui:Anderen Ordner öffnen…} | {key:openOtherWorkspace} |
+| {ui:Vollbild} | {key:toggleFullscreen} |
 | {ui:Seitenleiste ein-/ausblenden} | {key:ToggleSidebar} |
 | {ui:Details ein-/ausblenden} | {key:toggleInspector} |
 

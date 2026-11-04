@@ -1238,6 +1238,7 @@ fn new_workspaces_start_without_a_naming_convention_and_keep_that_after_a_reload
     assert!(c.create_folders, "folder help stays on");
     let raw: Value = serde_json::from_slice(&std::fs::read(root.join("schrumbi.json")).unwrap()).unwrap();
     assert_eq!(raw["renameOnFiling"], json!(false), "written out, so a reload does not fall back to the legacy default");
+    assert_eq!((&raw["checkNames"], &raw["checkFolders"]), (&json!(false), &json!(false)), "mirrors for older builds");
     assert!(!open(&root).config.unwrap().naming_convention());
     let _ = std::fs::remove_dir_all(root);
 }
@@ -1354,13 +1355,32 @@ fn a_plain_role_name_takes_out_only_the_author_token_and_only_the_added_word() {
 }
 
 #[test]
-fn the_convention_follows_renaming_on_filing_and_ignores_the_retired_name_check() {
+fn the_convention_follows_renaming_on_filing_and_a_name_check_keeps_it_on() {
     let mut c = crate::core::model::StudyConfig::default();
     assert!(!c.naming_convention());
     c.set_naming_convention(true);
     assert!(c.naming_convention() && c.rename_on_filing);
     let old: crate::core::model::StudyConfig = serde_json::from_str(r#"{"renameOnFiling":false,"checkNames":true}"#).unwrap();
-    assert!(!old.naming_convention(), "a name check alone no longer switches the convention on");
+    assert!(old.naming_convention() && old.rename_on_filing, "a convention that was on through the name check stays on");
+    let plain: crate::core::model::StudyConfig = serde_json::from_str(r#"{"renameOnFiling":false}"#).unwrap();
+    assert!(!plain.naming_convention());
+    let legacy: crate::core::model::StudyConfig = serde_json::from_str(r#"{"checkNames":false}"#).unwrap();
+    assert!(legacy.rename_on_filing, "without the switch the legacy default applies");
+}
+
+#[test]
+fn saving_mirrors_the_naming_switch_for_older_builds() {
+    let mut c = crate::core::model::StudyConfig::default();
+    c.set_naming_convention(true);
+    let raw: Value = serde_json::to_value(&c).unwrap();
+    assert_eq!(raw["checkNames"], json!(true));
+    assert_eq!(raw["checkFolders"], json!(false));
+    assert_eq!(raw["renameOnFiling"], json!(true));
+    assert_eq!(serde_json::from_value::<crate::core::model::StudyConfig>(raw).unwrap(), c);
+    c.set_naming_convention(false);
+    let raw: Value = serde_json::to_value(&c).unwrap();
+    assert_eq!(raw["checkNames"], json!(false));
+    assert!(!serde_json::from_value::<crate::core::model::StudyConfig>(raw).unwrap().naming_convention());
 }
 
 /// One module whose single rule hands in to the shared `Abgaben` folder.
