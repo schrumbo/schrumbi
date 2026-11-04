@@ -96,6 +96,8 @@ Right-click another tab → {ui:Daneben öffnen} shows it next to the current no
 | {ui:Verlauf} | Compare and restore older versions, when sync is set up |
 | {ui:Als Folien zeigen} | Parts split by `---` become slides |
 
+In the PDF headings stay with their text; short tables, code blocks, callouts, quotes and list items are not split across two pages, long tables repeat their header row.
+
 If an earlier export already lies next to the note, Schrumbi asks before replacing it. {ui:Rückgängig} in the message afterwards brings the old PDF back.
 
 - {ui:Nicht mehr fragen} replaces without asking from then on.

@@ -96,6 +96,8 @@ Rechtsklick auf einen anderen Tab → {ui:Daneben öffnen} zeigt ihn neben der a
 | {ui:Verlauf} | Ältere Stände vergleichen und wiederherstellen, wenn Sync eingerichtet ist |
 | {ui:Als Folien zeigen} | Teile mit `---` werden Folien |
 
+Im PDF bleiben Überschriften bei ihrem Text; kurze Tabellen, Codeblöcke, Hinweise, Zitate und Listenpunkte werden nicht über zwei Seiten geteilt, lange Tabellen wiederholen ihre Kopfzeile.
+
 Liegt neben der Notiz schon ein früherer Export, fragt Schrumbi vor dem Ersetzen. {ui:Rückgängig} in der Meldung danach holt das alte PDF zurück.
 
 - {ui:Nicht mehr fragen} ersetzt künftig ohne Frage.
