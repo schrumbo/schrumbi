@@ -1942,6 +1942,10 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
             highlights.push((start..text.len(), HighlightStyle { color: Some(c), ..Default::default() }));
         }
     }
+    let highlights = match &cx.find {
+        Some(find) => find.overlay(&text, highlights, t),
+        None => highlights,
+    };
     let order = cx.order.get();
     cx.order.set(order + 1);
     let copied = code.to_string();
@@ -2754,6 +2758,15 @@ pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_to
         _ => div().into_any_element(),
     };
     found_mark(element, found.filter(|f| f.block == row.block && (row.line..row.end_line).contains(&f.line)), t)
+}
+
+/// Brings an item into view with the row before it for context, and leaves the list alone when the item already shows.
+pub fn reveal_item_in_context(list: &ListState, ix: usize) {
+    let view = list.viewport_bounds();
+    if list.bounds_for_item(ix).is_some_and(|b| b.top() >= view.top() && b.bottom() <= view.bottom()) {
+        return;
+    }
+    list.scroll_to(ListOffset { item_ix: ix.saturating_sub(1), offset_in_item: px(0.) });
 }
 
 /// Scrolls a list so an item shows: not at all when it already does, just enough when it is near, else to its top, since rows not yet drawn have no height to count.

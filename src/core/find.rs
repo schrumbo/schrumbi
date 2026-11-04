@@ -3,7 +3,7 @@ use std::ops::Range;
 fn fold_into(c: char, out: &mut String) {
     match c {
         '\n' | '\r' | '\t' | '\u{a0}' => out.push(' '),
-        'ß' => out.push_str("ss"),
+        'ß' | 'ẞ' => out.push_str("ss"),
         c => out.extend(c.to_lowercase()),
     }
 }
@@ -39,10 +39,15 @@ pub fn matches(text: &str, query: &str, exact: bool) -> Vec<Range<usize>> {
         Some(s) => s.text + s.text_len + (at - s.folded - s.folded_len),
     };
     let mut found: Vec<Range<usize>> = Vec::new();
-    for (at, m) in folded.match_indices(&needle) {
-        let range = to_text(at, false)..to_text(at + m.len(), true);
+    let mut from = 0;
+    while let Some(i) = folded[from..].find(&needle) {
+        let at = from + i;
+        let range = to_text(at, false)..to_text(at + needle.len(), true);
         if found.last().is_none_or(|prev| prev.end <= range.start) {
             found.push(range);
+            from = at + needle.len();
+        } else {
+            from = at + folded[at..].chars().next().map_or(1, char::len_utf8);
         }
     }
     found
@@ -66,7 +71,7 @@ pub fn fingerprint(text: &str) -> u64 {
     for byte in chunks.remainder() {
         hash = (hash ^ u64::from(*byte)).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(29);
     }
-    hash
+    hash ^ (text.len() as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
 }
 
 /// The first match at or after `offset`, wrapping to the first one; `None` without matches.
@@ -121,6 +126,18 @@ mod tests {
         assert_eq!(found(text, "äö", false), vec!["ÄÖ", "äö"]);
         assert_eq!(found(text, "ss g", false), vec!["ß g", "ß G"]);
         assert_eq!(found(text, "ß", false), vec!["ß", "ß", "SS", "ß"]);
+    }
+
+    #[test]
+    fn a_dropped_overlap_does_not_hide_a_later_match() {
+        assert_eq!(matches("saßasas", "sas", false), vec![0..4, 5..8]);
+        assert_eq!(matches("ẞ", "ss", false), vec![0..3]);
+    }
+
+    #[test]
+    fn the_fingerprint_tells_short_texts_apart() {
+        assert_ne!(fingerprint(""), fingerprint("\u{1}"));
+        assert_ne!(fingerprint("a"), fingerprint("h\0\0\0\0\0\0\0"));
     }
 
     #[test]

@@ -28,6 +28,11 @@ pub struct FindState {
     pub signature: Option<(u64, String, bool)>,
     pub marks: Option<TextDecorationCollection>,
     pub mode: Option<std::mem::Discriminant<super::documents::Mode>>,
+    /// The search being computed in the background, and the task doing it.
+    pub pending: Option<(u64, String, bool)>,
+    pub task: Option<Task<()>>,
+    /// Frames left to centre the current match once the editor has scrolled it into view.
+    pub center: u8,
 }
 
 /// What the bar asks of the note it belongs to.

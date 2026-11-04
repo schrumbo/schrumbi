@@ -42,6 +42,8 @@ actions!(
 );
 
 const NOTE_PLACES: usize = 500;
+const FIND_IN_BACKGROUND_FROM: usize = 200_000;
+const FIND_MARKS_AROUND: usize = 1000;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -410,7 +412,7 @@ impl NoteView {
             self.find.signature = None;
         }
         let text = self.current_text(cx);
-        self.sync_find(&text, true, window, cx);
+        self.sync_find(&text, true, true, window, cx);
         cx.notify();
     }
 
@@ -430,10 +432,10 @@ impl NoteView {
         match event {
             FindEvent::Query => {
                 self.find.signature = None;
-                self.sync_find(&text, true, window, cx);
+                self.sync_find(&text, true, true, window, cx);
             }
             FindEvent::Step(forward) => {
-                self.sync_find(&text, false, window, cx);
+                self.sync_find(&text, false, false, window, cx);
                 self.find.current = crate::core::find::step(self.find.current, self.find.matches.len(), *forward);
                 self.paint_find(&text, cx);
                 self.reveal_find(&text, cx);
@@ -449,13 +451,19 @@ impl NoteView {
     }
 
     /// Finds the matches again when the text or the query changed; `reveal` also brings the current one into view.
-    fn sync_find(&mut self, text: &str, reveal: bool, _window: &mut Window, cx: &mut Context<Self>) {
+    fn sync_find(&mut self, text: &str, reveal: bool, later: bool, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(bar) = self.find.bar.clone().filter(|_| self.find.open) else { return };
         let (query, exact) = bar.read_with(cx, |b, cx| (b.text(cx), b.exact()));
         let mode = std::mem::discriminant(&self.mode);
         let reveal = reveal || self.find.mode.is_some_and(|seen| seen != mode);
         self.find.mode = Some(mode);
         let signature = (crate::core::find::fingerprint(text), query, exact);
+        if later && text.len() > FIND_IN_BACKGROUND_FROM && self.find.signature.as_ref() != Some(&signature) {
+            if self.find.pending.as_ref() != Some(&signature) {
+                self.find_in_background(text, signature, reveal, cx);
+            }
+            return;
+        }
         if self.find.signature.as_ref() != Some(&signature) || reveal {
             let anchor = self.find.anchor.take().or_else(|| self.find.matches.get(self.find.current).map(|m| m.start)).unwrap_or(0);
             let found = crate::core::find::matches(text, &signature.1, exact);
@@ -471,11 +479,44 @@ impl NoteView {
         bar.update(cx, |b, cx| b.show(count, current, can_replace, cx));
     }
 
+    fn find_in_background(&mut self, text: &str, signature: (u64, String, bool), reveal: bool, cx: &mut Context<Self>) {
+        let anchor = self.find.anchor.take().or_else(|| self.find.matches.get(self.find.current).map(|m| m.start)).unwrap_or(0);
+        self.find.pending = Some(signature.clone());
+        let (owned, query, exact) = (text.to_string(), signature.1.clone(), signature.2);
+        self.find.task = Some(cx.spawn(async move |this, cx| {
+            let (found, owned) = cx
+                .background_spawn(async move {
+                    let found = crate::core::find::matches(&owned, &query, exact);
+                    (found, owned)
+                })
+                .await;
+            let _ = this.update(cx, |n, cx| {
+                if n.find.pending.as_ref() != Some(&signature) {
+                    return;
+                }
+                n.find.pending = None;
+                n.find.current = crate::core::find::first_from(&found, anchor).unwrap_or(0);
+                n.find.matches = found;
+                n.find.signature = Some(signature);
+                n.paint_find(&owned, cx);
+                if reveal {
+                    n.reveal_find(&owned, cx);
+                }
+                let (count, current, can_replace) = (n.find.matches.len(), n.find.current, n.mode != Mode::Read);
+                if let Some(bar) = n.find.bar.clone() {
+                    bar.update(cx, |b, cx| b.show(count, current, can_replace, cx));
+                }
+                cx.notify();
+            });
+        }));
+    }
+
     /// Marks the matches in the editor and in the reader.
     fn paint_find(&mut self, text: &str, cx: &mut Context<Self>) {
         let t = Theme::get(cx);
         let current = self.find.current;
-        let decorations: Vec<TextDecoration> = self.find.matches.iter().enumerate().map(|(i, r)| TextDecoration::new(r.clone(), HighlightStyle { background_color: Some(markdown_view::find_fill(i == current, &t)), ..Default::default() })).collect();
+        let in_editor = matches!(self.mode, Mode::Source | Mode::Split);
+        let decorations: Vec<TextDecoration> = self.find.matches.iter().enumerate().skip(current.saturating_sub(FIND_MARKS_AROUND)).take(2 * FIND_MARKS_AROUND).filter(|_| in_editor).map(|(i, r)| TextDecoration::new(r.clone(), HighlightStyle { background_color: Some(markdown_view::find_fill(i == current, &t)), ..Default::default() })).collect();
         match &self.find.marks {
             Some(known) => known.set(decorations, cx),
             None if decorations.is_empty() => {}
@@ -486,6 +527,7 @@ impl NoteView {
         }
         let query = self.find.bar.as_ref().map(|b| b.read_with(cx, |b, cx| (b.text(cx), b.exact())));
         self.link_focus.find = match (query, self.find.matches.get(current)) {
+            _ if self.mode == Mode::Source => None,
             (Some((query, exact)), Some(at)) if self.find.open => {
                 let starts = markdown_view::block_starts(text);
                 let block_of = |offset: usize| starts.partition_point(|s| *s <= offset).saturating_sub(1);
@@ -503,11 +545,35 @@ impl NoteView {
         };
     }
 
+    fn center_find(&mut self, cx: &mut Context<Self>) {
+        if self.find.center == 0 {
+            return;
+        }
+        let Some(at) = self.find.matches.get(self.find.current).cloned() else { return };
+        let done = self.editor.update(cx, |s, cx| {
+            let (Some(b), Some(view)) = (s.range_to_bounds(&at), s.text_bounds()) else { return false };
+            let off = b.center().y - view.center().y;
+            if off.abs() > view.size.height / 6. {
+                let mut o = s.scroll_offset();
+                o.y -= off;
+                s.set_scroll_offset(o, cx);
+            }
+            true
+        });
+        self.find.center = if done { 0 } else { self.find.center - 1 };
+    }
+
     /// Selects the current match in the editor and brings it into view there and in the reader.
     fn reveal_find(&mut self, text: &str, cx: &mut Context<Self>) {
         let Some(at) = self.find.matches.get(self.find.current).cloned() else { return };
         if matches!(self.mode, Mode::Source | Mode::Split) {
-            self.editor.update(cx, |s, cx| s.set_selected_range(at.clone(), cx));
+            self.editor.update(cx, |s, cx| {
+                let shown = s.range_to_bounds(&at).zip(s.text_bounds()).is_some_and(|(b, view)| b.top() >= view.top() && b.bottom() <= view.bottom());
+                s.set_selected_range(at.clone(), cx);
+                if !shown {
+                    self.find.center = 8;
+                }
+            });
         }
         if self.mode != Mode::Source {
             self.reveal_line = Some(text.get(..at.start).unwrap_or_default().matches('\n').count());
@@ -518,7 +584,8 @@ impl NoteView {
     fn replace_found(&mut self, all: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(bar) = self.find.bar.clone().filter(|_| self.find.open && self.mode != Mode::Read) else { return };
         let text = self.current_text(cx);
-        self.sync_find(&text, false, window, cx);
+        self.find.signature = None;
+        self.sync_find(&text, false, false, window, cx);
         let replacement = bar.read(cx).replacement(cx);
         let (new, next) = if all {
             (crate::core::find::replace_all(&text, &self.find.matches, &replacement), 0)
@@ -532,7 +599,7 @@ impl NoteView {
         self.change_text(&text, new.clone(), window, cx);
         self.find.anchor = Some(next);
         self.find.signature = None;
-        self.sync_find(&new, true, window, cx);
+        self.sync_find(&new, true, true, window, cx);
     }
 
     /// Changes the note's text in one undoable step, in whichever editor is in use.
@@ -1958,7 +2025,7 @@ impl NoteView {
             self.reader_list.scroll_to(ListOffset { item_ix, offset_in_item: px(offset.fract() * 4096.) });
         }
         if let Some(line) = self.reveal_line.take() {
-            markdown_view::reveal_item(&self.reader_list, self.item_of_line(line));
+            markdown_view::reveal_item_in_context(&self.reader_list, self.item_of_line(line));
         }
         let path = self.path.clone();
         let toggle: markdown_view::OnToggle = Rc::new(move |line, cx: &mut App| {
@@ -2748,7 +2815,8 @@ impl Render for NoteView {
         if let Some((term, nth)) = request {
             self.reveal(&term, nth, &text, window, cx);
         }
-        self.sync_find(&text, false, window, cx);
+        self.sync_find(&text, false, true, window, cx);
+        self.center_find(cx);
         let exporting = lib.read(cx).exporting_pdfs.contains(&self.path);
         if !self.embedded {
             let (title, relative, dirty) = state::read(cx, |l| {
