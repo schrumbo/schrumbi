@@ -142,6 +142,7 @@ pub struct Page {
 }
 
 /// One run of pages with its own format, header and footer; `Block::Section(i)` starts `sections[i]`.
+#[derive(PartialEq)]
 pub struct Section {
     pub page: Page,
     pub header: Vec<Block>,
@@ -989,7 +990,11 @@ impl Parser {
     }
 }
 
-const LETTER: (f32, f32) = (612., 792.);
+fn content_width(p: &Page) -> f32 {
+    (p.width - p.left - p.right).max(36.)
+}
+
+const A4_SIZE: (f32, f32) = (595.3, 841.9);
 
 fn page_of(sect: Option<&El>) -> Page {
     let size = sect.and_then(|s| s.child("pgSz"));
@@ -997,8 +1002,8 @@ fn page_of(sect: Option<&El>) -> Page {
     let m = |name: &str, default: f32| mar.and_then(|m| m.attr(name)).and_then(twips).unwrap_or(default).abs();
     let side = |name: &str, default: f32| size.and_then(|s| s.attr(name)).and_then(twips).filter(|v| v.is_finite() && *v >= 72.).unwrap_or(default);
     Page {
-        width: side("w", LETTER.0),
-        height: side("h", LETTER.1),
+        width: side("w", A4_SIZE.0),
+        height: side("h", A4_SIZE.1),
         top: m("top", 72.),
         bottom: m("bottom", 72.),
         left: m("left", 72.),
@@ -1140,18 +1145,30 @@ pub fn parse(bytes: Vec<u8>) -> Result<Document, OpenError> {
 }
 
 fn collapse_contextual(blocks: &mut [Block]) {
-    for i in 1..blocks.len() {
-        let (a, b) = blocks.split_at_mut(i);
-        if let (Some(Block::Para(prev)), Some(Block::Para(next))) = (a.last_mut(), b.first_mut())
-            && prev.style == next.style
-        {
-            if prev.contextual {
-                prev.after = 0.;
-            }
-            if next.contextual {
-                next.before = 0.;
+    let mut before: Option<usize> = None;
+    for i in 0..blocks.len() {
+        match blocks[i] {
+            Block::Section(_) => continue,
+            Block::Para(_) => {}
+            _ => {
+                before = None;
+                continue;
             }
         }
+        if let Some(j) = before {
+            let (a, b) = blocks.split_at_mut(i);
+            if let (Block::Para(prev), Block::Para(next)) = (&mut a[j], &mut b[0])
+                && prev.style == next.style
+            {
+                if prev.contextual {
+                    prev.after = 0.;
+                }
+                if next.contextual {
+                    next.before = 0.;
+                }
+            }
+        }
+        before = Some(i);
     }
 }
 
@@ -1381,7 +1398,7 @@ impl Writer<'_> {
 
     fn page_rule(&mut self, s: &Section) -> String {
         let p = s.page;
-        let width = (p.width - p.left - p.right).max(36.);
+        let width = content_width(&p);
         let header = self.part(&s.header, width);
         let footer = self.part(&s.footer, width);
         format!(
@@ -1443,22 +1460,23 @@ pub fn to_typst(doc: &Document) -> Source {
     let base_font = doc.base.font.clone();
     let mut w = Writer { doc, out: String::new(), base_size, base_font: base_font.clone() };
     let first = &doc.sections[0];
-    let mut width = first.page.width - first.page.left - first.page.right;
+    let mut width = content_width(&first.page);
     let mut out = String::from(typ::PRELUDE);
     let family = base_font.map(|f| format!("{}, ", typ::s(&f))).unwrap_or_default();
     let color = doc.base.color.as_ref().filter(|c| !c.is_empty()).map(|c| typ::rgb(c, 1.)).unwrap_or_else(|| "black".into());
     out.push_str(&w.page_rule(first));
     let _ = writeln!(out, "#set text(font: ({family}{}), size: {}, fill: {color}, top-edge: \"ascender\", bottom-edge: \"descender\", hyphenate: false)", typ::FALLBACK, typ::pt(base_size));
     out.push_str("#set par(spacing: 0pt)\n#set block(spacing: 0pt)\n#set heading(numbering: none)\n#show heading: it => block(width: 100%, it.body)\n#set footnote.entry(separator: line(length: 30%, stroke: 0.5pt))\n");
-    let mut page = first.page;
+    let mut current = first;
     for b in &doc.blocks {
         if let Block::Section(i) = b {
             let next = &doc.sections[*i];
-            if !(next.continuous && (next.page.width, next.page.height) == (page.width, page.height)) {
+            let same = next.page == current.page && next.header == current.header && next.footer == current.footer;
+            if !(next.continuous && same) {
                 let rule = w.page_rule(next);
                 w.out.push_str(&rule);
-                width = next.page.width - next.page.left - next.page.right;
-                page = next.page;
+                width = content_width(&next.page);
+                current = next;
             }
         } else {
             w.blocks(std::slice::from_ref(b), width);
@@ -1642,10 +1660,34 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn missing_size_falls_back_to_letter_like_word() {
-        assert_eq!(page_sizes(&para("x")), [(612., 792.)]);
-        assert_eq!(page_sizes(&format!("{}<w:sectPr/>", para("x"))), [(612., 792.)]);
-        assert_eq!(page_sizes(&format!(r#"{}<w:sectPr><w:pgSz w:w="11906"/></w:sectPr>"#, para("x"))), [(595., 792.)]);
+    fn missing_size_falls_back_to_a4() {
+        assert_eq!(page_sizes(&para("x")), [PORTRAIT]);
+        assert_eq!(page_sizes(&format!("{}<w:sectPr/>", para("x"))), [PORTRAIT]);
+        assert_eq!(page_sizes(&format!(r#"{}<w:sectPr><w:pgSz w:w="12240"/></w:sectPr>"#, para("x"))), [(612., 842.)]);
+    }
+
+    #[test]
+    fn a_continuous_section_with_other_margins_starts_a_page() {
+        let wide = r#"<w:type w:val="continuous"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:left="2880" w:right="1417" w:top="1417" w:bottom="1134"/>"#;
+        let body = format!("{}{}<w:sectPr>{wide}</w:sectPr>", ending("oben", A4), para("unten"));
+        assert_eq!(page_sizes(&body), [PORTRAIT, PORTRAIT]);
+    }
+
+    #[test]
+    fn margins_wider_than_the_page_still_draw_tables() {
+        let table = r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+        let body = format!(r#"{table}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:left="8000" w:right="8000" w:top="1417" w:bottom="1134"/></w:sectPr>"#);
+        assert_eq!(page_sizes(&body), [PORTRAIT]);
+    }
+
+    #[test]
+    fn contextual_spacing_ignores_a_section_break_between_paragraphs() {
+        let styles = format!(r#"<w:styles {W}><w:style w:type="paragraph" w:styleId="Liste"><w:pPr><w:contextualSpacing/><w:spacing w:before="200" w:after="200"/></w:pPr></w:style></w:styles>"#);
+        let item = |text: &str, sect: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="Liste"/>{sect}</w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#);
+        let body = format!(r#"<w:document {W}><w:body>{}{}</w:body></w:document>"#, item("eins", r#"<w:sectPr><w:type w:val="continuous"/></w:sectPr>"#), item("zwei", ""));
+        let doc = parse(zip(&[("word/document.xml", body.as_bytes()), ("word/styles.xml", styles.as_bytes())])).unwrap();
+        let ps = paras(&doc);
+        assert_eq!((ps[0].after, ps[1].before), (0., 0.));
     }
 
     #[test]
