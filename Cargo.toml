@@ -3,7 +3,7 @@ description = "Study planner: deadlines, files and notes"
 license = "AGPL-3.0-only"
 repository = "https://github.com/schrumbo/schrumbi"
 name = "schrumbi"
-version = "0.2.4"
+version = "0.3.0"
 edition = "2024"
 publish = false
 
@@ -43,7 +43,6 @@ serde_yaml_ng = "0.10"
 sys-locale = "0.3.2"
 trash = "5.2.9"
 typst = "0.15.1"
-typst-assets = { version = "0.15.1", features = ["fonts"] }
 typst-kit = { version = "0.15.1", default-features = false, features = ["scan-fonts", "embedded-fonts"] }
 typst-layout = "0.15.1"
 typst-pdf = "0.15.1"

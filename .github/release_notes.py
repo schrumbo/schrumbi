@@ -5,7 +5,8 @@ import subprocess
 import sys
 
 USER_FACING = ("src/", "assets/", "packaging/", "Cargo.toml")
-SKIP = re.compile(r"^(Merge |Bump version|herd\b|Workflow\b|Test\b|Tests\b|CI\b|gate\b|Agent tools\b)", re.I)
+INTERNAL = re.compile(r"doc comments?", re.I)
+SKIP = re.compile(r"^(Merge |Bump version|herd\b|Drive\b|Workflow\b|Test\b|Tests\b|CI\b|gate\b|Agent tools\b)", re.I)
 
 
 def git(*args):
@@ -39,7 +40,7 @@ def main():
     repo = sys.argv[4] if len(sys.argv) > 4 else ""
     groups = {}
     for subject, files in commits(since, until):
-        if SKIP.match(subject) or not any(f.startswith(USER_FACING) for f in files):
+        if SKIP.match(subject) or INTERNAL.search(subject) or not any(f.startswith(USER_FACING) for f in files):
             continue
         area, text = split(subject)
         groups.setdefault(area or "General", []).append(text)

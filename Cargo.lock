@@ -7873,7 +7873,7 @@ dependencies = [
 
 [[package]]
 name = "schrumbi"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -7925,7 +7925,6 @@ dependencies = [
  "trash",
  "tray-icon",
  "typst",
- "typst-assets",
  "typst-kit",
  "typst-layout",
  "typst-pdf",
