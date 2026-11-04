@@ -723,7 +723,7 @@ fn mini_graph(path: &Path, vault: &index::VaultIndex, t: &Theme) -> Option<AnyEl
             .soft(hover, radius::SMALL)
             .text_size(px(font::CAPTION))
             .tooltip(tip(target.file_stem().unwrap_or_default().to_string_lossy().to_string()))
-            .on_click(move |_, _, cx| act(cx, |l| l.follow_path(&open)))
+            .on_click(move |_, _, cx| act(cx, |l| l.follow_path(&open, None)))
             .child(div().truncate().child(target.file_stem().unwrap_or_default().to_string_lossy().to_string()))
     });
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();

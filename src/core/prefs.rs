@@ -163,6 +163,8 @@ pub struct Prefs {
     pub open_documents: BTreeMap<String, Vec<String>>,
     /// The document shown beside the current one, per workspace.
     pub split_documents: BTreeMap<String, String>,
+    /// The tab shown last, per workspace.
+    pub active_documents: BTreeMap<String, String>,
     /// Share of the width the left document gets in the split view.
     pub split_share: f32,
     /// Width of the folder tree on the notes page.
@@ -250,6 +252,7 @@ impl Default for Prefs {
             indexed_root: None,
             open_documents: BTreeMap::new(),
             split_documents: BTreeMap::new(),
+            active_documents: BTreeMap::new(),
             split_share: 0.5,
             module_column: None,
             notes_column: None,

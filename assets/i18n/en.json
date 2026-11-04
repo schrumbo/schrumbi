@@ -1662,5 +1662,8 @@
   "Folien": "Slides",
   "Durchsuche Folie %lld von %lld": "Searching slide %lld of %lld",
   "Dieses Blatt konnte nicht gelesen werden": "This sheet could not be read",
-  "Die anderen Blätter bleiben verfügbar.": "The other sheets are still available."
+  "Die anderen Blätter bleiben verfügbar.": "The other sheets are still available.",
+  "Vorschau: Die nächste Datei, die du öffnest, ersetzt diesen Tab. Doppelklick oder Schreiben behält ihn.": "Preview: the next file you open replaces this tab. Double-click or start writing to keep it.",
+  "Rechts geöffnet": "Open on the right",
+  "Tab behalten": "Keep Tab"
 }

@@ -25,11 +25,13 @@ pub struct NoteBuffer {
     /// Saves are only remembered, because a sync is rewriting the workspace.
     held: bool,
     save_wanted: bool,
+    /// Written in since it was opened, also when that is saved already.
+    pub touched: bool,
 }
 
 impl NoteBuffer {
     pub fn open(path: &Path) -> Self {
-        let mut b = Self { path: path.to_path_buf(), text: String::new(), dirty: false, missing: false, undecodable: false, last_saved: String::new(), known: None, revision: 0, conflict: None, held: false, save_wanted: false };
+        let mut b = Self { path: path.to_path_buf(), text: String::new(), dirty: false, missing: false, undecodable: false, last_saved: String::new(), known: None, revision: 0, conflict: None, held: false, save_wanted: false, touched: false };
         b.load();
         b
     }
@@ -123,12 +125,14 @@ impl NoteBuffer {
     /// The editor's text after an edit.
     pub fn edited(&mut self, text: String) {
         self.dirty = text != self.last_saved;
+        self.touched |= text != self.text;
         self.text = text;
     }
 
     /// A deliberate change from outside the editor, e.g. ticking a task in the reader.
     pub fn replace(&mut self, text: String) {
         self.dirty = text != self.last_saved;
+        self.touched |= text != self.text;
         self.text = text;
         self.revision += 1;
     }

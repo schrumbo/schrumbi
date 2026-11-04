@@ -40,3 +40,5 @@ pub mod office;
 pub mod update;
 #[cfg(test)]
 mod edge_tests;
+#[cfg(test)]
+mod tab_tests;

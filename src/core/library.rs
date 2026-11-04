@@ -294,7 +294,7 @@ pub struct Library {
     /// Notes shown in their own window; their buffers outlive the tab.
     pub note_windows: HashSet<PathBuf>,
     route: Route,
-    closed_documents: Vec<PathBuf>,
+    closed_documents: Vec<(PathBuf, usize)>,
     /// The open document shown beside the current one.
     pub split_document: Option<PathBuf>,
     /// Where the last rename ended up, for the list that started it.
@@ -367,6 +367,10 @@ pub struct Library {
     pub reveal_folder: Option<String>,
     pub focus_explorer: bool,
     pub focus_document: bool,
+    /// Asks the main window to put the focus on the note on the right.
+    pub focus_beside: bool,
+    /// The last click went into the note on the right; links from there open on the right.
+    pub beside_active: bool,
     /// Opens the next document without moving the keyboard to it.
     pub quiet_open: bool,
     /// Asks the shown note to switch between reading and writing, when the keyboard is elsewhere.
@@ -471,6 +475,8 @@ impl Library {
             reveal_folder: None,
             focus_explorer: false,
             focus_document: false,
+            focus_beside: false,
+            beside_active: false,
             quiet_open: false,
             toggle_mode: false,
             back_routes: Vec::new(),
@@ -850,28 +856,61 @@ impl Library {
 
     /// Opens a file in the preview tab, which the next one replaces.
     pub fn open_preview(&mut self, path: &Path) {
+        self.preview_in(path, false);
+    }
+
+    /// Shows a file as the preview tab in the left pane or, with `right`, in the split.
+    /// Only an untouched preview that is not on screen in the other pane makes room for it.
+    fn preview_in(&mut self, path: &Path, right: bool) {
         let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let right = right && self.split_document.is_some() && matches!(self.route, Route::Doc(_));
         if self.open_documents.contains(&path) || !Self::opens_in_app(&path) {
-            self.open_file(&path);
+            if right && self.open_documents.contains(&path) && self.active_document.as_ref() != Some(&path) {
+                self.show_in(path, true);
+            } else {
+                self.open_file(&path);
+            }
             return;
         }
-        let replaced = self.preview_document.clone().filter(|p| self.open_documents.contains(p) && !self.buffers.get(p).is_some_and(|b| b.dirty));
+        let shown = self.shown_document().cloned();
+        let (here, other) = if right { (self.split_document.clone(), shown) } else { (shown, self.split_document.clone()) };
+        let replaced = self.preview_document.clone().filter(|p| self.open_documents.contains(p) && other.as_ref() != Some(p) && !self.buffers.get(p).is_some_and(|b| b.dirty || b.touched));
         match replaced {
             Some(old) => {
                 let at = self.open_documents.iter().position(|d| *d == old).unwrap_or(0);
                 self.open_documents[at] = path.clone();
-                self.buffers.remove(&old);
-                self.tab_trails.remove(&old);
-                self.preview_document = Some(path.clone());
-                self.follow_outside_moves();
-                self.active_document = Some(path.clone());
-                self.save_documents();
-                self.set_route(Route::Doc(path));
+                if !self.note_windows.contains(&old) {
+                    self.buffers.remove(&old);
+                }
+                let trail = self.tab_trails.remove(&old);
+                if here.as_ref() == Some(&old) {
+                    let (mut back, _) = trail.unwrap_or_default();
+                    back.push(old);
+                    self.tab_trails.insert(path.clone(), (back, Vec::new()));
+                }
             }
             None => {
-                self.open_document(&path);
-                self.preview_document = Some(path);
+                let at = here.as_ref().and_then(|h| self.open_documents.iter().position(|d| d == h)).map_or(self.open_documents.len(), |i| i + 1);
+                self.open_documents.insert(at, path.clone());
             }
+        }
+        self.preview_document = Some(path.clone());
+        self.follow_outside_moves();
+        self.show_in(path, right);
+    }
+
+    /// Shows an open document in the left pane or, with `right`, in the split, and remembers the tabs.
+    fn show_in(&mut self, path: PathBuf, right: bool) {
+        self.beside_active = right;
+        if right {
+            self.split_document = Some(path);
+            self.focus_beside = true;
+            self.save_documents();
+            self.changed();
+        } else {
+            self.active_document = Some(path.clone());
+            self.save_documents();
+            self.set_route(Route::Doc(path));
         }
     }
 
@@ -882,10 +921,11 @@ impl Library {
         open
     }
 
-    /// Keeps a preview tab open for good.
+    /// Keeps a preview tab open for good; Back no longer swaps it out.
     pub fn pin_document(&mut self, path: &Path) {
         if self.preview_document.as_deref() == Some(path) {
             self.preview_document = None;
+            self.tab_trails.remove(path);
             self.changed();
         }
     }
@@ -908,7 +948,7 @@ impl Library {
         Some(target)
     }
 
-    /// Swaps the shown tab's document, as following a link does.
+    /// Swaps the shown preview tab's document, as Back and Forward do.
     fn replace_tab(&mut self, old: &Path, new: &Path) {
         if let Some(at) = self.open_documents.iter().position(|d| d == old) {
             self.open_documents[at] = new.to_path_buf();
@@ -927,27 +967,24 @@ impl Library {
         self.changed();
     }
 
-    /// Walks to a note in the shown tab, as a link does.
-    pub fn follow_path(&mut self, path: &Path) {
-        self.follow(path);
+    /// Walks to a note as a link in `from` does.
+    pub fn follow_path(&mut self, path: &Path, from: Option<&Path>) {
+        self.follow(path, from);
     }
 
-    /// Follows a link: inside the shown tab, or a new one when asked. Nothing unsaved is lost on the way.
-    fn follow(&mut self, path: &Path) {
+    /// Follows a link as a preview in the pane of the note it sits in, or as a kept tab when asked.
+    /// A kept tab is never swapped out.
+    fn follow(&mut self, path: &Path, from: Option<&Path>) {
         let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         let new_tab = LINK_IN_NEW_TAB.swap(false, Ordering::Relaxed);
-        let Route::Doc(current) = self.route.clone() else {
-            self.open_file(&path);
-            return;
-        };
-        if new_tab || path == current || self.open_documents.contains(&path) || !path.exists() || !Self::opens_in_app(&path) || self.split_document.is_some() || !self.save_tab(&current) {
+        if new_tab || !path.exists() || !Self::opens_in_app(&path) {
             self.open_file(&path);
             return;
         }
-        let (mut back, _) = self.tab_trails.remove(&current).unwrap_or_default();
-        back.push(current.clone());
-        self.tab_trails.insert(path.clone(), (back, Vec::new()));
-        self.replace_tab(&current, &path);
+        let from = from.map(|f| dunce::canonicalize(f).unwrap_or_else(|_| f.to_path_buf()));
+        let in_pane = matches!(self.route, Route::Doc(_)) && from.as_ref().is_some_and(|f| self.beside_active && !self.open_documents.contains(f));
+        let right = in_pane || (from.is_some() && from == self.split_document);
+        self.preview_in(&path, right);
     }
 
     fn save_tab(&mut self, path: &Path) -> bool {
@@ -960,6 +997,9 @@ impl Library {
 
     fn step_tab(&mut self, backwards: bool) -> bool {
         let Route::Doc(current) = self.route.clone() else { return false };
+        if self.preview_document.as_ref() != Some(&current) || self.buffers.get(&current).is_some_and(|b| b.touched) {
+            return false;
+        }
         let Some((mut back, mut forward)) = self.tab_trails.remove(&current) else { return false };
         let target = if backwards { back.pop() } else { forward.pop() };
         let usable = target.filter(|t| t.exists() && !self.open_documents.contains(t));
@@ -975,7 +1015,7 @@ impl Library {
 
     fn tab_can_step(&self, backwards: bool) -> bool {
         let Route::Doc(current) = &self.route else { return false };
-        self.tab_trails.get(current).is_some_and(|(b, f)| !if backwards { b } else { f }.is_empty())
+        self.preview_document.as_ref() == Some(current) && self.tab_trails.get(current).is_some_and(|(b, f)| !if backwards { b } else { f }.is_empty())
     }
 
     /// Today's daily note from the vault's settings, created from its template if needed.
@@ -1051,6 +1091,7 @@ impl Library {
         }
         match self.buffer(path).restore(updated) {
             Ok(()) => {
+                self.pin_document(path);
                 self.record_edit(kind, label, Change::Note { path: path.to_path_buf(), text: before });
                 true
             }
@@ -1180,7 +1221,7 @@ impl Library {
         let vault = index::current();
         let beside = from.and_then(Path::parent).map(|d| d.join(&target.path)).filter(|p| !target.path.is_empty() && p.is_file());
         let Some(path) = beside.or_else(|| vault.resolver.resolve(&target, from)).or_else(|| from.filter(|_| target.path.is_empty()).map(Path::to_path_buf)) else { return false };
-        self.follow(&path);
+        self.follow(&path, from);
         let text = if target.headings.is_empty() && target.block.is_none() { None } else { std::fs::read_to_string(&path).ok() };
         if let Some(text) = text {
             let spot = match (&target.block, target.headings.last()) {
@@ -1499,6 +1540,17 @@ impl Library {
         self.tab_can_step(true) || self.back_routes.iter().any(|r| self.route_exists(r))
     }
 
+    /// A note reached through the history becomes the shown tab; the note it leaves goes right when it was the right one.
+    fn land(&mut self, r: &Route) {
+        let Route::Doc(p) = r else { return };
+        if self.split_document.as_ref() == Some(p) {
+            self.split_document = self.active_document.clone().filter(|a| a != p);
+        }
+        self.active_document = Some(p.clone());
+        self.beside_active = false;
+        self.save_documents();
+    }
+
     pub fn can_go_forward(&self) -> bool {
         self.tab_can_step(false) || self.forward_routes.iter().any(|r| self.route_exists(r))
     }
@@ -1509,6 +1561,7 @@ impl Library {
         }
         while let Some(r) = self.forward_routes.pop() {
             if self.route_exists(&r) {
+                self.land(&r);
                 let from = std::mem::replace(&mut self.route, r);
                 self.arrived(&from);
                 self.back_routes.push(from);
@@ -2881,7 +2934,13 @@ impl Library {
             }
         };
         self.open_documents.iter_mut().for_each(swap);
-        self.closed_documents.iter_mut().for_each(swap);
+        self.closed_documents.iter_mut().for_each(|(p, _)| swap(p));
+        if self.preview_document.as_ref() == Some(&from) {
+            self.preview_document = None;
+        }
+        if let Some(trail) = self.tab_trails.remove(&from) {
+            self.tab_trails.insert(to.clone(), trail);
+        }
         self.active_document.iter_mut().for_each(swap);
         self.split_document.iter_mut().for_each(swap);
         let (old_key, new_key) = (from.to_string_lossy().to_string(), to.to_string_lossy().to_string());
@@ -3350,7 +3409,8 @@ impl Library {
         let canonical = |p: PathBuf| dunce::canonicalize(&p).unwrap_or(p);
         let mut seen = HashSet::new();
         self.open_documents = rels.iter().map(|r| root.join(r)).filter(|p| p.exists()).map(canonical).filter(|p| seen.insert(p.clone())).collect();
-        self.active_document = self.open_documents.first().cloned();
+        let active = prefs::get().active_documents.get(&self.documents_key()).map(|r| canonical(root.join(r)));
+        self.active_document = active.filter(|p| self.open_documents.contains(p)).or_else(|| self.open_documents.first().cloned());
         let split = prefs::get().split_documents.get(&self.documents_key()).map(|r| canonical(root.join(r)));
         self.split_document = split.filter(|p| self.open_documents.contains(p) && self.active_document.as_ref() != Some(p));
     }
@@ -3359,8 +3419,13 @@ impl Library {
         let key = self.documents_key();
         let rels: Vec<String> = self.open_documents.iter().map(|p| self.relative_path(p)).collect();
         let split = self.split_document.as_ref().map(|p| self.relative_path(p));
+        let active = self.active_document.as_ref().map(|p| self.relative_path(p));
         prefs::update(|p| {
             p.open_documents.insert(key.clone(), rels);
+            match active {
+                Some(active) => p.active_documents.insert(key.clone(), active),
+                None => p.active_documents.remove(&key),
+            };
             match split {
                 Some(split) => p.split_documents.insert(key, split),
                 None => p.split_documents.remove(&key),
@@ -3376,25 +3441,33 @@ impl Library {
     /// Opens a file as a tab in the main window.
     pub fn open_document(&mut self, path: &Path) {
         let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if self.split_document.as_ref() == Some(&path)
+            && let Some(left) = self.active_document.clone()
+        {
+            self.focus_beside = true;
+            self.beside_active = true;
+            self.set_route(Route::Doc(left));
+            return;
+        }
+        self.beside_active = false;
         if !self.open_documents.contains(&path) {
             match self.active_document.as_ref().and_then(|a| self.open_documents.iter().position(|d| d == a)) {
                 Some(i) => self.open_documents.insert(i + 1, path.clone()),
                 None => self.open_documents.push(path.clone()),
             }
-            self.save_documents();
-        }
-        if self.split_document.as_ref() == Some(&path) {
-            self.split_document = None;
-            self.save_documents();
         }
         self.follow_outside_moves();
         self.active_document = Some(path.clone());
+        self.save_documents();
         self.set_route(Route::Doc(path));
     }
 
     /// Shows an open document next to the current one, or ends that when `None`.
     pub fn set_split(&mut self, path: Option<PathBuf>) {
         self.split_document = path.filter(|p| self.open_documents.contains(p) && self.active_document.as_ref() != Some(p));
+        if let Some(p) = self.split_document.clone() {
+            self.pin_document(&p);
+        }
         self.save_documents();
         self.changed();
     }
@@ -3509,7 +3582,7 @@ impl Library {
         if !self.note_windows.contains(path) {
             self.buffers.remove(path);
         }
-        self.closed_documents.push(self.open_documents.remove(i));
+        self.closed_documents.push((self.open_documents.remove(i), i));
         self.tab_trails.remove(path);
         if self.preview_document.as_deref() == Some(path) {
             self.preview_document = None;
@@ -3517,15 +3590,17 @@ impl Library {
         if self.split_document.as_deref() == Some(path) {
             self.split_document = None;
         }
-        self.save_documents();
         let was_shown = self.route == Route::Doc(path.to_path_buf());
         if self.active_document.as_deref() == Some(path) {
-            self.active_document = if self.open_documents.is_empty() { None } else { Some(self.open_documents[i.min(self.open_documents.len() - 1)].clone()) };
-            if self.split_document.is_some() && self.split_document == self.active_document {
-                self.split_document = None;
-                self.save_documents();
-            }
+            let split = self.split_document.clone();
+            let distance = |j: usize| if j >= i { 2 * (j - i) } else { 2 * (i - 1 - j) + 1 };
+            let next = (0..self.open_documents.len()).filter(|&j| split.as_ref() != Some(&self.open_documents[j])).min_by_key(|&j| distance(j));
+            self.active_document = match next {
+                Some(j) => Some(self.open_documents[j].clone()),
+                None => self.split_document.take(),
+            };
         }
+        self.save_documents();
         if was_shown {
             match self.active_document.clone() {
                 Some(next) => {
@@ -3545,29 +3620,32 @@ impl Library {
 
     /// Opens the most recently closed tab whose file still exists.
     pub fn reopen_document(&mut self) {
-        while let Some(path) = self.closed_documents.pop() {
+        while let Some((path, at)) = self.closed_documents.pop() {
             if path.exists() {
+                if !self.open_documents.contains(&path) {
+                    self.open_documents.insert(at.min(self.open_documents.len()), path.clone());
+                }
                 self.open_document(&path);
                 return;
             }
         }
     }
 
-    /// Moves a tab in front of `before`, or to the end when `before` is the tab itself or unknown.
+    /// Moves a tab to the place of `before`, or to the end when `before` is unknown.
     pub fn move_document(&mut self, path: &Path, before: &Path) {
         if path == before {
             return;
         }
         let Some(from) = self.open_documents.iter().position(|d| d == path) else { return };
+        let to = self.open_documents.iter().position(|d| d == before).unwrap_or(self.open_documents.len() - 1);
         let doc = self.open_documents.remove(from);
-        let to = self.open_documents.iter().position(|d| d == before).unwrap_or(self.open_documents.len());
         self.open_documents.insert(to, doc);
         self.save_documents();
         self.changed();
     }
 
     pub fn close_other_documents(&mut self, path: &Path) {
-        self.closed_documents.extend(self.open_documents.iter().filter(|d| *d != path).cloned());
+        self.closed_documents.extend(self.open_documents.iter().enumerate().rev().filter(|(_, d)| *d != path).map(|(i, d)| (d.clone(), i)));
         self.split_document = None;
         let windows = self.note_windows.clone();
         self.buffers.retain(|p, _| p == path || windows.contains(p));
@@ -3577,7 +3655,7 @@ impl Library {
     }
 
     pub fn close_all_documents(&mut self) {
-        self.closed_documents.extend(self.open_documents.iter().cloned());
+        self.closed_documents.extend(self.open_documents.iter().cloned().enumerate().rev().map(|(i, d)| (d, i)));
         self.split_document = None;
         let windows = self.note_windows.clone();
         self.buffers.retain(|p, _| windows.contains(p));
@@ -3591,13 +3669,15 @@ impl Library {
     }
 
     /// Next (`+1`) or previous (`-1`) tab, wrapping around.
+    /// The note on the right is on screen already and is skipped.
     pub fn cycle_document(&mut self, step: i64) {
-        if self.open_documents.is_empty() {
+        let docs: Vec<PathBuf> = self.open_documents.iter().filter(|d| self.split_document.as_ref() != Some(*d)).cloned().collect();
+        if docs.is_empty() {
             return;
         }
-        let n = self.open_documents.len() as i64;
-        let i = self.active_document.as_ref().and_then(|a| self.open_documents.iter().position(|d| d == a)).unwrap_or(0) as i64;
-        let next = self.open_documents[((i + step + n) % n) as usize].clone();
+        let n = docs.len() as i64;
+        let i = self.active_document.as_ref().and_then(|a| docs.iter().position(|d| d == a)).unwrap_or(0) as i64;
+        let next = docs[((i + step + n) % n) as usize].clone();
         self.open_document(&next);
     }
 
@@ -3607,6 +3687,7 @@ impl Library {
         }
         while let Some(r) = self.back_routes.pop() {
             if self.route_exists(&r) {
+                self.land(&r);
                 let from = std::mem::replace(&mut self.route, r);
                 self.arrived(&from);
                 self.forward_routes.push(from);
