@@ -141,6 +141,15 @@ pub struct Page {
     pub footer: f32,
 }
 
+/// One run of pages with its own format, header and footer; `Block::Section(i)` starts `sections[i]`.
+#[derive(PartialEq)]
+pub struct Section {
+    pub page: Page,
+    pub header: Vec<Block>,
+    pub footer: Vec<Block>,
+    pub continuous: bool,
+}
+
 /// Where a link goes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Link {
@@ -211,6 +220,7 @@ pub enum Block {
     Para(Para),
     Table(Table),
     PageBreak,
+    Section(usize),
 }
 
 pub struct Image {
@@ -220,10 +230,8 @@ pub struct Image {
 
 /// A Word document reduced to what the viewer draws.
 pub struct Document {
-    pub page: Page,
+    pub sections: Vec<Section>,
     pub blocks: Vec<Block>,
-    pub header: Vec<Block>,
-    pub footer: Vec<Block>,
     pub images: Vec<Image>,
     pub base: RunStyle,
 }
@@ -262,6 +270,8 @@ struct Parser {
     anchors: HashSet<String>,
     placed: HashSet<String>,
     table_style: Vec<String>,
+    ends: Vec<El>,
+    sections: bool,
 }
 
 fn twips(v: &str) -> Option<f32> {
@@ -932,7 +942,15 @@ impl Parser {
     fn blocks(&mut self, parent: &El, out: &mut Vec<Block>) {
         for e in parent.els() {
             match e.name.as_str() {
-                "p" => self.paragraph(e, out),
+                "p" => {
+                    self.paragraph(e, out);
+                    if self.sections
+                        && let Some(sect) = e.child("pPr").and_then(|p| p.child("sectPr"))
+                    {
+                        self.ends.push(sect.clone());
+                        out.push(Block::Section(self.ends.len()));
+                    }
+                }
                 "tbl" => self.table(e, out),
                 "sdt" => {
                     if let Some(c) = e.child("sdtContent") {
@@ -952,8 +970,46 @@ impl Parser {
         self.blocks(&root, &mut out);
         self.rels = saved_rels;
         self.part = saved_part;
-        out.retain(|b| *b != Block::PageBreak);
+        out.retain(|b| !matches!(b, Block::PageBreak | Block::Section(_)));
         out
+    }
+
+    fn section(&mut self, sect: Option<&El>, before: Option<&Section>) -> Section {
+        let reference = |kind: &str| sect.and_then(|s| s.all(kind).find(|h| h.attr("type").is_none_or(|t| t == "default")).and_then(|h| h.attr("r:id")).map(str::to_string));
+        let (header_id, footer_id) = (reference("headerReference"), reference("footerReference"));
+        let target = |id: Option<String>, parser: &Parser| id.and_then(|i| parser.rels.get(&i).map(|r| r.target.clone()));
+        let (header_part, footer_part) = (target(header_id, self), target(footer_id, self));
+        let inherited = |own: Option<Vec<Block>>, from: fn(&Section) -> &Vec<Block>| own.or_else(|| before.map(|b| from(b).clone())).unwrap_or_default();
+        let header = inherited(header_part.map(|p| self.part_blocks(&p)), |s| &s.header);
+        let footer = inherited(footer_part.map(|p| self.part_blocks(&p)), |s| &s.footer);
+        let page = match (sect, before) {
+            (None, Some(before)) => before.page,
+            _ => page_of(sect),
+        };
+        Section { page, header, footer, continuous: sect.and_then(|s| s.val("type")) == Some("continuous") }
+    }
+}
+
+fn content_width(p: &Page) -> f32 {
+    (p.width - p.left - p.right).max(36.)
+}
+
+const A4_SIZE: (f32, f32) = (595.3, 841.9);
+
+fn page_of(sect: Option<&El>) -> Page {
+    let size = sect.and_then(|s| s.child("pgSz"));
+    let mar = sect.and_then(|s| s.child("pgMar"));
+    let m = |name: &str, default: f32| mar.and_then(|m| m.attr(name)).and_then(twips).unwrap_or(default).abs();
+    let side = |name: &str, default: f32| size.and_then(|s| s.attr(name)).and_then(twips).filter(|v| v.is_finite() && *v >= 72.).unwrap_or(default);
+    Page {
+        width: side("w", A4_SIZE.0),
+        height: side("h", A4_SIZE.1),
+        top: m("top", 72.),
+        bottom: m("bottom", 72.),
+        left: m("left", 72.),
+        right: m("right", 72.),
+        header: m("header", 36.),
+        footer: m("footer", 36.),
     }
 }
 
@@ -968,7 +1024,7 @@ fn restyle(b: &mut Block, run: &RunStyle) {
                 }
             }
         }
-        Block::Table(_) | Block::PageBreak => {}
+        Block::Table(_) | Block::PageBreak | Block::Section(_) => {}
     }
 }
 
@@ -1061,59 +1117,58 @@ pub fn parse(bytes: Vec<u8>) -> Result<Document, OpenError> {
         anchors: HashSet::new(),
         placed: HashSet::new(),
         table_style: Vec::new(),
+        ends: Vec::new(),
+        sections: false,
     };
     parser.load_theme();
     parser.load_styles();
     parser.load_numbering();
     let links: HashSet<String> = body.descendants().into_iter().filter(|e| e.name == "hyperlink").filter_map(|e| e.attr("anchor").map(str::to_string)).collect();
     parser.anchors = body.descendants().into_iter().filter(|e| e.name == "bookmarkStart").filter_map(|e| e.attr("name").map(str::to_string)).filter(|n| links.contains(n)).collect();
-    let sect = body.child("sectPr").or_else(|| body.descendants().into_iter().filter(|e| e.name == "sectPr").last());
-    let size = sect.and_then(|s| s.child("pgSz"));
-    let mar = sect.and_then(|s| s.child("pgMar"));
-    let m = |name: &str, default: f32| mar.and_then(|m| m.attr(name)).and_then(twips).unwrap_or(default).abs();
-    let mut page = Page {
-        width: size.and_then(|s| s.attr("w")).and_then(twips).unwrap_or(595.3),
-        height: size.and_then(|s| s.attr("h")).and_then(twips).unwrap_or(841.9),
-        top: m("top", 72.),
-        bottom: m("bottom", 72.),
-        left: m("left", 72.),
-        right: m("right", 72.),
-        header: m("header", 36.),
-        footer: m("footer", 36.),
-    };
-    if page.width < 72. || page.height < 72. {
-        page.width = 595.3;
-        page.height = 841.9;
-    }
-    let reference = |kind: &str| sect.and_then(|s| s.all(kind).find(|h| h.attr("type").is_none_or(|t| t == "default")).and_then(|h| h.attr("r:id")).map(str::to_string));
-    let (header_id, footer_id) = (reference("headerReference"), reference("footerReference"));
     let mut blocks = Vec::new();
+    parser.sections = true;
     parser.blocks(body, &mut blocks);
-    let target = |id: Option<String>, parser: &Parser| id.and_then(|i| parser.rels.get(&i).map(|r| r.target.clone()));
-    let (header_part, footer_part) = (target(header_id, &parser), target(footer_id, &parser));
+    parser.sections = false;
     parser.anchors.clear();
-    let header = header_part.map(|p| parser.part_blocks(&p)).unwrap_or_default();
-    let footer = footer_part.map(|p| parser.part_blocks(&p)).unwrap_or_default();
-    while matches!(blocks.last(), Some(Block::PageBreak)) {
+    let ends = std::mem::take(&mut parser.ends);
+    let last = body.child("sectPr");
+    let mut sections: Vec<Section> = Vec::new();
+    for sect in ends.iter().map(Some).chain(std::iter::once(last)) {
+        let built = parser.section(sect, sections.last());
+        sections.push(built);
+    }
+    while matches!(blocks.last(), Some(Block::PageBreak | Block::Section(_))) {
         blocks.pop();
     }
     collapse_contextual(&mut blocks);
-    Ok(Document { page, blocks, header, footer, images: parser.images, base: parser.doc_run })
+    Ok(Document { sections, blocks, images: parser.images, base: parser.doc_run })
 }
 
 fn collapse_contextual(blocks: &mut [Block]) {
-    for i in 1..blocks.len() {
-        let (a, b) = blocks.split_at_mut(i);
-        if let (Some(Block::Para(prev)), Some(Block::Para(next))) = (a.last_mut(), b.first_mut())
-            && prev.style == next.style
-        {
-            if prev.contextual {
-                prev.after = 0.;
-            }
-            if next.contextual {
-                next.before = 0.;
+    let mut before: Option<usize> = None;
+    for i in 0..blocks.len() {
+        match blocks[i] {
+            Block::Section(_) => continue,
+            Block::Para(_) => {}
+            _ => {
+                before = None;
+                continue;
             }
         }
+        if let Some(j) = before {
+            let (a, b) = blocks.split_at_mut(i);
+            if let (Block::Para(prev), Block::Para(next)) = (&mut a[j], &mut b[0])
+                && prev.style == next.style
+            {
+                if prev.contextual {
+                    prev.after = 0.;
+                }
+                if next.contextual {
+                    next.before = 0.;
+                }
+            }
+        }
+        before = Some(i);
     }
 }
 
@@ -1308,7 +1363,7 @@ impl Writer<'_> {
                             let w: f32 = t.cols[cell.col..cell.col + span].iter().sum::<f32>() * scale - t.inset.0 - t.inset.1;
                             self.table(inner, w.max(20.));
                         }
-                        Block::PageBreak => {}
+                        Block::PageBreak | Block::Section(_) => {}
                     }
                 }
                 let body = std::mem::replace(&mut self.out, saved);
@@ -1336,8 +1391,27 @@ impl Writer<'_> {
                 Block::Para(p) => self.para(p, false),
                 Block::Table(t) => self.table(t, width),
                 Block::PageBreak => self.out.push_str("#pagebreak(weak: true)\n"),
+                Block::Section(_) => {}
             }
         }
+    }
+
+    fn page_rule(&mut self, s: &Section) -> String {
+        let p = s.page;
+        let width = content_width(&p);
+        let header = self.part(&s.header, width);
+        let footer = self.part(&s.footer, width);
+        format!(
+            "#set page(width: {}, height: {}, margin: (top: {}, bottom: {}, left: {}, right: {}), fill: white, header-ascent: 0pt, footer-descent: 0pt, header: block(width: 100%, height: 100%)[#place(top + left, dy: {})[{header}]], footer: block(width: 100%, height: 100%)[#place(bottom + left, dy: {})[{footer}]])\n",
+            typ::pt(p.width),
+            typ::pt(p.height),
+            typ::pt(p.top),
+            typ::pt(p.bottom),
+            typ::pt(p.left),
+            typ::pt(p.right),
+            typ::pt(p.header),
+            typ::pt(-p.footer)
+        )
     }
 
     fn part(&mut self, blocks: &[Block], width: f32) -> String {
@@ -1370,7 +1444,7 @@ impl Document {
                             }
                         }
                     }
-                    Block::PageBreak => {}
+                    Block::PageBreak | Block::Section(_) => {}
                 }
             }
         }
@@ -1385,28 +1459,29 @@ pub fn to_typst(doc: &Document) -> Source {
     let base_size = doc.base.size.unwrap_or(10.);
     let base_font = doc.base.font.clone();
     let mut w = Writer { doc, out: String::new(), base_size, base_font: base_font.clone() };
-    let p = doc.page;
-    let width = (p.width - p.left - p.right).max(36.);
-    let header = w.part(&doc.header, width);
-    let footer = w.part(&doc.footer, width);
+    let first = &doc.sections[0];
+    let mut width = content_width(&first.page);
     let mut out = String::from(typ::PRELUDE);
     let family = base_font.map(|f| format!("{}, ", typ::s(&f))).unwrap_or_default();
     let color = doc.base.color.as_ref().filter(|c| !c.is_empty()).map(|c| typ::rgb(c, 1.)).unwrap_or_else(|| "black".into());
-    let _ = writeln!(
-        out,
-        "#set page(width: {}, height: {}, margin: (top: {}, bottom: {}, left: {}, right: {}), fill: white, header-ascent: 0pt, footer-descent: 0pt, header: block(width: 100%, height: 100%)[#place(top + left, dy: {})[{header}]], footer: block(width: 100%, height: 100%)[#place(bottom + left, dy: {})[{footer}]])",
-        typ::pt(p.width),
-        typ::pt(p.height),
-        typ::pt(p.top),
-        typ::pt(p.bottom),
-        typ::pt(p.left),
-        typ::pt(p.right),
-        typ::pt(p.header),
-        typ::pt(-p.footer)
-    );
+    out.push_str(&w.page_rule(first));
     let _ = writeln!(out, "#set text(font: ({family}{}), size: {}, fill: {color}, top-edge: \"ascender\", bottom-edge: \"descender\", hyphenate: false)", typ::FALLBACK, typ::pt(base_size));
     out.push_str("#set par(spacing: 0pt)\n#set block(spacing: 0pt)\n#set heading(numbering: none)\n#show heading: it => block(width: 100%, it.body)\n#set footnote.entry(separator: line(length: 30%, stroke: 0.5pt))\n");
-    w.blocks(&doc.blocks, width);
+    let mut current = first;
+    for b in &doc.blocks {
+        if let Block::Section(i) = b {
+            let next = &doc.sections[*i];
+            let same = next.page == current.page && next.header == current.header && next.footer == current.footer;
+            if !(next.continuous && same) {
+                let rule = w.page_rule(next);
+                w.out.push_str(&rule);
+                width = content_width(&next.page);
+                current = next;
+            }
+        } else {
+            w.blocks(std::slice::from_ref(b), width);
+        }
+    }
     out.push_str(&w.out);
     let files = doc.images.iter().enumerate().filter_map(|(i, img)| img.kind.map(|k| (format!("/img/{i}.{k}"), img.bytes.clone()))).collect();
     Source { text: out, files }
@@ -1481,7 +1556,7 @@ pub(crate) mod tests {
     #[test]
     fn reads_headings_runs_lists_tables_images_links_and_breaks() {
         let doc = parse(sample_docx()).unwrap();
-        assert!((doc.page.width - 595.3).abs() < 0.1 && (doc.page.left - 70.85).abs() < 0.1);
+        assert!((doc.sections[0].page.width - 595.3).abs() < 0.1 && (doc.sections[0].page.left - 70.85).abs() < 0.1);
         let ps = paras(&doc);
         assert_eq!(ps[0].heading, Some(1));
         assert!((ps[0].before - 12.).abs() < 0.01);
@@ -1526,6 +1601,99 @@ pub(crate) mod tests {
         let text = d.page_text(0).slice(0, d.page_text(0).glyph_count());
         assert!(text.contains("Projektbericht") && text.contains("Unterpunkt") && text.contains("Breit"), "{text}");
         assert!(d.page_text(1).slice(0, d.page_text(1).glyph_count()).contains("nachher"));
+    }
+
+    fn page_sizes(body: &str) -> Vec<(f32, f32)> {
+        let xml = format!(r#"<w:document {W}><w:body>{body}</w:body></w:document>"#);
+        let doc = parse(zip(&[("word/document.xml", xml.as_bytes())])).unwrap();
+        let source = to_typst(&doc);
+        let pdf = crate::core::pdf_export::compile(&source.text, source.files).unwrap();
+        let d = crate::core::pdf_render::PdfDoc::from_data(std::sync::Arc::new(pdf)).unwrap();
+        (0..d.page_count()).map(|i| d.page_size(i).map(|(w, h)| (w.round(), h.round())).unwrap()).collect()
+    }
+
+    const A4: &str = r#"<w:pgSz w:w="11906" w:h="16838"/>"#;
+    const A4_LANDSCAPE: &str = r#"<w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/>"#;
+    const LETTER: &str = r#"<w:pgSz w:w="12240" w:h="15840"/>"#;
+    const PORTRAIT: (f32, f32) = (595., 842.);
+    const LANDSCAPE: (f32, f32) = (842., 595.);
+
+    fn para(text: &str) -> String {
+        format!(r#"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"#)
+    }
+
+    fn ending(text: &str, sect: &str) -> String {
+        format!(r#"<w:p><w:pPr><w:sectPr>{sect}</w:sectPr></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#)
+    }
+
+    #[test]
+    fn a_landscape_last_section_does_not_turn_portrait_pages_landscape() {
+        let body = format!("{}{}<w:sectPr>{A4_LANDSCAPE}</w:sectPr>", ending("Deckblatt", A4), para("Tabelle"));
+        assert_eq!(page_sizes(&body), [PORTRAIT, LANDSCAPE]);
+    }
+
+    #[test]
+    fn sections_keep_their_own_page_format() {
+        let body = format!("{}{}{}<w:sectPr>{A4}</w:sectPr>", ending("eins", A4), ending("zwei", A4_LANDSCAPE), para("drei"));
+        assert_eq!(page_sizes(&body), [PORTRAIT, LANDSCAPE, PORTRAIT]);
+        let body = format!("{}{}<w:sectPr>{A4}</w:sectPr>", ending("eins", A4_LANDSCAPE), para("zwei"));
+        assert_eq!(page_sizes(&body), [LANDSCAPE, PORTRAIT]);
+    }
+
+    #[test]
+    fn a_section_break_after_the_last_text_adds_no_page() {
+        let body = format!("{}<w:sectPr>{A4_LANDSCAPE}</w:sectPr>", ending("nur Text", A4));
+        assert_eq!(page_sizes(&body), [PORTRAIT]);
+    }
+
+    #[test]
+    fn continuous_sections_of_one_size_stay_on_the_page() {
+        let continuous = format!(r#"<w:type w:val="continuous"/>{A4}"#);
+        let body = format!("{}{}<w:sectPr>{continuous}</w:sectPr>", ending("oben", A4), para("unten"));
+        assert_eq!(page_sizes(&body), [PORTRAIT]);
+    }
+
+    #[test]
+    fn letter_and_a4_are_read_as_written() {
+        assert_eq!(page_sizes(&format!("{}<w:sectPr>{LETTER}</w:sectPr>", para("x"))), [(612., 792.)]);
+        assert_eq!(page_sizes(&format!("{}<w:sectPr>{A4}</w:sectPr>", para("x"))), [PORTRAIT]);
+    }
+
+    #[test]
+    fn missing_size_falls_back_to_a4() {
+        assert_eq!(page_sizes(&para("x")), [PORTRAIT]);
+        assert_eq!(page_sizes(&format!("{}<w:sectPr/>", para("x"))), [PORTRAIT]);
+        assert_eq!(page_sizes(&format!(r#"{}<w:sectPr><w:pgSz w:w="12240"/></w:sectPr>"#, para("x"))), [(612., 842.)]);
+    }
+
+    #[test]
+    fn a_continuous_section_with_other_margins_starts_a_page() {
+        let wide = r#"<w:type w:val="continuous"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:left="2880" w:right="1417" w:top="1417" w:bottom="1134"/>"#;
+        let body = format!("{}{}<w:sectPr>{wide}</w:sectPr>", ending("oben", A4), para("unten"));
+        assert_eq!(page_sizes(&body), [PORTRAIT, PORTRAIT]);
+    }
+
+    #[test]
+    fn margins_wider_than_the_page_still_draw_tables() {
+        let table = r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+        let body = format!(r#"{table}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:left="8000" w:right="8000" w:top="1417" w:bottom="1134"/></w:sectPr>"#);
+        assert_eq!(page_sizes(&body), [PORTRAIT]);
+    }
+
+    #[test]
+    fn contextual_spacing_ignores_a_section_break_between_paragraphs() {
+        let styles = format!(r#"<w:styles {W}><w:style w:type="paragraph" w:styleId="Liste"><w:pPr><w:contextualSpacing/><w:spacing w:before="200" w:after="200"/></w:pPr></w:style></w:styles>"#);
+        let item = |text: &str, sect: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="Liste"/>{sect}</w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#);
+        let body = format!(r#"<w:document {W}><w:body>{}{}</w:body></w:document>"#, item("eins", r#"<w:sectPr><w:type w:val="continuous"/></w:sectPr>"#), item("zwei", ""));
+        let doc = parse(zip(&[("word/document.xml", body.as_bytes()), ("word/styles.xml", styles.as_bytes())])).unwrap();
+        let ps = paras(&doc);
+        assert_eq!((ps[0].after, ps[1].before), (0., 0.));
+    }
+
+    #[test]
+    fn a_missing_last_section_keeps_the_page_before_it() {
+        let body = format!("{}{}", ending("eins", A4_LANDSCAPE), para("zwei"));
+        assert_eq!(page_sizes(&body), [LANDSCAPE, LANDSCAPE]);
     }
 
     #[test]
