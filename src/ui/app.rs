@@ -2,7 +2,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
-use crate::core::i18n::{ctrl_name, shift_name, tr};
+use crate::core::i18n::{key_name, tr};
 use crate::core::library::{NewNoteRequest, Route};
 use crate::core::prefs;
 use crate::core::text::end_ellipsis;
@@ -83,11 +83,7 @@ fn route(r: Route) -> impl Fn(&mut App) {
 }
 
 pub fn init(cx: &mut App) {
-    gpui_kit::component::kbd::set_relabel(|label| match label {
-        "Ctrl" => ctrl_name().to_string(),
-        "Shift" => shift_name().to_string(),
-        other => other.to_string(),
-    });
+    gpui_kit::component::kbd::set_relabel(key_name);
     cx.on_action(|_: &Quit, cx| quit(cx));
     cx.on_action(|_: &OpenSettings, cx| super::settings::open(cx));
     cx.on_action(|_: &About, cx| super::settings::open_about(cx));
@@ -308,6 +304,9 @@ pub fn bind_keys(cx: &mut App) {
         kb(cmd("/"), ShowShortcuts, None),
         kb("f1".into(), ShowHelp, None),
         kb(cmd(","), OpenSettings, None),
+        kb(cmd("x"), gpui_kit::component::input::Cut, Some("Root")),
+        kb(cmd("v"), gpui_kit::component::input::Paste, Some("Root")),
+        kb(cmd("a"), gpui_kit::component::input::SelectAll, Some("Root")),
         kb(cmd("z"), Undo, Some("MainWindow")),
         kb(cmd("shift-z"), Redo, Some("MainWindow")),
         kb(cmd("s"), Save, None),
@@ -426,7 +425,7 @@ pub fn rebuild_menus(cx: &mut App) {
     cx.set_menus([
         Menu::new("Schrumbi").items(app_menu),
         Menu::new(tr("Ablage")).items([
-            MenuItem::action(tr("Befehl suchen …"), CommandPalette),
+            MenuItem::action(tr("Befehl suchen…"), CommandPalette),
             MenuItem::separator(),
             MenuItem::action(tr("Neuer Eintrag…"), NewEntry),
             MenuItem::action(tr("Neue Notiz, Datei oder Ordner…"), NewFile),

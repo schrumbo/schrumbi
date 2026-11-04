@@ -156,11 +156,13 @@ fn file_pills(lib: &Library, a: &Assignment, st: &ModuleState, view: Entity<Page
                 .on_click(move |_, _, cx| super::preview::show(&preview, cx))
                 .when(brief, |d| d.child(icon("clipboard-list", iconsize::XS, t.accent)).child(div().font_weight(FontWeight::MEDIUM).child(tr("Aufgabe"))))
                 .when(!brief, |d| d.child(file_icon(path, iconsize::S)).child(div().truncate().child(crate::core::text::middle_ellipsis(&name, 26))))
-                .context_menu(move |menu, _, _| {
+                .context_menu(move |menu, _, cx| {
                     let (p1, p2, p3, id) = (menu_path.clone(), menu_path.clone(), menu_path.clone(), id.clone());
+                    let rename = super::convention_rename::menu_item(&menu_path, cx);
                     let role = if brief { FileRole::Work } else { FileRole::Brief };
                     menu.item(PopupMenuItem::new(tr("Öffnen")).on_click(move |_, _, cx| act(cx, |l| l.open_file(&p1))))
                         .item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&p2)))
+                        .when_some(rename, |m, item| m.item(item))
                         .separator()
                         .item(PopupMenuItem::new(if brief { tr("Ist meine Abgabe") } else { tr("Ist die Aufgabenstellung") }).on_click(move |_, _, cx| act(cx, |l| l.set_role(role, &p3, &id))))
                 }),
@@ -468,7 +470,7 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     let now = chrono::Local::now().timestamp() as f64;
     let hover_rows = recent.into_iter().enumerate().map(|(i, (path, at))| {
         let (open, menu) = (path.clone(), path.clone());
-        inset_file_row(("module-recent", i), &path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t).child(caption(super::notes_page::changed_ago(now - at), t).flex_none()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).context_menu(move |menu_box, _, _| file_menu(menu_box, menu.clone()))
+        inset_file_row(("module-recent", i), &path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t).child(caption(super::notes_page::changed_ago(now - at), t).flex_none()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).context_menu(move |menu_box, _, cx| file_menu(menu_box, menu.clone()).when_some(super::convention_rename::menu_item(&menu, cx), |m, item| m.item(item)))
     });
     let new_id = m.id.clone();
     let module_folder = m.folder.clone();

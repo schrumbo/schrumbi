@@ -1018,7 +1018,7 @@ impl NotesPage {
                     .child(div().flex_1().min_w_0().truncate().child(text.clone()))
                     .child(caption(note.clone(), t).flex_none().max_w(px(90.)).truncate())
                     .on_click(click(row, me))
-                    .context_menu(move |m, _, _| file_menu(m, menu.clone()))
+                    .context_menu(move |m, _, cx| file_menu(m, menu.clone()).when_some(super::convention_rename::menu_item(&menu, cx), |m, item| m.item(item)))
                     .into_any_element()
             }
         }
@@ -1120,11 +1120,11 @@ impl Render for NotesPage {
                 move |menu, _, _| {
                     let (a, b, c, d) = (me.clone(), me.clone(), me.clone(), me.clone());
                     menu.item(PopupMenuItem::new(tr("Neuer Ordner")).icon(menu_icon("folder-plus")).on_click(move |_, window, cx| a.update(cx, |s, cx| s.new_folder(None, window, cx))))
-                        .item(PopupMenuItem::new(tr("Tagesnotiz öffnen")).icon(menu_icon("calendar")).on_click(|_, _, cx| {
+                        .item(PopupMenuItem::new(format!("{}{}", tr("Tagesnotiz öffnen"), crate::core::shortcuts::ShortcutAction::DailyNote.hint())).icon(menu_icon("calendar")).on_click(|_, _, cx| {
                             act(cx, |l| l.open_daily_note());
                             state::reindex(cx);
                         }))
-                        .item(PopupMenuItem::new(tr("Graph zeigen")).icon(menu_icon("waypoints")).on_click(|_, _, cx| act(cx, |l| l.show_graph(None))))
+                        .item(PopupMenuItem::new(format!("{}{}", tr("Graph zeigen"), crate::core::shortcuts::ShortcutAction::ShowGraph.hint())).icon(menu_icon("waypoints")).on_click(|_, _, cx| act(cx, |l| l.show_graph(None))))
                         .separator()
                         .item(PopupMenuItem::new(tr("Nach Name sortieren")).checked(order == Order::Name).on_click(move |_, _, cx| {
                             b.update(cx, |s, cx| {

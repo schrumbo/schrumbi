@@ -35,6 +35,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         Some(kb(super::app::cmd("alt-f"), ReplaceInNote, ctx)),
         #[cfg(not(target_os = "macos"))]
         Some(kb("ctrl-h".into(), ReplaceInNote, ctx)),
+        #[cfg(not(target_os = "macos"))]
+        Some(kb("ctrl-shift-z".into(), gpui_kit::component::input::Redo, ctx)),
         Some(kb("escape".into(), CloseFind, Some("FindOpen"))),
         Some(kb("enter".into(), ListNewline, ctx)),
         Some(kb("shift-enter".into(), PlainNewline, ctx)),

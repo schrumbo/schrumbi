@@ -495,6 +495,9 @@ impl NoteView {
     fn find_in_background(&mut self, text: &str, signature: (u64, String, bool), reveal: bool, cx: &mut Context<Self>) {
         let anchor = self.find.anchor.or_else(|| self.find.matches.get(self.find.current).map(|m| m.start)).unwrap_or(0);
         self.find.pending = Some(signature.clone());
+        if let Some(bar) = self.find.bar.clone() {
+            bar.update(cx, |b, cx| b.searching(cx));
+        }
         let (owned, query, exact) = (text.to_string(), signature.1.clone(), signature.2);
         self.find.task = Some(cx.spawn(async move |this, cx| {
             let (found, owned) = cx
@@ -545,10 +548,12 @@ impl NoteView {
             (Some((query, exact)), Some(at)) if self.find.open => {
                 let starts = markdown_view::block_starts(text);
                 let block_of = |offset: usize| starts.partition_point(|s| *s <= offset).saturating_sub(1);
-                let block = block_of(at.start);
+                let undrawn = markdown_view::fence_lines(text);
+                let drawn = |m: &&std::ops::Range<usize>| !undrawn.iter().any(|f| f.contains(&m.start));
+                let block = if drawn(&at) { block_of(at.start) } else { usize::MAX };
                 let block_start = starts.get(block).copied().unwrap_or(0);
                 let before = &self.find.matches[..current];
-                let nth = before.iter().rev().take_while(|m| m.start >= block_start).count();
+                let nth = before.iter().rev().take_while(|m| m.start >= block_start).filter(drawn).count();
                 let line_start = text.get(..at.start).and_then(|t| t.rfind('\n')).map_or(0, |i| i + 1);
                 let line = text.get(..at.start).unwrap_or_default().matches('\n').count();
                 let line_nth = before.iter().rev().take_while(|m| m.start >= line_start).count();
@@ -2440,7 +2445,9 @@ impl NoteView {
             }))
             .on_action(cx.listener(|n, _: &ToggleComment, w, cx| {
                 let (s, r) = n.with_text(cx);
-                n.apply(edit_ops::toggle_comment(&s, r), w, cx)
+                if let Some(e) = edit_ops::toggle_comment(&s, r) {
+                    n.apply(e, w, cx)
+                }
             }))
             .on_action(cx.listener(|n, _: &MoveLineUp, w, cx| {
                 if n.live_line_action(LineAction::Up, w, cx) {

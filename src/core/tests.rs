@@ -69,3 +69,16 @@ fn shortens_file_names_in_the_middle() {
     assert_eq!(middle_ellipsis("Übung-Übung-Übung-Übung.pdf", 11), "Übung…g.pdf");
     assert_eq!(middle_ellipsis("abc", 2), "abc");
 }
+
+#[test]
+fn a_removed_or_replaced_toast_is_no_longer_hovered() {
+    let mut lib = Library::new();
+    lib.notify("Eins".into(), "check", None, Some(Box::new(|_| {})));
+    lib.toast_hovered = true;
+    lib.perform_toast_action();
+    assert!(lib.toast.is_none() && !lib.toast_hovered, "the pointer cannot leave a toast that is gone");
+    lib.notify("Zwei".into(), "check", None, None);
+    lib.toast_hovered = true;
+    lib.notify("Drei".into(), "check", None, None);
+    assert!(!lib.toast_hovered);
+}

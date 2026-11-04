@@ -160,6 +160,8 @@ pub struct Theme {
     pub green: Hsla,
     pub blue: Hsla,
     pub orange: Hsla,
+    /// Orange that is readable as text on the content background.
+    pub orange_text: Hsla,
     pub red: Hsla,
     pub gray: Hsla,
     pub ink: Hsla,
@@ -203,6 +205,7 @@ impl Theme {
             green: if dark { c(0x30D158) } else { c(0x34C759) },
             blue: if dark { c(0x0A84FF) } else { c(0x007AFF) },
             orange: if dark { c(0xFF9F0A) } else { c(0xFF9500) },
+            orange_text: if dark { c(0xFF9F0A) } else { c(0x9A5700) },
             red: if dark { c(0xFF453A) } else { c(0xFF3B30) },
             gray: c(0x8E8E93),
             ink,
@@ -233,6 +236,7 @@ impl Theme {
             green: c(0xA3BE8C),
             blue: c(0x81A1C1),
             orange: c(0xD08770),
+            orange_text: c(0xF0A78E),
             red: c(0xBF616A),
             gray: c(0x8591A8),
             ink,
@@ -263,6 +267,7 @@ impl Theme {
             green: c(0x50FA7B),
             blue: c(0x8BE9FD),
             orange: c(0xFFB86C),
+            orange_text: c(0xFFB86C),
             red: c(0xFF5555),
             gray: c(0x8A94B8),
             ink,
@@ -534,6 +539,7 @@ mod tests {
                 assert!(contrast(t.primary, background) >= 7., "primary, {dark:?}");
                 assert!(contrast(t.secondary, background) >= 4.5, "secondary, {dark:?}: {}", contrast(t.secondary, background));
                 assert!(contrast(t.accent_text, background) >= 4.5, "accent, {dark:?}: {}", contrast(t.accent_text, background));
+                assert!(contrast(t.orange_text, background) >= 4.5, "orange text, {dark:?}: {}", contrast(t.orange_text, background));
                 for name in ["blue", "green", "orange", "purple", "pink", "teal", "red", "yellow", "indigo", "mint", "brown", "gray"] {
                     let color = t.palette(name);
                     assert!(contrast(t.readable(color), t.column.blend(color.opacity(0.12))) >= 4.5, "{name}, {dark:?}");

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::i18n::{backspace_name, ctrl_name, shift_name, tr};
+use super::i18n::{backspace_name, ctrl_name, shift_name, tr, trf};
 use super::prefs::{self, Shortcut};
 
 /// Every action with a configurable shortcut. Defaults follow VS Code where it has an equivalent.
@@ -76,7 +76,7 @@ impl Group {
         tr(match self {
             Group::General => "Allgemein",
             Group::Navigation => "Navigation",
-            Group::View => "Ansicht",
+            Group::View => "Darstellung",
             Group::Documents => "Dokumente & Notizen",
             Group::Editor => "Editor",
         })
@@ -277,18 +277,22 @@ impl ShortcutAction {
         })
     }
 
-    pub fn default_shortcut(self) -> Shortcut {
+    /// The keys the action has until the user changes them; `None` when it ships without any.
+    pub fn default_shortcut(self) -> Option<Shortcut> {
+        if self == Self::ToggleComment {
+            return None;
+        }
         if !cfg!(target_os = "macos") {
             match self {
-                Self::GoBack => return s("left", false, false, true, false),
-                Self::GoForward => return s("right", false, false, true, false),
-                Self::Refresh => return s("f5", false, false, false, false),
-                Self::ToggleFullscreen => return s("f11", false, false, false, false),
-                Self::ToggleInspector => return s("i", true, true, false, false),
+                Self::GoBack => return Some(s("left", false, false, true, false)),
+                Self::GoForward => return Some(s("right", false, false, true, false)),
+                Self::Refresh => return Some(s("f5", false, false, false, false)),
+                Self::ToggleFullscreen => return Some(s("f11", false, false, false, false)),
+                Self::ToggleInspector => return Some(s("i", true, true, false, false)),
                 _ => {}
             }
         }
-        match self {
+        Some(match self {
             Self::GoToday => s("1", true, false, false, false),
             Self::GoGrid => s("2", true, false, false, false),
             Self::GoRecord => s("3", true, false, false, false),
@@ -325,7 +329,7 @@ impl ShortcutAction {
             Self::Link => s("k", true, false, false, false),
             Self::InlineCode => s("c", true, true, false, false),
             Self::ToggleTask => s("return", true, false, false, false),
-            Self::ToggleComment => s("/", true, false, false, false),
+            Self::ToggleComment => return None,
             Self::MoveLineUp => s("up", false, false, true, false),
             Self::MoveLineDown => s("down", false, false, true, false),
             Self::CopyLineUp => s("up", false, true, true, false),
@@ -337,7 +341,7 @@ impl ShortcutAction {
             Self::ZoomIn => s("+", true, false, false, false),
             Self::ZoomOut => s("-", true, false, false, false),
             Self::ZoomReset => s("0", true, false, false, false),
-        }
+        })
     }
 
     /// The effective shortcut; `None` when the user cleared it.
@@ -346,7 +350,7 @@ impl ShortcutAction {
         if p.disabled_shortcuts.contains(self.id()) {
             return None;
         }
-        Some(p.shortcuts.get(self.id()).cloned().unwrap_or_else(|| self.default_shortcut()))
+        p.shortcuts.get(self.id()).cloned().or_else(|| self.default_shortcut())
     }
 
     pub fn is_customized(self) -> bool {
@@ -355,10 +359,11 @@ impl ShortcutAction {
     }
 
     pub fn set(self, shortcut: Option<Shortcut>) {
+        let default = self.default_shortcut();
         prefs::update(|p| match shortcut {
             Some(s) => {
                 p.disabled_shortcuts.remove(self.id());
-                if s == self.default_shortcut() {
+                if Some(&s) == default.as_ref() {
                     p.shortcuts.remove(self.id());
                 } else {
                     p.shortcuts.insert(self.id().into(), s);
@@ -366,7 +371,11 @@ impl ShortcutAction {
             }
             None => {
                 p.shortcuts.remove(self.id());
-                p.disabled_shortcuts.insert(self.id().into());
+                if default.is_some() {
+                    p.disabled_shortcuts.insert(self.id().into());
+                } else {
+                    p.disabled_shortcuts.remove(self.id());
+                }
             }
         });
     }
@@ -396,6 +405,29 @@ impl ShortcutAction {
         self.shortcut().map_or_else(String::new, |s| format!(" ({})", s.display()))
     }
 
+    /// The names of what the app itself does with these keys, unless they are the action's own defaults.
+    pub fn fixed_conflicts(self) -> Vec<String> {
+        let Some(mine) = self.shortcut().filter(|m| Some(m) != self.default_shortcut().as_ref()) else { return Vec::new() };
+        let mac = cfg!(target_os = "macos");
+        let notes = matches!(self.group(), Group::Editor | Group::Documents);
+        let mut names: Vec<String> = Vec::new();
+        for f in FIXED.iter().filter(|f| f.key == mine.key && f.command == mine.command && f.shift == mine.shift && f.option == mine.option && !mine.control && (notes || !f.notes_only) && !(mac && f.key == "h")) {
+            let name = tr(f.label);
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names
+    }
+
+    /// Why these keys cannot be recorded for `self`: what they already do everywhere.
+    pub fn reserved_for(self, keys: &Shortcut) -> Option<String> {
+        if Some(keys) == self.default_shortcut().as_ref() {
+            return None;
+        }
+        keys.reserved_for()
+    }
+
     /// Other actions using the same keys in an overlapping scope.
     pub fn conflicts(self) -> Vec<ShortcutAction> {
         let Some(mine) = self.shortcut() else { return Vec::new() };
@@ -405,6 +437,44 @@ impl ShortcutAction {
             .collect()
     }
 }
+
+/// A key the app binds on its own: the keys, the label of what it does and whether it only works in notes.
+struct Fixed {
+    key: &'static str,
+    command: bool,
+    shift: bool,
+    option: bool,
+    label: &'static str,
+    notes_only: bool,
+}
+
+const fn fixed(key: &'static str, command: bool, shift: bool, option: bool, label: &'static str, notes_only: bool) -> Fixed {
+    Fixed { key, command, shift, option, label, notes_only }
+}
+
+const FIXED: [Fixed; 21] = [
+    fixed("k", true, false, false, "Befehl suchen…", false),
+    fixed("p", true, false, false, "Befehl suchen…", false),
+    fixed("p", true, true, false, "Befehl suchen…", false),
+    fixed("/", true, false, false, "Tastenkürzel anzeigen", false),
+    fixed("7", true, true, false, "Tastenkürzel anzeigen", false),
+    fixed("f1", false, false, false, "Schrumbi-Anleitung", false),
+    fixed(",", true, false, false, "Einstellungen", false),
+    fixed("s", true, false, false, "Sichern", false),
+    fixed("w", true, true, false, "Fenster schließen", false),
+    fixed("r", true, true, false, "Studienordner im Finder zeigen", false),
+    fixed("m", true, false, false, "Im Dock ablegen", false),
+    fixed("b", true, false, false, "Seitenleiste ein-/ausblenden", false),
+    fixed("f", true, false, true, "In Notiz ersetzen", true),
+    fixed("h", true, false, false, "In Notiz ersetzen", true),
+    fixed("x", true, true, false, "Durchgestrichen", true),
+    fixed(".", true, true, false, "Zitat", true),
+    fixed("8", true, true, false, "Liste", true),
+    fixed("7", true, true, false, "Nummerierte Liste", true),
+    fixed("1", true, false, true, "Überschrift 1", true),
+    fixed("2", true, false, true, "Überschrift 2", true),
+    fixed("3", true, false, true, "Überschrift 3", true),
+];
 
 /// The custom and the cleared shortcuts, as `reset_all` took them away.
 pub type Customized = (BTreeMap<String, Shortcut>, BTreeSet<String>);
@@ -418,6 +488,29 @@ pub fn released_bindings(before: &BTreeSet<Bound>, now: &BTreeSet<Bound>) -> Vec
 }
 
 impl Shortcut {
+    /// What the system and every text field do with these keys, e.g. "Für Kopieren reserviert".
+    pub fn reserved_for(&self) -> Option<String> {
+        let what = if self.key == "tab" && !self.command && !self.option && !self.control {
+            "Tastaturnavigation"
+        } else if self.command && !self.option && !self.control {
+            match (self.key.as_str(), self.shift) {
+                ("c", false) => "Kopieren",
+                ("v", false) => "Einsetzen",
+                ("x", false) => "Ausschneiden",
+                ("a", false) => "Alles auswählen",
+                ("z", false) => "Widerrufen",
+                ("z", true) => "Wiederholen",
+                ("y", false) if !cfg!(target_os = "macos") => "Wiederholen",
+                ("w", false) => "Tab schließen",
+                ("q", false) => "Beenden",
+                _ => return None,
+            }
+        } else {
+            return None;
+        };
+        Some(trf("Für %@ reserviert", &[&tr(what)]))
+    }
+
     /// The modifier and key labels in this platform's order, e.g. ⇧ ⌘ E or Ctrl Shift E.
     pub fn parts(&self) -> Vec<String> {
         let mac = cfg!(target_os = "macos");
@@ -539,10 +632,51 @@ mod tests {
         assert_eq!(ShortcutAction::OpenOtherWorkspace.group(), Group::General);
         assert_eq!(ShortcutAction::ToggleFullscreen.group(), Group::View);
         let seven = ShortcutAction::GoModule1.default_shortcut();
-        ShortcutAction::GoNotes.set(Some(seven));
+        ShortcutAction::GoNotes.set(seven);
         let conflicts = ShortcutAction::GoNotes.conflicts();
         ShortcutAction::GoNotes.reset();
         assert_eq!(conflicts, vec![ShortcutAction::GoModule1]);
         assert!(ShortcutAction::GoNotes.conflicts().is_empty());
+    }
+
+    #[test]
+    fn copy_paste_and_tab_cannot_be_taken() {
+        let k = |key: &str, shift: bool| s(key, true, shift, false, false);
+        for key in ["c", "v", "x", "a", "z", "w", "q"] {
+            assert!(ShortcutAction::Bold.reserved_for(&k(key, false)).is_some(), "{key}");
+        }
+        assert!(ShortcutAction::Bold.reserved_for(&k("z", true)).is_some());
+        assert_eq!(ShortcutAction::Bold.reserved_for(&k("y", false)).is_some(), !cfg!(target_os = "macos"));
+        assert!(ShortcutAction::Bold.reserved_for(&s("tab", false, false, false, false)).is_some());
+        assert!(ShortcutAction::Bold.reserved_for(&s("tab", false, true, false, false)).is_some());
+        assert!(ShortcutAction::Bold.reserved_for(&s("tab", false, false, false, true)).is_none(), "Ctrl+Tab stays free");
+        assert!(ShortcutAction::Bold.reserved_for(&k("c", true)).is_none(), "Ctrl+Shift+C is not copy");
+        assert!(ShortcutAction::Bold.reserved_for(&k("b", false)).is_none());
+        assert!(ShortcutAction::CloseTab.reserved_for(&k("w", false)).is_none(), "an action may keep its own default");
+    }
+
+    #[test]
+    fn a_key_of_the_app_names_what_it_does() {
+        let sidebar = s("b", true, false, false, false);
+        ShortcutAction::Italic.set(Some(sidebar));
+        let fixed = ShortcutAction::Italic.fixed_conflicts();
+        ShortcutAction::Italic.reset();
+        assert_eq!(fixed.len(), 1);
+        assert!(ShortcutAction::Bold.fixed_conflicts().is_empty(), "the default of Bold is meant to win in notes");
+        assert!(ShortcutAction::Italic.fixed_conflicts().is_empty());
+    }
+
+    #[test]
+    fn commenting_ships_without_keys_but_can_be_bound() {
+        assert_eq!(ShortcutAction::ToggleComment.default_shortcut(), None);
+        assert_eq!(ShortcutAction::ToggleComment.shortcut(), None);
+        assert!(!ShortcutAction::ToggleComment.is_customized());
+        let keys = s("j", true, true, false, false);
+        ShortcutAction::ToggleComment.set(Some(keys.clone()));
+        assert_eq!(ShortcutAction::ToggleComment.shortcut(), Some(keys));
+        assert!(ShortcutAction::ToggleComment.is_customized());
+        ShortcutAction::ToggleComment.set(None);
+        assert_eq!(ShortcutAction::ToggleComment.shortcut(), None);
+        assert!(!ShortcutAction::ToggleComment.is_customized());
     }
 }

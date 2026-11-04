@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{Days, Local};
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -18,7 +18,7 @@ use super::motion::{self, Soft};
 use super::theme::{self, Theme, font, radius, space, iconsize, control};
 use super::widgets::*;
 use crate::core::text::fold;
-use crate::core::i18n::{ctrl_name, shift_name, tr, trf};
+use crate::core::i18n::{ctrl_name, tr, trf};
 use crate::core::ics;
 use crate::core::model::*;
 use crate::core::naming::Naming;
@@ -216,6 +216,13 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Eigenschaften über dem Text", Tab::Notes),
 ];
 
+/// Why the keys just pressed were not taken as a shortcut.
+#[derive(Clone)]
+enum Rejected {
+    NeedsModifier,
+    Reserved(String),
+}
+
 /// The settings window: Allgemein, Semester, Module, Notizen, Tastenkürzel.
 pub struct Settings {
     tab: Tab,
@@ -231,7 +238,9 @@ pub struct Settings {
     /// The scrolling page of the tabs that scroll as a whole.
     page: ScrollHandle,
     recording: Option<ShortcutAction>,
-    needs_modifier: bool,
+    rejected: Option<Rejected>,
+    key_buttons: HashMap<&'static str, FocusHandle>,
+    reset_toast: Option<u64>,
     focus: FocusHandle,
     launch_at_login: bool,
     markdown_default: Option<bool>,
@@ -581,12 +590,12 @@ fn theme_label(choice: prefs::ThemeChoice) -> String {
 
 impl Settings {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Befehl suchen")));
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Kürzel suchen")));
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Suchen")));
         let lib = state::lib(cx);
         let (me, handle) = (cx.weak_entity(), window.window_handle());
         let recorder = cx.intercept_keystrokes(move |e, window, cx| {
-            let Some(settings) = me.upgrade().filter(|s| window.window_handle() == handle && s.read(cx).recording.is_some()) else { return };
+            let Some(settings) = me.upgrade().filter(|s| window.window_handle() == handle && s.read(cx).armed(window)) else { return };
             settings.update(cx, |s, cx| s.record_key(&e.keystroke, cx));
             cx.stop_propagation();
         });
@@ -616,7 +625,9 @@ impl Settings {
             hit: 0,
             page: ScrollHandle::new(),
             recording: None,
-            needs_modifier: false,
+            rejected: None,
+            key_buttons: HashMap::new(),
+            reset_toast: None,
             focus: cx.focus_handle(),
             launch_at_login: super::platform::launches_at_login(),
             markdown_default: super::platform::markdown_is_default(),
@@ -2134,42 +2145,93 @@ impl Settings {
         div().flex().flex_col().gap(px(space::XL)).child(learning).child(syntax)
     }
 
+    /// Whether a shortcut is being recorded and its key button, which only records while it has the focus.
+    fn armed(&self, window: &Window) -> bool {
+        self.recording.and_then(|a| self.key_buttons.get(a.id())).is_some_and(|h| h.is_focused(window))
+    }
+
+    fn key_button(&mut self, a: ShortcutAction, cx: &mut Context<Self>) -> FocusHandle {
+        self.key_buttons.entry(a.id()).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
+    }
+
+    fn start_recording(&mut self, a: ShortcutAction, toggle: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.recording = if toggle && self.recording == Some(a) { None } else { Some(a) };
+        self.rejected = None;
+        self.reset_toast = None;
+        let handle = self.key_button(a, cx);
+        handle.focus(window, cx);
+        cx.notify();
+    }
+
     fn shortcuts(&mut self, t: &Theme, cx: &mut Context<Self>) -> Div {
-        let filter = self.filter.read(cx).value().to_lowercase();
+        let query = self.filter.read(cx).value().trim().to_string();
+        let filter = query.to_lowercase();
         let any_custom = ShortcutAction::ALL.iter().any(|a| a.is_customized());
+        let notice = self.reset_toast.filter(|id| state::read(cx, |l| l.toast.as_ref().is_some_and(|t| t.id == *id)));
         let head = div()
             .flex()
             .items_center()
             .gap(px(space::S))
             .child(div().flex_1().child(Input::new(&self.filter).prefix(icon("search", iconsize::S, t.secondary)).cleanable(true)))
+            .when_some(notice, |d, id| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S))
+                        .text_size(px(font::CAPTION))
+                        .text_color(t.secondary)
+                        .child(icon("check", iconsize::XS, t.green_text))
+                        .child(tr("Alle Kürzel zurückgesetzt"))
+                        .child(link_button("sc-reset-undo", tr("Rückgängig"), t).on_click(cx.listener(move |s, _, _, cx| {
+                            s.reset_toast = None;
+                            act(cx, |l| {
+                                if l.toast.as_ref().is_some_and(|t| t.id == id) {
+                                    l.perform_toast_action();
+                                }
+                            });
+                            cx.notify();
+                        }))),
+                )
+            })
             .child(Button::new("sc-reset-all").label(tr("Alle zurücksetzen")).disabled(!any_custom).on_click(cx.listener(|s, _, _, cx| {
                 let before = ShortcutAction::reset_all();
                 s.recording = None;
+                s.rejected = None;
                 super::app::bind_keys(cx);
                 let undo: crate::core::library::Undo = Box::new(move |l| {
                     ShortcutAction::restore(before);
                     l.shortcuts_restored = true;
                 });
                 state::act(cx, |l| l.notify(tr("Alle Kürzel zurückgesetzt"), "rotate-ccw", Some(tr("Rückgängig")), Some(undo)));
+                s.reset_toast = state::read(cx, |l| l.toast.as_ref().map(|t| t.id));
                 cx.notify();
             })));
         let (escape, delete) = (Shortcut { key: "escape".into(), command: false, shift: false, option: false, control: false }.display(), Shortcut { key: "delete".into(), command: false, shift: false, option: false, control: false }.display());
         let mut col = div().flex().flex_col().gap(px(space::XL)).child(div().flex().flex_col().gap(px(space::S)).child(head).child(caption(trf("Klick auf ein Kürzel und drück die neuen Tasten. %@ bricht ab, %@ entfernt das Kürzel.", &[&escape, &delete]), t)));
         let modules = module_names(cx);
+        let mut shown = false;
         for g in Group::ALL {
             let actions: Vec<ShortcutAction> = ShortcutAction::ALL.into_iter().filter(|a| a.group() == g && (filter.is_empty() || shortcut_fits(*a, &modules, &filter))).collect();
             if actions.is_empty() {
                 continue;
             }
+            shown = true;
             let mut rows: Vec<AnyElement> = Vec::new();
             for a in actions {
-                let conflicts = a.conflicts();
+                let mut clashes: Vec<String> = a.conflicts().iter().map(|c| c.named(&modules)).collect();
+                clashes.extend(a.fixed_conflicts());
                 let recording = self.recording == Some(a);
                 let customized = a.is_customized();
-                let needs_modifier = recording && self.needs_modifier;
-                let caps: AnyElement = if needs_modifier {
-                    let hint = if cfg!(target_os = "macos") { tr("Dazu ⌘, ⌥ oder ⌃ halten") } else { trf("Dazu %@, Alt oder %@ halten", &[&ctrl_name(), &shift_name()]) };
-                    div().text_size(px(font::CAPTION)).text_color(t.orange).child(hint).into_any_element()
+                let rejected = self.rejected.clone().filter(|_| recording);
+                let handle = self.key_button(a, cx);
+                let caps: AnyElement = if let Some(why) = rejected {
+                    let text = match why {
+                        Rejected::NeedsModifier if cfg!(target_os = "macos") => tr("Dazu ⌘, ⌥ oder ⌃ halten"),
+                        Rejected::NeedsModifier => trf("Dazu %@ oder Alt halten", &[&ctrl_name()]),
+                        Rejected::Reserved(why) => why,
+                    };
+                    div().text_size(px(font::CAPTION)).text_color(t.orange_text).child(text).into_any_element()
                 } else if recording {
                     div().text_size(px(font::CALLOUT)).text_color(t.accent_text).child(tr("Tasten drücken …")).into_any_element()
                 } else if let Some(s) = a.shortcut() {
@@ -2180,10 +2242,12 @@ impl Settings {
                 let hover = t.ink.opacity(0.06);
                 let recorder = div()
                     .id(SharedString::from(format!("rec-{}", a.id())))
+                    .track_focus(&handle)
                     .min_w(px(120.))
                     .h(px(control::M))
                     .px(px(space::S))
                     .flex()
+                    .flex_none()
                     .items_center()
                     .justify_end()
                     .rounded(px(radius::CONTROL))
@@ -2192,13 +2256,8 @@ impl Settings {
                     .when(recording, |d| d.border(px(1.5)).border_color(t.accent))
                     .child(caps)
                     .tooltip(tip(if recording { trf("%@ bricht ab, %@ entfernt das Kürzel", &[&escape, &delete]) } else { tr("Klicken zum Ändern") }))
-                    .on_click(cx.listener(move |s, _, window, cx| {
-                        s.recording = if s.recording == Some(a) { None } else { Some(a) };
-                        s.needs_modifier = false;
-                        s.focus.focus(window, cx);
-                        cx.notify();
-                    }));
-                let default = a.default_shortcut().display();
+                    .on_click(cx.listener(move |s, _, window, cx| s.start_recording(a, true, window, cx)));
+                let default = a.default_shortcut().map_or_else(|| tr("kein Kürzel"), |d| d.display());
                 rows.push(
                     div()
                         .flex()
@@ -2206,14 +2265,15 @@ impl Settings {
                         .gap(px(space::S))
                         .px(px(space::L))
                         .py(px(space::S))
-                        .child(div().flex_1().child(a.named(&modules)))
-                        .when(!conflicts.is_empty(), |d| {
-                            d.child(div().id(SharedString::from(format!("dup-{}", a.id()))).flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange).child(icon("triangle-alert", iconsize::XS, t.orange)).child(tr("Doppelt")).tooltip(tip(trf("Auch belegt: %@", &[&conflicts.iter().map(|c| c.named(&modules)).collect::<Vec<_>>().join(", ")]))))
+                        .child(div().id(SharedString::from(format!("lbl-{}", a.id()))).flex_1().min_w_0().cursor_pointer().soft(hover, radius::SMALL).on_click(cx.listener(move |s, _, window, cx| s.start_recording(a, false, window, cx))).child(a.named(&modules)))
+                        .when(!clashes.is_empty(), |d| {
+                            d.child(div().id(SharedString::from(format!("dup-{}", a.id()))).flex().flex_none().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange_text).child(icon("triangle-alert", iconsize::XS, t.orange_text)).child(tr("Doppelt")).tooltip(tip(trf("Auch belegt: %@", &[&clashes.join(", ")]))))
                         })
                         .child(recorder)
                         .child(div().w(px(26.)).when(customized, |d| {
-                            d.child(Button::new(SharedString::from(format!("rst-{}", a.id()))).ghost().small().icon(menu_icon("rotate-ccw")).tooltip(trf("Zurücksetzen auf %@", &[&default])).on_click(cx.listener(move |_, _, _, cx| {
+                            d.child(Button::new(SharedString::from(format!("rst-{}", a.id()))).ghost().small().icon(menu_icon("rotate-ccw")).tooltip(trf("Zurücksetzen auf %@", &[&default])).on_click(cx.listener(move |s, _, _, cx| {
                                 a.reset();
+                                s.reset_toast = None;
                                 super::app::bind_keys(cx);
                                 cx.notify();
                             })))
@@ -2222,6 +2282,14 @@ impl Settings {
                 );
             }
             col = col.child(section(Some(g.label()), None, rows, t));
+        }
+        if !shown {
+            let filter_field = self.filter.clone();
+            col = col.child(
+                unavailable("search", trf("Keine Treffer für „%@“", &[&query]), "", t)
+                    .h(px(240.))
+                    .child(Button::new("sc-clear-filter").label(tr("Filter zurücksetzen")).on_click(cx.listener(move |_, _, window, cx| filter_field.update(cx, |f, cx| f.set_value("", window, cx))))),
+            );
         }
         col
     }
@@ -2248,6 +2316,11 @@ impl Settings {
         } else {
             let mac = cfg!(target_os = "macos");
             let s = Shortcut { key, command: if mac { m.platform } else { m.control }, shift: m.shift, option: m.alt, control: if mac { m.control } else { false } };
+            if let Some(why) = action.reserved_for(&s) {
+                self.rejected = Some(Rejected::Reserved(why));
+                cx.notify();
+                return;
+            }
             let special = ["up", "down", "left", "right", "tab", "return"].contains(&s.key.as_str());
             let function = s.key.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()).is_some_and(|n| (1..=24).contains(&n));
             if s.command || s.option || s.control || function || (special && s.shift) {
@@ -2255,12 +2328,13 @@ impl Settings {
                 self.recording = None;
                 super::app::bind_keys(cx);
             } else {
-                self.needs_modifier = true;
+                self.rejected = Some(Rejected::NeedsModifier);
                 cx.notify();
                 return;
             }
         }
-        self.needs_modifier = false;
+        self.rejected = None;
+        self.reset_toast = None;
         cx.notify();
     }
 }
@@ -2270,6 +2344,10 @@ impl Render for Settings {
         super::perf::frame_start();
         if window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
+        }
+        if self.recording.is_some() && !self.armed(window) {
+            self.recording = None;
+            self.rejected = None;
         }
         if cx.try_global::<OpenOnSync>().is_some_and(|o| o.0) {
             cx.set_global(OpenOnSync(false));
@@ -2299,7 +2377,10 @@ impl Render for Settings {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|s, e: &KeyDownEvent, window, cx| {
                 if s.recording.is_none() && e.keystroke.key == "escape" {
-                    if window.context_stack().iter().any(|c| c.contains("Input")) {
+                    let filter_focused = s.filter.read(cx).focus_handle(cx).is_focused(window);
+                    if filter_focused && !s.filter.read(cx).value().is_empty() {
+                        s.filter.update(cx, |f, cx| f.set_value("", window, cx));
+                    } else if window.context_stack().iter().any(|c| c.contains("Input")) {
                         window.focus(&s.focus, cx);
                     } else {
                         window.remove_window();

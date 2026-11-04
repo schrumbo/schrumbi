@@ -302,14 +302,13 @@ fn survives_random_text_everywhere() {
             edit_ops::wrap(&a, sel.clone(), "**"),
             edit_ops::link(&a, sel.clone()),
             edit_ops::edit_lines(&a, sel.clone(), edit_ops::toggled_task),
-            edit_ops::toggle_comment(&a, sel.clone()),
             edit_ops::copy_lines(&a, sel.clone(), true),
             edit_ops::copy_lines(&a, sel.clone(), false),
             edit_ops::delete_lines(&a, sel.clone()),
             edit_ops::shift_lines(&a, sel.clone(), 1),
             edit_ops::shift_lines(&a, sel.clone(), -1),
         ];
-        for e in edits.iter().chain(edit_ops::move_lines(&a, sel.clone(), true).iter()).chain(edit_ops::move_lines(&a, sel.clone(), false).iter()).chain(edit_ops::newline(&a, sel.start).iter()) {
+        for e in edits.iter().chain(edit_ops::move_lines(&a, sel.clone(), true).iter()).chain(edit_ops::move_lines(&a, sel.clone(), false).iter()).chain(edit_ops::newline(&a, sel.start).iter()).chain(edit_ops::toggle_comment(&a, sel.clone()).iter()) {
             let out = edit_ops::apply(&a, e);
             assert!(out.is_char_boundary(e.select.start.min(out.len())), "{a:?} {sel:?}");
         }

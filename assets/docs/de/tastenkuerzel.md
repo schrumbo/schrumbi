@@ -6,7 +6,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 
 | Befehl | Kürzel |
 |---|---|
-| {ui:Befehl suchen …} | {key:CommandPalette} |
+| {ui:Befehl suchen…} | {key:CommandPalette} |
 | {ui:Schrumbi-Anleitung} | {key:ShowHelp} |
 | {ui:Tastenkürzel anzeigen} | {key:ShowShortcuts} |
 | {ui:Einstellungen} | {key:OpenSettings} |
@@ -37,7 +37,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Zurück} | {key:goBack} |
 | {ui:Vorwärts} | {key:goForward} |
 
-## Ansicht
+## Darstellung
 
 | Befehl | Kürzel |
 |---|---|

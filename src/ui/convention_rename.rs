@@ -26,7 +26,7 @@ pub fn available(path: &Path, cx: &App) -> bool {
 pub fn menu_item(path: &Path, cx: &App) -> Option<PopupMenuItem> {
     match state::read(cx, |l| l.convention_offer(path)) {
         ConventionOffer::Hidden => None,
-        ConventionOffer::NeedsDeadline => Some(PopupMenuItem::new(tr("Nach Muster benennen… (erst einer Abgabe zuordnen)")).icon(menu_icon("wand-sparkles")).disabled(true)),
+        ConventionOffer::NeedsDeadline => Some(PopupMenuItem::new(tr("Nach Muster benennen – erst Abgabe zuordnen")).icon(menu_icon("wand-sparkles")).disabled(true)),
         ConventionOffer::Ready => {
             let path = path.to_path_buf();
             Some(PopupMenuItem::new(tr("Nach Muster benennen…")).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| open(path.clone(), window, cx)))

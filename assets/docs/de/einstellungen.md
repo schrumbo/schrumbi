@@ -24,11 +24,11 @@ Die Suche kennt auch andere Wörter: `dark` findet das Erscheinungsbild, `git` d
 
 ## Kürzel ändern
 
-1. {ui:Tastenkürzel} öffnen und auf ein Kürzel klicken.
-2. Neue Tasten drücken. Dabei sein muss eine Sondertaste, bei Pfeilen, Tab und Return reicht Umschalt, F-Tasten gehen allein. Fehlt die Sondertaste, steht ein Hinweis da.
+1. {ui:Tastenkürzel} öffnen und auf ein Kürzel oder seinen Namen klicken, oder mit Tab hinfahren und {key:return} drücken.
+2. Neue Tasten drücken. Dabei sein muss eine Sondertaste, bei Pfeilen, Tab und Return reicht Umschalt, F-Tasten gehen allein. Fehlt die Sondertaste, steht ein Hinweis da. Kürzel, die Schrumbi oder das System fest nutzen (Kopieren, Einfügen, Tab schließen), lassen sich nicht setzen; der Grund steht an der Zeile.
 3. {key:escape} bricht ab, {key:delete} entfernt das Kürzel.
 
-Ist ein Kürzel doppelt belegt, steht {ui:Doppelt} daneben. Beim Aufnehmen löst die Taste nichts aus, so lässt sich auch ein belegtes Kürzel setzen. {ui:Alle zurücksetzen} stellt die Standards wieder her, {ui:Rückgängig} im Hinweis holt deine Kürzel zurück.
+Ein Klick ins Suchfeld oder woandershin beendet das Aufnehmen. Gibt es keinen Treffer, leert {key:escape} im Feld die Suche. Ist ein Kürzel doppelt belegt, steht {ui:Doppelt} daneben, der Hinweis nennt den anderen Befehl. Beim Aufnehmen löst die Taste nichts aus, so lässt sich auch ein belegtes Kürzel setzen. {ui:Alle zurücksetzen} stellt die Standards wieder her, {ui:Rückgängig} im Hinweis neben dem Suchfeld holt deine Kürzel zurück; er verschwindet nach wenigen Sekunden.
 
 ## Folgesemester
 

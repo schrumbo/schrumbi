@@ -2606,6 +2606,27 @@ pub fn block_starts(src: &str) -> Vec<usize> {
     starts
 }
 
+/// Byte ranges of the opening and closing fence lines of fenced code blocks, which are never drawn.
+pub fn fence_lines(src: &str) -> Vec<std::ops::Range<usize>> {
+    let mut lines = Vec::new();
+    for (event, range) in Parser::new_ext(src, markdown::options()).into_offset_iter() {
+        if !matches!(event, Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_)))) {
+            continue;
+        }
+        let Some(block) = src.get(range.clone()) else { continue };
+        let first = block.find('\n').map_or(block.len(), |i| i + 1);
+        lines.push(range.start..range.start + first);
+        let body = block[first..].trim_end_matches('\n');
+        let last = body.rfind('\n').map_or(0, |i| i + 1);
+        let tail = &body[last..];
+        let fence = tail.trim_start();
+        if !body.is_empty() && (fence.starts_with("```") || fence.starts_with("~~~")) && fence.trim_start_matches(['`', '~']).trim().is_empty() {
+            lines.push(range.start + first + last..range.end);
+        }
+    }
+    lines
+}
+
 /// A block to scroll to and mark briefly, after arriving from a search match.
 #[derive(Clone)]
 pub struct Found {
@@ -3090,7 +3111,7 @@ Ende
 
 #[cfg(test)]
 mod find_tests {
-    use super::{block_at, block_starts, with_fills};
+    use super::{block_at, block_starts, fence_lines, with_fills};
     use super::{FontWeight, HighlightStyle, Hsla};
 
     fn bold() -> HighlightStyle {
@@ -3135,6 +3156,15 @@ Letzter
         for offset in 0..src.len() {
             assert_eq!(starts.partition_point(|s| *s <= offset).saturating_sub(1), block_at(src, offset), "offset {offset}");
         }
+    }
+
+    #[test]
+    fn fence_lines_are_the_undrawn_lines_of_a_code_block() {
+        let src = "foo\n\n```foo\nfoo = 1\n```\n\n~~~\nbar\n";
+        let lines: Vec<&str> = fence_lines(src).into_iter().map(|r| &src[r]).collect();
+        assert_eq!(lines, ["```foo\n", "```", "~~~\n"]);
+        assert!(fence_lines("`foo` und ```foo``` inline\n").is_empty());
+        assert!(fence_lines("    foo\n").is_empty());
     }
 
     #[test]

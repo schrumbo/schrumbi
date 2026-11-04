@@ -13,7 +13,7 @@ use super::theme::{Theme, font, space, iconsize, radius, control};
 use super::widgets::{KeyNav, icon, tip};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library, Route};
-use crate::core::prefs;
+use crate::core::prefs::{self, Shortcut};
 use crate::core::shortcuts::ShortcutAction;
 
 /// Height of the title band that holds the traffic lights.
@@ -86,7 +86,7 @@ fn module_help(name: String, index: usize) -> String {
 }
 
 fn shortcut_label(key: &str) -> String {
-    if cfg!(target_os = "macos") { format!("⌘{key}") } else { format!("Ctrl+{key}") }
+    Shortcut { key: key.into(), command: true, shift: false, option: false, control: false }.display()
 }
 
 fn badge(n: usize, tint: Hsla) -> Div {

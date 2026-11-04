@@ -27,16 +27,28 @@ pub fn selected_lines(s: &str, sel: &Range<usize>) -> Range<usize> {
     line_start(s, sel.start)..line_end(s, end.max(sel.start))
 }
 
+/// Whether the selection, or the caret, sits directly between a pair of `token`; a single `*` is not one half of a `**`.
+fn wrapped_in(s: &str, sel: &Range<usize>, token: &str) -> bool {
+    if !s[..sel.start].ends_with(token) || !s[sel.end..].starts_with(token) {
+        return false;
+    }
+    if token != "*" {
+        return true;
+    }
+    let before = s[..sel.start].chars().rev().take_while(|c| *c == '*').count();
+    let after = s[sel.end..].chars().take_while(|c| *c == '*').count();
+    before % 2 == 1 && after % 2 == 1
+}
+
 /// `**sel**`, `*sel*` or `` `sel` ``; with no selection the caret lands between the tokens.
 pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
     let inner = &s[sel.clone()];
+    if wrapped_in(s, &sel, token) {
+        let range = sel.start - token.len()..sel.end + token.len();
+        let start = range.start;
+        return Edit { range, text: inner.to_string(), select: start..start + inner.len() };
+    }
     if !sel.is_empty() {
-        let around = sel.start >= token.len() && s[..sel.start].ends_with(token) && s[sel.end..].starts_with(token);
-        if around {
-            let range = sel.start - token.len()..sel.end + token.len();
-            let start = range.start;
-            return Edit { range, text: inner.to_string(), select: start..start + inner.len() };
-        }
         if inner.len() >= token.len() * 2 && inner.starts_with(token) && inner.ends_with(token) && !inner.contains('\n') {
             let bare = &inner[token.len()..inner.len() - token.len()];
             return Edit { range: sel.clone(), text: bare.to_string(), select: sel.start..sel.start + bare.len() };
@@ -106,9 +118,16 @@ pub fn edit_lines(s: &str, sel: Range<usize>, transform: impl Fn(&str) -> String
     Edit { range: r, text, select }
 }
 
-/// Wraps the selected lines in `<!-- -->`, or unwraps them.
-pub fn toggle_comment(s: &str, sel: Range<usize>) -> Edit {
-    let r = selected_lines(s, &sel);
+/// Wraps the selected lines in `<!-- -->`, or unwraps them; the front matter is never touched, so `None` when only it is selected.
+pub fn toggle_comment(s: &str, sel: Range<usize>) -> Option<Edit> {
+    let mut r = selected_lines(s, &sel);
+    let body = super::vault::frontmatter::body_offset(s);
+    if r.start < body {
+        if r.end <= body {
+            return None;
+        }
+        r.start = body;
+    }
     let block = &s[r.clone()];
     let trimmed = block.trim();
     let text = if let Some(inner) = trimmed.strip_prefix("<!--").and_then(|t| t.strip_suffix("-->")) {
@@ -117,7 +136,7 @@ pub fn toggle_comment(s: &str, sel: Range<usize>) -> Edit {
         format!("<!-- {block} -->")
     };
     let end = r.start + text.len();
-    Edit { range: r.clone(), text, select: r.start..end }
+    Some(Edit { range: r.clone(), text, select: r.start..end })
 }
 
 /// Swaps the selected lines with the line above or below; `None` at the edges.
@@ -563,10 +582,34 @@ mod tests {
         assert_eq!(toggled_task("1. a"), "1. [ ] a");
         assert_eq!(toggled_task("  plain"), "  - [ ] plain");
         let s = "x\nhello\ny";
-        let e = toggle_comment(s, 3..3);
+        let e = toggle_comment(s, 3..3).unwrap();
         let once = apply(s, &e);
         assert_eq!(once, "x\n<!-- hello -->\ny");
-        assert_eq!(apply(&once, &toggle_comment(&once, 3..3)), s);
+        assert_eq!(apply(&once, &toggle_comment(&once, 3..3).unwrap()), s);
+    }
+
+    #[test]
+    fn commenting_leaves_the_front_matter_alone() {
+        let s = "---
+title: a
+---
+hello
+world";
+        assert_eq!(toggle_comment(s, 0..0), None);
+        assert_eq!(toggle_comment(s, 6..10), None);
+        assert_eq!(toggle_comment(s, 14..16), None);
+        let e = toggle_comment(s, 0..s.len()).unwrap();
+        assert_eq!(apply(s, &e), "---
+title: a
+---
+<!-- hello
+world -->");
+        let e = toggle_comment(s, 18..18).unwrap();
+        assert_eq!(apply(s, &e), "---
+title: a
+---
+<!-- hello -->
+world");
     }
 
     #[test]

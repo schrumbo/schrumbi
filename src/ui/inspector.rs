@@ -189,8 +189,8 @@ fn file_line(path: &std::path::Path, extra: Vec<(String, Box<dyn Fn(&mut App)>)>
         })
         .child(file_icon(path, iconsize::M))
         .child(div().flex_1().min_w_0().truncate().child(name))
-        .context_menu(move |menu, _, _| {
-            let mut menu = file_menu(menu, menu_path.clone());
+        .context_menu(move |menu, _, cx| {
+            let mut menu = file_menu(menu, menu_path.clone()).when_some(super::convention_rename::menu_item(&menu_path, cx), |m, item| m.item(item));
             if !extra.is_empty() {
                 menu = menu.separator();
             }

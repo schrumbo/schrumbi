@@ -53,6 +53,7 @@ pub struct FindBar {
     can_replace: bool,
     count: usize,
     current: usize,
+    searching: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -74,7 +75,7 @@ impl FindBar {
                 }
             }),
         ];
-        Self { query, replacement, exact: false, replacing: false, can_replace: false, count: 0, current: 0, _subs: subs }
+        Self { query, replacement, exact: false, replacing: false, can_replace: false, count: 0, current: 0, searching: false, _subs: subs }
     }
 
     pub fn text(&self, cx: &App) -> String {
@@ -91,9 +92,17 @@ impl FindBar {
 
     /// Shows the bar's state: how many matches there are, which one is current, and whether the note can be changed.
     pub fn show(&mut self, count: usize, current: usize, can_replace: bool, cx: &mut Context<Self>) {
-        if (self.count, self.current, self.can_replace) != (count, current, can_replace) {
-            (self.count, self.current, self.can_replace) = (count, current, can_replace);
+        if (self.count, self.current, self.can_replace, self.searching) != (count, current, can_replace, false) {
+            (self.count, self.current, self.can_replace, self.searching) = (count, current, can_replace, false);
             self.replacing &= can_replace;
+            cx.notify();
+        }
+    }
+
+    /// Shows that a search is still running, so the count of the last one is not taken for the answer.
+    pub fn searching(&mut self, cx: &mut Context<Self>) {
+        if !self.searching {
+            self.searching = true;
             cx.notify();
         }
     }
@@ -136,12 +145,14 @@ impl Render for FindBar {
         let empty = self.query.read(cx).value().is_empty();
         let summary = if empty {
             String::new()
+        } else if self.searching {
+            tr("Suche…")
         } else if self.count == 0 {
             tr("Keine Treffer")
         } else {
             trf("%lld von %lld", &[&(self.current + 1), &self.count])
         };
-        let has = self.count > 0;
+        let has = self.count > 0 && !self.searching;
         let (prev, next, close, exact, toggle) = (cx.entity(), cx.entity(), cx.entity(), cx.entity(), cx.entity());
         let (replace_one, replace_all) = (cx.entity(), cx.entity());
         let first = div()

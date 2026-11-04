@@ -6,7 +6,7 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 
 | Command | Shortcut |
 |---|---|
-| {ui:Befehl suchen …} | {key:CommandPalette} |
+| {ui:Befehl suchen…} | {key:CommandPalette} |
 | {ui:Schrumbi-Anleitung} | {key:ShowHelp} |
 | {ui:Tastenkürzel anzeigen} | {key:ShowShortcuts} |
 | {ui:Einstellungen} | {key:OpenSettings} |

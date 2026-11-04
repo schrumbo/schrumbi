@@ -24,11 +24,11 @@ Search knows other words too: `dark` finds the appearance, `git` the sync. It al
 
 ## Change Shortcuts
 
-1. Open {ui:Tastenkürzel} and click a shortcut.
-2. Press the new keys. A modifier key must be included, for arrows, Tab and Return Shift is enough, F keys work alone. Without a modifier a hint appears.
+1. Open {ui:Tastenkürzel} and click a shortcut or its name, or Tab to it and press {key:return}.
+2. Press the new keys. A modifier key must be included, for arrows, Tab and Return Shift is enough, F keys work alone. Without a modifier a hint appears. Shortcuts that Schrumbi or the system use for fixed purposes (copy, paste, close tab) cannot be set; the reason appears on the row.
 3. {key:escape} cancels, {key:delete} removes the shortcut.
 
-If a shortcut is used twice, {ui:Doppelt} appears next to it. While recording, the key triggers nothing, so a key already in use can be set too. {ui:Alle zurücksetzen} restores the defaults, {ui:Rückgängig} in the notice brings your shortcuts back.
+A click in the search field or elsewhere ends recording. With no hit, {key:escape} in the field clears the search. If a shortcut is used twice, {ui:Doppelt} appears next to it, and its hint names the other command. While recording, the key triggers nothing, so a key already in use can be set too. {ui:Alle zurücksetzen} restores the defaults, {ui:Rückgängig} in the notice next to the search field brings your shortcuts back; it disappears after a few seconds.
 
 ## Next Semester
 

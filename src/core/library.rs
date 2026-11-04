@@ -2223,12 +2223,14 @@ impl Library {
 
     pub fn notify(&mut self, message: String, icon: &'static str, action_title: Option<String>, undo: Option<Undo>) {
         self.toast_counter += 1;
+        self.toast_hovered = false;
         self.toast = Some(Toast { id: self.toast_counter, message, icon, action_title: action_title.unwrap_or_else(|| tr("Rückgängig")), undo });
         self.changed();
     }
 
     /// Runs the action offered by the current toast.
     pub fn perform_toast_action(&mut self) {
+        self.toast_hovered = false;
         if let Some(action) = self.toast.take().and_then(|t| t.undo) {
             action(self);
         }
