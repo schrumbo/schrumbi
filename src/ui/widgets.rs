@@ -628,5 +628,5 @@ pub fn file_target(element: Stateful<Div>, a: &Assignment, t: &Theme) -> Statefu
 /// A file dragged from the file list onto a deadline: linked where it is, or filed when it lives outside the study folder.
 pub fn link_dropped(path: &Path, id: &str, cx: &mut App) {
     let path = path.to_path_buf();
-    act(cx, |l| if l.root.as_ref().is_some_and(|r| path.starts_with(r)) { l.link(std::slice::from_ref(&path), id) } else { l.request_filing(vec![path.clone()], Some(id.to_string())) });
+    act(cx, |l| if l.inside(&path) { l.link(std::slice::from_ref(&path), id) } else { l.request_filing(vec![path.clone()], Some(id.to_string())) });
 }

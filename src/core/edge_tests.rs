@@ -1580,6 +1580,36 @@ fn choices_for_a_file_are_its_modules_open_deadlines_with_the_linked_ones_checke
 }
 
 #[test]
+fn links_follow_a_rename_when_the_workspace_path_is_not_canonical() {
+    let real = folder("links-detour");
+    std::fs::create_dir_all(real.join("umweg")).unwrap();
+    std::fs::write(real.join("schrumbi.json"), serde_json::to_vec_pretty(&shared_config()).unwrap()).unwrap();
+    let root = real.join("umweg").join("..");
+    let mut lib = open(&root);
+    let a = upcoming(&lib);
+    let note = lib.create_assignment_note(&a.id).unwrap();
+    lib.rename(&note, "Anders.md");
+    let renamed = note.with_file_name("Anders.md");
+    assert!(renamed.exists() && lib.is_linked(&renamed, &a.id) && !lib.is_linked(&note, &a.id), "the link follows the rename");
+    lib.open_document(&renamed);
+    let tab = lib.active_document.clone().unwrap();
+    assert_ne!(tab, renamed, "a tab spells the path resolved");
+    assert!(lib.is_linked(&tab, &a.id));
+    lib.rename(&tab, "Zweite.md");
+    let second = note.with_file_name("Zweite.md");
+    assert!(second.exists() && lib.is_linked(&second, &a.id), "renaming the open tab keeps the link");
+    let modules = lib.config.as_ref().unwrap().modules.iter().map(|m| m.folder.clone()).collect::<Vec<_>>();
+    let module = real.join(&modules[0]);
+    lib.rename(&dunce::canonicalize(&module).unwrap(), "Kurs");
+    assert_eq!(lib.config.as_ref().unwrap().modules[0].folder, "Kurs", "the module follows its folder renamed by its resolved path");
+    let pdf = root.join("Kurs").join("Abgaben").join("Blatt.pdf");
+    std::fs::write(&pdf, "x").unwrap();
+    lib.link(&[dunce::canonicalize(&pdf).unwrap()], &a.id);
+    assert!(lib.is_linked(&pdf, &a.id), "a file given by its resolved path can be linked");
+    let _ = std::fs::remove_dir_all(real);
+}
+
+#[test]
 fn links_inside_a_renamed_folder_follow_it() {
     let (root, mut lib) = workspace("links-folder", &shared_config());
     let a = upcoming(&lib);

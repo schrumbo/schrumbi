@@ -247,6 +247,8 @@ pub static LINK_IN_NEW_TAB: AtomicBool = AtomicBool::new(false);
 /// Central app state: workspace, config, user state and everything derived from them.
 pub struct Library {
     pub root: Option<PathBuf>,
+    /// `root` with symlinks, short names and `..` resolved, as editor tabs and the notes tree spell paths.
+    settled_root: Option<PathBuf>,
     pub config: Option<StudyConfig>,
     pub state: StudyState,
     pub assignments: Vec<Assignment>,
@@ -417,6 +419,7 @@ impl Library {
     pub fn new() -> Self {
         Self {
             root: None,
+            settled_root: None,
             config: None,
             state: StudyState::default(),
             assignments: Vec::new(),
@@ -531,6 +534,7 @@ impl Library {
         self.close();
         workspace::migrate_legacy(root);
         self.root = Some(root.to_path_buf());
+        self.settled_root = Some(dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()));
         prefs::remember_workspace(root);
         self.load_config();
         self.load_state();
@@ -575,6 +579,7 @@ impl Library {
         self.redo_steps.clear();
         self.coalescing = None;
         self.root = None;
+        self.settled_root = None;
         self.config = None;
         self.state = StudyState::default();
         self.assignments.clear();
@@ -1849,8 +1854,7 @@ impl Library {
     }
 
     pub fn module_containing(&self, path: &Path) -> Option<&Module> {
-        let root = self.root.as_ref()?;
-        let rel = super::text::slash_path(path.strip_prefix(root).ok()?);
+        let rel = super::text::slash_path(&self.below_root(path)?);
         self.config.as_ref()?.modules.iter().filter(|m| rel == m.folder || rel.starts_with(&format!("{}/", m.folder))).max_by_key(|m| m.folder.len())
     }
 
@@ -2159,7 +2163,13 @@ impl Library {
     }
 
     pub fn relative_path(&self, path: &Path) -> String {
-        self.root.as_ref().and_then(|r| path.strip_prefix(r).ok()).map_or_else(|| path.to_string_lossy().to_string(), super::text::slash_path)
+        self.below_root(path).map_or_else(|| path.to_string_lossy().to_string(), |rest| super::text::slash_path(&rest))
+    }
+
+    /// `path` relative to the workspace, spelled from the root as opened or from the resolved root.
+    fn below_root(&self, path: &Path) -> Option<PathBuf> {
+        let (root, settled) = (self.root.as_ref()?, self.settled_root.as_ref()?);
+        path.strip_prefix(root).or_else(|_| path.strip_prefix(settled)).map(Path::to_path_buf).ok()
     }
 
     pub fn missing_folders(&self) -> Vec<PathBuf> {
@@ -2460,8 +2470,9 @@ impl Library {
         self.changed();
     }
 
-    fn inside(&self, p: &Path) -> bool {
-        self.root.as_ref().is_some_and(|r| p.starts_with(r))
+    /// Whether `p` lies in the workspace, spelled as given or resolved.
+    pub(crate) fn inside(&self, p: &Path) -> bool {
+        self.below_root(p).is_some()
     }
 
     /// Moves files inside the workspace, copies files from outside. Returns the new path.
@@ -2476,7 +2487,7 @@ impl Library {
         let result: Result<PathBuf> = (|| {
             std::fs::create_dir_all(folder)?;
             let wanted = folder.join(name);
-            if wanted == path {
+            if wanted == path || settled_path(&wanted) == settled_path(path) {
                 return Ok(wanted);
             }
             let target = unique_path(&wanted);
@@ -2768,8 +2779,7 @@ impl Library {
         let name = name_of(path);
         let raw = path.parent()?.to_path_buf();
         let settled = dunce::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
-        let root = self.root.clone()?;
-        let settled_root = dunce::canonicalize(&root).unwrap_or_else(|_| root.clone());
+        let (root, settled_root) = (self.root.clone()?, self.settled_root.clone()?);
         let holds = |a: &Assignment| {
             let other = a.folder.strip_prefix(&root).map_or_else(|_| a.folder.clone(), |rest| settled_root.join(rest));
             [&a.folder, &other].iter().any(|f| [&raw, &settled].iter().any(|d| *d == *f || (a.recursive && a.owns_folder() && d.starts_with(f))))
@@ -2805,8 +2815,8 @@ impl Library {
 
     /// Modules keep following their folder when it, or a folder above it, gets a new name.
     fn folder_moved(&mut self, old: &Path, new: &Path) {
-        let (Some(root), Some(mut config)) = (self.root.clone(), self.config.clone()) else { return };
-        let (Ok(old), Ok(new)) = (old.strip_prefix(&root), new.strip_prefix(&root)) else { return };
+        let Some(mut config) = self.config.clone() else { return };
+        let (Some(old), Some(new)) = (self.below_root(old), self.below_root(new)) else { return };
         let (old, new) = (old.to_string_lossy().replace('\\', "/"), new.to_string_lossy().replace('\\', "/"));
         let mut changed = false;
         for m in &mut config.modules {
@@ -2862,6 +2872,7 @@ impl Library {
 
     /// Keeps tabs, open notes, links and remembered positions on a file that moved.
     fn path_moved(&mut self, from: &Path, to: &Path) {
+        let (old, new) = (self.relative_path(from), self.relative_path(to));
         let settled = |p: &Path| p.parent().and_then(|d| dunce::canonicalize(d).ok()).zip(p.file_name()).map_or_else(|| p.to_path_buf(), |(d, n)| d.join(n));
         let (from, to) = (settled(from), settled(to));
         let swap = |p: &mut PathBuf| {
@@ -2890,7 +2901,6 @@ impl Library {
             buffer.moved_to(&to);
             self.buffers.insert(to.clone(), buffer);
         }
-        let (old, new) = (self.relative_path(&from), self.relative_path(&to));
         let mut relinked = false;
         let inside = format!("{old}/");
         for rel in self.state.linked_files.values_mut().flatten() {
