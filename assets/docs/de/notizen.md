@@ -85,7 +85,19 @@ Hat eine andere App die Datei geändert, siehst du einen Hinweis. Nichts geht ve
 | {key:ReopenTab} | Zuletzt geschlossenen Tab öffnen |
 | {key:nextTab} / {key:previousTab} | Nächster / vorheriger Tab |
 
-Rechtsklick auf einen anderen Tab → {ui:Daneben öffnen} zeigt ihn neben der aktuellen Notiz.
+- Ein Tab geht nur zu, wenn du ihn schließt: ×, Mittelklick oder {key:closeTab}.
+- Ein Klick auf eine Datei öffnet sie als Vorschau mit schrägem Titel. Die nächste Datei ersetzt sie.
+- Doppelklick, Schreiben oder Rechtsklick → {ui:Tab behalten} macht aus der Vorschau einen festen Tab.
+- Ein Link öffnet sein Ziel als Vorschau, die Notiz mit dem Link bleibt offen.
+- Tab ziehen ändert die Reihenfolge. {key:ReopenTab} bringt den Tab an seinen alten Platz zurück.
+
+### Nebeneinander
+
+- Rechtsklick auf einen Tab → {ui:Daneben öffnen}, oder den Tab in die rechte Hälfte ziehen.
+- Der Tab der rechten Notiz zeigt zwei Spalten als Symbol. Ein Klick darauf springt in die rechte Notiz.
+- Links in der rechten Notiz öffnen rechts.
+- {key:closeTab} schließt die Notiz, in der du gerade bist. Ist links nichts mehr offen, rückt die rechte Notiz nach links.
+- × rechts oben ({ui:Geteilte Ansicht schließen}) beendet das Nebeneinander, beide Tabs bleiben offen.
 
 ## Mehr
 

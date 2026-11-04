@@ -454,16 +454,14 @@ fn split_view_follows_the_tabs() {
     lib.set_split(Some(a.clone()));
     assert_eq!(lib.split_document, Some(a.clone()));
     lib.open_document(&a);
-    assert_eq!(lib.split_document, None, "bringing it to the front ends the split");
-    lib.set_split(Some(b.clone()));
-    lib.close_document(&b);
-    assert_eq!(lib.split_document, None);
-    lib.open_document(&b);
+    assert_eq!((lib.active_document.clone(), lib.split_document.clone()), (Some(b.clone()), Some(a.clone())), "opening the note on the right keeps both");
+    lib.close_document(&a);
+    assert_eq!(lib.split_document, None, "closing the note on the right folds the split");
     lib.open_document(&a);
     lib.set_split(Some(b.clone()));
     lib.close_document(&a);
     assert_eq!(lib.active_document, Some(b.clone()));
-    assert_eq!(lib.split_document, None, "the tab that moves to the front leaves the side");
+    assert_eq!(lib.split_document, None, "the last left tab gone, the note on the right moves over");
 }
 
 #[test]

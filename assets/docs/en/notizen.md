@@ -85,7 +85,19 @@ If another app changed the file, you see a notice. Nothing is lost until you cho
 | {key:ReopenTab} | Reopen the last closed tab |
 | {key:nextTab} / {key:previousTab} | Next / previous tab |
 
-Right-click another tab → {ui:Daneben öffnen} shows it next to the current note.
+- A tab only closes when you close it: ×, middle click or {key:closeTab}.
+- A click on a file opens it as a preview with a slanted title. The next file replaces it.
+- Double-click, start writing or right-click → {ui:Tab behalten} to turn the preview into a kept tab.
+- A link opens its target as a preview; the note with the link stays open.
+- Drag a tab to change the order. {key:ReopenTab} brings a tab back to its old place.
+
+### Side by side
+
+- Right-click a tab → {ui:Daneben öffnen}, or drag the tab into the right half.
+- The tab of the right note shows two columns as its icon. Clicking it jumps into the right note.
+- Links in the right note open on the right.
+- {key:closeTab} closes the note you are in. When nothing is left on the left, the right note moves over.
+- × at the top right ({ui:Geteilte Ansicht schließen}) ends side by side; both tabs stay open.
 
 ## More
 

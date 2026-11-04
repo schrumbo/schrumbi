@@ -416,7 +416,7 @@ impl Pages {
         let view = self.doc_view(&path, window, cx);
         let fallback = self.doc_recent.iter().find(|p| **p != path).cloned();
         let beside = state::read(cx, |l| l.split_document.clone()).filter(|p| *p != path);
-        let (quiet, asked) = state::lib(cx).update(cx, |l, _| (std::mem::take(&mut l.quiet_open), std::mem::take(&mut l.focus_document)));
+        let (quiet, asked, beside_asked) = state::lib(cx).update(cx, |l, _| (std::mem::take(&mut l.quiet_open), std::mem::take(&mut l.focus_document), std::mem::take(&mut l.focus_beside)));
         if self.shown_doc.as_ref() != Some(&path) {
             self.shown_doc = Some(path);
             self.doc_needs_focus = !quiet;
@@ -425,20 +425,7 @@ impl Pages {
         if self.doc_needs_focus && !window.has_active_dialog(cx) {
             self.doc_needs_focus = false;
             let target = view.clone();
-            window.on_next_frame(move |window, cx| {
-                if let Ok(note) = target.clone().downcast::<super::documents::NoteView>() {
-                    note.update(cx, |n, cx| n.activate(window, cx));
-                    if let Some(action) = cx.default_global::<super::palette::PendingNoteAction>().0.take() {
-                        window.dispatch_action(action, cx);
-                    }
-                } else if let Ok(canvas) = target.clone().downcast::<super::canvas_view::CanvasView>() {
-                    canvas.update(cx, |c, cx| c.activate(window, cx));
-                } else if let Ok(base) = target.clone().downcast::<super::base_view::BaseView>() {
-                    base.update(cx, |b, cx| b.activate(window, cx));
-                } else if let Ok(file) = target.downcast::<super::documents::FileViewer>() {
-                    file.update(cx, |f, cx| f.activate(window, cx));
-                }
-            });
+            window.on_next_frame(move |window, cx| activate_doc(target, window, cx));
         }
         let canvas = |v: &AnyView| v.clone().downcast::<super::canvas_view::CanvasView>().is_ok();
         let left_canvas = canvas(&view);
@@ -447,6 +434,11 @@ impl Pages {
             Some(other) => {
                 let right = self.doc_view(&other, window, cx);
                 let right_canvas = canvas(&right);
+                if beside_asked && !window.has_active_dialog(cx) {
+                    let target = right.clone();
+                    window.on_next_frame(move |window, cx| activate_doc(target, window, cx));
+                }
+                let closing = other.clone();
                 let t = Theme::get(cx);
                 let (accent, me) = (t.accent, cx.entity());
                 let area = div()
@@ -464,9 +456,9 @@ impl Pages {
                         let share = p.split_share;
                         crate::core::prefs::update(|prefs| prefs.split_share = share);
                     }))
-                    .child(div().flex_none().min_w_0().h_full().overflow_hidden().w(relative(self.split_share)).child(view))
+                    .child(div().flex_none().min_w_0().h_full().overflow_hidden().w(relative(self.split_share)).capture_any_mouse_down(|_, _, cx| set_beside_active(false, cx)).child(view))
                     .child(div().h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator))
-                    .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(right))
+                    .child(div().flex_1().min_w_0().h_full().overflow_hidden().capture_any_mouse_down(|_, _, cx| set_beside_active(true, cx)).on_action(move |_: &super::app::CloseTab, _, cx| super::documents::close_tab(&closing, cx)).child(right))
                     .child(div().id("doc-split").absolute().top_0().bottom_0().left(relative(self.split_share)).w(px(tab::SPLIT_GRIP)).cursor_col_resize().soft_edge(accent.opacity(0.06), 0., accent.opacity(0.3), space::XS).on_click(cx.listener(|p, e: &ClickEvent, _, cx| {
                         if e.click_count() >= 2 {
                             p.split_share = 0.5;
@@ -690,5 +682,24 @@ impl Render for Pages {
         fields.prune();
         self.fields = fields;
         self.with_explorer(body, width, window, cx)
+    }
+}
+
+fn set_beside_active(on: bool, cx: &mut App) {
+    state::lib(cx).update(cx, |l, _| l.beside_active = on);
+}
+
+fn activate_doc(target: AnyView, window: &mut Window, cx: &mut App) {
+    if let Ok(note) = target.clone().downcast::<super::documents::NoteView>() {
+        note.update(cx, |n, cx| n.activate(window, cx));
+        if let Some(action) = cx.default_global::<super::palette::PendingNoteAction>().0.take() {
+            window.dispatch_action(action, cx);
+        }
+    } else if let Ok(canvas) = target.clone().downcast::<super::canvas_view::CanvasView>() {
+        canvas.update(cx, |c, cx| c.activate(window, cx));
+    } else if let Ok(base) = target.clone().downcast::<super::base_view::BaseView>() {
+        base.update(cx, |b, cx| b.activate(window, cx));
+    } else if let Ok(file) = target.downcast::<super::documents::FileViewer>() {
+        file.update(cx, |f, cx| f.activate(window, cx));
     }
 }
