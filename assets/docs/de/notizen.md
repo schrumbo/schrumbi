@@ -94,7 +94,8 @@ Hat eine andere App die Datei geändert, siehst du einen Hinweis. Nichts geht ve
 ### Nebeneinander
 
 - Rechtsklick auf einen Tab → {ui:Daneben öffnen}, oder den Tab in die rechte Hälfte ziehen.
-- Der Tab der rechten Notiz zeigt zwei Spalten als Symbol. Ein Klick darauf springt in die rechte Notiz.
+- Der Tab der rechten Notiz zeigt als Symbol ein Fenster mit gefüllter rechter Hälfte. Ein Klick darauf springt in die rechte Notiz.
+- Eine farbige Linie unter der Leiste zeigt, in welcher Notiz du gerade bist.
 - Links in der rechten Notiz öffnen rechts.
 - {key:closeTab} schließt die Notiz, in der du gerade bist. Ist links nichts mehr offen, rückt die rechte Notiz nach links.
 - × rechts oben ({ui:Geteilte Ansicht schließen}) beendet das Nebeneinander, beide Tabs bleiben offen.

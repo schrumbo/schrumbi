@@ -2734,7 +2734,8 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
     let split = is_split(current, cx);
     let fit = bar_fit::slot(split);
     if split {
-        let title = state::read(cx, |l| l.note_title(current));
+        let (title, is_preview, focused) = state::read(cx, |l| (l.note_title(current), l.preview_document.as_deref() == Some(current), l.beside_active));
+        let close = current.to_path_buf();
         return div()
             .relative()
             .overflow_hidden()
@@ -2744,14 +2745,32 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
             .px(px(space::M))
             .flex_none().h(px(control::SUBBAR))
             .border_b_1()
-            .border_color(t.separator)
+            .border_color(if focused { t.accent.opacity(0.6) } else { t.separator })
             .child(fit.measure_bar())
             .child(div().flex_none().child(file_icon(current, iconsize::M)))
-            .child(div().id("split-title").flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(px(font::CALLOUT)).tooltip(tip(title.clone())).child(title))
+            .child(
+                div()
+                    .id("split-title")
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis_middle()
+                    .when(is_preview, Styled::italic)
+                    .text_size(px(font::CALLOUT))
+                    .tooltip(tip(if is_preview { format!("{title}\n{}", tr("Vorschau: Die nächste Datei, die du öffnest, ersetzt diesen Tab. Doppelklick oder Schreiben behält ihn.")) } else { title.clone() }))
+                    .context_menu(move |m, _, _| {
+                        let (pin, shut) = (close.clone(), close.clone());
+                        m.when(is_preview, |m| m.item(PopupMenuItem::new(tr("Tab behalten")).icon(menu_icon("bookmark")).on_click(move |_, _, cx| act(cx, |l| l.pin_document(&pin)))))
+                            .item(PopupMenuItem::new(tr("Tab schließen")).on_click(move |_, _, cx| close_tab(&shut, cx)))
+                            .item(PopupMenuItem::new(tr("Geteilte Ansicht schließen")).icon(menu_icon("columns-2")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))))
+                    })
+                    .child(title),
+            )
             .child(div().flex_none().child(actions))
             .child(Button::new("split-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Geteilte Ansicht schließen")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))));
     }
-    let (preview, beside) = state::read(cx, |l| (l.preview_document.clone(), l.split_document.clone()));
+    let (preview, beside, focused, can_beside) = state::read(cx, |l| (l.preview_document.clone(), l.split_document.clone(), l.split_document.is_some() && !l.beside_active, l.can_drop_document(current, library::DocDrop::Beside, None)));
     let TabPlan { docs, titles, dirty, natural, widths, active: shown_index, show_files, list_all, .. } = tab_plan(current, &fit, window, cx);
     let list_all = fit.decided().unwrap_or(list_all);
     let overflow = list_all.then(|| {
@@ -2857,7 +2876,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                     let path = dragged.path.clone();
                     act(cx, |l| l.move_document(&path, &target));
                 })
-                .child(div().flex_none().child(if is_beside { icon("columns-2", iconsize::M, t.secondary).into_any_element() } else { file_icon(doc, iconsize::M).into_any_element() }))
+                .child(div().flex_none().child(if is_beside { icon("split-right", iconsize::M, t.secondary).into_any_element() } else { file_icon(doc, iconsize::M).into_any_element() }))
                 .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis_middle().when(is_preview, Styled::italic).text_size(px(font::CALLOUT)).text_color(if active || is_beside { t.primary } else { t.secondary }).child(titles[i].clone()))
                 .child(if squeezed {
                     div().absolute().top_0().bottom_0().right_0().pl(px(space::XS)).pr(px(space::S)).rounded_r(px(radius::INNER)).flex().items_center().bg(under).when(!active, |d| d.invisible().group_hover("doc-tab", Styled::visible)).child(close_button).into_any_element()
@@ -2865,9 +2884,10 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                     close_button.when(!active && !is_dirty, |d| d.invisible().group_hover("doc-tab", Styled::visible)).into_any_element()
                 })
                 .context_menu(move |m, _, _| {
-                    let (a, b, c, d, beside, keep) = (menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone());
+                    let (a, b, c, d, beside, keep, shown) = (menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone());
                     m.when(is_preview, |m| m.item(PopupMenuItem::new(tr("Tab behalten")).icon(menu_icon("bookmark")).on_click(move |_, _, cx| act(cx, |l| l.pin_document(&keep)))))
                         .when(!active && !is_beside, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.set_split(Some(beside.clone()))))))
+                        .when(active && can_beside, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.drop_document(&shown, library::DocDrop::Beside, None)))))
                         .item(PopupMenuItem::new(tr("Tab schließen")).on_click(move |_, _, cx| close_tab(&a, cx)))
                         .item(PopupMenuItem::new(tr("Andere Tabs schließen")).on_click(move |_, _, cx| close_other_tabs(&b, cx)))
                         .item(PopupMenuItem::new(tr("Alle Tabs schließen")).on_click(|_, _, cx| close_all_tabs(cx)))
@@ -2889,7 +2909,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
         .pr(px(space::M))
         .flex_none().h(px(control::SUBBAR))
         .border_b_1()
-        .border_color(t.separator)
+        .border_color(if focused { t.accent.opacity(0.6) } else { t.separator })
         .child(fit.measure_bar())
         .children(show_files)
         .child(div().flex_1().min_w_0().relative().child(tabs.id("doc-tabs").w_full().overflow_x_scroll().track_scroll(&scroll)).children(fades.into_iter().flatten().flatten()).child(fit.measure_strip()))

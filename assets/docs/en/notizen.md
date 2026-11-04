@@ -94,7 +94,8 @@ If another app changed the file, you see a notice. Nothing is lost until you cho
 ### Side by side
 
 - Right-click a tab → {ui:Daneben öffnen}, or drag the tab into the right half.
-- The tab of the right note shows two columns as its icon. Clicking it jumps into the right note.
+- The tab of the right note shows a window with a filled right half as its icon. Clicking it jumps into the right note.
+- A coloured line under the bar shows which note you are in.
 - Links in the right note open on the right.
 - {key:closeTab} closes the note you are in. When nothing is left on the left, the right note moves over.
 - × at the top right ({ui:Geteilte Ansicht schließen}) ends side by side; both tabs stay open.

@@ -687,7 +687,12 @@ impl Render for Pages {
 }
 
 fn set_beside_active(on: bool, cx: &mut App) {
-    state::lib(cx).update(cx, |l, _| l.beside_active = on);
+    state::lib(cx).update(cx, |l, cx| {
+        if l.beside_active != on {
+            l.beside_active = on;
+            cx.notify();
+        }
+    });
 }
 
 fn activate_doc(target: AnyView, window: &mut Window, cx: &mut App) {
