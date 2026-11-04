@@ -33,7 +33,7 @@ Word, Excel and PowerPoint open in Schrumbi, read-only.
 | File | View |
 |---|---|
 | `.docx` | Pages like a PDF: zoom, search, copy text |
-| `.pptx` | One slide below the other, with slide numbers |
+| `.pptx` | One slide below the other, with slide numbers, zoom and search |
 | `.xlsx` `.xlsm` `.xls` `.ods` | Spreadsheet with sheets at the bottom |
 
 In a spreadsheet:
@@ -45,8 +45,10 @@ In a spreadsheet:
 | {key:cmd-down} | To the end of the column |
 | {key:cmd-c} | Copy the selection, with tabs between cells |
 | {key:cmd-f} | Search this sheet, {key:return} for the next match |
+| {key:cmd-pageup} {key:cmd-pagedown} | Previous and next sheet |
+| {key:escape} | Cancel a drag and keep the old selection |
 
-Edit in the default app: ⋯ → {ui:Mit Standard-App öffnen}. When it saves, Schrumbi shows the new version. Password-protected files open only in the default app.
+Edit in the default app: ⋯ → {ui:Mit Standard-App öffnen}. When it saves, Schrumbi shows the new version. Password-protected files open only in the default app. When one sheet can't be read, the other sheets stay open.
 
 ## Reading and Editing
 

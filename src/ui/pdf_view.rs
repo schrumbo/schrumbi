@@ -1182,6 +1182,7 @@ impl PdfView {
     fn toolbar(&self, window: &Window, cx: &mut Context<Self>, t: &Theme) -> Div {
         let me = cx.entity();
         let count = self.page_count();
+        let slides = self.slides;
         let current = self.current_page() + 1;
         let (m1, m2, m3, m4, m5, m6, m7) = (me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me);
         let page_label = if self.slides { trf("Folie %lld von %lld", &[&current, &count]) } else { trf("Seite %lld von %lld", &[&current, &count]) };
@@ -1203,7 +1204,7 @@ impl PdfView {
                 .soft(t.ink.opacity(0.06), radius::INNER)
                 .font_features(tabular())
                 .text_size(px(font::CALLOUT))
-                .tooltip(tip(tr("Zu Seite springen")))
+                .tooltip(tip(if self.slides { tr("Zu Folie springen") } else { tr("Zu Seite springen") }))
                 .child(page_label)
                 .on_click(move |_, window, cx| m1.update(cx, |v, cx| v.start_editing(false, window, cx)))
                 .into_any_element(),
@@ -1252,12 +1253,12 @@ impl PdfView {
             .child(Button::new("pdf-fit").ghost().small().icon(menu_icon("chevron-down")).tooltip(tr("Einpassen")).dropdown_menu(move |menu, _, _| {
                 let entry = |label: String, fit: Fit, view: Entity<PdfView>| PopupMenuItem::new(label).on_click(move |_, _, cx| view.update(cx, |v, cx| v.set_fit(fit, None, cx)));
                 let v = m7.clone();
-                menu.item(entry(tr("Breite einpassen"), Fit::Width, v.clone())).item(entry(tr("Seite einpassen"), Fit::Page, v.clone())).separator().item(entry("50 %".into(), Fit::Scale(0.5), v.clone())).item(entry("100 %".into(), Fit::Scale(1.), v.clone())).item(entry("150 %".into(), Fit::Scale(1.5), v.clone())).item(entry("200 %".into(), Fit::Scale(2.), v))
+                menu.item(entry(tr("Breite einpassen"), Fit::Width, v.clone())).item(entry(if slides { tr("Folie einpassen") } else { tr("Seite einpassen") }, Fit::Page, v.clone())).separator().item(entry("50 %".into(), Fit::Scale(0.5), v.clone())).item(entry("100 %".into(), Fit::Scale(1.), v.clone())).item(entry("150 %".into(), Fit::Scale(1.5), v.clone())).item(entry("200 %".into(), Fit::Scale(2.), v))
             }))
     }
 
     fn navigator_picks(&self) -> Vec<(PanelTab, String, &'static str)> {
-        [(PanelTab::Thumbnails, tr("Seiten"), "gallery-vertical-end"), (PanelTab::Outline, tr("Inhalt"), "list-tree"), (PanelTab::Search, tr("Suche"), "search"), (PanelTab::Marks, tr("Marker"), "highlighter")]
+        [(PanelTab::Thumbnails, if self.slides { tr("Folien") } else { tr("Seiten") }, "gallery-vertical-end"), (PanelTab::Outline, tr("Inhalt"), "list-tree"), (PanelTab::Search, tr("Suche"), "search"), (PanelTab::Marks, tr("Marker"), "highlighter")]
             .into_iter()
             .filter(|(value, ..)| *value != PanelTab::Outline || !self.meta.outline.is_empty())
             .collect()
@@ -1451,7 +1452,7 @@ impl PdfView {
         let total = self.page_count();
         let running = self.search_progress < total && self.search_input.as_ref().is_some_and(|i| !i.read(cx).value().trim().is_empty());
         let summary = if self.hits.is_empty() {
-            if running { trf("Durchsuche Seite %lld von %lld", &[&self.search_progress, &total]) } else if self.search_input.as_ref().is_some_and(|i| !i.read(cx).value().trim().is_empty()) { tr("Keine Treffer") } else { String::new() }
+            if running && slides { trf("Durchsuche Folie %lld von %lld", &[&self.search_progress, &total]) } else if running { trf("Durchsuche Seite %lld von %lld", &[&self.search_progress, &total]) } else if self.search_input.as_ref().is_some_and(|i| !i.read(cx).value().trim().is_empty()) { tr("Keine Treffer") } else { String::new() }
         } else {
             let at = self.current_hit.map_or(0, |c| c + 1);
             trf("%lld von %lld", &[&at, &self.hits.len()])

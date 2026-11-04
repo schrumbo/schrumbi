@@ -6,6 +6,10 @@ use super::typ::{self, Align};
 use super::xml::El;
 use super::{OpenError, Source};
 
+const MAX_SPAN: usize = 64;
+const MAX_TABLE_COLS: usize = 512;
+const MAX_COUNTER: i64 = 32_767;
+
 /// Character formatting; unset fields inherit.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RunStyle {
@@ -466,7 +470,7 @@ impl Parser {
                 let level = Level {
                     fmt: l.val("numFmt").unwrap_or("decimal").to_string(),
                     text: l.val("lvlText").unwrap_or("").to_string(),
-                    start: l.val("start").and_then(|v| v.parse().ok()).unwrap_or(1),
+                    start: l.val("start").and_then(|v| v.parse::<i64>().ok()).map_or(1, |v| v.clamp(0, MAX_COUNTER) as _),
                     para: self.para_style(l.child("pPr")),
                     run: self.run_style(l.child("rPr")),
                     tab_after: l.val("suff").is_none_or(|v| v == "tab"),
@@ -477,7 +481,7 @@ impl Parser {
         }
         for n in root.all("num") {
             let (Some(id), Some(abs)) = (n.attr("numId"), n.val("abstractNumId")) else { continue };
-            let starts = n.all("lvlOverride").filter_map(|o| Some((o.attr("ilvl")?.parse().ok()?, o.val("startOverride")?.parse().ok()?))).collect();
+            let starts = n.all("lvlOverride").filter_map(|o| Some((o.attr("ilvl")?.parse().ok()?, o.val("startOverride")?.parse::<i64>().ok()?.clamp(0, MAX_COUNTER) as _))).collect();
             self.nums.insert(id.to_string(), (abs.to_string(), starts));
         }
     }
@@ -499,7 +503,7 @@ impl Parser {
         if i >= counters.len() {
             return None;
         }
-        counters[i] += 1;
+        counters[i] = counters[i].saturating_add(1);
         for (deeper, c) in counters.iter_mut().enumerate().skip(i + 1) {
             *c = starts.get(&(deeper as u8)).copied().unwrap_or(levels.get(deeper).map_or(1, |l| l.start)) - 1;
         }
@@ -840,12 +844,15 @@ impl Parser {
         let row_count = trs.len();
         for (ri, tr) in trs.into_iter().enumerate() {
             let trpr = tr.child("trPr");
-            let mut col = trpr.and_then(|p| p.val("gridBefore")).and_then(|v| v.parse().ok()).unwrap_or(0usize);
+            let mut col = trpr.and_then(|p| p.val("gridBefore")).and_then(|v| v.parse().ok()).unwrap_or(0usize).min(MAX_SPAN);
             let height = trpr.and_then(|p| p.child("trHeight")).and_then(|h| h.attr("val")).and_then(twips).filter(|h| *h > 0.);
             let mut cells = Vec::new();
             for tc in tr.els().flat_map(|e| if e.name == "sdt" { e.child("sdtContent").map(|c| c.all("tc").cloned().collect::<Vec<_>>()).unwrap_or_default() } else if e.name == "tc" { vec![e.clone()] } else { vec![] }) {
+                if col >= MAX_TABLE_COLS {
+                    break;
+                }
                 let tcpr = tc.child("tcPr");
-                let span = tcpr.and_then(|p| p.val("gridSpan")).and_then(|v| v.parse().ok()).unwrap_or(1usize).max(1);
+                let span = tcpr.and_then(|p| p.val("gridSpan")).and_then(|v| v.parse().ok()).unwrap_or(1usize).clamp(1, MAX_SPAN);
                 let vmerge = tcpr.and_then(|p| p.child("vMerge")).map(|m| m.attr("val").unwrap_or("continue").to_string());
                 if vmerge.as_deref() == Some("continue") {
                     if let Some((r, c)) = open.get(&col).copied()
@@ -994,6 +1001,9 @@ fn field_kind(instr: &str) -> FieldKind {
 }
 
 fn roman(mut n: i64) -> String {
+    if !(1..4000).contains(&n) {
+        return n.to_string();
+    }
     let table = [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"), (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")];
     let mut out = String::new();
     for (v, s) in table {
@@ -1006,7 +1016,7 @@ fn roman(mut n: i64) -> String {
 }
 
 fn letters(n: i64) -> String {
-    let n = (n - 1).max(0);
+    let n = (n - 1).clamp(0, MAX_COUNTER);
     let c = (b'a' + (n % 26) as u8) as char;
     c.to_string().repeat((n / 26 + 1) as usize)
 }

@@ -367,6 +367,11 @@ impl Format {
         self.sections.first().is_some_and(|s| s.date)
     }
 
+    /// Whether numbers show in General, which may drop digits to fit a column.
+    pub fn is_general(&self) -> bool {
+        self.sections.first().is_some_and(|s| s.general)
+    }
+
     fn pick(&self, v: f64) -> (Option<&Section>, bool) {
         let numeric: Vec<&Section> = self.sections.iter().filter(|s| !s.toks.contains(&Tok::At)).collect();
         if numeric.iter().any(|s| s.cond.is_some()) {
@@ -489,7 +494,7 @@ fn number(sec: &Section, v: f64, locale: Locale) -> String {
     let exp = toks.iter().position(|t| matches!(t, Tok::Exp(_)));
     let slash = toks.iter().position(|t| *t == Tok::Slash);
     let dot = toks.iter().position(|t| *t == Tok::Dot).filter(|&d| exp.is_none_or(|e| d < e) && slash.is_none());
-    let int_end = dot.or(exp).or(slash.and_then(|s| toks[..s].iter().rposition(|t| matches!(t, Tok::Lit(_))).filter(|&p| p > first))).unwrap_or(last + 1);
+    let int_end = dot.or(exp).or(slash.and_then(|s| toks[..s].iter().rposition(|t| matches!(t, Tok::Lit(_))).filter(|&p| p > first))).unwrap_or(last + 1).max(first);
     let int_toks: Vec<&Tok> = toks[first..int_end].iter().filter(|t| is_digit(t)).collect();
     let grouped = toks[first..int_end].contains(&Tok::Comma);
     let min_int = int_toks.iter().filter(|t| ***t == Tok::Zero).count();
@@ -648,9 +653,11 @@ fn from_days(z_from_1899_12_30: i64) -> (i64, u32, u32) {
 }
 
 fn date(sec: &Section, v: f64, date1904: bool, locale: Locale) -> Option<String> {
+    let sub = sec.toks.iter().find_map(|t| if let Tok::SubSecond(n) = t { Some(*n) } else { None });
+    let step = 86400. * 10f64.powi(sub.unwrap_or(0) as i32);
+    let v = (v * step).round() / step;
     let (y, mo, d, h, mi, s, wd) = civil(v, date1904)?;
     let ampm = sec.toks.iter().any(|t| matches!(t, Tok::AmPm(_)));
-    let sub = sec.toks.iter().find_map(|t| if let Tok::SubSecond(n) = t { Some(*n) } else { None });
     let (s_int, s_frac) = match sub {
         Some(n) => {
             let p = 10f64.powi(n as i32);
@@ -687,7 +694,7 @@ fn date(sec: &Section, v: f64, date1904: bool, locale: Locale) -> Option<String>
                 out.push_str(&format!("{:.*}", n as usize, s_frac)[2..]);
             }
             Tok::Elapsed(unit, n) => {
-                let total = v * 86400.;
+                let total = (v * 86_400_000.).round() / 1000.;
                 let x = match unit {
                     'h' => (total / 3600.).floor(),
                     'm' => (total / 60.).floor(),
@@ -732,6 +739,8 @@ mod tests {
         assert_eq!(f("General", 0.1 + 0.2, EN), "0.3");
         assert_eq!(f("General", 123456789012., EN), "1.23457E+11");
         assert_eq!(f("0.00", 1.23456, DE), "1,23");
+        assert_eq!(f(".00", 0.5, EN), ".50");
+        assert!(!f("E+00", 5., EN).is_empty());
         assert_eq!(f("#,##0.00", 1234567.891, DE), "1.234.567,89");
         assert_eq!(f("#,##0.00", 1234567.891, EN), "1,234,567.89");
         assert_eq!(f("#,##0.00 €", -1234.5, DE), "-1.234,50 €");
@@ -757,6 +766,9 @@ mod tests {
         assert_eq!(f("yyyy-mm-dd hh:mm", 45943.5, DE), "2025-10-13 12:00");
         assert_eq!(f("d. mmmm yyyy", 45943., DE), "13. Oktober 2025");
         assert_eq!(f("dddd", 45943., EN), "Monday");
+        assert_eq!(f("[h]:mm:ss", 1.9999999999999998, EN), "48:00:00");
+        assert_eq!(f("hh:mm:ss", 0.5 + 59.6 / 86400., EN), "12:01:00");
+        assert_eq!(f("hh:mm:ss.0", 0.5 + 59.96 / 86400., EN), "12:01:00.0");
         assert_eq!(f("ddd", 45943., DE), "Mo");
         assert_eq!(f("h:mm AM/PM", 0.75, EN), "6:00 PM");
         assert_eq!(f("[h]:mm:ss", 1.5, EN), "36:00:00");

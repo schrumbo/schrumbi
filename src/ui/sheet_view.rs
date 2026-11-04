@@ -16,6 +16,7 @@ use gpui_kit::*;
 use super::motion::{self, Soft};
 use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
+use crate::core::crash;
 use crate::core::i18n::{tr, trf};
 use crate::core::office::OpenError;
 use crate::core::office::sheet::{Book, Cell, CellKind, HAlign, Merge, Sheet, Style, VAlign, column_name};
@@ -35,6 +36,11 @@ const MAX_ZOOM: f32 = 4.;
 const EXTRA_ROWS: u32 = 60;
 const EXTRA_COLS: u32 = 16;
 const HIT_LIMIT: usize = 10_000;
+const SCROLLBAR: f32 = 12.;
+const TAB_WIDTH: f32 = 180.;
+const TINT: f32 = 0.12;
+const MUTED: u32 = 0x6b6b6b;
+const FROZEN_SHARE: f32 = 0.75;
 const COPY_IN_BACKGROUND: u64 = 20_000;
 const PAPER: u32 = 0xffffff;
 const GRID: u32 = 0xe1e1e1;
@@ -45,13 +51,14 @@ const ZOOMS: [f32; 6] = [0.5, 0.75, 1., 1.25, 1.5, 2.];
 enum Message {
     Opened(Vec<String>, usize),
     Sheet(usize, Arc<Sheet>),
+    SheetFailed(usize),
     Failed(OpenError),
 }
 
 fn start(path: PathBuf, results: async_channel::Sender<Message>) {
     std::thread::spawn(move || {
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-        let opened = std::panic::catch_unwind(|| std::fs::read(&path).map_err(|_| OpenError::Broken).and_then(|bytes| Book::open(bytes, &ext))).unwrap_or(Err(OpenError::Broken));
+        let opened = crash::caught(|| std::fs::read(&path).map_err(|_| OpenError::Broken).and_then(|bytes| Book::open(bytes, &ext))).unwrap_or(Err(OpenError::Broken)).and_then(|book| if book.names.is_empty() { Err(OpenError::Broken) } else { Ok(book) });
         let mut book = match opened {
             Ok(book) => book,
             Err(why) => {
@@ -64,9 +71,11 @@ fn start(path: PathBuf, results: async_channel::Sender<Message>) {
         }
         let active = book.active;
         for i in std::iter::once(active).chain((0..book.names.len()).filter(|i| *i != active)) {
-            let sheet = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| book.sheet(i))).ok();
-            let Some(sheet) = sheet else { continue };
-            if results.send_blocking(Message::Sheet(i, Arc::new(sheet))).is_err() {
+            let message = match crash::caught(|| book.sheet(i)) {
+                Some(sheet) => Message::Sheet(i, Arc::new(sheet)),
+                None => Message::SheetFailed(i),
+            };
+            if results.send_blocking(message).is_err() {
                 return;
             }
         }
@@ -128,16 +137,20 @@ struct Geo {
 
 impl Geo {
     fn new(s: &Sheet, zoom: f32, offset: Point<Pixels>, size: (f32, f32)) -> Self {
-        let rows = s.used_rows.max(s.frozen_rows) + EXTRA_ROWS;
+        let rows = s.used_rows.max(s.frozen_rows).saturating_add(EXTRA_ROWS);
         let digits = (rows.max(1000) as f32).log10().floor() + 1.;
+        let header_w = (digits * 7. + 2. * space::S).round();
+        let fits = |frozen: f32, room: f32| room <= 0. || frozen <= room * FROZEN_SHARE;
+        let frozen_cols = if fits(s.cols.start(s.frozen_cols) * zoom, size.0 - header_w) { s.frozen_cols } else { 0 };
+        let frozen_rows = if fits(s.heights.start(s.frozen_rows) * zoom, size.1 - HEADER_HEIGHT) { s.frozen_rows } else { 0 };
         Self {
             zoom,
-            header_w: (digits * 7. + 2. * space::S).round(),
+            header_w,
             header_h: HEADER_HEIGHT,
-            frozen_w: s.cols.start(s.frozen_cols) * zoom,
-            frozen_h: s.heights.start(s.frozen_rows) * zoom,
-            frozen_rows: s.frozen_rows,
-            frozen_cols: s.frozen_cols,
+            frozen_w: s.cols.start(frozen_cols) * zoom,
+            frozen_h: s.heights.start(frozen_rows) * zoom,
+            frozen_rows,
+            frozen_cols,
             sx: (-f32::from(offset.x)).max(0.),
             sy: (-f32::from(offset.y)).max(0.),
             w: size.0,
@@ -152,6 +165,16 @@ impl Geo {
 
     fn row_y(&self, s: &Sheet, r: u32) -> f32 {
         let y = self.header_h + s.heights.start(r) * self.zoom;
+        if r < self.frozen_rows { y } else { y - self.sy }
+    }
+
+    fn col_end(&self, s: &Sheet, c: u32) -> f32 {
+        let x = self.header_w + s.cols.start(c + 1) * self.zoom;
+        if c < self.frozen_cols { x } else { x - self.sx }
+    }
+
+    fn row_end(&self, s: &Sheet, r: u32) -> f32 {
+        let y = self.header_h + s.heights.start(r + 1) * self.zoom;
         if r < self.frozen_rows { y } else { y - self.sy }
     }
 
@@ -178,8 +201,8 @@ impl Geo {
     }
 
     fn extent(&self, s: &Sheet) -> (u32, u32) {
-        let rows = (s.used_rows.max(s.frozen_rows) + EXTRA_ROWS).max(s.heights.at((self.h - self.header_h).max(0.) / self.zoom) + 2);
-        let cols = (s.used_cols.max(s.frozen_cols) + EXTRA_COLS).max(s.cols.at((self.w - self.header_w).max(0.) / self.zoom) + 2);
+        let rows = s.used_rows.max(s.frozen_rows).saturating_add(EXTRA_ROWS).max(s.heights.at((self.h - self.header_h).max(0.) / self.zoom) + 2);
+        let cols = s.used_cols.max(s.frozen_cols).saturating_add(EXTRA_COLS).max(s.cols.at((self.w - self.header_w).max(0.) / self.zoom) + 2);
         (rows, cols)
     }
 
@@ -195,7 +218,8 @@ pub struct SheetView {
     stamp: Option<(SystemTime, u64)>,
     names: Vec<String>,
     sheets: Vec<Option<Arc<Sheet>>>,
-    fonts: Vec<Vec<Font>>,
+    broken: Vec<bool>,
+    fonts: Vec<Arc<Vec<Font>>>,
     active: usize,
     failed: Option<OpenError>,
     opened: bool,
@@ -206,6 +230,8 @@ pub struct SheetView {
     zoom: f32,
     selection: Selection,
     drag: Option<Drag>,
+    whole: Option<(Drag, Selection)>,
+    before_drag: Selection,
     focus: FocusHandle,
     focused_once: bool,
     search_open: bool,
@@ -232,6 +258,7 @@ impl SheetView {
             stamp: stamp(path),
             names: Vec::new(),
             sheets: Vec::new(),
+            broken: Vec::new(),
             fonts: Vec::new(),
             active: 0,
             failed: None,
@@ -243,6 +270,8 @@ impl SheetView {
             zoom: 1.,
             selection: Selection::at((0, 0)),
             drag: None,
+            whole: None,
+            before_drag: Selection::at((0, 0)),
             focus: cx.focus_handle(),
             focused_once: true,
             search_open: false,
@@ -299,7 +328,8 @@ impl SheetView {
                 let first = !self.opened;
                 self.failed = None;
                 self.sheets.resize(names.len(), None);
-                self.fonts.resize(names.len(), Vec::new());
+                self.broken = vec![false; names.len()];
+                self.fonts.resize(names.len(), Arc::default());
                 self.names = names;
                 if first {
                     self.active = active.min(self.names.len().saturating_sub(1));
@@ -310,18 +340,22 @@ impl SheetView {
             }
             Message::Sheet(i, sheet) => {
                 if i < self.sheets.len() {
-                    self.fonts[i] = sheet.styles.iter().map(|s| cell_font(s, cx)).collect();
+                    self.fonts[i] = Arc::new(sheet.styles.iter().map(|s| cell_font(s, cx)).collect());
+                    self.broken[i] = false;
                     self.sheets[i] = Some(sheet);
                     if i == self.active && self.search_open {
                         self.rerun_search(cx);
                     }
                 }
             }
-            Message::Failed(why) => {
-                if !self.opened {
-                    self.failed = Some(why);
+            Message::SheetFailed(i) => {
+                if i < self.sheets.len() {
+                    self.broken[i] = true;
+                    self.sheets[i] = None;
+                    self.fonts[i] = Arc::default();
                 }
             }
+            Message::Failed(why) => self.failed = Some(why),
         }
         cx.notify();
     }
@@ -345,6 +379,7 @@ impl SheetView {
         }
         self.places.insert(self.active, Place { offset: self.scroll.offset(), selection: self.selection });
         self.active = index;
+        self.tabs.scroll_to_item(index);
         let place = self.places.remove(&index);
         self.selection = place.as_ref().map_or(Selection::at((0, 0)), |p| p.selection);
         self.scroll.set_offset(place.map_or(point(px(0.), px(0.)), |p| p.offset));
@@ -377,6 +412,7 @@ impl SheetView {
         let Some(target) = self.target(e.position) else { return };
         let (last_row, last_col) = self.extent_last();
         let shift = e.modifiers.shift;
+        self.before_drag = self.selection;
         match target {
             Target::Cell(r, c) => {
                 if shift {
@@ -389,10 +425,12 @@ impl SheetView {
             Target::Row(r) => {
                 self.selection = if shift { Selection { anchor: (self.selection.anchor.0, 0), head: (r, last_col) } } else { Selection { anchor: (r, 0), head: (r, last_col) } };
                 self.drag = Some(Drag::Rows);
+                self.whole = Some((Drag::Rows, self.selection));
             }
             Target::Column(c) => {
                 self.selection = if shift { Selection { anchor: (0, self.selection.anchor.1), head: (last_row, c) } } else { Selection { anchor: (0, c), head: (last_row, c) } };
                 self.drag = Some(Drag::Columns);
+                self.whole = Some((Drag::Columns, self.selection));
             }
             Target::Corner => self.select_all(cx),
         }
@@ -424,6 +462,9 @@ impl SheetView {
         };
         if head != self.selection.head {
             self.selection.head = head;
+            if let Some((d, _)) = self.whole {
+                self.whole = Some((d, self.selection));
+            }
             cx.notify();
         }
     }
@@ -473,7 +514,7 @@ impl SheetView {
         if c >= g.frozen_cols {
             let left = s.cols.start(c) * g.zoom - g.frozen_w;
             let right = s.cols.start(c + 1) * g.zoom - g.frozen_w;
-            let room = g.w - g.header_w - g.frozen_w;
+            let room = g.w - g.header_w - g.frozen_w - SCROLLBAR;
             if left < g.sx {
                 o.x = px(-left);
             } else if right > g.sx + room {
@@ -483,7 +524,7 @@ impl SheetView {
         if r >= g.frozen_rows {
             let top = s.heights.start(r) * g.zoom - g.frozen_h;
             let bottom = s.heights.start(r + 1) * g.zoom - g.frozen_h;
-            let room = g.h - g.header_h - g.frozen_h;
+            let room = g.h - g.header_h - g.frozen_h - SCROLLBAR;
             if top < g.sy {
                 o.y = px(-top);
             } else if bottom > g.sy + room {
@@ -543,7 +584,7 @@ impl SheetView {
         if self.search_input.is_some() {
             return;
         }
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("In dieser Tabelle suchen")));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("In diesem Blatt suchen")));
         self._subs.push(cx.subscribe_in(&input, window, |this, s, e: &InputEvent, _, cx| match e {
             InputEvent::Change => {
                 let q = s.read(cx).value().to_string();
@@ -668,7 +709,10 @@ impl SheetView {
     }
 
     fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
-        if self.search_open {
+        if self.drag.take().is_some() {
+            self.selection = self.before_drag;
+            cx.notify();
+        } else if self.search_open {
             self.close_search(window, cx);
         } else if self.selection.anchor != self.selection.head {
             self.selection = Selection::at(self.selection.anchor);
@@ -696,7 +740,12 @@ impl SheetView {
             "down" if command => self.move_to((last_row, self.selection.head.1), shift, cx),
             "left" if command => self.move_to((self.selection.head.0, 0), shift, cx),
             "right" if command => self.move_to((self.selection.head.0, last_col), shift, cx),
-            "home" if command => self.move_to((0, 0), shift, cx),
+            "home" if command => {
+                self.move_to((0, 0), shift, cx);
+                self.scroll.set_offset(point(px(0.), px(0.)));
+            }
+            "pageup" if command => self.switch_to(self.active.saturating_sub(1), window, cx),
+            "pagedown" if command => self.switch_to((self.active + 1).min(self.names.len().saturating_sub(1)), window, cx),
             "end" if command => self.move_to((last_row, last_col), shift, cx),
             "home" => self.move_to((self.selection.head.0, 0), shift, cx),
             "up" => self.move_by(-1, 0, shift, cx),
@@ -714,6 +763,11 @@ impl SheetView {
 
     fn address(&self) -> String {
         let (r0, c0, r1, c1) = self.selection.range();
+        match self.whole {
+            Some((Drag::Rows, s)) if s == self.selection => return format!("{}:{}", r0 + 1, r1 + 1),
+            Some((Drag::Columns, s)) if s == self.selection => return format!("{}:{}", column_name(c0), column_name(c1)),
+            _ => {}
+        }
         let a = format!("{}{}", column_name(c0), r0 + 1);
         if (r0, c0) == (r1, c1) || self.sheet().and_then(|s| s.merge_at(r0, c0)).is_some_and(|m| (m.r0, m.c0, m.r1, m.c1) == (r0, c0, r1, c1)) { a } else { format!("{a}:{}{}", column_name(c1), r1 + 1) }
     }
@@ -758,7 +812,7 @@ impl SheetView {
                     .child(Button::new("sheet-search-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Suche schließen")).on_click(move |_, window, cx| m3.update(cx, |v, cx| v.close_search(window, cx))))
                     .into_any_element()
             }
-            _ => Button::new("sheet-search").ghost().small().icon(menu_icon("search")).tooltip(tr("Suchen")).on_click(move |_, window, cx| m3.update(cx, |v, cx| v.open_search(window, cx))).into_any_element(),
+            _ => Button::new("sheet-search").ghost().small().icon(menu_icon("search")).tooltip(tr("Suche")).on_click(move |_, window, cx| m3.update(cx, |v, cx| v.open_search(window, cx))).into_any_element(),
         };
         let zoom = format!("{} %", (self.zoom * 100.).round());
         div()
@@ -793,7 +847,6 @@ impl SheetView {
         for (i, name) in self.names.iter().enumerate() {
             let on = i == self.active;
             let v = me.clone();
-            let loading = self.sheets.get(i).is_some_and(Option::is_none);
             row = row.child(
                 div()
                     .id(("sheet-tab", i))
@@ -806,13 +859,14 @@ impl SheetView {
                     .rounded(px(radius::INNER))
                     .cursor_pointer()
                     .key_nav()
+                    .max_w(px(TAB_WIDTH))
                     .when(!on, |d| d.soft(t.ink.opacity(0.06), radius::INNER))
+                    .tooltip(tip(name.clone()))
                     .when(on, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm())
                     .text_size(px(font::CALLOUT))
                     .text_color(if on { t.primary } else { t.secondary })
                     .when(on, |d| d.font_weight(FontWeight::MEDIUM))
-                    .when(loading && on, |d| d.child(motion::spinner(iconsize::XS, t.secondary)))
-                    .child(name.clone())
+                    .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(name.clone()))
                     .on_click(move |_, window, cx| v.update(cx, |v, cx| v.switch_to(i, window, cx))),
             );
         }
@@ -822,14 +876,19 @@ impl SheetView {
     fn grid(&mut self, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> AnyElement {
         let me = cx.entity();
         let Some(s) = self.sheet() else {
+            if self.broken.get(self.active).copied().unwrap_or(false) {
+                return div().flex_1().min_h_0().child(unopenable(&self.path, false, tr("Dieses Blatt konnte nicht gelesen werden"), tr("Die anderen Blätter bleiben verfügbar."), t)).into_any_element();
+            }
             return div().flex_1().min_h_0().flex().items_center().justify_center().child(motion::loading(iconsize::L, t.secondary)).into_any_element();
         };
         let g = self.geo(&s);
         let (content_w, content_h) = g.content(&s);
+        let empty = s.rows.is_empty() && s.merges.is_empty();
         let fonts = self.fonts.get(self.active).cloned().unwrap_or_default();
+
         let paint = Paint {
             sheet: s,
-            fonts: Arc::new(fonts),
+            fonts,
             zoom: self.zoom,
             scroll: self.scroll.clone(),
             selection: self.selection,
@@ -882,6 +941,7 @@ impl SheetView {
                     .child(div().w(px(content_w)).h(px(content_h))),
             )
             .child(canvas(|_, _, _| {}, move |bounds, _, window, cx| window.with_content_mask(Some(ContentMask { bounds }), |window| paint.paint(bounds, window, cx))).absolute().top_0().left_0().size_full())
+            .when(empty, |d| d.child(div().absolute().top_0().left_0().size_full().flex().items_center().justify_center().text_size(px(font::BODY)).text_color(hex(MUTED)).child(tr("Dieses Blatt ist leer"))))
             .scrollbar(&self.scroll, gpui_kit::component::scroll::ScrollbarAxis::Both)
             .child(super::image_view::wheel_zoom(move |factor, at, _, cx| {
                 me.update(cx, |v, cx| {
@@ -987,20 +1047,22 @@ impl Paint {
         let x_of = |c: u32| g.col_x(s, c);
         let y_of = |r: u32| g.row_y(s, r);
         let (left, top) = (x_of(cols.start), y_of(rows.start));
-        let (right, bottom) = (x_of(cols.end), y_of(rows.end));
+        let (right, bottom) = (g.col_end(s, cols.end - 1), g.row_end(s, rows.end - 1));
         if s.grid_lines {
-            for c in cols.start..=cols.end {
-                if s.cols.size(c.saturating_sub(1)) > 0. || c == cols.start {
+            for c in cols.start..cols.end {
+                if c == cols.start || s.cols.size(c - 1) > 0. {
                     quad(window, o, x_of(c), top, 1., bottom - top, hex(GRID));
                 }
             }
-            for r in rows.start..=rows.end {
+            quad(window, o, right, top, 1., bottom - top, hex(GRID));
+            for r in rows.start..rows.end {
                 quad(window, o, left, y_of(r), right - left + 1., 1., hex(GRID));
             }
+            quad(window, o, left, bottom, right - left + 1., 1., hex(GRID));
         }
         let merges: Vec<Merge> = s.merges.iter().copied().filter(|m| m.r1 >= rows.start && m.r0 < rows.end && m.c1 >= cols.start && m.c0 < cols.end).collect();
         let in_merge = |r: u32, c: u32| merges.iter().any(|m| (m.r0..=m.r1).contains(&r) && (m.c0..=m.c1).contains(&c));
-        let rect = |r0: u32, c0: u32, r1: u32, c1: u32| (x_of(c0), y_of(r0), x_of(c1 + 1) - x_of(c0), y_of(r1 + 1) - y_of(r0));
+        let rect = |r0: u32, c0: u32, r1: u32, c1: u32| (x_of(c0), y_of(r0), g.col_end(s, c1) - x_of(c0), g.row_end(s, r1) - y_of(r0));
         let visible_rows = s.rows_from(rows.start);
         let visible_rows = &visible_rows[..visible_rows.partition_point(|r| r.index < rows.end)];
         for m in &merges {
@@ -1092,7 +1154,7 @@ impl Paint {
         let st = s.style(cell);
         let (r1, c1) = merge.map_or((row.index, cell.col), |m| (m.r1, m.c1));
         let (x, y) = (g.col_x(s, cell.col), g.row_y(s, row.index));
-        let (w, h) = (g.col_x(s, c1 + 1) - x, g.row_y(s, r1 + 1) - y);
+        let (w, h) = (g.col_end(s, c1) - x, g.row_end(s, r1) - y);
         if w <= 0. || h <= 0. {
             return;
         }
@@ -1147,26 +1209,34 @@ impl Paint {
             });
             return;
         }
-        let text: SharedString = cell.text.clone().into();
-        let mut shaped = window.text_system().shape_line(text.clone(), px(size), &[run(text.len())], None);
-        let tw = f32::from(shaped.width);
         let room = w - 2. * pad;
-        if cell.kind == CellKind::Number && tw > room && merge.is_none() {
-            let fits = (cell.text.len() as f32 * room / tw).floor() as usize;
-            for shorter in rounded(&cell.text).into_iter().filter(|s| s.len() <= fits + 1) {
-                let line = window.text_system().shape_line(shorter.clone().into(), px(size), &[run(shorter.len())], None);
-                if f32::from(line.width) <= room {
-                    shaped = line;
-                    break;
+        let shape = |text: SharedString, window: &mut Window| {
+            let len = text.len();
+            window.text_system().shape_line(text, px(size), &[run(len)], None)
+        };
+        let shaped = if cell.kind == CellKind::Number && merge.is_none() {
+            let digit = f32::from(shape("0".into(), window).width).max(0.1);
+            let guess = |t: &str| t.chars().count() as f32 * digit;
+            let full = guess(&cell.text);
+            let mut shown = None;
+            if full <= room * 0.85 || full <= room * 1.15 && f32::from(shape(cell.text.clone().into(), window).width) <= room {
+                shown = Some(shape(cell.text.clone().into(), window));
+            } else if cell.general {
+                for shorter in rounded(&cell.text).into_iter().filter(|t| guess(t) <= room * 1.15) {
+                    let line = shape(shorter.into(), window);
+                    if f32::from(line.width) <= room {
+                        shown = Some(line);
+                        break;
+                    }
                 }
             }
-        }
-        if cell.kind == CellKind::Number && f32::from(shaped.width) > room && merge.is_none() {
-            let hash = window.text_system().shape_line("#".into(), px(size), &[run(1)], None);
-            let n = (room / f32::from(hash.width).max(1.)).floor().max(1.) as usize;
-            let hashes: SharedString = "#".repeat(n).into();
-            shaped = window.text_system().shape_line(hashes.clone(), px(size), &[run(hashes.len())], None);
-        }
+            shown.unwrap_or_else(|| {
+                let hash = f32::from(shape("#".into(), window).width).max(1.);
+                shape("#".repeat((room / hash).floor().max(1.) as usize).into(), window)
+            })
+        } else {
+            shape(cell.text.clone().into(), window)
+        };
         let tw = f32::from(shaped.width);
         let tx = match align {
             HAlign::Center => x + (w - tw) / 2.,
@@ -1218,11 +1288,11 @@ impl Paint {
             return;
         }
         let (x, y) = (g.col_x(s, c0), g.row_y(s, r0));
-        let (w, h) = (g.col_x(s, c1 + 1) - x, g.row_y(s, r1 + 1) - y);
+        let (w, h) = (g.col_end(s, c1) - x, g.row_end(s, r1) - y);
         let anchor = self.selection.anchor;
         let single = (r0, c0, r1, c1) == (anchor.0, anchor.1, anchor.0, anchor.1) || s.merge_at(anchor.0, anchor.1).is_some_and(|m| (m.r0, m.c0, m.r1, m.c1) == (r0, c0, r1, c1));
         if !single {
-            quad(window, o, x, y, w, h, self.accent.opacity(0.12));
+            quad(window, o, x, y, w, h, self.accent.opacity(TINT));
         }
         let b = 2.;
         let edge = self.accent;
@@ -1270,7 +1340,7 @@ impl Paint {
                     }
                     let on = c >= c0 && c <= c1;
                     if on {
-                        quad(window, o, x, 0., w, g.header_h, self.accent.opacity(0.14));
+                        quad(window, o, x, 0., w, g.header_h, self.accent.opacity(TINT));
                         quad(window, o, x, g.header_h - 2., w, 2., self.accent);
                     }
                     quad(window, o, x, 0., 1., g.header_h, self.header_line);
@@ -1294,7 +1364,7 @@ impl Paint {
                     }
                     let on = r >= r0 && r <= r1;
                     if on {
-                        quad(window, o, 0., y, g.header_w, h, self.accent.opacity(0.14));
+                        quad(window, o, 0., y, g.header_w, h, self.accent.opacity(TINT));
                         quad(window, o, g.header_w - 2., y, 2., h, self.accent);
                     }
                     quad(window, o, 0., y, g.header_w, 1., self.header_line);

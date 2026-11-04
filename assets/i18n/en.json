@@ -1619,7 +1619,7 @@
   "Öffnet sich im Browser": "Opens in the browser",
   "Zurück zum Vorschlag": "Back to the suggestion",
   "PDF ersetzt: %@": "PDF replaced: %@",
-  "In dieser Tabelle suchen": "Search this spreadsheet",
+  "In diesem Blatt suchen": "Search this sheet",
   "Suche …": "Searching …",
   "Suche schließen": "Close search",
   "Zoom": "Zoom",
@@ -1628,5 +1628,12 @@
   "Datei konnte nicht geöffnet werden": "Couldn't open the file",
   "Die Datei ist beschädigt oder hat ein unbekanntes Format.": "The file is damaged or has an unknown format.",
   "Folie %lld": "Slide %lld",
-  "Folie %lld von %lld": "Slide %lld of %lld"
+  "Folie %lld von %lld": "Slide %lld of %lld",
+  "Dieses Blatt ist leer": "This sheet is empty",
+  "Zu Folie springen": "Go to slide",
+  "Folie einpassen": "Fit slide",
+  "Folien": "Slides",
+  "Durchsuche Folie %lld von %lld": "Searching slide %lld of %lld",
+  "Dieses Blatt konnte nicht gelesen werden": "This sheet could not be read",
+  "Die anderen Blätter bleiben verfügbar.": "The other sheets are still available."
 }

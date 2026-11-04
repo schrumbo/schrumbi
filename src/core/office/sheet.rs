@@ -78,6 +78,8 @@ pub struct Cell {
     pub style: u32,
     pub color: Option<u32>,
     pub formula: Option<Box<str>>,
+    /// A number in General format, which narrow columns may round.
+    pub general: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +134,9 @@ impl Axis {
         let n = self.starts.len() - 1;
         let end = self.starts[n];
         if pos >= end {
+            if self.default <= 0. {
+                return (0..n as u32).rev().find(|&i| self.size(i) > 0.).unwrap_or(0);
+            }
             return (n as f32 + ((pos - end) / self.default.max(1.)).floor()) as u32;
         }
         let i = self.starts.partition_point(|s| *s <= pos);
@@ -193,7 +198,8 @@ impl Sheet {
                 _ => None,
             };
             let mut line = String::new();
-            for c in c0..=c1 {
+            let last = row.and_then(|row| row.cells.last()).map_or(c0, |cell| cell.col.clamp(c0, c1));
+            for c in c0..=last {
                 if c > c0 {
                     line.push('\t');
                 }
@@ -244,10 +250,13 @@ pub fn parse_ref(r: &str) -> Option<(u32, u32)> {
         if !b.is_ascii_alphabetic() {
             return None;
         }
-        col = col.checked_mul(26)? + (b.to_ascii_uppercase() - b'A') as u32 + 1;
+        col = col.checked_mul(26)?.checked_add((b.to_ascii_uppercase() - b'A') as u32 + 1)?;
+        if col > MAX_COLS {
+            return None;
+        }
     }
     let row: u32 = digits.trim_start_matches('$').parse().ok()?;
-    (row >= 1 && col >= 1).then(|| (row - 1, col - 1))
+    (row >= 1 && row <= MAX_ROWS && col >= 1).then(|| (row - 1, col - 1))
 }
 
 fn parse_range(r: &str) -> Option<Merge> {
@@ -286,7 +295,7 @@ fn color(e: Option<&El>, theme: &[String]) -> Option<u32> {
         return None;
     }
     let hex = if let Some(rgb) = e.attr("rgb") {
-        let rgb = if rgb.len() == 8 { &rgb[2..] } else { rgb };
+        let rgb = if rgb.len() == 8 { rgb.get(2..).unwrap_or(rgb) } else { rgb };
         rgb.to_ascii_lowercase()
     } else if let Some(t) = e.attr("theme") {
         theme.get(t.parse::<usize>().ok()?)?.to_ascii_lowercase()
@@ -460,11 +469,12 @@ struct Builder {
     frozen: (u32, u32),
     grid_lines: bool,
     used: (u32, u32),
+    tail: Option<(u32, f32)>,
 }
 
 impl Builder {
     fn new() -> Self {
-        Self { rows: Vec::new(), widths: Vec::new(), heights: Vec::new(), default_width: 64., default_height: 20., merges: Vec::new(), frozen: (0, 0), grid_lines: true, used: (0, 0) }
+        Self { rows: Vec::new(), widths: Vec::new(), heights: Vec::new(), default_width: 64., default_height: 20., merges: Vec::new(), frozen: (0, 0), grid_lines: true, used: (0, 0), tail: None }
     }
 
     fn finish(mut self, styles: Vec<Style>) -> Sheet {
@@ -478,10 +488,12 @@ impl Builder {
             self.used.0 = self.used.0.max(m.r1 + 1);
             self.used.1 = self.used.1.max(m.c1 + 1);
         }
-        let ncols = (self.widths.len() as u32).max(self.used.1);
+        let tail_from = self.tail.map_or(u32::MAX, |t| t.0);
+        let tail_width = self.tail.map(|t| t.1).filter(|w| !w.is_nan()).unwrap_or(self.default_width);
+        let ncols = (self.widths.len() as u32).max(self.used.1).max(tail_from.min(MAX_COLS));
         let mut widths = self.widths;
         widths.resize(ncols as usize, f32::NAN);
-        let widths: Vec<f32> = widths.into_iter().map(|w| if w.is_nan() { self.default_width } else { w }).collect();
+        let widths: Vec<f32> = widths.into_iter().enumerate().map(|(i, w)| if !w.is_nan() { w } else if i as u32 >= tail_from { tail_width } else { self.default_width }).collect();
         self.heights.sort_by_key(|h| h.0);
         let nrows = self.heights.last().map_or(0, |h| h.0 + 1).max(self.used.0);
         let mut heights = vec![self.default_height; if self.heights.is_empty() { 0 } else { nrows as usize }];
@@ -493,7 +505,7 @@ impl Builder {
         Sheet {
             rows: self.rows,
             styles,
-            cols: Axis::new(widths, self.default_width),
+            cols: Axis::new(widths, tail_width),
             heights: Axis::new(heights, self.default_height),
             merges: self.merges,
             frozen_rows: self.frozen.0,
@@ -556,15 +568,12 @@ fn worksheet(bytes: &[u8], shared: &[String], styles: &Styles, date1904: bool, l
                 }
                 "col" => {
                     let min = attr(e, "min").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1).max(1);
+                    let min = min.min(MAX_COLS);
                     let max = attr(e, "max").and_then(|v| v.parse::<u32>().ok()).unwrap_or(min).clamp(min, MAX_COLS);
                     let hidden = flag(e, "hidden");
                     let w = attr(e, "width").and_then(|v| v.parse::<f32>().ok());
                     if max - min > 2000 {
-                        if let Some(w) = w
-                            && !hidden
-                        {
-                            default_width = Some(w);
-                        }
+                        b.tail = Some((min - 1, if hidden { 0. } else { w.map_or(f32::NAN, width_px) }));
                         continue;
                     }
                     if b.widths.len() < max as usize {
@@ -709,6 +718,7 @@ fn finish_cell(
     } else {
         si.as_ref().and_then(|si| shared_formulas.get(si)).map(|f| format!("={f}").into_boxed_str())
     };
+    let mut general = false;
     let (text, kind, color) = match kind.as_str() {
         "s" => match v.trim().parse::<usize>().ok().and_then(|i| shared.get(i)) {
             Some(s) => {
@@ -725,6 +735,7 @@ fn finish_cell(
         _ => match v.trim().parse::<f64>() {
             Ok(n) => {
                 let shown = format.map_or_else(|| numfmt::Shown { text: numfmt::general(n, locale), color: None }, |f| f.number(n, date1904, locale));
+                general = format.is_none_or(Format::is_general);
                 (shown.text, CellKind::Number, shown.color)
             }
             Err(_) if v.is_empty() => (String::new(), CellKind::Empty, None),
@@ -737,7 +748,7 @@ fn finish_cell(
     }
     b.used.0 = b.used.0.max(row.index + 1);
     b.used.1 = b.used.1.max(col + 1);
-    row.cells.push(Cell { col, text, kind, style, color, formula });
+    row.cells.push(Cell { col, text, kind, style, color, formula, general });
 }
 
 /// A workbook that hands out its sheets one at a time.
@@ -824,8 +835,22 @@ impl Book {
             BookSource::Other { sheets, locale } => {
                 use calamine::Reader as _;
                 let name = self.names.get(index).cloned().unwrap_or_default();
+                if let calamine::Sheets::Xlsb(x) = sheets.as_mut() {
+                    let Ok(mut reader) = x.worksheet_cells_reader(&name) else { return Builder::new().finish(vec![Style::default()]) };
+                    let mut cells = Vec::new();
+                    while let Ok(Some(cell)) = reader.next_cell() {
+                        let (r, c) = cell.get_position();
+                        if r < MAX_ROWS && c < MAX_COLS {
+                            cells.push((r, c, calamine::Data::from(cell.get_value().clone())));
+                        }
+                    }
+                    return from_cells(cells.iter().map(|(r, c, v)| (*r, *c, v)), *locale);
+                }
                 match sheets.worksheet_range(&name) {
-                    Ok(range) => from_range(&range, *locale),
+                    Ok(range) => {
+                        let (r0, c0) = range.start().unwrap_or((0, 0));
+                        from_cells(range.used_cells().map(|(r, c, v)| (r as u32 + r0, c as u32 + c0, v)).filter(|(r, c, _)| *r < MAX_ROWS && *c < MAX_COLS), *locale)
+                    }
                     Err(_) => Builder::new().finish(vec![Style::default()]),
                 }
             }
@@ -833,18 +858,17 @@ impl Book {
     }
 }
 
-fn from_range(range: &calamine::Range<calamine::Data>, locale: Locale) -> Sheet {
+fn from_cells<'a>(cells: impl Iterator<Item = (u32, u32, &'a calamine::Data)>, locale: Locale) -> Sheet {
     use calamine::Data;
     let mut b = Builder::new();
-    let (r0, c0) = range.start().unwrap_or((0, 0));
     let mut widths: Vec<usize> = Vec::new();
     let mut rows: HashMap<u32, Vec<Cell>> = HashMap::new();
     let general = Format::parse("General");
     let date = Format::parse(if locale.german { "dd.mm.yyyy" } else { "m/d/yyyy" });
     let date_time = Format::parse(if locale.german { "dd.mm.yyyy hh:mm" } else { "m/d/yyyy h:mm" });
     let duration = Format::parse("[h]:mm:ss");
-    for (r, c, v) in range.used_cells() {
-        let (r, c) = (r as u32 + r0, c as u32 + c0);
+    for (r, c, v) in cells {
+        let plain = matches!(v, Data::Int(_) | Data::Float(_));
         let (text, kind) = match v {
             Data::Int(i) => (general.number(*i as f64, false, locale).text, CellKind::Number),
             Data::Float(f) => (general.number(*f, false, locale).text, CellKind::Number),
@@ -870,7 +894,7 @@ fn from_range(range: &calamine::Range<calamine::Data>, locale: Locale) -> Sheet 
         widths[c as usize] = widths[c as usize].max(text.lines().map(|l| l.chars().count()).max().unwrap_or(0));
         b.used.0 = b.used.0.max(r + 1);
         b.used.1 = b.used.1.max(c + 1);
-        rows.entry(r).or_default().push(Cell { col: c, text, kind, style: 0, color: None, formula: None });
+        rows.entry(r).or_default().push(Cell { col: c, text, kind, style: 0, color: None, formula: None, general: plain });
     }
     b.rows = rows.into_iter().map(|(index, cells)| Row { index, cells }).collect();
     b.widths = widths.into_iter().map(|n| if n == 0 { f32::NAN } else { (n as f32 * 7. + 12.).clamp(64., 320.) }).collect();
@@ -964,6 +988,26 @@ mod tests {
         assert_eq!((s.rows.len(), s.used_rows), (20_000, 20_000));
         assert_eq!(s.cell(19_999, 0).map(|c| c.text.as_str()), Some("20000"));
         assert_eq!(s.rows_from(19_998).len(), 2);
+    }
+
+    fn only_sheet(data: &str) -> Sheet {
+        let book = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="A" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+        let sheet = format!(r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">{data}</worksheet>"#);
+        let root = rels(&[("rId1", "officeDocument", "xl/workbook.xml")]);
+        let book_rels = rels(&[("rId1", "worksheet", "worksheets/sheet1.xml")]);
+        let bytes = zip(&[("_rels/.rels", root.as_bytes()), ("xl/workbook.xml", book.as_bytes()), ("xl/_rels/workbook.xml.rels", book_rels.as_bytes()), ("xl/worksheets/sheet1.xml", sheet.as_bytes())]);
+        Book::open_with(bytes, "xlsx", DE).unwrap().sheet(0)
+    }
+
+    #[test]
+    fn hostile_sizes_stay_bounded() {
+        let s = only_sheet(r#"<cols><col min="16385" max="16385" width="9"/></cols><sheetData><row r="1"><c r="ZZZZZZ1"><v>1</v></c><c r="B1"><v>2</v></c></row></sheetData><mergeCells><mergeCell ref="A1:ZZZZZZ9"/></mergeCells>"#);
+        assert!(s.used_cols <= MAX_COLS && s.merges.is_empty());
+        let s = only_sheet(r#"<cols><col min="30" max="16384" hidden="1"/></cols><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>"#);
+        assert_eq!((s.cols.size(28), s.cols.size(29), s.cols.size(40)), (64., 0., 0.));
+        assert_eq!(s.cols.at(s.cols.start(29) + 500.), 28);
+        let s = only_sheet(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="1000000"><c r="C1000000"><v>2</v></c></row></sheetData>"#);
+        assert_eq!(s.tsv(0, 0, 999_999, 2).len(), 2 + 999_998 * 2 + 4);
     }
 
     #[test]

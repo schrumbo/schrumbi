@@ -43,7 +43,7 @@ pub fn rgb(hex: &str, alpha: f32) -> String {
 /// Six hex digits, or nothing for `auto` and garbage.
 pub fn hex(value: &str) -> Option<String> {
     let v = value.trim().trim_start_matches('#');
-    let v = if v.len() == 8 { &v[2..] } else { v };
+    let v = if v.len() == 8 { v.get(2..).unwrap_or(v) } else { v };
     (v.len() == 6 && v.chars().all(|c| c.is_ascii_hexdigit())).then(|| v.to_ascii_lowercase())
 }
 

@@ -141,7 +141,10 @@ fn resolve_alternates(el: &mut El) {
     el.children = out;
 }
 
+const MAX_DEPTH: usize = 256;
+
 /// Parses a whole part into a tree; text inside elements is kept as written, spaces included.
+
 pub fn parse(bytes: &[u8]) -> Option<El> {
     let text = String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes));
     let mut reader = Reader::from_str(&text);
@@ -149,7 +152,12 @@ pub fn parse(bytes: &[u8]) -> Option<El> {
     let mut stack: Vec<El> = vec![El::default()];
     loop {
         match reader.read_event().ok()? {
-            Event::Start(e) => stack.push(start(&e)),
+            Event::Start(e) => {
+                if stack.len() > MAX_DEPTH {
+                    return None;
+                }
+                stack.push(start(&e));
+            }
             Event::Empty(e) => {
                 let el = start(&e);
                 stack.last_mut()?.children.push(Node::El(el));

@@ -399,7 +399,7 @@ impl Parser {
         } else if let Some(c) = p.child("buChar") {
             Some(Bullet::Char(c.attr("char").unwrap_or("•").to_string()))
         } else {
-            p.child("buAutoNum").map(|a| Bullet::Auto(a.attr("type").unwrap_or("arabicPeriod").to_string(), a.attr("startAt").and_then(|v| v.parse().ok()).unwrap_or(1)))
+            p.child("buAutoNum").map(|a| Bullet::Auto(a.attr("type").unwrap_or("arabicPeriod").to_string(), a.attr("startAt").and_then(|v| v.parse::<i64>().ok()).map_or(1, |v| v.clamp(0, 32_767) as _)))
         };
         Level {
             align: p.attr("algn").map(|a| match a {
@@ -791,8 +791,8 @@ impl Parser {
                 let ins = |n: &str, d: f32| tcpr.and_then(|p| emu(p.attr(n))).unwrap_or(d);
                 let props = BodyProps { inset: [Some(ins("marL", 7.2)), Some(ins("marT", 3.6)), Some(ins("marR", 7.2)), Some(ins("marB", 3.6))], anchor: tcpr.and_then(|p| p.attr("anchor")).map(|a| if a == "ctr" { "horizon" } else if a == "b" { "bottom" } else { "top" }), ..Default::default() };
                 let text = tc.child("txBody").map(|b| self.text(b, &levels, &props, None, &ctx.map, &ctx.rels, slide)).unwrap_or(Text { inset: [7.2, 3.6, 7.2, 3.6], anchor: "top", paras: Vec::new(), scale: 1., line_reduction: 0. });
-                let span = tc.attr("gridSpan").and_then(|v| v.parse().ok()).unwrap_or(1usize).max(1);
-                let rowspan = tc.attr("rowSpan").and_then(|v| v.parse().ok()).unwrap_or(1usize).max(1);
+                let span = tc.attr("gridSpan").and_then(|v| v.parse().ok()).unwrap_or(1usize).clamp(1, 64);
+                let rowspan = tc.attr("rowSpan").and_then(|v| v.parse().ok()).unwrap_or(1usize).clamp(1, 1024);
                 cells.push(TableCell { col: ci, row: ri, span, rowspan, fill, text });
             }
         }

@@ -36,7 +36,7 @@ pub struct ImageView {
 pub fn wheel_factor(delta: &ScrollDelta) -> f32 {
     match delta {
         ScrollDelta::Pixels(p) => (f32::from(p.y) * 0.004).exp(),
-        ScrollDelta::Lines(l) => (l.y * 0.12).exp(),
+        ScrollDelta::Lines(l) => (l.y.clamp(-1., 1.) * 0.12).exp(),
     }
 }
 

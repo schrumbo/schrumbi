@@ -422,7 +422,6 @@ pub fn section_title(s: impl Into<SharedString>) -> Div {
     div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).child(s.into())
 }
 
-/// Empty-state placeholder like SwiftUI's `ContentUnavailableView`.
 /// A file Schrumbi cannot show, with the way out: its default app.
 pub fn unopenable(path: &Path, locked: bool, title: impl Into<SharedString>, description: impl Into<SharedString>, t: &Theme) -> Div {
     use gpui_kit::component::Sizable as _;
@@ -432,6 +431,7 @@ pub fn unopenable(path: &Path, locked: bool, title: impl Into<SharedString>, des
     )
 }
 
+/// Empty-state placeholder like SwiftUI's `ContentUnavailableView`.
 pub fn unavailable(icon_name: &str, title: impl Into<SharedString>, description: impl Into<SharedString>, t: &Theme) -> Div {
     div()
         .size_full()

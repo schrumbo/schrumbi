@@ -33,7 +33,11 @@ impl Source {
     fn load(&self) -> Result<Vec<u8>, Option<OpenError>> {
         match self {
             Self::Pdf(path) => std::fs::read(path).map_err(|_| None),
-            Self::Office(path) => std::panic::catch_unwind(|| office::render_pdf(path)).unwrap_or(Err(OpenError::Broken)).map_err(Some),
+            Self::Office(path) => crate::core::crash::caught(|| match crate::core::crash::caught_pool() {
+                Some(pool) => pool.install(|| office::render_pdf(path)),
+                None => office::render_pdf(path),
+            })
+            .unwrap_or(Err(OpenError::Broken)).map_err(Some),
         }
     }
 }
