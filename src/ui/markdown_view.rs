@@ -2655,11 +2655,15 @@ pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_to
     found_mark(element, found.filter(|f| f.block == row.block && (row.line..row.end_line).contains(&f.line)), t)
 }
 
-/// The footnotes a note refers to, as they appear at its end, each with a way back.
-/// Scrolls a list so an item shows: just enough when it is on screen, else to its top, since rows not yet drawn have no height to count.
+/// Scrolls a list so an item shows: not at all when it already does, just enough when it is near, else to its top, since rows not yet drawn have no height to count.
 pub fn reveal_item(list: &ListState, ix: usize) {
-    let (top, bottom) = (list.logical_scroll_top().item_ix, list.viewport_bounds().bottom());
-    let near = ix <= top || (top..=ix).all(|k| list.bounds_for_item(k).is_some_and(|b| k == ix || b.bottom() < bottom));
+    let view = list.viewport_bounds();
+    let top = list.logical_scroll_top().item_ix;
+    let near = ix <= top || (top..=ix).all(|k| list.bounds_for_item(k).is_some_and(|b| k == ix || b.bottom() < view.bottom()));
+    let shown = near && list.bounds_for_item(ix).is_some_and(|b| b.top() >= view.top() && b.bottom() <= view.bottom());
+    if shown {
+        return;
+    }
     if near {
         list.scroll_to_reveal_item(ix);
     } else {
@@ -2667,6 +2671,7 @@ pub fn reveal_item(list: &ListState, ix: usize) {
     }
 }
 
+/// The footnotes a note refers to, as they appear at its end, each with a way back.
 /// `list` scrolls back to the row a footnote is referred from, found by its source line.
 pub fn render_footnotes(note: &ParsedNote, list: Option<(ListState, Rc<dyn Fn(usize) -> usize>)>, t: &Theme) -> Option<AnyElement> {
     let used: Vec<_> = note.footnote_order.iter().filter_map(|id| note.footnotes.iter().find(|(f, _)| f == id)).collect();
