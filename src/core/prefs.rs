@@ -322,7 +322,11 @@ pub fn get() -> Prefs {
 pub fn update(f: impl FnOnce(&mut Prefs)) {
     let snapshot = {
         let mut p = PREFS.write().unwrap();
+        let before = p.clone();
         f(&mut p);
+        if *p == before {
+            return;
+        }
         p.clone()
     };
     if let Some(dir) = config_dir() {
