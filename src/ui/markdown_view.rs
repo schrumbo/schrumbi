@@ -1127,6 +1127,73 @@ pub struct LinkFocus {
     pub edit_item: Option<EditItem>,
     /// What the reader has folded, kept across sessions.
     pub folds: Folds,
+    /// The text the note's find bar looks for.
+    pub find: Option<Rc<FindMarks>>,
+}
+
+/// What the reader marks while the find bar is open.
+pub struct FindMarks {
+    pub query: String,
+    pub exact: bool,
+    /// The top-level block holding the current match, and which match of that block it is.
+    pub block: usize,
+    pub nth: usize,
+    /// The source line of the current match, and which match of that line it is, for the live view.
+    pub line: usize,
+    pub line_nth: usize,
+}
+
+struct FindDraw {
+    marks: Rc<FindMarks>,
+    current: Option<usize>,
+    seen: Cell<usize>,
+}
+
+impl FindDraw {
+    fn new(focus: Option<&LinkFocus>, current: impl Fn(&FindMarks) -> Option<usize>) -> Option<Self> {
+        let marks = focus?.find.clone()?;
+        let current = current(&marks);
+        Some(Self { marks, current, seen: Cell::new(0) })
+    }
+
+    fn overlay(&self, text: &str, highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>, t: &Theme) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+        let found = crate::core::find::matches(text, &self.marks.query, self.marks.exact);
+        let first = self.seen.get();
+        self.seen.set(first + found.len());
+        let fills: Vec<(std::ops::Range<usize>, Hsla)> = found.into_iter().enumerate().map(|(i, r)| (r, find_fill(self.current == Some(first + i), t))).collect();
+        with_fills(highlights, &fills)
+    }
+}
+
+/// The background of a find match; the current one is stronger.
+pub fn find_fill(current: bool, t: &Theme) -> Hsla {
+    t.orange.opacity(if current { 0.7 } else { 0.28 })
+}
+
+/// `highlights` with a background laid under each fill range, split where they overlap, so no two ranges overlap.
+fn with_fills(highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>, fills: &[(std::ops::Range<usize>, Hsla)]) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+    if fills.is_empty() {
+        return highlights;
+    }
+    let mut cuts: Vec<usize> = highlights.iter().flat_map(|(r, _)| [r.start, r.end]).chain(fills.iter().flat_map(|(r, _)| [r.start, r.end])).collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut out: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
+    for pair in cuts.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        let base = highlights.iter().find(|(r, _)| r.start <= from && to <= r.end).map(|(_, h)| *h);
+        let fill = fills.iter().find(|(r, _)| r.start <= from && to <= r.end).map(|(_, c)| *c);
+        let style = match (base, fill) {
+            (None, None) => continue,
+            (Some(h), None) => h,
+            (h, Some(c)) => HighlightStyle { background_color: Some(c), ..h.unwrap_or_default() },
+        };
+        match out.last_mut() {
+            Some((r, h)) if r.end == from && *h == style => r.end = to,
+            _ => out.push((from..to, style)),
+        }
+    }
+    out
 }
 
 /// Called with a top-level block, the drawn text and the byte clicked.
@@ -1178,6 +1245,8 @@ struct Ctx<'a> {
     cell: Cell<Option<(usize, usize)>>,
     /// The field for the cell being written.
     open_cell: Option<(usize, usize, RefCell<Option<AnyElement>>)>,
+    /// The matches of the find bar to mark in this block.
+    find: Option<FindDraw>,
 }
 
 /// Whether an image is small enough to stand in a line of text.
@@ -1349,6 +1418,10 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
     let order = cx.order.get();
     cx.order.set(order + 1);
     let base = cx.base.map(Path::to_path_buf);
+    let highlights = match &cx.find {
+        Some(find) => find.overlay(&text, highlights, t),
+        None => highlights,
+    };
     let body = div().text_size(px(size)).line_height(relative(1.5)).child(selectable(("md-text", order), text, highlights, order, t.accent.opacity(0.3)).links(links).hovers(hovers, base).inline(slots).pills(pills, t.accent.opacity(0.14)).on_text_click(text_click_of(cx)));
     body.into_any_element()
 }
@@ -1765,7 +1838,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
     let note = embedded_note(&path, target);
     let mut chain = cx.chain.clone();
     chain.push(path.clone());
-    let inner = Ctx { t, base: path.parent(), on_toggle: None, footnote_order: &note.footnote_order, order: cx.order, chain, focus: None, links_seen: cx.links_seen, block: cx.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None };
+    let inner = Ctx { t, base: path.parent(), on_toggle: None, footnote_order: &note.footnote_order, order: cx.order, chain, focus: None, links_seen: cx.links_seen, block: cx.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
     let blocks = render_blocks(&note.blocks, &inner);
     div()
         .flex()
@@ -2512,6 +2585,23 @@ pub fn block_at(src: &str, offset: usize) -> usize {
     at
 }
 
+/// Byte offset where each top-level block starts, counted like `block_at`.
+pub fn block_starts(src: &str) -> Vec<usize> {
+    let mut depth = 0;
+    let mut starts = Vec::new();
+    for (event, range) in Parser::new_ext(src, markdown::options()).into_offset_iter() {
+        if depth == 0 && !matches!(event, Event::End(_) | Event::Start(Tag::FootnoteDefinition(_))) {
+            starts.push(range.start);
+        }
+        match event {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth -= 1,
+            _ => {}
+        }
+    }
+    starts
+}
+
 /// A block to scroll to and mark briefly, after arriving from a search match.
 #[derive(Clone)]
 pub struct Found {
@@ -2531,7 +2621,7 @@ pub const FOUND_HOLD: std::time::Duration = std::time::Duration::from_millis(300
 /// Renders a parsed note; task boxes call `on_toggle` with their source line.
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
     let (order, links_seen) = (Cell::new(0), Cell::new(0));
-    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None };
+    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
     div().flex().flex_col().gap(px(space::M)).children(render_blocks(&note.blocks, &cx)).children(render_footnotes(note, None, t))
 }
 
@@ -2590,7 +2680,10 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
     let together = note.blocks.get(i..(i + live.count).min(note.blocks.len())).filter(|b| b.len() > 1);
     let order = Cell::new((item as u64 + 1) * 100_000);
     let links_seen = Cell::new(note.links.iter().take_while(|(_, top)| *top < i).count());
-    let cx = Ctx { t, base, on_toggle, footnote_order: live.footnotes.unwrap_or(&note.footnote_order), order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: item, head_text: Cell::new(false), cell: Cell::new(None), open_cell: live.open_cell };
+    let cx = Ctx { t, base, on_toggle, footnote_order: live.footnotes.unwrap_or(&note.footnote_order), order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: item, head_text: Cell::new(false), cell: Cell::new(None), open_cell: live.open_cell, find: FindDraw::new(focus, |m| match (live.item, live.footnotes) {
+        (Some(_), Some(_)) => (live.line == m.line).then_some(m.line_nth),
+        _ => (m.block == i).then_some(m.nth),
+    }) };
     let element = match together {
         Some(blocks) => div().flex().flex_col().gap(px(space::S)).children(render_blocks(blocks, &cx)).into_any_element(),
         None => render_blocks(std::slice::from_ref(block), &cx).into_iter().next().unwrap_or_else(|| div().into_any_element()),
@@ -2654,7 +2747,7 @@ fn found_mark(element: AnyElement, found: Option<&Found>, t: &Theme) -> AnyEleme
 pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_toggle: Option<OnToggle>, found: Option<&Found>, focus: Option<&LinkFocus>, t: &Theme) -> AnyElement {
     let Some((from, to)) = row.part else { return render_live(note, row.block, base, on_toggle, found, focus, LiveDraw::default(), t) };
     let (order, links_seen) = (Cell::new(row.order), Cell::new(row.links_before));
-    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: row.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None };
+    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: row.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: FindDraw::new(focus, |_| None) };
     let element = match note.blocks.get(row.block) {
         Some(Block::List { start, items }) => list_items(start, items.get(from..to.min(items.len())).unwrap_or_default(), from, &cx).into_any_element(),
         Some(Block::Table { head, rows, aligns }) => table(head, rows, aligns, Some((from, to, note.sources.get(row.block).map_or((0, 0), |s| (s.hash, s.line)))), &cx),
@@ -2687,7 +2780,7 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<(ListState, Rc<dyn Fn(us
         return None;
     }
     let (order, links_seen) = (Cell::new(u64::MAX / 2), Cell::new(0));
-    let cx = Ctx { t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None };
+    let cx = Ctx { t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
     let rows = used.iter().enumerate().map(|(i, (id, blocks))| {
         let home = note.footnote_homes.get(id).copied().unwrap_or(0);
         let list = list.clone();
@@ -2978,5 +3071,63 @@ Ende
 ");
         assert_eq!(note.rows().iter().map(|r| r.part).collect::<Vec<_>>(), [None, None]);
         assert_eq!(note.rows().iter().map(|r| r.hash).collect::<Vec<_>>(), note.sources().iter().map(|s| s.hash).collect::<Vec<_>>());
+    }
+}
+
+#[cfg(test)]
+mod find_tests {
+    use super::{block_at, block_starts, with_fills};
+    use super::{FontWeight, HighlightStyle, Hsla};
+
+    fn bold() -> HighlightStyle {
+        HighlightStyle { font_weight: Some(FontWeight::BOLD), ..Default::default() }
+    }
+
+    #[test]
+    fn fills_split_styles_where_they_overlap() {
+        let fill = Hsla { h: 0.1, s: 1., l: 0.5, a: 0.3 };
+        let out = with_fills(vec![(0..6, bold())], &[(4..9, fill)]);
+        let ranges: Vec<_> = out.iter().map(|(r, _)| r.clone()).collect();
+        assert_eq!(ranges, [0..4, 4..6, 6..9]);
+        assert_eq!(out[0].1, bold());
+        assert_eq!(out[1].1, HighlightStyle { background_color: Some(fill), ..bold() });
+        assert_eq!(out[2].1, HighlightStyle { background_color: Some(fill), ..Default::default() });
+    }
+
+    #[test]
+    fn fills_keep_the_other_styles_and_stay_ordered() {
+        let fill = Hsla { h: 0.1, s: 1., l: 0.5, a: 0.3 };
+        let styles = vec![(0..2, bold()), (5..8, bold())];
+        let out = with_fills(styles.clone(), &[(3..4, fill), (9..10, fill)]);
+        let ranges: Vec<_> = out.iter().map(|(r, _)| r.clone()).collect();
+        assert_eq!(ranges, [0..2, 3..4, 5..8, 9..10]);
+        assert!(out.windows(2).all(|w| w[0].0.end <= w[1].0.start));
+        assert_eq!(with_fills(styles.clone(), &[]), styles);
+    }
+
+    #[test]
+    fn block_starts_agree_with_block_at() {
+        let src = "# Titel
+
+Erster Absatz
+
+- a
+- b
+
+Letzter
+";
+        let starts = block_starts(src);
+        assert_eq!(starts.len(), 4);
+        for offset in 0..src.len() {
+            assert_eq!(starts.partition_point(|s| *s <= offset).saturating_sub(1), block_at(src, offset), "offset {offset}");
+        }
+    }
+
+    #[test]
+    fn neighbouring_fills_with_one_style_join() {
+        let fill = Hsla { h: 0.1, s: 1., l: 0.5, a: 0.3 };
+        let out = with_fills(Vec::new(), &[(0..2, fill), (2..4, fill)]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, 0..4);
     }
 }

@@ -77,7 +77,7 @@ fn highlighted(source: &str, t: &Theme) -> (String, Vec<(std::ops::Range<usize>,
 }
 
 fn rendered(note: &ParsedNote, folds: &Folds, base: Option<&Path>, t: &Theme) -> Div {
-    let focus = LinkFocus { index: None, note: None, list: None, text_click: None, edit_item: None, folds: folds.clone() };
+    let focus = LinkFocus { index: None, note: None, list: None, text_click: None, edit_item: None, folds: folds.clone(), find: None };
     let hidden = note.hidden_blocks(folds);
     div()
         .flex()

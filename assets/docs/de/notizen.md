@@ -59,6 +59,24 @@ Bearbeiten geht in der Standard-App: ⋯ → {ui:Mit Standard-App öffnen}. Sich
 
 Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live: Text bleibt gezeichnet} oder {ui:Code-Editor: Quelltext mit Zeilennummern}.
 
+## In der Notiz suchen
+
+| Kürzel | Wirkung |
+|---|---|
+| {key:findInNote} | Suche öffnen, markierter Text wird eingesetzt |
+| {key:return} / {key:shift-return} | Nächster / vorheriger Treffer |
+| {key:escape} | Suche schließen |
+
+Alle Treffer sind markiert, der aktuelle kräftiger. Groß- und Kleinschreibung sowie Umlaute sind egal, bis du {ui:Groß-/Kleinschreibung beachten} wählst.
+
+{ui:In Notiz ersetzen} (Pfeil links in der Suche) zeigt die Ersetzen-Zeile. {key:return} ersetzt einen Treffer, {ui:Alle ersetzen} alle. Ein {key:Undo} nimmt es zurück. Im Lesen-Modus gibt es kein Ersetzen.
+
+## Rechtschreibung
+
+Unbekannte Wörter sind unterstrichen. Zeige auf eins, dann {ui:Zum Wörterbuch hinzufügen}, auch im Rechtsklick-Menü. Ohne Maus: {ui:Zum Wörterbuch hinzufügen} in der {key:CommandPalette} nimmt das Wort an der Schreibmarke auf.
+
+Die Wörter stehen in den Einstellungen unter {ui:Eigenes Wörterbuch}; das Kreuz nimmt eins wieder heraus. Alle offenen Notizen übernehmen das sofort.
+
 ## Sichern
 
 Schrumbi sichert nach 2 Sekunden Tipp-Pause, einstellbar unter {ui:Notizen} → {ui:Sichern}. {key:Save} sichert sofort, Schließen sichert immer.

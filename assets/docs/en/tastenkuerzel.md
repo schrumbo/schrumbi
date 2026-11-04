@@ -46,6 +46,7 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Lesen / Bearbeiten wechseln} | {key:togglePreview} |
 | {ui:Geteilte Ansicht} | {key:splitPreview} |
 | {ui:Als PDF exportieren} | {key:exportPDF} |
+| {ui:In Notiz suchen} | {key:findInNote} |
 
 ## Editor
 

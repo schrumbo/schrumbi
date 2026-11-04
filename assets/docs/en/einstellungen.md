@@ -7,7 +7,7 @@
 | {ui:Allgemein} | Appearance, language, naming convention, sidebar, reminders |
 | {ui:Semester} | Lecture period, breaks, holidays |
 | {ui:Module} | Codes, folders, links, recurring deadlines, timetable |
-| {ui:Notizen} | Editor, font size, saving, PDF export, Obsidian |
+| {ui:Notizen} | Editor, font size, personal dictionary, saving, PDF export, Obsidian |
 | {ui:Karten} | Retention target, new cards and reviews per day |
 | {ui:Sync} | Online storage, automatic mode, switching off |
 | {ui:Tastenkürzel} | Change most shortcuts |

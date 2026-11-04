@@ -95,6 +95,8 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("google", "Im Kalender zeigen"),
     ("moodle", "Kalender abonnieren"),
     ("spell", "Rechtschreibung prüfen"),
+    ("dictionary", "Eigenes Wörterbuch"),
+    ("wörterbuch", "Eigenes Wörterbuch"),
     ("ects", "Bezeichnung der Punkte"),
     ("naming", "Namenskonvention"),
     ("dateiname", "Namenskonvention"),
@@ -203,6 +205,7 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Editor", Tab::Notes),
     ("Notizen schreiben", Tab::Notes),
     ("Rechtschreibung prüfen", Tab::Notes),
+    ("Eigenes Wörterbuch", Tab::Notes),
     ("Obsidian", Tab::Notes),
     ("Schriftgröße", Tab::Notes),
     ("Text in voller Breite", Tab::Notes),
@@ -2060,7 +2063,28 @@ impl Settings {
         );
         let obsidian = self.obsidian_section(&mut fields, window, cx, t);
         self.fields = fields;
-        div().flex().flex_col().gap(px(space::XL)).child(editor).child(section(Some(tr("Sichern")), Some(save_footer), save_rows, t)).child(pdf).child(obsidian)
+        let dictionary = self.dictionary_section(&p.spell_words, t);
+        div().flex().flex_col().gap(px(space::XL)).child(editor).child(dictionary).child(section(Some(tr("Sichern")), Some(save_footer), save_rows, t)).child(pdf).child(obsidian)
+    }
+
+    fn dictionary_section(&self, words: &[String], t: &Theme) -> Div {
+        let rows = if words.is_empty() {
+            vec![div().px(px(space::L)).py(px(space::M)).text_color(t.secondary).child(tr("Noch keine Wörter")).into_any_element()]
+        } else {
+            words
+                .iter()
+                .enumerate()
+                .map(|(i, word)| {
+                    let gone = word.clone();
+                    row(
+                        word.clone(),
+                        Button::new(("dict-remove", i)).ghost().small().icon(menu_icon("x")).tooltip(tr("Aus dem Wörterbuch entfernen")).on_click(move |_, _, cx| super::spell_card::remove_word(&gone, cx)),
+                        t,
+                    )
+                })
+                .collect()
+        };
+        section(Some(tr("Eigenes Wörterbuch")), Some(tr("Diese Wörter markiert die Rechtschreibung nicht. Hinzufügen: in einer Notiz auf ein unterstrichenes Wort zeigen.")), rows, t)
     }
 
     fn cards_tab(&mut self, t: &Theme) -> Div {

@@ -15,6 +15,7 @@ pub enum ShortcutAction {
     TogglePreview,
     SplitPreview,
     ExportPdf,
+    FindInNote,
     ToggleInspector,
     Refresh,
     Sync,
@@ -63,7 +64,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 33] = [
+    pub const ALL: [ShortcutAction; 34] = [
         Self::QuickOpen,
         Self::SearchFiles,
         Self::NewEntry,
@@ -75,6 +76,7 @@ impl ShortcutAction {
         Self::TogglePreview,
         Self::SplitPreview,
         Self::ExportPdf,
+        Self::FindInNote,
         Self::ToggleInspector,
         Self::Refresh,
         Self::Sync,
@@ -113,6 +115,7 @@ impl ShortcutAction {
             Self::TogglePreview => "togglePreview",
             Self::SplitPreview => "splitPreview",
             Self::ExportPdf => "exportPDF",
+            Self::FindInNote => "findInNote",
             Self::ToggleInspector => "toggleInspector",
             Self::Refresh => "refresh",
             Self::Sync => "syncNow",
@@ -141,7 +144,7 @@ impl ShortcutAction {
     pub fn group(self) -> Group {
         match self {
             Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::NewEntry | Self::NewFile | Self::GoBack | Self::ToggleInspector | Self::Refresh => Group::General,
-            Self::CloseTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf => Group::Documents,
+            Self::CloseTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote => Group::Documents,
             _ => Group::Editor,
         }
     }
@@ -164,6 +167,7 @@ impl ShortcutAction {
             Self::TogglePreview => "Lesen / Bearbeiten wechseln",
             Self::SplitPreview => "Geteilte Ansicht",
             Self::ExportPdf => "Als PDF exportieren",
+            Self::FindInNote => "In Notiz suchen",
             Self::Bold => "Fett",
             Self::Italic => "Kursiv",
             Self::Link => "Link einfügen",
@@ -210,6 +214,7 @@ impl ShortcutAction {
             Self::TogglePreview => s("v", true, true, false, false),
             Self::SplitPreview => s("v", true, false, true, false),
             Self::ExportPdf => s("e", true, true, false, false),
+            Self::FindInNote => s("f", true, false, false, false),
             Self::Bold => s("b", true, false, false, false),
             Self::Italic => s("i", true, false, false, false),
             Self::Link => s("k", true, false, false, false),

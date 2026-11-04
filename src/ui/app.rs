@@ -319,6 +319,8 @@ pub fn bind_keys(cx: &mut App) {
             binding(ShortcutAction::TogglePreview, TogglePreview, None),
             binding(ShortcutAction::SplitPreview, SplitPreview, None),
             binding(ShortcutAction::ExportPdf, ExportPdf, None),
+            binding(ShortcutAction::FindInNote, super::find_bar::FindInNote, Some("NoteView")),
+            Some(kb(cmd("alt-f"), super::find_bar::ReplaceInNote, Some("NoteView"))),
         ]
         .into_iter()
         .flatten(),
@@ -399,6 +401,9 @@ pub fn rebuild_menus(cx: &mut App) {
             MenuItem::os_action(tr("Kopieren"), gpui_kit::component::input::Copy, OsAction::Copy),
             MenuItem::os_action(tr("Einsetzen"), gpui_kit::component::input::Paste, OsAction::Paste),
             MenuItem::os_action(tr("Alles auswählen"), gpui_kit::component::input::SelectAll, OsAction::SelectAll),
+            MenuItem::separator(),
+            MenuItem::action(tr("In Notiz suchen"), super::find_bar::FindInNote),
+            MenuItem::action(tr("In Notiz ersetzen"), super::find_bar::ReplaceInNote),
         ]),
         Menu::new(tr("Darstellung")).items([
             MenuItem::action(tr("Lesen / Bearbeiten"), TogglePreview),

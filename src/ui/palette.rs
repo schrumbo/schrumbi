@@ -146,6 +146,9 @@ fn commands(cx: &App) -> Vec<Command> {
             add(&view, S::SplitPreview.label(), "columns-2", keys(S::SplitPreview), Run::NoteAction(Box::new(app::SplitPreview)));
         }
         add(&view, S::ExportPdf.label(), "share", keys(S::ExportPdf), Run::NoteAction(Box::new(app::ExportPdf)));
+        add(&edit, S::FindInNote.label(), "search", keys(S::FindInNote), Run::NoteAction(Box::new(super::find_bar::FindInNote)));
+        add(&edit, tr("Zum Wörterbuch hinzufügen"), "plus", None, Run::NoteAction(Box::new(super::spell_card::AddWordAtCaret)));
+        add(&edit, tr("In Notiz ersetzen"), "replace", Some(if cfg!(target_os = "macos") { "⌘⌥F".to_string() } else { "Ctrl+H".to_string() }), Run::NoteAction(Box::new(super::find_bar::ReplaceInNote)));
         let full = crate::core::prefs::get().reader_full_width;
         add(&view, if full { tr("Text in voller Breite ausschalten") } else { tr("Text in voller Breite einschalten") }, "move-horizontal", None, Run::Call(Rc::new(move |cx| super::documents::set_reader_full_width(!full, cx))));
         add(&file, tr("Sichern"), "save", Some(fixed_keys("S")), Run::NoteAction(Box::new(app::Save)));

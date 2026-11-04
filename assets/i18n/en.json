@@ -1662,5 +1662,17 @@
   "Folien": "Slides",
   "Durchsuche Folie %lld von %lld": "Searching slide %lld of %lld",
   "Dieses Blatt konnte nicht gelesen werden": "This sheet could not be read",
-  "Die anderen Blätter bleiben verfügbar.": "The other sheets are still available."
+  "Die anderen Blätter bleiben verfügbar.": "The other sheets are still available.",
+  "In dieser Notiz suchen": "Search in this note",
+  "Ersetzen durch": "Replace with",
+  "Ersetzen ein-/ausblenden": "Show or hide replace",
+  "Groß-/Kleinschreibung beachten": "Match case",
+  "Alle ersetzen": "Replace all",
+  "In Notiz suchen": "Find in note",
+  "In Notiz ersetzen": "Replace in note",
+  "Zum Wörterbuch hinzufügen": "Add to dictionary",
+  "Eigenes Wörterbuch": "Personal dictionary",
+  "Noch keine Wörter": "No words yet",
+  "Aus dem Wörterbuch entfernen": "Remove from dictionary",
+  "Diese Wörter markiert die Rechtschreibung nicht. Hinzufügen: in einer Notiz auf ein unterstrichenes Wort zeigen.": "Spell check does not mark these words. To add one, point at an underlined word in a note."
 }
