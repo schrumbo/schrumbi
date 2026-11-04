@@ -274,7 +274,7 @@ fn show(module: Option<String>, cx: &mut App) {
         ..Default::default()
     };
     let options = super::chrome::window_options(options, tr("Einstellungen"));
-    let _ = gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| {
+    let _ = super::chrome::open_window(options, cx, |window, cx| cx.new(|cx| {
         let mut settings = Settings::new(window, cx);
         if let Some(id) = module {
             settings.show_module(id);
@@ -300,7 +300,7 @@ pub fn open_about(cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(360.), px(300.)), cx);
     let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), is_resizable: false, titlebar: Some(TitlebarOptions { title: Some(tr("Über Schrumbi").into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }), ..Default::default() };
     let options = super::chrome::window_options(options, tr("Über Schrumbi"));
-    let _ = gpui_kit::open_window(options, cx, |_, cx| cx.new(|_| About));
+    let _ = super::chrome::open_window(options, cx, |_, cx| cx.new(|_| About));
 }
 
 struct About;

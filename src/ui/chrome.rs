@@ -69,6 +69,33 @@ pub fn main_bar(cx: &mut App) -> TitleBar {
     TitleBar::new().child(menu)
 }
 
+/// Opens a window like `gpui_kit::open_window`, with its content view out of the responder chain.
+/// AccessKit swaps that view's class back when a window closes, and AppKit's Touch Bar search, which
+/// observes every responder, then fails to stop observing it and aborts the app.
+pub fn open_window<V: Render>(options: WindowOptions, cx: &mut App, build: impl FnOnce(&mut Window, &mut App) -> Entity<V>) -> Result<(AnyWindowHandle, Entity<V>)> {
+    let opened = gpui_kit::open_window(options, cx, build)?;
+    let _ = opened.0.update(cx, |_, window, _| skip_content_view(window));
+    Ok(opened)
+}
+
+#[cfg(target_os = "macos")]
+fn skip_content_view(window: &Window) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Ok(RawWindowHandle::AppKit(h)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw()) else { return };
+    let view = h.ns_view.as_ptr().cast::<AnyObject>();
+    unsafe {
+        let ns_window: *mut AnyObject = msg_send![view, window];
+        if !ns_window.is_null() {
+            let _: () = msg_send![view, setNextResponder: ns_window];
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn skip_content_view(_: &Window) {}
+
 /// Copies the app's menus into the in-window menu bar.
 pub fn sync_menus(cx: &mut App) {
     if !CUSTOM {

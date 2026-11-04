@@ -67,7 +67,7 @@ pub fn open(path: &Path, cx: &mut App) {
         ..Default::default()
     };
     let options = super::chrome::window_options(options, title_for_bar);
-    let _ = gpui_kit::open_window(options, cx, |window, cx| {
+    let _ = super::chrome::open_window(options, cx, |window, cx| {
         window.on_window_should_close(cx, |window, cx| {
             request_close(window, cx);
             false

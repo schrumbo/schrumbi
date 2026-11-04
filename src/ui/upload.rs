@@ -53,7 +53,7 @@ fn open(cx: &mut App) {
         ..Default::default()
     };
     let options = super::chrome::window_options(options, tr("Hochladen"));
-    let _ = gpui_kit::open_window(options, cx, |window, cx| {
+    let _ = super::chrome::open_window(options, cx, |window, cx| {
         keep_visible_when_inactive(window);
         cx.new(|cx| UploadPanel::new(window, cx))
     });
