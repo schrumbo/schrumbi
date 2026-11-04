@@ -17,5 +17,6 @@ For each interactive element or view the diff adds or changes, check:
 5. Tokens instead of literal values, inner radius smaller than outer, target at least 24 px
 6. `tr()` on all text, one term per concept, a real `…`; a button keeps its label while loading
 7. Same control looks and behaves like its siblings in the same file
+8. Against `.claude/rules/users.md`: jargon on a default path, a basic that needs a setting first, a command without mouse path or without palette entry and shortcut, nagging or blaming text
 
 Report each miss as `file:line — element — what is missing`. Skip anything already fine. If nothing is missing, say `No findings`.

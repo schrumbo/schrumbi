@@ -21,7 +21,9 @@ Standing instruction from the owner: use the agents below without being asked. D
 - Scripts before agents: anything `gate` or `app` can answer needs no model.
 - Use the LSP tool (definitions, references) before grepping for symbols.
 - Parallel independent features go through the `herd` skill, never through parallel edits in one tree.
-- Whole-area polish passes use the `app-polish` skill, with `ux-tester` and `perf-tester` as its hands. It is the owner's standard for all UI work: Figma level, evidence for every claim.
+- Whole-area polish passes use the `app-polish` skill, with `ux-tester` and `perf-tester` as its hands. It is the owner's standard for all UI work: Figma level, evidence for every claim. Every area in its plan gets an archetype row: which of A–E use it and their acceptance questions from `.claude/archetypes.md`, answered with evidence.
+- Design questions go through `ui-ux-pro-max:ui-ux-pro-max` with the affected archetypes from `.claude/rules/users.md` as the audience.
+- Update `.claude/archetypes.md` when real user data arrives (feedback, issues, survey); its §7 says how.
 
 ## Two machines
 

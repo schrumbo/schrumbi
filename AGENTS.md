@@ -1,6 +1,6 @@
 # Schrumbi
 
-Rust/GPUI desktop study planner working on the user's plain folders. Losing user data is the worst possible bug. Feel target: Figma.
+Rust/GPUI desktop study planner working on the user's plain folders. Losing user data is the worst possible bug. Feel target: Figma. Built for the five archetypes in `.claude/rules/users.md`: beginners never feel they must be hackers, experts never hit a ceiling.
 
 ## Commands
 

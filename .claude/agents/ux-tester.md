@@ -30,6 +30,8 @@ For every changed element:
 - Try the small window (`app resize 640 420`), long German text, empty data, Escape and `app key cmd-z` (Ctrl+Z on Windows).
 - Wrap the main interaction in `app perf begin` and `app perf end <name>`; a frame above 16.7 ms is a finding, and so is any visible delay.
 
+Then replay the task as the archetypes in `.claude/rules/users.md` (details in `.claude/archetypes.md`) the change touches, always A: mouse only, no Markdown knowledge, reading only the German labels; D: does the screen show one next step, does anything nag or blame; E: keyboard and palette only. Every term A would not understand, every step only E could find, and every power E misses is a finding.
+
 Ask of each screen: is the UI good, what is missing, what is too much, what would nobody miss, does it need a remake? What would feel better in Figma, and why?
 
 A finding is `Befund` (seen in a screenshot, number or behaviour) or `Prüfen` (suspicion). "Should work" is never evidence. Never claim it feels like Figma; only the owner can confirm that. List what needs their hands as `manual`.
