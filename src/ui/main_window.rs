@@ -186,7 +186,6 @@ impl MainWindow {
             Route::Record => tr("Leistungen"),
             Route::Inbox => tr("Inbox"),
             Route::Search => tr("Suche"),
-            Route::Checks => tr("Aufräumen"),
             Route::Notes => tr("Notizen"),
             Route::Graph => tr("Graph"),
             Route::Cards => tr("Karten"),

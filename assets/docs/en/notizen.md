@@ -75,14 +75,14 @@ If another app changed the file, you see a notice. Nothing is lost until you cho
 
 - Type `[[` and choose a note.
 - {key:toggleInspector} shows {ui:Rückverweise}, {ui:Ausgehend} and {ui:Erwähnungen ohne Link}.
-- {key:ShowGraph} shows all notes as a graph.
+- {key:showGraph} shows all notes as a graph.
 
 ## Tabs
 
 | Shortcut | Effect |
 |---|---|
 | {key:closeTab} | Close tab |
-| {key:ReopenTab} | Reopen the last closed tab |
+| {key:reopenTab} | Reopen the last closed tab |
 | {key:nextTab} / {key:previousTab} | Next / previous tab |
 
 - A tab only closes when you close it: ×, middle click or {key:closeTab}.

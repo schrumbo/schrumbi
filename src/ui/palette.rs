@@ -94,11 +94,12 @@ fn commands(cx: &App) -> Vec<Command> {
         if conflicts {
             add(&general, tr("Konflikte lösen…"), "git-merge", None, Run::Action(Box::new(app::ResolveConflicts)));
         }
-        add(&go, tr("Übersicht"), "layout-grid", Some(fixed_keys("1")), Run::Action(Box::new(app::GoToday)));
-        add(&go, tr("Semester"), "table", Some(fixed_keys("2")), Run::Action(Box::new(app::GoGrid)));
-        add(&go, tr("Leistungen"), "award", Some(fixed_keys("3")), Run::Action(Box::new(app::GoRecord)));
-        add(&go, tr("Inbox"), "inbox", Some(fixed_keys("4")), Run::Action(Box::new(app::GoInbox)));
-        add(&go, tr("Karten"), "layers", Some(fixed_keys("6")), Run::Action(Box::new(app::GoCards)));
+        add(&go, S::GoToday.label(), "layout-grid", keys(S::GoToday), Run::Action(Box::new(app::GoToday)));
+        add(&go, S::GoGrid.label(), "table", keys(S::GoGrid), Run::Action(Box::new(app::GoGrid)));
+        add(&go, S::GoRecord.label(), "award", keys(S::GoRecord), Run::Action(Box::new(app::GoRecord)));
+        add(&go, S::GoInbox.label(), "inbox", keys(S::GoInbox), Run::Action(Box::new(app::GoInbox)));
+        add(&go, S::GoNotes.label(), "book-open", keys(S::GoNotes), Run::Action(Box::new(app::GoNotes)));
+        add(&go, S::GoCards.label(), "layers", keys(S::GoCards), Run::Action(Box::new(app::GoCards)));
         add(&go, tr("Neue Karte…"), "plus", None, Run::InWindow(super::cards_page::new_card));
         add(&go, tr("Karten lernen"), "graduation-cap", None, Run::Call(Rc::new(|cx| {
             act(cx, |l| {
@@ -107,24 +108,22 @@ fn commands(cx: &App) -> Vec<Command> {
             })
         })));
         add(&go, tr("Aus Anki importieren…"), "download", None, Run::InWindow(super::cards_page::choose_import));
-        add(&go, tr("Notizen"), "book-open", None, Run::Call(Rc::new(|cx| act(cx, |l| l.show_notes()))));
-        add(&go, tr("Aufräumen"), "list-checks", Some(fixed_keys("5")), Run::Action(Box::new(app::GoChecks)));
         add(&go, S::SearchFiles.label(), "search", keys(S::SearchFiles), Run::Action(Box::new(app::SearchFiles)));
         add(&go, S::GoBack.label(), "arrow-left", keys(S::GoBack), Run::Action(Box::new(app::GoBack)));
-        add(&go, tr("Vorwärts"), "arrow-right", Some(if cfg!(target_os = "macos") { "⌃⇧-".to_string() } else { "Alt+→".to_string() }), Run::Action(Box::new(app::GoForward)));
+        add(&go, S::GoForward.label(), "arrow-right", keys(S::GoForward), Run::Action(Box::new(app::GoForward)));
         if l.open_documents.len() > 1 {
             add(&go, S::NextTab.label(), "arrow-right", keys(S::NextTab), Run::Action(Box::new(app::NextTab)));
             add(&go, S::PreviousTab.label(), "arrow-left", keys(S::PreviousTab), Run::Action(Box::new(app::PreviousTab)));
         }
         if l.can_reopen_document() {
-            add(&go, tr("Geschlossenen Tab wieder öffnen"), "rotate-ccw", Some(fixed_shift_keys("T")), Run::Action(Box::new(app::ReopenTab)));
+            add(&go, S::ReopenTab.label(), "rotate-ccw", keys(S::ReopenTab), Run::Action(Box::new(app::ReopenTab)));
         }
         if !l.open_documents.is_empty() {
             add(&go, tr("Alle Tabs schließen"), "x", None, Run::Call(Rc::new(|cx| super::documents::close_all_tabs(cx))));
         }
-        for m in l.semester_modules() {
+        for (i, m) in l.semester_modules().into_iter().enumerate() {
             let route = Route::Module(m.id.clone());
-            add(&go, m.display_name(), "book-open", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.set_route(route.clone())))));
+            add(&go, m.display_name(), "book-open", (i < 3).then(|| fixed_keys(&(i + 7).to_string())), Run::Call(Rc::new(move |cx| act(cx, |l| l.set_route(route.clone())))));
         }
     });
     add(&new, S::NewEntry.label(), "calendar-plus", keys(S::NewEntry), Run::Action(Box::new(app::NewEntry)));
@@ -134,12 +133,13 @@ fn commands(cx: &App) -> Vec<Command> {
     add(&file, tr("Kalender exportieren (.ics)…"), "calendar", None, Run::Action(Box::new(app::ExportCalendar)));
     add(&file, tr("Studium als ZIP exportieren…"), "archive", None, Run::Action(Box::new(app::ExportArchive)));
     add(&file, super::platform::reveal_workspace_label(), "folder", None, Run::Action(Box::new(app::RevealWorkspace)));
-    add(&file, tr("Anderen Ordner öffnen…"), "folder-open", None, Run::Action(Box::new(app::OpenOtherWorkspace)));
+    add(&file, tr("Anderen Ordner öffnen…"), "folder-open", Some(fixed_shift_keys("O")), Run::Action(Box::new(app::OpenOtherWorkspace)));
     if state::read(cx, |l| l.inspector_kind().is_some()) {
         add(&view, S::ToggleInspector.label(), "panel-right", keys(S::ToggleInspector), Run::Action(Box::new(app::ToggleInspector)));
     }
     add(&view, tr("Seitenleiste ein-/ausblenden"), "panel-left", Some(fixed_keys("B")), Run::Action(Box::new(super::main_window::ToggleSidebar)));
     add(&view, S::Refresh.label(), "refresh-cw", keys(S::Refresh), Run::Action(Box::new(app::Refresh)));
+    add(&view, tr("Vollbild"), "maximize", Some(if cfg!(target_os = "macos") { "⌃⌘F".to_string() } else { "F11".to_string() }), Run::Action(Box::new(app::ToggleFullscreen)));
     if active.is_some() {
         add(&view, S::TogglePreview.label(), "book-open", keys(S::TogglePreview), Run::NoteAction(Box::new(app::TogglePreview)));
         if crate::core::prefs::get().note_editor == crate::core::prefs::NoteEditor::Code {
@@ -199,7 +199,7 @@ fn commands(cx: &App) -> Vec<Command> {
     if in_notes {
         add(&notes, tr("Dateien ein- oder ausblenden"), "panel-left", None, Run::Call(Rc::new(|cx| super::notes_page::set_hidden(!crate::core::prefs::get().notes_explorer_hidden, cx))));
     }
-    add(&notes, tr("Graph zeigen"), "waypoints", Some(fixed_keys("G")), Run::Call(Rc::new(|cx| act(cx, |l| l.show_graph(None)))));
+    add(&notes, S::ShowGraph.label(), "waypoints", keys(S::ShowGraph), Run::Action(Box::new(app::ShowGraph)));
     if let Some(note) = active {
         let (a, b, c, d, e) = (note.clone(), note.clone(), note.clone(), note.clone(), note);
         add(&notes, tr("Graph um diese Notiz"), "waypoints", None, Run::Call(Rc::new(move |cx| {
@@ -435,13 +435,12 @@ impl Render for ShortcutSheet {
             shortcut_row(tr("Suchen"), vec!["/".to_string()], &t),
             shortcut_row(tr("Seitenleiste ein-/ausblenden"), fixed_parts("B"), &t),
             shortcut_row(tr("Widerrufen"), fixed_parts("Z"), &t),
-            shortcut_row(tr("Übersicht"), fixed_parts("1"), &t),
-            shortcut_row(tr("Semester"), fixed_parts("2"), &t),
-            shortcut_row(tr("Leistungen"), fixed_parts("3"), &t),
-            shortcut_row(tr("Inbox"), fixed_parts("4"), &t),
-            shortcut_row(tr("Aufräumen"), fixed_parts("5"), &t),
+            shortcut_row(tr("Anderen Ordner öffnen…"), if cfg!(target_os = "macos") { vec!["⇧".to_string(), "⌘".to_string(), "O".to_string()] } else { vec!["Ctrl".to_string(), "Shift".to_string(), "O".to_string()] }, &t),
+            shortcut_row(tr("Vollbild"), if cfg!(target_os = "macos") { vec!["⌃".to_string(), "⌘".to_string(), "F".to_string()] } else { vec!["F11".to_string()] }, &t),
         ];
         general.extend(group(Group::General));
+        let mut navigation = group(Group::Navigation);
+        navigation.extend((7..=9).map(|n| shortcut_row(trf("Modul %lld", &[&(n - 6)]), fixed_parts(&n.to_string()), &t)));
         let close = cx.entity();
         div()
             .w_full()
@@ -473,7 +472,7 @@ impl Render for ShortcutSheet {
                                 .flex()
                                 .gap(px(space::XL))
                                 .p(px(space::XL))
-                                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XL)).child(section(Group::General.label(), general)))
+                                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XL)).child(section(Group::General.label(), general)).child(section(Group::Navigation.label(), navigation)))
                                 .child(
                                     div()
                                         .flex_1()

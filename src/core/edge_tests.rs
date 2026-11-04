@@ -54,7 +54,6 @@ fn read_everything(lib: &mut Library) {
     let _ = lib.upcoming();
     let _ = lib.upcoming_days(7);
     let _ = lib.upcoming_exams();
-    let _ = lib.misnamed();
     let _ = lib.tray_items();
     let _ = lib.reminders();
     let _ = lib.ics();
@@ -810,16 +809,20 @@ fn a_note_made_here_takes_the_name_of_its_heading() {
     assert_eq!(crate::core::text::safe_file_stem(" a/b: c? . "), "a b c");
 }
 
+fn misnamed(lib: &Library) -> Vec<PathBuf> {
+    lib.assignments.iter().flat_map(|a| lib.evaluation(a).misnamed).collect()
+}
+
 #[test]
 fn existing_configs_keep_organizing() {
     let (root, lib) = workspace("organize-default", &config(1, 1));
     let c = lib.config.unwrap();
-    assert!(c.rename_on_filing && c.check_names && c.check_folders && c.create_folders);
+    assert!(c.rename_on_filing && c.check_names && c.create_folders);
     let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
-fn own_structure_hides_name_and_folder_findings_until_switched_back() {
+fn own_structure_hides_name_findings_until_switched_back() {
     let (root, mut lib) = workspace("organize-checks", &config(1, 1));
     let a = lib.assignments.first().cloned().unwrap();
     std::fs::create_dir_all(&a.folder).unwrap();
@@ -827,19 +830,14 @@ fn own_structure_hides_name_and_folder_findings_until_switched_back() {
     if let Some(job) = lib.scan_job() {
         lib.apply_scan(job.run());
     }
-    assert!(!lib.misnamed().is_empty());
-    assert!(lib.reports_missing_folders() && !lib.missing_folders().is_empty());
+    assert!(!misnamed(&lib).is_empty());
     let mut c = lib.config.clone().unwrap();
-    (c.rename_on_filing, c.check_names, c.check_folders, c.create_folders) = (false, false, false, false);
+    (c.rename_on_filing, c.check_names, c.create_folders) = (false, false, false);
     lib.update_config(c.clone());
-    assert!(lib.misnamed().is_empty());
-    assert!(!lib.reports_missing_folders() && lib.missing_folders().is_empty());
+    assert!(misnamed(&lib).is_empty());
     c.check_names = true;
     lib.update_config(c.clone());
-    assert!(!lib.misnamed().is_empty());
-    c.check_folders = true;
-    lib.update_config(c);
-    assert!(lib.reports_missing_folders() && !lib.missing_folders().is_empty());
+    assert!(!misnamed(&lib).is_empty());
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -877,7 +875,7 @@ fn filing_a_file_where_it_already_is_keeps_its_name() {
 fn a_file_filed_into_a_fallback_folder_still_counts_and_undo_takes_both_back() {
     let (root, mut lib) = workspace("organize-fallback", &config(1, 1));
     let mut c = lib.config.clone().unwrap();
-    (c.rename_on_filing, c.check_names, c.check_folders, c.create_folders) = (false, false, false, false);
+    (c.rename_on_filing, c.check_names, c.create_folders) = (false, false, false);
     lib.update_config(c);
     std::fs::create_dir_all(root.join("M0")).unwrap();
     let a = lib.assignments.first().cloned().unwrap();
@@ -1248,7 +1246,7 @@ fn new_workspaces_start_without_a_naming_convention_and_keep_that_after_a_reload
     std::fs::create_dir_all(root.join("Mathe")).unwrap();
     let c = open(&root).config.unwrap();
     assert!(!c.naming_convention() && !c.rename_on_filing && !c.check_names);
-    assert!(c.check_folders && c.create_folders, "folder help stays on");
+    assert!(c.create_folders, "folder help stays on");
     let raw: Value = serde_json::from_slice(&std::fs::read(root.join("schrumbi.json")).unwrap()).unwrap();
     assert_eq!(raw["renameOnFiling"], json!(false), "written out, so a reload does not fall back to the legacy default");
     assert!(!open(&root).config.unwrap().naming_convention());
@@ -1278,12 +1276,12 @@ fn without_a_convention_nothing_is_flagged_and_new_files_keep_plain_names() {
         }
     };
     rescan(&mut lib);
-    assert!(!lib.misnamed().is_empty());
+    assert!(!misnamed(&lib).is_empty());
     let mut c = lib.config.clone().unwrap();
     c.set_naming_convention(false);
     lib.update_config(c.clone());
     rescan(&mut lib);
-    assert!(lib.misnamed().is_empty(), "no misnamed findings");
+    assert!(misnamed(&lib).is_empty(), "no misnamed findings");
     let read = |p: &Path| std::fs::read_to_string(p).unwrap();
 
     let made = lib.create_note("TEST", &a.folder, "md").unwrap();
@@ -1305,7 +1303,7 @@ fn without_a_convention_nothing_is_flagged_and_new_files_keep_plain_names() {
     c.set_naming_convention(true);
     lib.update_config(c);
     rescan(&mut lib);
-    assert!(!lib.misnamed().is_empty(), "switching back brings the findings back");
+    assert!(!misnamed(&lib).is_empty(), "switching back brings the findings back");
     assert!(typed.exists() && a.folder.join("Mein Entwurf.pdf").exists(), "switching never renames anything by itself");
     let _ = std::fs::remove_dir_all(root);
 }
@@ -1647,4 +1645,13 @@ fn the_week_counts_what_the_semester_counts() {
         lib.add_manual(ManualAssignment { module: "m0".into(), title: format!("{kind:?}"), due, kind, optional, upload: kind == Kind::Submission, ..Default::default() });
     }
     assert_eq!(lib.week_progress(), (0, 2), "the task and the required submission, like the semester count");
+}
+
+#[test]
+fn settings_written_before_the_cleanup_page_went_still_load() {
+    let mut raw = config(1, 1);
+    raw["checkFolders"] = json!(true);
+    let (root, lib) = workspace("old-check-folders", &raw);
+    assert!(lib.config.is_some(), "an old checkFolders key is ignored, not an error");
+    let _ = std::fs::remove_dir_all(root);
 }

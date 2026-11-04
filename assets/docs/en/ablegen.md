@@ -45,7 +45,7 @@ P1_26_Stakeholder-Radar_Muster-M_Mueller-C_261028.pdf
 
 A task description is then named `P1_26_Infografik_Aufgabe_261028.pdf`.
 
-Whatever you create or rename keeps the name you type. A file gets the pattern only when you ask for it:
+Whatever you create or rename keeps the name you type. A file gets the pattern only when you ask for it. The command only appears once {ui:Nach einem Muster benennen} is switched on:
 
 1. {ui:Mehr} or right-click the file → {ui:Nach Konvention benennen…}, or {key:CommandPalette} and the same command
 2. Check the suggestion and change it if needed. Below it you see whether it follows the pattern.
@@ -55,7 +55,7 @@ The suggestion takes a note's heading as title and keeps date and co-authors fro
 
 ## Inbox
 
-The inbox is the folder `_Inbox` in your study folder, you change the name under {ui:Inbox-Ordner}. What lies there waits for a place. {key:GoInbox} opens it.
+The inbox is the folder `_Inbox` in your study folder, you change the name under {ui:Inbox-Ordner}. What lies there waits for a place. {key:goInbox} opens it.
 
 | Key | Effect |
 |---|---|

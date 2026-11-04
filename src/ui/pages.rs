@@ -4,7 +4,6 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::browser::FileBrowser;
-use super::checks::{self, ChecksState};
 use super::fields::Fields;
 use super::grid::{self, GridState};
 use super::module_page::{self, ModuleState};
@@ -23,7 +22,6 @@ use crate::core::text::fold;
 pub struct Pages {
     pub grid: GridState,
     pub record: RecordState,
-    pub checks: ChecksState,
     pub module: ModuleState,
     search: Entity<FileBrowser>,
     preview: Entity<FilePreview>,
@@ -131,7 +129,6 @@ impl Pages {
         Self {
             grid: GridState::default(),
             record: RecordState::default(),
-            checks: ChecksState::default(),
             module: ModuleState { focus: Some(cx.focus_handle()), ..Default::default() },
             search,
             preview,
@@ -635,14 +632,6 @@ impl Render for Pages {
                 Some(c) => div().id("record-scroll").size_full().overflow_y_scrollbar().child(record::render(&c, &self.record, &mut fields, window, cx, &t)).into_any_element(),
                 None => div().into_any_element(),
             },
-            Route::Checks => {
-                let st = std::mem::take(&mut self.checks);
-                let el = checks::render(&lib, &st, &mut fields, window, cx, &t);
-                let names = std::mem::take(&mut self.checks.names);
-                self.checks = st;
-                self.checks.names.extend(names);
-                el
-            }
             Route::Inbox => self.inbox.clone().into_any_element(),
             Route::Search => self.search_page(lib.read(cx), width, &t),
             Route::Module(id) => {

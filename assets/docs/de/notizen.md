@@ -75,14 +75,14 @@ Hat eine andere App die Datei geändert, siehst du einen Hinweis. Nichts geht ve
 
 - `[[` tippen und eine Notiz wählen.
 - {key:toggleInspector} zeigt {ui:Rückverweise}, {ui:Ausgehend} und {ui:Erwähnungen ohne Link}.
-- {key:ShowGraph} zeigt alle Notizen als Graph.
+- {key:showGraph} zeigt alle Notizen als Graph.
 
 ## Tabs
 
 | Kürzel | Wirkung |
 |---|---|
 | {key:closeTab} | Tab schließen |
-| {key:ReopenTab} | Zuletzt geschlossenen Tab öffnen |
+| {key:reopenTab} | Zuletzt geschlossenen Tab öffnen |
 | {key:nextTab} / {key:previousTab} | Nächster / vorheriger Tab |
 
 - Ein Tab geht nur zu, wenn du ihn schließt: ×, Mittelklick oder {key:closeTab}.

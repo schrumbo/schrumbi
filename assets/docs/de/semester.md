@@ -4,7 +4,7 @@ Ein Semester hat Vorlesungswochen, ein Modul hat einen Ordner. Mehr braucht Schr
 
 ## Semester
 
-{key:GoGrid} zeigt das ganze Semester.
+{key:goGrid} zeigt das ganze Semester.
 
 - Oben: Fortschritt und ein Band aus Wochen. Klick auf eine Vorlesungswoche springt hin.
 - {ui:Module}: jedes Modul mit nächster Frist. Klick öffnet die Modulseite.
@@ -56,7 +56,7 @@ Aus `W{w}_KW{kw}` wird `W03_KW44`. Fristen in einer Pause fallen weg, Fristen an
 
 ## Leistungen
 
-{key:GoRecord} zeigt Punkte und Noten.
+{key:goRecord} zeigt Punkte und Noten.
 
 - Eine {ui:Note} setzt {ui:Bestanden} passend zum Notensystem.
 - Klick auf einen Modulnamen öffnet die Teilleistungen, etwa Klausur 60 % und Projekt 40 %.

@@ -28,7 +28,7 @@ pub fn run(cx: &mut App) {
     cx.spawn(async move |cx| {
         let pause = Duration::from_millis(500);
         cx.background_executor().timer(pause).await;
-        for route in [Route::Today, Route::Grid, Route::Record, Route::Inbox, Route::Search, Route::Checks, Route::Module("m1".into())] {
+        for route in [Route::Today, Route::Grid, Route::Record, Route::Inbox, Route::Search, Route::Cards, Route::Module("m1".into())] {
             cx.update(|cx| act(cx, |l| l.set_route(route)));
             cx.background_executor().timer(pause).await;
         }

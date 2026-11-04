@@ -4,6 +4,15 @@ use super::prefs::{self, Shortcut};
 /// Every action with a configurable shortcut. Defaults follow VS Code where it has an equivalent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShortcutAction {
+    GoToday,
+    GoGrid,
+    GoRecord,
+    GoInbox,
+    GoNotes,
+    GoCards,
+    GoForward,
+    ShowGraph,
+    ReopenTab,
     QuickOpen,
     SearchFiles,
     NewEntry,
@@ -42,16 +51,22 @@ pub enum ShortcutAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Group {
     General,
+    Navigation,
     Documents,
     Editor,
 }
 
 impl Group {
-    pub const ALL: [Group; 3] = [Group::General, Group::Documents, Group::Editor];
+    pub const ALL: [Group; 4] = [Group::General, Group::Navigation, Group::Documents, Group::Editor];
+
+    fn is_global(self) -> bool {
+        matches!(self, Group::General | Group::Navigation)
+    }
 
     pub fn label(self) -> String {
         tr(match self {
             Group::General => "Allgemein",
+            Group::Navigation => "Navigation",
             Group::Documents => "Dokumente & Notizen",
             Group::Editor => "Editor",
         })
@@ -63,7 +78,16 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 33] = [
+    pub const ALL: [ShortcutAction; 42] = [
+        Self::GoToday,
+        Self::GoGrid,
+        Self::GoRecord,
+        Self::GoInbox,
+        Self::GoNotes,
+        Self::GoCards,
+        Self::GoForward,
+        Self::ShowGraph,
+        Self::ReopenTab,
         Self::QuickOpen,
         Self::SearchFiles,
         Self::NewEntry,
@@ -102,6 +126,15 @@ impl ShortcutAction {
     /// Storage key, matching the Swift app's raw values.
     pub fn id(self) -> &'static str {
         match self {
+            Self::GoToday => "goToday",
+            Self::GoGrid => "goGrid",
+            Self::GoRecord => "goRecord",
+            Self::GoInbox => "goInbox",
+            Self::GoNotes => "goNotes",
+            Self::GoCards => "goCards",
+            Self::GoForward => "goForward",
+            Self::ShowGraph => "showGraph",
+            Self::ReopenTab => "reopenTab",
             Self::QuickOpen => "quickOpen",
             Self::SearchFiles => "searchFiles",
             Self::NewEntry => "newEntry",
@@ -140,14 +173,24 @@ impl ShortcutAction {
 
     pub fn group(self) -> Group {
         match self {
-            Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::NewEntry | Self::NewFile | Self::GoBack | Self::ToggleInspector | Self::Refresh => Group::General,
-            Self::CloseTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf => Group::Documents,
+            Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::ShowGraph | Self::GoBack | Self::SearchFiles => Group::Navigation,
+            Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::Refresh => Group::General,
+            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf => Group::Documents,
             _ => Group::Editor,
         }
     }
 
     pub fn label(self) -> String {
         tr(match self {
+            Self::GoToday => "Übersicht",
+            Self::GoGrid => "Semester",
+            Self::GoRecord => "Leistungen",
+            Self::GoInbox => "Inbox",
+            Self::GoNotes => "Notizen",
+            Self::GoCards => "Karten",
+            Self::GoForward => "Vorwärts",
+            Self::ShowGraph => "Graph zeigen",
+            Self::ReopenTab => "Geschlossenen Tab wieder öffnen",
             Self::QuickOpen => "Datei schnell öffnen",
             Self::SearchFiles => "In allen Dateien suchen",
             Self::NewEntry => "Neuer Eintrag",
@@ -188,12 +231,22 @@ impl ShortcutAction {
         if !cfg!(target_os = "macos") {
             match self {
                 Self::GoBack => return s("left", false, false, true, false),
+                Self::GoForward => return s("right", false, false, true, false),
                 Self::Refresh => return s("f5", false, false, false, false),
                 Self::ToggleInspector => return s("i", true, true, false, false),
                 _ => {}
             }
         }
         match self {
+            Self::GoToday => s("1", true, false, false, false),
+            Self::GoGrid => s("2", true, false, false, false),
+            Self::GoRecord => s("3", true, false, false, false),
+            Self::GoInbox => s("4", true, false, false, false),
+            Self::GoNotes => s("5", true, false, false, false),
+            Self::GoCards => s("6", true, false, false, false),
+            Self::GoForward => s("-", false, true, false, true),
+            Self::ShowGraph => s("g", true, false, false, false),
+            Self::ReopenTab => s("t", true, true, false, false),
             Self::QuickOpen => s("o", true, false, false, false),
             Self::SearchFiles => s("f", true, true, false, false),
             Self::NewEntry => s("n", true, true, false, false),
@@ -285,7 +338,7 @@ impl ShortcutAction {
         let Some(mine) = self.shortcut() else { return Vec::new() };
         Self::ALL
             .into_iter()
-            .filter(|o| *o != self && o.shortcut().as_ref() == Some(&mine) && (o.group() == self.group() || o.group() == Group::General || self.group() == Group::General))
+            .filter(|o| *o != self && o.shortcut().as_ref() == Some(&mine) && (o.group() == self.group() || o.group().is_global() || self.group().is_global()))
             .collect()
     }
 }

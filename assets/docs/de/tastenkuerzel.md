@@ -11,6 +11,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Tastenkürzel anzeigen} | {key:ShowShortcuts} |
 | {ui:Einstellungen} | {key:OpenSettings} |
 | {ui:Datei schnell öffnen} | {key:quickOpen} |
+| {ui:Anderen Ordner öffnen…} | {key:cmd-shift-o} |
 | {ui:In allen Dateien suchen} | {key:searchFiles} |
 | {ui:Neuer Eintrag} | {key:newEntry} |
 | {ui:Neue Notiz, Datei oder Ordner} | {key:newFile} |
@@ -24,14 +25,16 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 
 | Befehl | Kürzel |
 |---|---|
-| {ui:Übersicht} | {key:GoToday} |
-| {ui:Semester} | {key:GoGrid} |
-| {ui:Leistungen} | {key:GoRecord} |
-| {ui:Inbox} | {key:GoInbox} |
-| {ui:Aufräumen} | {key:GoChecks} |
-| {ui:Karten} | {key:GoCards} |
+| {ui:Übersicht} | {key:goToday} |
+| {ui:Semester} | {key:goGrid} |
+| {ui:Leistungen} | {key:goRecord} |
+| {ui:Inbox} | {key:goInbox} |
+| {ui:Notizen} | {key:goNotes} |
+| {ui:Karten} | {key:goCards} |
+| Erstes, zweites, drittes Modul | {key:cmd-7}, {key:cmd-8}, {key:cmd-9} |
 | {ui:Zurück} | {key:goBack} |
-| {ui:Graph zeigen} | {key:ShowGraph} |
+| {ui:Vorwärts} | {key:goForward} |
+| {ui:Graph zeigen} | {key:showGraph} |
 | {ui:Seitenleiste ein-/ausblenden} | {key:ToggleSidebar} |
 | {ui:Details ein-/ausblenden} | {key:toggleInspector} |
 
@@ -41,6 +44,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 |---|---|
 | {ui:Sichern} | {key:Save} |
 | {ui:Tab schließen} | {key:closeTab} |
+| {ui:Geschlossenen Tab wieder öffnen} | {key:reopenTab} |
 | {ui:Nächster Tab} | {key:nextTab} |
 | {ui:Vorheriger Tab} | {key:previousTab} |
 | {ui:Lesen / Bearbeiten wechseln} | {key:togglePreview} |

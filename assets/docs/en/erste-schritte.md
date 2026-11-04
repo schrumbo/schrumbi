@@ -30,13 +30,12 @@ In {ui:Module}, matching folders are already ticked: everything directly inside 
 
 | Area | Shortcut | Shows |
 |---|---|---|
-| {ui:Übersicht} | {key:GoToday} | What is due now |
-| {ui:Semester} | {key:GoGrid} | All weeks and modules |
-| {ui:Leistungen} | {key:GoRecord} | Points and grades |
-| {ui:Inbox} | {key:GoInbox} | Files that still need a place |
-| {ui:Notizen} | | Notes, search, tags, tasks |
-| {ui:Karten} | {key:GoCards} | Flashcards to study |
-| {ui:Aufräumen} | {key:GoChecks} | Only appears when something needs doing |
+| {ui:Übersicht} | {key:goToday} | What is due now |
+| {ui:Semester} | {key:goGrid} | All weeks and modules |
+| {ui:Leistungen} | {key:goRecord} | Points and grades |
+| {ui:Inbox} | {key:goInbox} | Files that still need a place |
+| {ui:Notizen} | {key:goNotes} | Notes, search, tags, tasks |
+| {ui:Karten} | {key:goCards} | Flashcards to study |
 
 - Clicking the open area or {key:ToggleSidebar} shows and hides the labels.
 - Right-click an area except {ui:Übersicht}: {ui:Aus der Seitenleiste ausblenden}.

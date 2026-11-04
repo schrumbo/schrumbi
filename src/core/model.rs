@@ -52,8 +52,6 @@ pub struct StudyConfig {
     /// Flags handed-in files that do not follow the naming pattern, and names notes in checked folders by it. Configs written before this switch existed keep it on.
     #[serde(default = "on")]
     pub check_names: bool,
-    /// Reports folders that rules expect but that do not exist.
-    pub check_folders: bool,
     /// Setup and filing may create folders; off, files only go into folders that exist.
     pub create_folders: bool,
     /// Folder inside each module where files for its deadlines go; empty = the module folder itself.
@@ -78,7 +76,6 @@ impl Default for StudyConfig {
             search_exclude: default_exclude(),
             rename_on_filing: false,
             check_names: false,
-            check_folders: true,
             create_folders: true,
             submission_folder: submissions(),
         }

@@ -1,6 +1,6 @@
 # Karten
 
-Karteikarten stehen als Text in deinen Notizen. Schrumbi findet sie und plant die Wiederholungen. {key:GoCards} öffnet sie.
+Karteikarten stehen als Text in deinen Notizen. Schrumbi findet sie und plant die Wiederholungen. {key:goCards} öffnet sie.
 
 ## Karten schreiben
 

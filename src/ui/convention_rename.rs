@@ -16,9 +16,9 @@ use crate::core::library::ConventionPlan;
 
 const FORBIDDEN: &str = "\\/:*?\"<>|";
 
-/// Whether a file can be renamed by its module's convention.
+/// Whether a file can be renamed by its module's convention; never offered while no naming convention is switched on in the settings.
 pub fn available(path: &Path, cx: &App) -> bool {
-    state::read(cx, |l| l.can_name_by_convention(path))
+    state::read(cx, |l| l.config.as_ref().is_some_and(|c| c.naming_convention()) && l.can_name_by_convention(path))
 }
 
 /// Works out the convention name off the UI thread, then lets the user check and change it before renaming.
