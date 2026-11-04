@@ -21,6 +21,8 @@ pub fn upload_percent(text: &str) -> Option<u8> {
 
 /// How long to wait for the rest of a finished command's output.
 const PIPE_GRACE: Duration = Duration::from_secs(2);
+/// How long to wait at most for the end of a finished command's stdout; on a busy machine it can take seconds to come through. ssh's control master holds only stderr, so it costs the short wait.
+const SILENT_GRACE: Duration = Duration::from_secs(10);
 /// How long local commands may take.
 pub const LOCAL: Duration = Duration::from_secs(30);
 /// How long commands that touch the whole working tree may take; large workspaces need minutes.
@@ -129,8 +131,22 @@ pub fn spawn(mut command: Command, input: Option<Vec<u8>>, timeout: Duration) ->
         }
     };
     let settled = Instant::now();
-    while !(stdout.lock().unwrap().1 && stderr.lock().unwrap().1) && settled.elapsed() < PIPE_GRACE {
+    let progress = || {
+        let (out, err) = (stdout.lock().unwrap(), stderr.lock().unwrap());
+        (out.0.len(), err.0.len(), out.1, err.1)
+    };
+    let (mut seen, mut until) = (progress(), settled + PIPE_GRACE);
+    while !(seen.2 && seen.3) {
+        let now = Instant::now();
+        if now >= until && (seen.2 || now >= settled + SILENT_GRACE) {
+            break;
+        }
         std::thread::sleep(Duration::from_millis(5));
+        let next = progress();
+        if next != seen {
+            until = until.max((Instant::now() + PIPE_GRACE).min(settled + SILENT_GRACE));
+            seen = next;
+        }
     }
     let raw = std::mem::take(&mut stdout.lock().unwrap().0);
     let stderr = std::mem::take(&mut stderr.lock().unwrap().0);

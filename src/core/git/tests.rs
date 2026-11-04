@@ -679,6 +679,38 @@ fn a_helper_holding_the_pipes_does_not_hang_us() {
     let start = SystemTime::now();
     let out = spawn(c, None, Duration::from_secs(20)).unwrap();
     assert_eq!(out.stdout.trim(), "fertig");
+    assert!(start.elapsed().unwrap() < Duration::from_secs(15));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_silent_helper_holding_the_pipes_does_not_hang_us() {
+    let mut c = Command::new("/bin/sh");
+    c.args(["-c", "(sleep 30) & exit 0"]);
+    let start = SystemTime::now();
+    let out = spawn(c, None, Duration::from_secs(20)).unwrap();
+    assert_eq!((out.code, out.stdout.as_str()), (0, ""));
+    assert!(start.elapsed().unwrap() < Duration::from_secs(15));
+}
+
+#[cfg(unix)]
+#[test]
+fn output_that_comes_late_is_still_read() {
+    let mut c = Command::new("/bin/sh");
+    c.args(["-c", "(sleep 3; echo spaet) & exit 0"]);
+    let start = SystemTime::now();
+    let out = spawn(c, None, Duration::from_secs(20)).unwrap();
+    assert_eq!(out.stdout.trim(), "spaet");
+    assert!(start.elapsed().unwrap() < Duration::from_secs(10));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_helper_holding_only_stderr_costs_the_short_wait() {
+    let mut c = Command::new("/bin/sh");
+    c.args(["-c", "(sleep 30) >/dev/null & exit 0"]);
+    let start = SystemTime::now();
+    spawn(c, None, Duration::from_secs(20)).unwrap();
     assert!(start.elapsed().unwrap() < Duration::from_secs(8));
 }
 
