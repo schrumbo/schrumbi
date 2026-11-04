@@ -1372,7 +1372,7 @@ impl NoteView {
         super::link_card::hide(cx);
         let _ = window;
         let item = match (&self.parsed, self.mode) {
-            (Some((_, p)), Mode::Read) => p.row_of_link(next) + 1,
+            (Some((_, p)), mode) if mode != Mode::Live => p.row_of_link(next) + 1,
             (p, _) => self.item_of_line(p.as_ref().and_then(|(_, p)| p.sources().get(links[next].1).map(|s| s.line)).unwrap_or(0)),
         };
         self.reader_list.scroll_to_reveal_item(item);

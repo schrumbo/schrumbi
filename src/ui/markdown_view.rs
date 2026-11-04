@@ -486,8 +486,8 @@ fn reader_rows(src: &str, breaks: &Breaks, blocks: &[Block], sources: &[BlockSou
                 .map(|from| {
                     let part = &body[from..(from + PART).min(body.len())];
                     let line = if from == 0 { source.line } else { source.line + 2 + from };
-                    let cells = |rows: &[Vec<Vec<Inline>>]| rows.iter().flatten().map(|c| links_in(&[Block::Paragraph(c.clone())])).sum::<usize>();
-                    let links = cells(part) + if from == 0 { links_in(&[Block::Paragraph(head.concat())]) } else { 0 };
+                    let count = |cells: &mut dyn Iterator<Item = &Vec<Inline>>| cells.flatten().filter(|i| matches!(i, Inline::Link(..))).count();
+                    let links = count(&mut part.iter().flatten()) + if from == 0 { count(&mut head.iter()) } else { 0 };
                     let room = part.iter().flatten().chain(if from == 0 { head.iter() } else { [].iter() }).map(|c| 1 + inline_room(c)).sum::<u64>() + 1;
                     (from, from + part.len(), line, links, room)
                 })
@@ -518,7 +518,8 @@ fn reader_rows(src: &str, breaks: &Breaks, blocks: &[Block], sources: &[BlockSou
 
 /// More than the things drawn for these inlines count, so the parts of one block number theirs without meeting.
 fn inline_room(inlines: &[Inline]) -> u64 {
-    1 + inlines.iter().map(|i| if matches!(i, Inline::Image(..)) { 1_000 } else { 0 }).sum::<u64>()
+    let room = |src: &str| if Path::new(src.trim_end_matches('\\')).extension().is_some_and(|e| IMAGE_TYPES.contains(&e.to_string_lossy().to_lowercase().as_str())) { 2 } else { 1_000 };
+    1 + inlines.iter().map(|i| if let Inline::Image(src, ..) = i { room(src) } else { 0 }).sum::<u64>()
 }
 
 /// More than the things drawn for these blocks count, as `inline_room` for blocks.
@@ -2034,7 +2035,7 @@ fn list_items(start: &Option<u64>, items: &[Item], first: usize, cx: &Ctx) -> Di
 
 /// A table, or the rows `from..to` of it with the head only when they start it, its columns measured from the whole table.
 /// `part` also names the whole table by its source, so its parts measure it once.
-fn table(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>], aligns: &[pulldown_cmark::Alignment], part: Option<(usize, usize, u64)>, cx: &Ctx) -> AnyElement {
+fn table(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>], aligns: &[pulldown_cmark::Alignment], part: Option<(usize, usize, (u64, usize))>, cx: &Ctx) -> AnyElement {
     let t = cx.t;
     let size = note_size(font::BODY);
     let cell = |inl: &Vec<Inline>, row: usize, i: usize, bold: bool| {
@@ -2087,7 +2088,7 @@ fn table(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>], aligns: &[pulldown_cma
     let key = part.map(|(.., source)| {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (source, size.to_bits(), cx.footnote_order).hash(&mut hasher);
+        (source, rows.as_ptr() as usize, size.to_bits(), cx.footnote_order).hash(&mut hasher);
         hasher.finish()
     });
     let measure = match key {
@@ -2100,24 +2101,17 @@ fn table(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>], aligns: &[pulldown_cma
         }),
         None => measure(),
     };
-    let scroll = part.map(|_| table_scroll(head, rows.len()));
+    let scroll = part.map(|(.., source)| table_scroll(source));
     Table { id: ElementId::from(("md-table", order)), columns, cells, measure, key, with_head, ends: (with_head, to >= rows.len()), scroll, size, border: t.separator, head_bg: t.secondary_bg }.into_any_element()
 }
 
 thread_local! {
-    static TABLE_SCROLLS: RefCell<HashMap<u64, ScrollHandle>> = RefCell::new(HashMap::new());
+    static TABLE_SCROLLS: RefCell<HashMap<(u64, usize), ScrollHandle>> = RefCell::new(HashMap::new());
     static TABLE_TEXTS: RefCell<HashMap<u64, Rc<Vec<Vec<CellText>>>>> = RefCell::new(HashMap::new());
 }
 
 /// One sideways scroll shared by every part of a table, so its columns stay aligned.
-fn table_scroll(head: &[Vec<Inline>], rows: usize) -> ScrollHandle {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    rows.hash(&mut hasher);
-    for cell in head {
-        plain_text(cell).hash(&mut hasher);
-    }
-    let key = hasher.finish();
+fn table_scroll(key: (u64, usize)) -> ScrollHandle {
     TABLE_SCROLLS.with(|known| {
         let mut known = known.borrow_mut();
         if known.len() > 256 {
@@ -2654,7 +2648,7 @@ pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_to
     let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: row.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None };
     let element = match note.blocks.get(row.block) {
         Some(Block::List { start, items }) => list_items(start, items.get(from..to.min(items.len())).unwrap_or_default(), from, &cx).into_any_element(),
-        Some(Block::Table { head, rows, aligns }) => table(head, rows, aligns, Some((from, to, note.sources.get(row.block).map_or(0, |s| s.hash))), &cx),
+        Some(Block::Table { head, rows, aligns }) => table(head, rows, aligns, Some((from, to, note.sources.get(row.block).map_or((0, 0), |s| (s.hash, s.line)))), &cx),
         _ => div().into_any_element(),
     };
     found_mark(element, found.filter(|f| f.block == row.block && (row.line..row.end_line).contains(&f.line)), t)
