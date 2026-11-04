@@ -84,9 +84,28 @@ pub struct ParsedNote {
     links: Vec<(String, usize)>,
     blocks: Vec<Block>,
     footnotes: Vec<(String, Vec<Block>)>,
-    /// The top-level block that first refers to a footnote.
+    /// The source line that first refers to a footnote.
     footnote_homes: HashMap<String, usize>,
     footnote_order: Vec<String>,
+    rows: Vec<ReaderRow>,
+}
+
+/// How many list items or table rows one row of the reader holds, so a long list only builds what is on screen.
+const PART: usize = 8;
+
+/// One row of the reader: a top-level block, or a stretch of the items of a long list or the rows of a long table.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReaderRow {
+    pub block: usize,
+    /// The list items or table rows drawn, when the block is drawn in parts.
+    pub part: Option<(usize, usize)>,
+    pub line: usize,
+    pub end_line: usize,
+    pub hash: u64,
+    /// The links of the note before this row.
+    links_before: usize,
+    /// Where this row starts counting what it draws, growing in reading order.
+    order: u64,
 }
 
 struct Breaks(Vec<usize>);
@@ -422,7 +441,7 @@ pub fn parse(src: &str) -> ParsedNote {
             Event::FootnoteReference(id) => {
                 if !footnote_order.iter().any(|f| f == id.as_ref()) {
                     footnote_order.push(id.to_string());
-                    footnote_homes.insert(id.to_string(), stack.first().map_or(0, |s| s.1.len()));
+                    footnote_homes.insert(id.to_string(), breaks.line_of(range.start));
                 }
                 stack.last_mut().unwrap().2.push(Inline::FootnoteRef(id.to_string()));
             }
@@ -435,7 +454,89 @@ pub fn parse(src: &str) -> ParsedNote {
     for (i, block) in blocks.iter().enumerate() {
         collect_links(std::slice::from_ref(block), i, &mut links);
     }
-    ParsedNote { sources, links, blocks, footnotes, footnote_homes, footnote_order }
+    let rows = reader_rows(src, &breaks, &blocks, &sources);
+    ParsedNote { sources, links, blocks, footnotes, footnote_homes, footnote_order, rows }
+}
+
+/// Splits long lists and tables into rows of `PART` items, each knowing its lines, links and drawing order.
+fn reader_rows(src: &str, breaks: &Breaks, blocks: &[Block], sources: &[BlockSource]) -> Vec<ReaderRow> {
+    use std::hash::{Hash, Hasher};
+    let line_start = |line: usize| if line == 0 { 0 } else { breaks.0.get(line - 1).map_or(src.len(), |b| b + 1) };
+    let mut rows = Vec::new();
+    let mut links_before = 0;
+    for (block, (b, source)) in blocks.iter().zip(sources).enumerate() {
+        let order = (block as u64 + 1) * 100_000;
+        let links_in = |blocks: &[Block]| {
+            let mut found = Vec::new();
+            collect_links(blocks, block, &mut found);
+            found.len()
+        };
+        let parts: Vec<(usize, usize, usize, usize, u64)> = match b {
+            Block::List { items, .. } if items.len() > PART => (0..items.len())
+                .step_by(PART)
+                .map(|from| {
+                    let part = &items[from..(from + PART).min(items.len())];
+                    let line = if from == 0 { source.line } else { part[0].line };
+                    let links = part.iter().map(|i| links_in(&i.blocks)).sum();
+                    (from, from + part.len(), line, links, part.iter().map(|i| order_room(&i.blocks)).sum())
+                })
+                .collect(),
+            Block::Table { head, rows: body, .. } if body.len() > PART => (0..body.len())
+                .step_by(PART)
+                .map(|from| {
+                    let part = &body[from..(from + PART).min(body.len())];
+                    let line = if from == 0 { source.line } else { source.line + 2 + from };
+                    let count = |cells: &mut dyn Iterator<Item = &Vec<Inline>>| cells.flatten().filter(|i| matches!(i, Inline::Link(..))).count();
+                    let links = count(&mut part.iter().flatten()) + if from == 0 { count(&mut head.iter()) } else { 0 };
+                    let room = part.iter().flatten().chain(if from == 0 { head.iter() } else { [].iter() }).map(|c| 1 + inline_room(c)).sum::<u64>() + 1;
+                    (from, from + part.len(), line, links, room)
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        if parts.is_empty() {
+            rows.push(ReaderRow { block, part: None, line: source.line, end_line: source.end_line, hash: source.hash, links_before, order });
+            links_before += links_in(std::slice::from_ref(b));
+            continue;
+        }
+        let mut order = order;
+        for (k, (from, to, line, links, room)) in parts.iter().copied().enumerate() {
+            let end_line = parts.get(k + 1).map_or(source.end_line, |next| next.2).max(line);
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            src.get(line_start(line)..line_start(end_line)).unwrap_or_default().hash(&mut hash);
+            (from, to, source.line, matches!(b, Block::Table { .. }).then_some(source.hash)).hash(&mut hash);
+            if let Block::List { start, .. } = b {
+                start.hash(&mut hash);
+            }
+            rows.push(ReaderRow { block, part: Some((from, to)), line, end_line, hash: hash.finish(), links_before, order });
+            links_before += links;
+            order += room + 1;
+        }
+    }
+    rows
+}
+
+/// More than the things drawn for these inlines count, so the parts of one block number theirs without meeting.
+fn inline_room(inlines: &[Inline]) -> u64 {
+    let room = |src: &str| if Path::new(src.trim_end_matches('\\')).extension().is_some_and(|e| IMAGE_TYPES.contains(&e.to_string_lossy().to_lowercase().as_str())) { 2 } else { 1_000 };
+    1 + inlines.iter().map(|i| if let Inline::Image(src, ..) = i { room(src) } else { 0 }).sum::<u64>()
+}
+
+/// More than the things drawn for these blocks count, as `inline_room` for blocks.
+fn order_room(blocks: &[Block]) -> u64 {
+    blocks
+        .iter()
+        .map(|b| match b {
+            Block::Heading(_, inl) | Block::Paragraph(inl) => inline_room(inl),
+            Block::Quote(inner) | Block::Centered(inner) | Block::Right(inner) => order_room(inner),
+            Block::Callout(_, title, inner) | Block::Details(title, inner, _) => 1 + inline_room(title) + order_room(inner),
+            Block::List { items, .. } => items.iter().map(|i| order_room(&i.blocks)).sum(),
+            Block::Table { head, rows, .. } => 1 + head.iter().chain(rows.iter().flatten()).map(|c| 1 + inline_room(c)).sum::<u64>(),
+            Block::Properties(props) => 1 + props.len() as u64,
+            _ => 2,
+        })
+        .sum::<u64>()
+        + 1
 }
 
 /// Drops the spaces and line breaks at the start or end of a paragraph's text.
@@ -1172,7 +1273,7 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
             Inline::Text(s, st) | Inline::Link(s, st, _) => {
                 let start = text.len();
                 text.push_str(s);
-                let mut unresolved = false;
+                let (mut unresolved, mut focused) = (false, false);
                 if let Inline::Link(_, _, url) = i {
                     unresolved = !is_external(url) && !link_exists(url, cx.base);
                     if is_external(url) {
@@ -1185,9 +1286,7 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                     if let Some(focus) = cx.focus {
                         let index = cx.links_seen.get();
                         cx.links_seen.set(index + 1);
-                        if focus.index == Some(index) {
-                            highlights.push((start..text.len(), HighlightStyle { background_color: Some(t.accent.opacity(0.28)), ..Default::default() }));
-                        }
+                        focused = focus.index == Some(index);
                     }
                 }
                 let mut h = HighlightStyle::default();
@@ -1223,6 +1322,9 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                     h.color = Some(t.accent_text);
                     h.underline = Some(UnderlineStyle { thickness: px(1.), color: Some(t.accent_text.opacity(0.4)), wavy: false });
                 }
+                if focused {
+                    h.background_color = Some(t.accent.opacity(0.28));
+                }
                 if h != HighlightStyle::default() {
                     highlights.push((start..text.len(), h));
                 }
@@ -1233,7 +1335,7 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                 text.push_str(&superscript(&n.to_string()));
                 highlights.push((start..text.len(), HighlightStyle { color: Some(t.accent_text), ..Default::default() }));
                 if let Some(list) = cx.focus.and_then(|f| f.list.clone()) {
-                    links.push((start..text.len(), Rc::new(move |_| list.scroll_to_reveal_item(list.item_count().saturating_sub(1)))));
+                    links.push((start..text.len(), Rc::new(move |_| reveal_item(&list, list.item_count().saturating_sub(1)))));
                 }
             }
             Inline::Image(src, alt, target) => {
@@ -1335,8 +1437,17 @@ thread_local! {
 struct Table {
     id: ElementId,
     columns: usize,
-    /// Rows of cells, the head first, each drawn and with its text for measuring.
-    cells: Vec<Vec<(AnyElement, CellText)>>,
+    /// The rows drawn, the head first when it is drawn.
+    cells: Vec<Vec<Div>>,
+    /// The text of every row of the whole table, the head first, for measuring.
+    measure: Rc<Vec<Vec<CellText>>>,
+    /// Names what `measure` holds, so the widths are found without reading it.
+    key: Option<u64>,
+    with_head: bool,
+    /// Whether the top and the bottom edge of the table are drawn here.
+    ends: (bool, bool),
+    /// The sideways scroll shared with the table's other parts.
+    scroll: Option<ScrollHandle>,
     size: f32,
     border: Hsla,
     head_bg: Hsla,
@@ -1350,10 +1461,15 @@ impl Table {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.size.to_bits().hash(&mut hasher);
         base.family.hash(&mut hasher);
-        for row in &self.cells {
-            row.len().hash(&mut hasher);
-            for (_, text) in row {
-                text.hash(&mut hasher);
+        match self.key {
+            Some(key) => key.hash(&mut hasher),
+            None => {
+                for row in self.measure.iter() {
+                    row.len().hash(&mut hasher);
+                    for text in row {
+                        text.hash(&mut hasher);
+                    }
+                }
             }
         }
         let key = hasher.finish();
@@ -1362,9 +1478,9 @@ impl Table {
         }
         let mut drawn_all = true;
         let mut measured: Vec<Vec<(f32, f32)>> = Vec::new();
-        for (r, row) in self.cells.iter().enumerate() {
+        for (r, row) in self.measure.iter().enumerate() {
             let mut sizes = Vec::new();
-            for (_, cell) in row.iter().take(self.columns) {
+            for cell in row.iter().take(self.columns) {
                 let mut text = String::new();
                 let mut runs = Vec::new();
                 for (part, bold, italic) in &cell.runs {
@@ -1416,32 +1532,35 @@ impl RenderOnce for Table {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let widths = self.widths(window, cx);
         let (natural, least) = (&widths.0, &widths.1);
-        let column = |c: usize, element: AnyElement| {
+        let column = |c: usize, cell: Div| {
             let (basis, narrowest) = (natural.get(c).copied().unwrap_or(0.), least.get(c).copied().unwrap_or(0.));
-            let mut d = div().flex().flex_basis(px(narrowest)).flex_shrink_0().min_w(px(narrowest)).max_w(px(basis.max(narrowest)));
+            let mut d = cell.flex_basis(px(narrowest)).flex_shrink_0().min_w(px(narrowest)).max_w(px(basis.max(narrowest)));
             d.style().flex_grow = Some((basis - narrowest).max(0.));
-            d.child(element)
+            d
         };
         let border = self.border;
+        let (with_head, (top, bottom)) = (self.with_head, self.ends);
         let mut rows = self.cells.into_iter().enumerate().map(|(r, row)| {
-            div().flex().when(r > 0, |d| d.border_t_1().border_color(border)).children(row.into_iter().enumerate().map(|(c, (element, _))| column(c, element)).collect::<Vec<_>>())
+            div().flex().when(r > 0 || !top, |d| d.border_t_1().border_color(border)).children(row.into_iter().enumerate().map(|(c, element)| column(c, element)).collect::<Vec<_>>())
         });
-        let head = rows.next().map(|d| d.bg(self.head_bg));
+        let head = if with_head { rows.next().map(|d| d.bg(self.head_bg)) } else { None };
         let outline = TABLE_RULE * 2.;
-        div().id(self.id).w_full().overflow_x_scroll().child(
-            div()
-                .w_full()
-                .min_w(px(least.iter().sum::<f32>() + outline))
-                .max_w(px(natural.iter().sum::<f32>() + outline))
-                .flex()
-                .flex_col()
-                .rounded(px(radius::CONTROL))
-                .border_1()
-                .border_color(border)
-                .overflow_hidden()
-                .children(head)
-                .children(rows),
-        )
+        let corner = px(radius::CONTROL);
+        let frame = div()
+            .w_full()
+            .min_w(px(least.iter().sum::<f32>() + outline))
+            .max_w(px(natural.iter().sum::<f32>() + outline))
+            .flex()
+            .flex_col()
+            .when(top, |d| d.rounded_t(corner).border_t_1())
+            .when(bottom, |d| d.rounded_b(corner).border_b_1())
+            .border_l_1()
+            .border_r_1()
+            .border_color(border)
+            .overflow_hidden()
+            .children(head)
+            .children(rows);
+        div().id(self.id).w_full().overflow_x_scroll().when_some(self.scroll, |d, scroll| d.track_scroll(&scroll)).child(frame)
     }
 }
 
@@ -1813,6 +1932,196 @@ fn heading_top(level: u8) -> f32 {
     if level <= 2 { space::S } else { space::XS }
 }
 
+/// The items of a list from `first` on, numbered as in the whole list.
+fn list_items(start: &Option<u64>, items: &[Item], first: usize, cx: &Ctx) -> Div {
+    let t = cx.t;
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(space::XS))
+        .children(items.iter().enumerate().map(|(i, item)| {
+            let marker: AnyElement = match (item.task, start) {
+                (Some(mark), _) => {
+                    let done = mark == 'x' || mark == 'X';
+                    let special = !done && mark != ' ';
+                    let line = item.line;
+                    let toggle = cx.on_toggle.clone();
+                    div()
+                        .id(SharedString::from(format!("task-{line}")))
+        .capture_any_mouse_down(|_, _, _| press_control())
+                        .mt(px(space::XS))
+                        .ml(px(space::XXS))
+                        .size(px(iconsize::S))
+                        .flex_none()
+                        .rounded(px(radius::SMALL))
+                        .soft(if done { t.on_accent.opacity(0.2) } else { t.ink.opacity(0.1) }, radius::SMALL)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when(done, |d| d.bg(t.accent))
+                        .when(!done, |d| d.border_1().border_color(if special { t.accent } else { t.secondary }))
+                        .when(special, |d| d.text_size(px(font::CAPTION2)).text_color(t.accent).child(mark.to_string()))
+                        .when(toggle.is_some(), |d| d.cursor_pointer())
+                        .when(done, |d| d.child(super::widgets::icon("check", iconsize::XS, t.on_accent)))
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(f) = &toggle {
+                                f(line, cx);
+                            }
+                        })
+                        .into_any_element()
+                }
+                (None, Some(s)) => div().flex_none().min_w(px(space::L)).flex().justify_end().text_size(px(note_size(font::BODY))).line_height(relative(1.5)).text_color(t.secondary).child(format!("{}.", s + (first + i) as u64)).into_any_element(),
+                (None, None) => div().flex_none().min_w(px(space::L)).flex().justify_end().text_size(px(note_size(font::BODY))).line_height(relative(1.5)).text_color(t.secondary).child("•").into_any_element(),
+            };
+            let done = matches!(item.task, Some('x' | 'X'));
+            let has_nested = item.blocks.iter().any(|b| matches!(b, Block::List { .. }));
+            let fold_key = format!("l{}", item.line);
+            let folds = cx.focus.map(|f| f.folds.clone());
+            let folded = has_nested && folds.as_ref().is_some_and(|f| f.borrow().contains(&fold_key));
+            let shown_blocks: Vec<AnyElement> = item
+                .blocks
+                .iter()
+                .filter(|b| !(folded && matches!(b, Block::List { .. })))
+                .map(|b| {
+                    let inner = render_blocks(std::slice::from_ref(b), cx).into_iter().next().unwrap_or_else(|| div().into_any_element());
+                    if matches!(b, Block::List { .. }) {
+                        div().border_l_1().border_color(t.separator).pl(px(space::S)).child(inner).into_any_element()
+                    } else if done {
+                        div().text_color(t.secondary).line_through().child(inner).into_any_element()
+                    } else {
+                        inner
+                    }
+                })
+                .collect();
+            let group = SharedString::from(format!("md-item-{}", item.line));
+            let fold_button = (has_nested && folds.is_some()).then(|| {
+                let line = item.line;
+                div()
+                    .id(("md-list-fold", line))
+                    .when(!folded, |d| d.invisible().group_hover(group.clone(), StyleRefinement::visible))
+        .capture_any_mouse_down(|_, _, _| press_control())
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size(px(control::S))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .soft(t.ink.opacity(0.06), radius::SMALL)
+                    .tooltip(super::widgets::tip(tr(if folded { "Ausklappen" } else { "Einklappen" })))
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(f) = &folds {
+                            toggle_fold(f, &fold_key);
+                            cx.refresh_windows();
+                        }
+                    })
+                    .child(super::motion::chevron(("md-list-chevron", line), !folded, t.tertiary))
+            });
+            div()
+                .relative()
+                .ml(px(-(space::L + space::XS)))
+                .pl(px(space::L + space::XS))
+                .group(group)
+                .flex()
+                .items_start()
+                .gap(px(space::S))
+                .children(fold_button)
+                .child(marker)
+                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XS)).children(shown_blocks))
+        }))
+}
+
+/// A table, or the rows `from..to` of it with the head only when they start it, its columns measured from the whole table.
+/// `part` also names the whole table by its source, so its parts measure it once.
+fn table(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>], aligns: &[pulldown_cmark::Alignment], part: Option<(usize, usize, (u64, usize))>, cx: &Ctx) -> AnyElement {
+    let t = cx.t;
+    let size = note_size(font::BODY);
+    let cell = |inl: &Vec<Inline>, row: usize, i: usize, bold: bool| {
+        cx.order.set(cx.order.get() + 1);
+        cx.cell.set(Some((row, i)));
+        let click = text_click_of(cx);
+        let d = div().px(px(space::S)).py(px(space::XS)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD));
+        let d = match aligns.get(i) {
+            Some(pulldown_cmark::Alignment::Center) => d.flex().justify_center(),
+            Some(pulldown_cmark::Alignment::Right) => d.flex().justify_end(),
+            _ => d,
+        };
+        let open = cx.open_cell.as_ref().filter(|(r, c, _)| *r == row && *c == i).and_then(|(_, _, field)| field.borrow_mut().take());
+        let drawn = match open {
+            Some(field) => d.child(field),
+            None => {
+                let body = styled_text(inl, cx, size);
+                d.when_some(click, |d, click| {
+                    d.capture_any_mouse_down(|_, _, _| press_control()).on_mouse_up(MouseButton::Left, move |_, window, cx| click("", 0, window, cx))
+                })
+                .child(body)
+            }
+        };
+        cx.cell.set(None);
+        drawn
+    };
+    let order = cx.order.get();
+    cx.order.set(order + 1);
+    let columns = rows.iter().map(Vec::len).chain(std::iter::once(head.len())).max().unwrap_or(0);
+    let filled = |mut row: Vec<Div>| {
+        row.resize_with(columns, div);
+        row
+    };
+    let (from, to) = part.map_or((0, rows.len()), |(from, to, _)| (from, to));
+    let to = to.min(rows.len());
+    let with_head = from == 0;
+    let mut cells = Vec::new();
+    if with_head {
+        cells.push(filled(head.iter().enumerate().map(|(i, c)| cell(c, 0, i, true)).collect()));
+    }
+    cells.extend(rows[from.min(to)..to].iter().enumerate().map(|(r, row)| filled(row.iter().enumerate().map(|(i, c)| cell(c, from + r + 1, i, false)).collect())));
+    let measure = || {
+        let texts = std::iter::once(head).chain(rows.iter().map(Vec::as_slice)).map(|row| {
+            let mut texts: Vec<CellText> = row.iter().map(|c| cell_text(c, cx, size)).collect();
+            texts.resize_with(columns, CellText::default);
+            texts
+        });
+        Rc::new(texts.collect::<Vec<_>>())
+    };
+    let key = part.map(|(.., source)| {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (source, rows.as_ptr() as usize, size.to_bits(), cx.footnote_order).hash(&mut hasher);
+        hasher.finish()
+    });
+    let measure = match key {
+        Some(key) => TABLE_TEXTS.with(|known| {
+            let mut known = known.borrow_mut();
+            if known.len() > 64 {
+                known.clear();
+            }
+            known.entry(key).or_insert_with(measure).clone()
+        }),
+        None => measure(),
+    };
+    let scroll = part.map(|(.., source)| table_scroll(source));
+    Table { id: ElementId::from(("md-table", order)), columns, cells, measure, key, with_head, ends: (with_head, to >= rows.len()), scroll, size, border: t.separator, head_bg: t.secondary_bg }.into_any_element()
+}
+
+thread_local! {
+    static TABLE_SCROLLS: RefCell<HashMap<(u64, usize), ScrollHandle>> = RefCell::new(HashMap::new());
+    static TABLE_TEXTS: RefCell<HashMap<u64, Rc<Vec<Vec<CellText>>>>> = RefCell::new(HashMap::new());
+}
+
+/// One sideways scroll shared by every part of a table, so its columns stay aligned.
+fn table_scroll(key: (u64, usize)) -> ScrollHandle {
+    TABLE_SCROLLS.with(|known| {
+        let mut known = known.borrow_mut();
+        if known.len() > 256 {
+            known.clear();
+        }
+        known.entry(key).or_default().clone()
+    })
+}
+
 fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
     let t = cx.t;
     blocks
@@ -1887,143 +2196,8 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                     .when(is_open, |d| d.child(div().pl(px(space::L)).flex().flex_col().gap(px(space::S)).children(render_blocks(inner, cx))))
                     .into_any_element()
             }
-            Block::List { start, items } => div()
-                .flex()
-                .flex_col()
-                .gap(px(space::XS))
-                .children(items.iter().enumerate().map(|(i, item)| {
-                    let marker: AnyElement = match (item.task, start) {
-                        (Some(mark), _) => {
-                            let done = mark == 'x' || mark == 'X';
-                            let special = !done && mark != ' ';
-                            let line = item.line;
-                            let toggle = cx.on_toggle.clone();
-                            div()
-                                .id(SharedString::from(format!("task-{line}")))
-                .capture_any_mouse_down(|_, _, _| press_control())
-                                .mt(px(space::XS))
-                                .ml(px(space::XXS))
-                                .size(px(14.))
-                                .flex_none()
-                                .rounded(px(radius::SMALL))
-                                .soft(if done { t.on_accent.opacity(0.2) } else { t.ink.opacity(0.1) }, radius::SMALL)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .when(done, |d| d.bg(t.accent))
-                                .when(!done, |d| d.border_1().border_color(if special { t.accent } else { t.secondary }))
-                                .when(special, |d| d.text_size(px(font::CAPTION2)).text_color(t.accent).child(mark.to_string()))
-                                .when(toggle.is_some(), |d| d.cursor_pointer())
-                                .when(done, |d| d.child(super::widgets::icon("check", iconsize::XS, t.on_accent)))
-                                .on_click(move |_, _, cx| {
-                                    cx.stop_propagation();
-                                    if let Some(f) = &toggle {
-                                        f(line, cx);
-                                    }
-                                })
-                                .into_any_element()
-                        }
-                        (None, Some(s)) => div().flex_none().min_w(px(16.)).flex().justify_end().text_size(px(note_size(font::BODY))).line_height(relative(1.5)).text_color(t.secondary).child(format!("{}.", s + i as u64)).into_any_element(),
-                        (None, None) => div().flex_none().min_w(px(16.)).flex().justify_end().text_size(px(note_size(font::BODY))).line_height(relative(1.5)).text_color(t.secondary).child("•").into_any_element(),
-                    };
-                    let done = matches!(item.task, Some('x' | 'X'));
-                    let has_nested = item.blocks.iter().any(|b| matches!(b, Block::List { .. }));
-                    let fold_key = format!("l{}", item.line);
-                    let folds = cx.focus.map(|f| f.folds.clone());
-                    let folded = has_nested && folds.as_ref().is_some_and(|f| f.borrow().contains(&fold_key));
-                    let shown_blocks: Vec<AnyElement> = item
-                        .blocks
-                        .iter()
-                        .filter(|b| !(folded && matches!(b, Block::List { .. })))
-                        .map(|b| {
-                            let inner = render_blocks(std::slice::from_ref(b), cx).into_iter().next().unwrap_or_else(|| div().into_any_element());
-                            if matches!(b, Block::List { .. }) {
-                                div().border_l_1().border_color(t.separator).pl(px(space::S)).child(inner).into_any_element()
-                            } else if done {
-                                div().text_color(t.secondary).line_through().child(inner).into_any_element()
-                            } else {
-                                inner
-                            }
-                        })
-                        .collect();
-                    let group = SharedString::from(format!("md-item-{}", item.line));
-                    let fold_button = (has_nested && folds.is_some()).then(|| {
-                        let line = item.line;
-                        div()
-                            .id(("md-list-fold", line))
-                            .when(!folded, |d| d.invisible().group_hover(group.clone(), StyleRefinement::visible))
-                .capture_any_mouse_down(|_, _, _| press_control())
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size(px(control::S))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .soft(t.ink.opacity(0.06), radius::SMALL)
-                            .tooltip(super::widgets::tip(tr(if folded { "Ausklappen" } else { "Einklappen" })))
-                            .on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                if let Some(f) = &folds {
-                                    toggle_fold(f, &fold_key);
-                                    cx.refresh_windows();
-                                }
-                            })
-                            .child(super::motion::chevron(("md-list-chevron", line), !folded, t.tertiary))
-                    });
-                    div()
-                        .relative()
-                        .ml(px(-(space::L + space::XS)))
-                        .pl(px(space::L + space::XS))
-                        .group(group)
-                        .flex()
-                        .items_start()
-                        .gap(px(space::S))
-                        .children(fold_button)
-                        .child(marker)
-                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XS)).children(shown_blocks))
-                })
-            )
-            .into_any_element(),
-            Block::Table { head, rows, aligns } => {
-                let size = note_size(font::BODY);
-                let cell = |inl: &Vec<Inline>, row: usize, i: usize, bold: bool| {
-                    let order = cx.order.get();
-                    cx.order.set(order + 1);
-                    cx.cell.set(Some((row, i)));
-                    let click = text_click_of(cx);
-                    let d = div().id(("md-cell", order)).flex_1().min_w_0().px(px(space::S)).py(px(space::XS)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD));
-                    let d = match aligns.get(i) {
-                        Some(pulldown_cmark::Alignment::Center) => d.flex().justify_center(),
-                        Some(pulldown_cmark::Alignment::Right) => d.flex().justify_end(),
-                        _ => d,
-                    };
-                    let open = cx.open_cell.as_ref().filter(|(r, c, _)| *r == row && *c == i).and_then(|(_, _, field)| field.borrow_mut().take());
-                    let drawn = match open {
-                        Some(field) => d.child(field),
-                        None => {
-                            let body = styled_text(inl, cx, size);
-                            d.when_some(click, |d, click| {
-                                d.capture_any_mouse_down(|_, _, _| press_control()).on_mouse_up(MouseButton::Left, move |_, window, cx| click("", 0, window, cx))
-                            })
-                            .child(body)
-                        }
-                    };
-                    cx.cell.set(None);
-                    (drawn.into_any_element(), cell_text(inl, cx, size))
-                };
-                let order = cx.order.get();
-                cx.order.set(order + 1);
-                let columns = rows.iter().map(Vec::len).chain(std::iter::once(head.len())).max().unwrap_or(0);
-                let filled = |mut row: Vec<(AnyElement, CellText)>| {
-                    row.resize_with(columns, || (div().into_any_element(), CellText::default()));
-                    row
-                };
-                let mut cells = vec![filled(head.iter().enumerate().map(|(i, c)| cell(c, 0, i, true)).collect())];
-                cells.extend(rows.iter().enumerate().map(|(row, r)| filled(r.iter().enumerate().map(|(i, c)| cell(c, row + 1, i, false)).collect())));
-                Table { id: ElementId::from(("md-table", order)), columns, cells, size, border: t.separator, head_bg: t.secondary_bg }.into_any_element()
-            }
+            Block::List { start, items } => list_items(start, items, 0, cx).into_any_element(),
+            Block::Table { head, rows, aligns } => table(head, rows, aligns, None, cx),
         })
         .collect()
 }
@@ -2110,6 +2284,32 @@ impl ParsedNote {
     /// Where each top-level block came from.
     pub fn sources(&self) -> &[BlockSource] {
         &self.sources
+    }
+
+    /// The rows the reader draws, long lists and tables in parts.
+    pub fn rows(&self) -> &[ReaderRow] {
+        &self.rows
+    }
+
+    /// The room below a reader row: none or a list's gap where the next row goes on with its block, a block's gap otherwise.
+    pub fn row_gap(&self, row: usize) -> f32 {
+        let Some(this) = self.rows.get(row) else { return space::M };
+        match (self.rows.get(row + 1), self.blocks.get(this.block)) {
+            (Some(next), Some(Block::List { .. })) if next.block == this.block => space::XS,
+            (Some(next), _) if next.block == this.block => 0.,
+            _ => space::M,
+        }
+    }
+
+    /// The reader row a source line is drawn in.
+    pub fn row_of_line(&self, line: usize) -> usize {
+        self.rows.iter().rposition(|r| r.line <= line).unwrap_or(0)
+    }
+
+    /// The reader row a link is drawn in, by its place in `links`.
+    pub fn row_of_link(&self, index: usize) -> usize {
+        let block = self.links.get(index).map_or(0, |(_, b)| *b);
+        self.rows.iter().rposition(|r| r.block == block && r.links_before <= index).or_else(|| self.rows.iter().position(|r| r.block == block)).unwrap_or(0)
     }
 
     /// Every link in reading order, with its top-level block.
@@ -2316,6 +2516,8 @@ pub fn block_at(src: &str, offset: usize) -> usize {
 #[derive(Clone)]
 pub struct Found {
     pub block: usize,
+    /// The source line of the match.
+    pub line: usize,
     pub token: usize,
 }
 
@@ -2423,8 +2625,13 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
         }
         _ => element,
     };
+    found_mark(element, found.filter(|f| f.block == i), t)
+}
+
+/// Marks a block briefly after arriving from a search match.
+fn found_mark(element: AnyElement, found: Option<&Found>, t: &Theme) -> AnyElement {
     let accent = t.accent;
-    match found.filter(|f| f.block == i) {
+    match found {
         Some(f) => div()
             .id(("md-found", f.token))
             .rounded(px(radius::INNER))
@@ -2435,8 +2642,38 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
     }
 }
 
+/// Renders one row of the reader: a whole top-level block, or a part of a long list or table.
+pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_toggle: Option<OnToggle>, found: Option<&Found>, focus: Option<&LinkFocus>, t: &Theme) -> AnyElement {
+    let Some((from, to)) = row.part else { return render_live(note, row.block, base, on_toggle, found, focus, LiveDraw::default(), t) };
+    let (order, links_seen) = (Cell::new(row.order), Cell::new(row.links_before));
+    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: row.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None };
+    let element = match note.blocks.get(row.block) {
+        Some(Block::List { start, items }) => list_items(start, items.get(from..to.min(items.len())).unwrap_or_default(), from, &cx).into_any_element(),
+        Some(Block::Table { head, rows, aligns }) => table(head, rows, aligns, Some((from, to, note.sources.get(row.block).map_or((0, 0), |s| (s.hash, s.line)))), &cx),
+        _ => div().into_any_element(),
+    };
+    found_mark(element, found.filter(|f| f.block == row.block && (row.line..row.end_line).contains(&f.line)), t)
+}
+
+/// Scrolls a list so an item shows: not at all when it already does, just enough when it is near, else to its top, since rows not yet drawn have no height to count.
+pub fn reveal_item(list: &ListState, ix: usize) {
+    let view = list.viewport_bounds();
+    let top = list.logical_scroll_top().item_ix;
+    let near = ix <= top || (top..=ix).all(|k| list.bounds_for_item(k).is_some_and(|b| k == ix || b.bottom() < view.bottom()));
+    let shown = near && list.bounds_for_item(ix).is_some_and(|b| b.top() >= view.top() && b.bottom() <= view.bottom());
+    if shown {
+        return;
+    }
+    if near {
+        list.scroll_to_reveal_item(ix);
+    } else {
+        list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(0.) });
+    }
+}
+
 /// The footnotes a note refers to, as they appear at its end, each with a way back.
-pub fn render_footnotes(note: &ParsedNote, list: Option<ListState>, t: &Theme) -> Option<AnyElement> {
+/// `list` scrolls back to the row a footnote is referred from, found by its source line.
+pub fn render_footnotes(note: &ParsedNote, list: Option<(ListState, Rc<dyn Fn(usize) -> usize>)>, t: &Theme) -> Option<AnyElement> {
     let used: Vec<_> = note.footnote_order.iter().filter_map(|id| note.footnotes.iter().find(|(f, _)| f == id)).collect();
     if used.is_empty() {
         return None;
@@ -2461,8 +2698,8 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<ListState>, t: &Theme) -
                     .text_color(t.accent_text)
                     .tooltip(super::widgets::tip(tr("Zurück zum Text")))
                     .on_click(move |_, _, _| {
-                        if let Some(l) = &list {
-                            l.scroll_to_reveal_item(home + 1);
+                        if let Some((l, item_of_line)) = &list {
+                            reveal_item(l, item_of_line(home));
                         }
                     })
                     .child("↩"),
@@ -2673,5 +2910,65 @@ mod reader_tests {
         assert_eq!(note.sources().iter().map(|s| s.line).skip(299).collect::<Vec<_>>(), [598, 600, 602]);
         let Some(Block::List { items, .. }) = note.blocks.last() else { panic!("no list") };
         assert_eq!(items.iter().map(|i| i.line).collect::<Vec<_>>(), [602, 603]);
+    }
+
+    #[test]
+    fn long_lists_and_tables_are_drawn_in_parts_that_keep_lines_links_and_order() {
+        let items: String = (0..100).map(|i| if i == 70 { format!("{i}. Punkt [Ziel](https://beispiel.de)[^a]
+") } else { format!("{i}. Punkt
+") }).collect();
+        let body: String = (0..90).map(|i| if i == 50 { format!("| {i} | [b](https://beispiel.de/b) |
+") } else { format!("| {i} | x |
+") }).collect();
+        let src = format!("# Titel
+
+{items}
+| A | B |
+|---|---|
+{body}
+Ende
+
+[^a]: Fuß
+");
+        let note = parse(&src);
+        let rows = note.rows();
+        let chunks = |n: usize| (0..n).step_by(super::PART).map(move |from| (from, (from + super::PART).min(n)));
+        let (lists, tables) = (chunks(100).count(), chunks(90).count());
+        let mut expected = vec![(0, None, 0, 1)];
+        expected.extend(chunks(100).map(|(from, to)| (1, Some((from, to)), 2 + from, if to == 100 { 102 } else { 2 + to })));
+        expected.extend(chunks(90).map(|(from, to)| (2, Some((from, to)), if from == 0 { 103 } else { 105 + from }, if to == 90 { 195 } else { 105 + to })));
+        expected.push((3, None, 196, 197));
+        assert_eq!(rows.iter().map(|r| (r.block, r.part, r.line, r.end_line)).collect::<Vec<_>>(), expected);
+        assert!(rows.windows(2).all(|w| w[0].order < w[1].order));
+        assert_eq!(rows[1].order, 200_000);
+        let (list_row, table_row) = (|item: usize| 1 + item / super::PART, |row: usize| 1 + lists + row / super::PART);
+        assert_eq!(note.row_of_line(72), list_row(70));
+        assert_eq!(note.row_of_line(104), table_row(0));
+        assert_eq!(note.row_of_line(155), table_row(50));
+        assert_eq!(note.row_of_line(500), rows.len() - 1);
+        assert_eq!(note.links().len(), 2);
+        assert_eq!((note.row_of_link(0), note.row_of_link(1)), (list_row(70), table_row(50)));
+        assert!(rows.iter().enumerate().all(|(i, r)| r.links_before == usize::from(i > list_row(70)) + usize::from(i > table_row(50))));
+        assert_eq!(note.footnote_homes.get("a"), Some(&72));
+        assert_eq!((note.row_gap(1), note.row_gap(lists), note.row_gap(lists + 1), note.row_gap(lists + tables)), (super::space::XS, super::space::M, 0., super::space::M));
+        let again = parse(&src.replacen("50 | [b]", "50 | [c]", 1));
+        let changed: Vec<usize> = rows.iter().zip(again.rows()).enumerate().filter(|(_, (a, b))| a.hash != b.hash).map(|(i, _)| i).collect();
+        assert_eq!(changed, (1 + lists..1 + lists + tables).collect::<Vec<_>>());
+        let toggled = parse(&src.replacen("75. Punkt", "75. Punkt!", 1));
+        let changed: Vec<usize> = rows.iter().zip(toggled.rows()).enumerate().filter(|(_, (a, b))| a.hash != b.hash).map(|(i, _)| i).collect();
+        assert_eq!(changed, [list_row(75)]);
+    }
+
+    #[test]
+    fn short_lists_and_tables_stay_one_row() {
+        let note = parse("- a
+- b
+
+| A |
+|---|
+| 1 |
+");
+        assert_eq!(note.rows().iter().map(|r| r.part).collect::<Vec<_>>(), [None, None]);
+        assert_eq!(note.rows().iter().map(|r| r.hash).collect::<Vec<_>>(), note.sources().iter().map(|s| s.hash).collect::<Vec<_>>());
     }
 }
