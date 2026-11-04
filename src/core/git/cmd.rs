@@ -243,7 +243,7 @@ impl Git {
 
     /// Git's own folder for this working tree; a `.git` file points elsewhere in linked worktrees.
     pub fn git_dir(&self) -> PathBuf {
-        self.run(&["rev-parse", "--absolute-git-dir"]).map_or_else(|_| self.root.join(".git"), |dir| PathBuf::from(dir.trim()))
+        self.run(&["rev-parse", "--absolute-git-dir"]).ok().filter(|dir| !dir.trim().is_empty()).map_or_else(|| self.root.join(".git"), |dir| PathBuf::from(dir.trim()))
     }
 }
 
