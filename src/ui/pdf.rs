@@ -95,7 +95,7 @@ impl Render for ReplaceExport {
             .flex()
             .flex_col()
             .track_focus(&self.focus)
-            .on_action(cx.listener(|s, _: &gpui_kit::base::actions::Confirm, _, cx| s.replace(cx)))
+            .on_action(cx.listener(|s, _: &gpui_kit::base::actions::Confirm, window, cx| if s.focus.is_focused(window) { s.replace(cx) } else { cx.propagate() }))
             .child(div().px(px(space::XL)).pt(px(space::L)).flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(tr("Früheren Export ersetzen?"))).child(caption(name, &t).truncate()))
             .child(
                 div()

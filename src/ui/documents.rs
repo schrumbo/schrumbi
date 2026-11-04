@@ -162,6 +162,8 @@ pub struct NoteView {
     /// A nearly empty note opens ready to continue writing below what is there.
     caret_to_end: bool,
     reader_list: ListState,
+    /// The height an item not drawn yet counts with, and the list width it was last given at; the list forgets it when its width changes.
+    row_estimate: (f32, Option<Pixels>),
     /// The text scale the list measured its items with.
     measured_scale: f32,
     measured_full: bool,
@@ -345,7 +347,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)) }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -357,11 +359,23 @@ impl NoteView {
         let Some(range) = search_index::occurrences(text, term).into_iter().nth(nth) else { return };
         self.editor.update(cx, |s, cx| s.set_selected_range(range.clone(), cx));
         let token = self.found.as_ref().map_or(0, |f| f.token + 1);
-        let _ = (&window, &cx);
         let block = markdown_view::block_at(text, range.start);
         let line = text.get(..range.start).unwrap_or_default().matches('\n').count();
         self.reveal_line = Some(line);
-        self.found = Some(markdown_view::Found { block, line, token });
+        let still = cx.reduce_motion();
+        self.found = Some(markdown_view::Found { block, line, token, still });
+        if still {
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(markdown_view::FOUND_HOLD).await;
+                let _ = this.update(cx, |n, cx| {
+                    if n.found.as_ref().is_some_and(|f| f.token == token) {
+                        n.found = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
     }
 
     /// Focuses the editor when editing, otherwise the note itself so its shortcuts work.
@@ -569,15 +583,17 @@ impl NoteView {
             return p.clone();
         }
         let p = Rc::new(markdown_view::parse(text));
-        let hashes: Vec<u64> = if self.mode == Mode::Live {
+        let (hashes, mut spans): (Vec<u64>, Vec<usize>) = if self.mode == Mode::Live {
             self.segments = Rc::new(live_text::segments(text, &p.shapes()));
             self.definitions = Rc::new(text.split('\n').filter(|l| l.starts_with('[') && l.contains("]:")).collect::<Vec<_>>().join("\n"));
-            self.segments.iter().map(|s| s.hash).collect()
+            self.segments.iter().map(|s| (s.hash, s.count)).unzip()
         } else {
-            p.rows().iter().map(|r| r.hash).collect()
+            p.rows().iter().map(|r| (r.hash, r.end_line.saturating_sub(r.line))).unzip()
         };
         self.source_lines = Rc::new(text.split('\n').map(str::to_string).collect());
-        self.adopt_items(hashes);
+        let middle = spans.len() / 2;
+        let per_item = if spans.is_empty() { 0 } else { *spans.select_nth_unstable(middle).1 };
+        self.adopt_items(hashes, per_item.max(1) as f32 * note_size(font::BODY) * 1.5);
         self.parsed = Some((self.revision, p.clone()));
         self.parsed_text = Some(text.to_string());
         p
@@ -1639,6 +1655,12 @@ impl NoteView {
             (Some((_, p)), Some(_)) => p.clone(),
             _ => self.parse_now(lib_text),
         };
+        let width = self.reader_list.viewport_bounds().size.width;
+        if self.row_estimate.1 != Some(width) && self.row_estimate.0 > 0. {
+            let _ = self.reader_list.clone().with_uniform_item_height(px(self.row_estimate.0));
+            self.row_estimate.1 = Some(width);
+            window.request_animation_frame();
+        }
         if let Some(line) = self.keep_line.take() {
             self.reader_list.scroll_to(ListOffset { item_ix: self.item_of_line(line), offset_in_item: px(0.) });
         }
@@ -1896,11 +1918,13 @@ impl NoteView {
     }
 
     /// Tells the list which items changed, so everything else keeps its measured height.
-    fn adopt_items(&mut self, new: Vec<u64>) {
+    /// Items not drawn yet count with `estimate`, so the scrollbar knows the whole note from the start.
+    fn adopt_items(&mut self, new: Vec<u64>, estimate: f32) {
         let old = std::mem::take(&mut self.item_hashes);
         let target = new.len() + 2;
         if self.reader_list.item_count() != old.len() + 2 {
             self.reader_list.reset(target);
+            self.row_estimate = (estimate, None);
         } else {
             let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
             let suffix = old.iter().rev().zip(new.iter().rev()).take_while(|(a, b)| a == b).count().min(old.len().min(new.len()) - prefix);
@@ -2544,7 +2568,7 @@ pub fn compare_note(path: PathBuf, cx: &mut App) {
             window.open_dialog(cx, move |d, _, cx| {
                 let t = Theme::get(cx);
                 let (reload, keep) = (path.clone(), path.clone());
-                d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().child(
+                d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().on_ok(super::sheets::pass_enter).child(
                     div()
                         .h(px(480.))
                         .flex()

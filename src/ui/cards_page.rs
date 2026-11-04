@@ -536,17 +536,11 @@ impl CardsPage {
         if count == 0 {
             return;
         }
-        use gpui_kit::component::WindowExt;
         let me = cx.entity();
         window.focus(&self.focus, cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let (me, deck) = (me.clone(), deck.clone());
-            let title = if count == 1 { tr("1 neue Karte als bekannt übernehmen?") } else { trf("%@ neue Karten als bekannt übernehmen?", &[&count.to_string()]) };
-            alert.title(title).description(tr("Sie zählen nicht mehr als neu und kommen als Wiederholungen, verteilt auf die nächsten Wochen. Pausierte Karten bleiben, wie sie sind.")).show_cancel(true).ok_text(tr("Als bekannt übernehmen")).cancel_text(tr("Abbrechen")).on_ok(move |_, _, cx| {
-                let deck = deck.clone();
-                me.update(cx, |p, cx| p.adopt_known_now(&deck, cx));
-                true
-            })
+        let title = if count == 1 { tr("1 neue Karte als bekannt übernehmen?") } else { trf("%@ neue Karten als bekannt übernehmen?", &[&count.to_string()]) };
+        super::sheets::ask(window, cx, title, tr("Sie zählen nicht mehr als neu und kommen als Wiederholungen, verteilt auf die nächsten Wochen. Pausierte Karten bleiben, wie sie sind."), tr("Als bekannt übernehmen"), false, move |cx| {
+            me.update(cx, |p, cx| p.adopt_known_now(&deck, cx));
         });
     }
 
@@ -566,17 +560,11 @@ impl CardsPage {
             self.delete_now(chosen, cx);
             return;
         }
-        use gpui_kit::component::WindowExt;
         let (me, count) = (cx.entity(), chosen.len());
-        let chosen = Rc::new(chosen);
         window.focus(&self.focus, cx);
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let (me, chosen) = (me.clone(), chosen.clone());
-            alert.title(trf("%@ Karten löschen?", &[&count.to_string()])).description(tr("Die Zeilen verschwinden aus den Notizen. ⌘Z bringt sie Notiz für Notiz zurück.")).show_cancel(true).ok_text(tr("Löschen")).cancel_text(tr("Abbrechen")).on_ok(move |_, _, cx| {
-                let cards = chosen.as_ref().clone();
-                me.update(cx, |p, cx| p.delete_now(cards, cx));
-                true
-            })
+        super::sheets::ask(window, cx, trf("%@ Karten löschen?", &[&count.to_string()]), tr("Die Zeilen verschwinden aus den Notizen. ⌘Z bringt sie Notiz für Notiz zurück."), tr("Löschen"), true, move |cx| {
+            let cards = chosen.clone();
+            me.update(cx, |p, cx| p.delete_now(cards, cx));
         });
     }
 

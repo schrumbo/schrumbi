@@ -1,4 +1,5 @@
 use gpui_kit::component::WindowExt;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -7,6 +8,7 @@ use super::filing_form::{FilingEvent, FilingForm};
 use super::palette::{Palette, ShortcutSheet};
 use super::quick::{Dismissed, NewNote, QuickAdd, QuickOpen};
 use super::wizards::{ImportCalendar, Reschedule, Setup};
+use crate::core::i18n::tr;
 use crate::core::library::Library;
 
 /// Opens the sheet the library asks for (filing, quick add, quick open, new note, setup, import, reschedule).
@@ -46,7 +48,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
             super::state::return_focus_to_page(cx);
         })
         .detach();
-        window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(560.)).h(px(600.)).p_0().child(form.clone()));
+        window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(560.)).h(px(600.)).p_0().on_ok(pass_enter).child(form.clone()));
         return;
     }
     if let Some((merge, note)) = lib.update(cx, |l, _| l.note_pick.take()) {
@@ -84,7 +86,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
             super::state::return_focus_to_page(cx);
         })
         .detach();
-        window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().overlay_closable(false).keyboard(false).close_button(false).child(view.clone()));
+        window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().overlay_closable(false).keyboard(false).close_button(false).on_ok(pass_enter).child(view.clone()));
     } else if let Some(p) = import {
         let view = cx.new(|cx| ImportCalendar::new(&p, cx));
         show(view, 640., window, cx);
@@ -103,6 +105,37 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     }
 }
 
+/// Asks before a change that cannot simply be taken back. Focus starts on Abbrechen and Enter only clicks the focused button, so Enter alone never runs `ok`.
+pub fn ask(window: &mut Window, cx: &mut App, title: String, message: String, ok_text: String, danger: bool, ok: impl Fn(&mut App) + 'static) {
+    let ok = std::rc::Rc::new(ok);
+    let cancel = cx.focus_handle();
+    let first = cancel.clone();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        let ok = ok.clone();
+        let confirm = Button::new("alert-ok").label(ok_text.clone()).on_click(move |_, window, cx| {
+            window.close_dialog(cx);
+            ok(cx);
+        });
+        alert.title(title.clone()).description(message.clone()).on_ok(pass_enter).footer(
+            gpui_kit::component::dialog::DialogFooter::new()
+                .child(Button::new("alert-cancel").label(tr("Abbrechen")).track_focus(&cancel).on_click(|_, window, cx| window.close_dialog(cx)))
+                .child(if danger { confirm.danger() } else { confirm.primary() }),
+        )
+    });
+    first.focus(window, cx);
+}
+
+/// Lets Enter reach the focused field, button or link instead of closing the dialog around it.
+pub fn pass_enter(_: &ClickEvent, _: &mut Window, cx: &mut App) -> bool {
+    cx.propagate();
+    false
+}
+
+/// Whether a text field has focus, so Enter there belongs to the sheet's main action rather than to a focused button.
+pub fn typing(window: &Window) -> bool {
+    window.context_stack().iter().any(|c| c.contains("Input"))
+}
+
 /// Presents a sheet in a dialog that closes when the sheet emits `Dismissed`.
 fn show<V: Render + EventEmitter<Dismissed>>(view: Entity<V>, width: f32, window: &mut Window, cx: &mut App) {
     let handle = window.window_handle();
@@ -111,7 +144,7 @@ fn show<V: Render + EventEmitter<Dismissed>>(view: Entity<V>, width: f32, window
             super::state::return_focus_to_page(cx);
     })
     .detach();
-    window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(width)).p_0().child(view.clone()));
+    window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(width)).p_0().on_ok(pass_enter).child(view.clone()));
 }
 
 /// Opens a sheet built on the spot, for pages with their own forms.
