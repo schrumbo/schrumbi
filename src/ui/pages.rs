@@ -420,6 +420,10 @@ impl Pages {
             self.doc_needs_focus = !quiet;
         }
         self.doc_needs_focus |= asked;
+        let right_focus = beside_asked && !quiet && beside.is_some();
+        if right_focus {
+            self.doc_needs_focus = false;
+        }
         if self.doc_needs_focus && !window.has_active_dialog(cx) {
             self.doc_needs_focus = false;
             let target = view.clone();
@@ -432,7 +436,7 @@ impl Pages {
             Some(other) => {
                 let right = self.doc_view(&other, window, cx);
                 let right_canvas = canvas(&right);
-                if beside_asked && !quiet {
+                if right_focus {
                     let target = right.clone();
                     window.on_next_frame(move |window, cx| activate_doc(target, window, cx));
                 }
