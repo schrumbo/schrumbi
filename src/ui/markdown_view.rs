@@ -1961,7 +1961,7 @@ fn list_items(start: &Option<u64>, items: &[Item], first: usize, cx: &Ctx) -> Di
                         .when(done, |d| d.bg(t.accent))
                         .when(!done, |d| d.border_1().border_color(if special { t.accent } else { t.secondary }))
                         .when(special, |d| d.text_size(px(font::CAPTION2)).text_color(t.accent).child(mark.to_string()))
-                        .when(toggle.is_some(), |d| d.cursor_pointer())
+                        .when(toggle.is_some(), |d| d.cursor_pointer().tooltip(super::widgets::tip(if done { tr("Als offen markieren") } else { tr("Als erledigt markieren") })))
                         .when(done, |d| d.child(super::widgets::icon("check", iconsize::XS, t.on_accent)))
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();
