@@ -107,9 +107,16 @@ impl FindBar {
             self.query.update(cx, |s, cx| s.set_value(seed, window, cx));
         }
         let field = if replacing && self.can_replace && !self.query.read(cx).value().is_empty() { self.replacement.clone() } else { self.query.clone() };
+        let after = field.clone();
         field.update(cx, |s, cx| {
             s.focus(window, cx);
             s.select_all(window, cx);
+        });
+        window.on_next_frame(move |window, cx| {
+            after.update(cx, |s, cx| {
+                s.focus(window, cx);
+                s.select_all(window, cx);
+            });
         });
         cx.notify();
     }
@@ -165,6 +172,7 @@ impl Render for FindBar {
         div()
             .id("find-bar")
             .key_context("FindBar")
+            .on_action(cx.listener(|_, _: &gpui_kit::component::input::Enter, _, _| {}))
             .flex_none()
             .flex()
             .flex_col()

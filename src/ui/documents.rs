@@ -42,6 +42,12 @@ actions!(
 );
 
 const NOTE_PLACES: usize = 500;
+fn editor_viewport(s: &EditorState) -> Option<Bounds<Pixels>> {
+    let mut view = s.text_bounds()?;
+    view.origin.y -= s.scroll_offset().y;
+    Some(view)
+}
+
 const FIND_IN_BACKGROUND_FROM: usize = 200_000;
 const FIND_MARKS_AROUND: usize = 1000;
 
@@ -561,7 +567,7 @@ impl NoteView {
         }
         let Some(at) = self.find.matches.get(self.find.current).cloned() else { return };
         let done = self.editor.update(cx, |s, cx| {
-            let (Some(b), Some(view)) = (s.range_to_bounds(&at), s.text_bounds()) else { return false };
+            let (Some(b), Some(view)) = (s.range_to_bounds(&at), editor_viewport(s)) else { return false };
             if b.top() < view.top() || b.bottom() > view.bottom() {
                 return false;
             }
@@ -584,7 +590,7 @@ impl NoteView {
         let Some(at) = self.find.matches.get(self.find.current).cloned() else { return };
         if matches!(self.mode, Mode::Source | Mode::Split) {
             self.editor.update(cx, |s, cx| {
-                let shown = s.range_to_bounds(&at).zip(s.text_bounds()).is_some_and(|(b, view)| b.top() >= view.top() && b.bottom() <= view.bottom());
+                let shown = s.range_to_bounds(&at).zip(editor_viewport(s)).is_some_and(|(b, view)| b.top() >= view.top() && b.bottom() <= view.bottom());
                 s.set_selected_range(at.clone(), cx);
                 if !shown {
                     self.find.center = 8;
@@ -598,7 +604,7 @@ impl NoteView {
     }
 
     fn replace_found(&mut self, all: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(bar) = self.find.bar.clone().filter(|_| self.find.open && self.mode != Mode::Read) else { return };
+        let Some(bar) = self.find.bar.clone().filter(|_| self.find.open && self.mode != Mode::Read && self.find.pending.is_none()) else { return };
         let text = self.current_text(cx);
         self.find.signature = None;
         self.sync_find(&text, false, false, window, cx);
