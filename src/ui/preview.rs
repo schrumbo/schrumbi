@@ -200,7 +200,7 @@ pub fn show_in(files: Vec<PathBuf>, index: usize, cx: &mut App) {
         ..Default::default()
     };
     let options = super::chrome::window_options(options, title);
-    let _ = gpui_kit::open_window(options, cx, move |_, cx| {
+    let _ = super::chrome::open_window(options, cx, move |_, cx| {
         let preview = cx.new(|cx| {
             let mut p = FilePreview::new(true);
             p.set_path(Some(path), cx);

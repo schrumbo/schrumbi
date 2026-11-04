@@ -181,7 +181,7 @@ fn toggle((x, y): (f64, f64), cx: &mut App) {
         focus: true,
         ..Default::default()
     };
-    if let Ok((handle, _)) = gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| TrayPopup::new(window, cx))) {
+    if let Ok((handle, _)) = super::chrome::open_window(options, cx, |window, cx| cx.new(|cx| TrayPopup::new(window, cx))) {
         cx.global_mut::<Tray>().popup = Some(handle);
     }
     super::drive::activate(cx);

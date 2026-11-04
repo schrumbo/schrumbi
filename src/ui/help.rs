@@ -55,7 +55,7 @@ pub fn open(slug: Option<&str>, cx: &mut App) {
         ..Default::default()
     };
     let options = super::chrome::window_options(options, tr("Schrumbi-Anleitung"));
-    let _ = gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Help::new(page, window, cx)));
+    let _ = super::chrome::open_window(options, cx, |window, cx| cx.new(|cx| Help::new(page, window, cx)));
 }
 
 static SAMPLES: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| crate::core::prefs::data_dir().unwrap_or_else(std::env::temp_dir).join("guide"));
