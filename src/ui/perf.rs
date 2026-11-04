@@ -26,12 +26,12 @@ pub fn frame_end<E: ParentElement>(root: E) -> E {
 
 fn frame_end_titled<E: ParentElement>(mut root: E, title: Option<SharedString>) -> E {
     if *ENABLED {
-        let last = canvas(|_, _, _| {}, move |_, _, window, _| {
+        let last = canvas(|_, _, _| {}, move |_, _, window, cx| {
             let ms = STARTED.take().map(|started| started.elapsed().as_secs_f64() * 1000.);
             if *PRINT && let Some(ms) = ms {
                 eprintln!("PERF {ms:.2}");
             }
-            super::drive::frame(window, ms.map(|ms| ms as f32), title.as_ref());
+            super::drive::frame(window, ms.map(|ms| ms as f32), title.as_ref(), cx);
         });
         root.extend([last.absolute().size_0().into_any_element()]);
     }
