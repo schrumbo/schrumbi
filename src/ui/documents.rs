@@ -2556,7 +2556,7 @@ pub fn compare_note(path: PathBuf, cx: &mut App) {
             window.open_dialog(cx, move |d, _, cx| {
                 let t = Theme::get(cx);
                 let (reload, keep) = (path.clone(), path.clone());
-                d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().child(
+                d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().on_ok(super::sheets::pass_enter).child(
                     div()
                         .h(px(480.))
                         .flex()

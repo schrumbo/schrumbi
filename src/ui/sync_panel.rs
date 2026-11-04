@@ -810,8 +810,10 @@ impl Render for SyncSetup {
             .flex()
             .flex_col()
             .gap(px(space::L))
-            .on_action(cx.listener(|s, _: &gpui_kit::base::actions::Confirm, _, cx| {
-                if s.step == SetupStep::Finish {
+            .on_action(cx.listener(|s, _: &gpui_kit::base::actions::Confirm, window, cx| {
+                if !s.focus.is_focused(window) && !super::sheets::typing(window) {
+                    cx.propagate();
+                } else if s.step == SetupStep::Finish {
                     cx.emit(Dismissed);
                 } else if !(s.blocked() || s.working) {
                     if s.next_after(s.step) == SetupStep::Finish {
@@ -1121,6 +1123,8 @@ impl Render for ConflictSheet {
             .on_action(cx.listener(|s, a: &gpui_kit::base::actions::Confirm, _, cx| {
                 if a.secondary {
                     s.apply(cx);
+                } else {
+                    cx.propagate();
                 }
             }))
             .on_key_down(cx.listener(|s, e: &KeyDownEvent, _, cx| {

@@ -719,8 +719,8 @@ impl Render for Setup {
             .flex()
             .flex_col()
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|s, e: &KeyDownEvent, _, cx| {
-                if e.keystroke.key == "enter" {
+            .on_key_down(cx.listener(|s, e: &KeyDownEvent, window, cx| {
+                if e.keystroke.key == "enter" && s.focus.is_focused(window) {
                     s.go_on(cx);
                 }
             }))

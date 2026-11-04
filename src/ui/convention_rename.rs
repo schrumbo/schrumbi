@@ -159,7 +159,7 @@ impl Render for ConventionRename {
             .w_full()
             .flex()
             .flex_col()
-            .on_action(cx.listener(|s, _: &Confirm, _, cx| s.confirm(cx)))
+            .on_action(cx.listener(|s, _: &Confirm, window, cx| if super::sheets::typing(window) { s.confirm(cx) } else { cx.propagate() }))
             .child(div().px(px(space::XL)).pt(px(space::L)).flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(tr("Nach Konvention benennen"))).child(caption(context, &t).truncate()))
             .child(
                 div()

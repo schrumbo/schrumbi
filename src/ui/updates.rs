@@ -91,7 +91,7 @@ pub fn show(window: &mut Window, cx: &mut App) {
     })
     .detach();
     use gpui_kit::component::WindowExt;
-    window.open_dialog(cx, move |d, _, _| d.entrance(gpui_kit::component::dialog::DialogEntrance::FadeSlide).w(px(480.)).p_0().child(view.clone()));
+    window.open_dialog(cx, move |d, _, _| d.entrance(gpui_kit::component::dialog::DialogEntrance::FadeSlide).w(px(480.)).p_0().on_ok(super::sheets::pass_enter).child(view.clone()));
 }
 
 enum Phase {

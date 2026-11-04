@@ -46,7 +46,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
             super::state::return_focus_to_page(cx);
         })
         .detach();
-        window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(560.)).h(px(600.)).p_0().on_ok(|_, _, _| false).child(form.clone()));
+        window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(560.)).h(px(600.)).p_0().on_ok(pass_enter).child(form.clone()));
         return;
     }
     if let Some((merge, note)) = lib.update(cx, |l, _| l.note_pick.take()) {
@@ -84,7 +84,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
             super::state::return_focus_to_page(cx);
         })
         .detach();
-        window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().overlay_closable(false).keyboard(false).close_button(false).on_ok(|_, _, _| false).child(view.clone()));
+        window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().overlay_closable(false).keyboard(false).close_button(false).on_ok(pass_enter).child(view.clone()));
     } else if let Some(p) = import {
         let view = cx.new(|cx| ImportCalendar::new(&p, cx));
         show(view, 640., window, cx);
@@ -103,6 +103,17 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     }
 }
 
+/// Lets Enter reach the focused field, button or link instead of closing the dialog around it.
+pub fn pass_enter(_: &ClickEvent, _: &mut Window, cx: &mut App) -> bool {
+    cx.propagate();
+    false
+}
+
+/// Whether a text field has focus, so Enter there belongs to the sheet's main action rather than to a focused button.
+pub fn typing(window: &Window) -> bool {
+    window.context_stack().iter().any(|c| c.contains("Input"))
+}
+
 /// Presents a sheet in a dialog that closes when the sheet emits `Dismissed`.
 fn show<V: Render + EventEmitter<Dismissed>>(view: Entity<V>, width: f32, window: &mut Window, cx: &mut App) {
     let handle = window.window_handle();
@@ -111,7 +122,7 @@ fn show<V: Render + EventEmitter<Dismissed>>(view: Entity<V>, width: f32, window
             super::state::return_focus_to_page(cx);
     })
     .detach();
-    window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(width)).p_0().on_ok(|_, _, _| false).child(view.clone()));
+    window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(width)).p_0().on_ok(pass_enter).child(view.clone()));
 }
 
 /// Opens a sheet built on the spot, for pages with their own forms.
