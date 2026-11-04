@@ -158,6 +158,9 @@ pub struct Converter<'a> {
     after_head: bool,
     /// Pictures and PDFs are named instead of drawn, because one of them could not be read.
     no_media: bool,
+    /// Where the last paragraph that is only a picture starts, so an italic caption right after it can be kept with it.
+    figure: Option<usize>,
+    para_start: usize,
 }
 
 /// Something shown in a note that is not text.
@@ -174,13 +177,15 @@ const CALLOUT_CLOSE: char = '\u{E002}';
 const EMBED_OPEN: char = '\u{E003}';
 const EMBED_CLOSE: char = '\u{E004}';
 const TASK_MARK: char = '\u{E005}';
+const PICTURE_OPEN: char = '\u{E006}';
+const PICTURE_CLOSE: char = '\u{E007}';
 const RASTER: [&str; 6] = ["png", "jpg", "jpeg", "gif", "svg", "webp"];
 const AUDIO: [&str; 7] = ["mp3", "wav", "m4a", "ogg", "flac", "3gp", "webm"];
 const VIDEO: [&str; 4] = ["mp4", "mov", "mkv", "ogv"];
 
 impl<'a> Converter<'a> {
     pub fn new(base: &'a Path) -> Self {
-        Self { base, images: Vec::new(), stack: vec![String::new()], items: Vec::new(), lists: Vec::new(), table: None, footnotes: Vec::new(), footnote_order: Vec::new(), code: None, image: None, embeds: Vec::new(), open_html: Vec::new(), after_head: false, no_media: false }
+        Self { base, images: Vec::new(), stack: vec![String::new()], items: Vec::new(), lists: Vec::new(), table: None, footnotes: Vec::new(), footnote_order: Vec::new(), code: None, image: None, embeds: Vec::new(), open_html: Vec::new(), after_head: false, no_media: false, figure: None, para_start: 0 }
     }
 
     fn without_media(mut self) -> Self {
@@ -217,14 +222,25 @@ impl<'a> Converter<'a> {
             let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
             (p.is_file() && RASTER.contains(&ext.as_str())).then_some(p)
         };
-        let size = alt.rsplit('|').next().and_then(|last| last.split('x').next()).and_then(|w| w.trim().parse::<f64>().ok());
-        let caption = if size.is_some() { alt.rsplit_once('|').map_or("", |(text, _)| text) } else { alt };
+        let (width, height) = image_size(alt);
+        let sized = width.is_some() || height.is_some();
+        let caption = if sized { alt.rsplit_once('|').map_or("", |(text, _)| text) } else { alt };
         match local {
             Some(p) if !self.no_media => {
                 let name = self.file_named(&p);
-                match size {
-                    Some(width) => format!("#sizedimg({}, {:.1}pt)", str_arg(&name), width * 0.75),
-                    None => format!("#fitimg({})", str_arg(&name)),
+                let pt = |v: f64| v * 0.75;
+                match picture_in_line(width, height) {
+                    Some((w, h)) => format!("#inlineimg({}, {:.1}pt, {:.1}pt)", str_arg(&name), pt(w), pt(h)),
+                    None => {
+                        let mut args = str_arg(&name);
+                        if let Some(w) = width {
+                            args.push_str(&format!(", width: {:.1}pt", pt(w)));
+                        }
+                        if let Some(h) = height {
+                            args.push_str(&format!(", height: {:.1}pt", pt(h)));
+                        }
+                        format!("{PICTURE_OPEN}#bigimg({args}){PICTURE_CLOSE}")
+                    }
                 }
             }
             Some(p) => format!("#filechip(\"image\")[{}]", lit(&p.file_name().unwrap_or_default().to_string_lossy())),
@@ -247,6 +263,15 @@ impl<'a> Converter<'a> {
             let tag = m.as_str().trim_matches(['<', '>', ' ', '/']).split_whitespace().next().unwrap_or_default().to_lowercase();
             if tag == "br" {
                 self.out().push_str("#linebreak()");
+            } else if tag == "img" {
+                let attribute = |name: &str| html_attribute(m.as_str(), name);
+                let size = match (attribute("width"), attribute("height")) {
+                    (Some(w), Some(h)) => format!("{w}x{h}"),
+                    (Some(w), None) => w,
+                    _ => String::new(),
+                };
+                let markup = self.image_markup(&attribute("src").unwrap_or_default(), &size);
+                self.out().push_str(&markup);
             } else if m.as_str().starts_with("</") {
                 if let Some(at) = self.open_html.iter().rposition(|t| *t == tag) {
                     let closes = self.open_html.len() - at;
@@ -261,6 +286,19 @@ impl<'a> Converter<'a> {
         if last < h.len() {
             let t = lit(&h[last..]);
             self.out().push_str(&t);
+        }
+    }
+
+    fn keep_caption(&mut self) {
+        let start = self.para_start;
+        let pending = self.figure.take();
+        let para = self.out().get(start..).unwrap_or_default().trim().to_string();
+        if let Some(figure) = pending.filter(|_| is_caption(&para)) {
+            let tail = self.out().split_off(figure);
+            let wrapped = format!("#keepfig[{}]\n\n", tail.trim_end());
+            self.out().push_str(&wrapped);
+        } else if is_picture_row(&para) {
+            self.figure = Some(start);
         }
     }
 
@@ -388,8 +426,12 @@ impl<'a> Converter<'a> {
                 }
                 continue;
             }
+            if self.figure.is_some() && starts_or_ends_a_block(event) {
+                self.figure = None;
+            }
             match event {
                 Event::Start(tag) => match tag {
+                    Tag::Paragraph => self.para_start = self.out().len(),
                     Tag::Heading { level, .. } => {
                         let n = markdown::heading_number(*level);
                         self.out().push_str(&format!("#heading(level: {n})["));
@@ -432,6 +474,9 @@ impl<'a> Converter<'a> {
                         self.close_html();
                         let inside = !self.items.is_empty() || self.stack.len() > 1;
                         self.out().push_str(if inside { "#parbreak()" } else { "\n\n" });
+                        if !inside {
+                            self.keep_caption();
+                        }
                     }
                     TagEnd::Heading(_) => {
                         self.close_html();
@@ -543,8 +588,64 @@ impl<'a> Converter<'a> {
         if !notes.is_empty() {
             out.push_str(&format!("#footnotes({})\n", notes.join(", ")));
         }
-        (out, self.images)
+        (picture_rows(&out), self.images)
     }
+}
+
+fn starts_or_ends_a_block(event: &Event) -> bool {
+    match event {
+        Event::Start(tag) => !matches!(tag, Tag::Paragraph | Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Link { .. } | Tag::Image { .. }),
+        Event::End(tag) => !matches!(tag, TagEnd::Paragraph | TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link | TagEnd::Image),
+        Event::Rule | Event::Html(_) => true,
+        _ => false,
+    }
+}
+
+/// The width and height written after the last `|` of an image, in pixels as the reading view takes them.
+fn image_size(alt: &str) -> (Option<f64>, Option<f64>) {
+    let word = alt.rsplit('|').next().unwrap_or(alt).trim();
+    let size = |v: &str| v.parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.);
+    match word.split_once('x') {
+        Some((w, h)) => (size(w), size(h)),
+        None => (size(word), None),
+    }
+}
+
+/// A picture with a size small enough to stand in a line of text, as the reading view decides it.
+fn picture_in_line(width: Option<f64>, height: Option<f64>) -> Option<(f64, f64)> {
+    const LIMIT: f64 = 30.;
+    match (width, height) {
+        (Some(w), Some(h)) if h <= LIMIT => Some((w, h)),
+        (None, Some(h)) if h <= LIMIT => Some((h, h)),
+        (Some(w), None) if w <= LIMIT => Some((w, w)),
+        _ => None,
+    }
+}
+
+fn html_attribute(tag: &str, name: &str) -> Option<String> {
+    static ATTRIBUTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\b([a-z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).unwrap());
+    ATTRIBUTE.captures_iter(tag).find(|c| c[1].eq_ignore_ascii_case(name)).and_then(|c| c.get(2).or_else(|| c.get(3)).or_else(|| c.get(4)).map(|m| m.as_str().trim().trim_end_matches('/').to_string()))
+}
+
+fn is_picture_row(paragraph: &str) -> bool {
+    static ROW: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r#"^(?:{PICTURE_OPEN}[^{PICTURE_CLOSE}]*{PICTURE_CLOSE}(?:[ \t]|#linebreak\(\)|#"[ \t]*")*)+$"#)).unwrap());
+    ROW.is_match(paragraph)
+}
+
+/// A short line right after a picture that reads as its caption: in italics, or starting like one.
+fn is_caption(paragraph: &str) -> bool {
+    static NAMED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^#"(?:Abbildung|Abb\.|Bild|Grafik|Diagramm|Figure|Fig\.|Quelle|Source)\b"#).unwrap());
+    paragraph.len() <= 300 && !paragraph.contains('\n') && (paragraph.starts_with("#emph[") || NAMED.is_match(paragraph))
+}
+
+/// Pictures that follow each other with nothing but space between them flow side by side and wrap, as in the reading view.
+fn picture_rows(text: &str) -> String {
+    static RUN: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r#"(?s){PICTURE_OPEN}.*?{PICTURE_CLOSE}(?:(?:[ \t]|#linebreak\(\)|#"[ \t]*")*{PICTURE_OPEN}.*?{PICTURE_CLOSE})*"#)).unwrap());
+    static ONE: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"(?s){PICTURE_OPEN}(.*?){PICTURE_CLOSE}")).unwrap());
+    if !text.contains(PICTURE_OPEN) {
+        return text.to_string();
+    }
+    RUN.replace_all(text, |run: &regex::Captures| format!("#bigrow[{}]", ONE.captures_iter(&run[0]).map(|c| c[1].to_string()).collect::<Vec<_>>().join("#h(4pt)"))).into_owned()
 }
 
 fn preamble(o: &Options, meta: Option<&Meta>) -> String {
@@ -573,6 +674,11 @@ fn preamble(o: &Options, meta: Option<&Meta>) -> String {
 #let marker = rgb("#8a939c")
 #let code-fill = soft
 #let pre-fill = soft
+#let texth = 730pt
+#let fitblock(props, body, above: auto, below: auto, limit: 0.4) = block(above: above, below: below, layout(size => {{
+  let probe = block(width: 100%, ..props, body)
+  block(breakable: measure(width: size.width, probe).height > limit * texth, width: 100%, ..props, body)
+}}))
 #set document(title: none)
 #set page(paper: "a4", margin: 56pt, footer: {footer}, footer-descent: 18pt)
 #set text(font: {SANS}, size: 10.5pt, fill: ink, lang: "{lang}", hyphenate: true)
@@ -583,7 +689,7 @@ fn preamble(o: &Options, meta: Option<&Meta>) -> String {
 #show link: set text(fill: accent)
 #show raw: set text(font: {MONO}, size: 9pt)
 #show raw.where(block: false): it => box(fill: code-fill, inset: (x: 3pt), outset: (y: 2pt), radius: 3pt, it)
-#show raw.where(block: true): it => block(width: 100%, fill: pre-fill, stroke: 0.75pt + rule, radius: 5pt, inset: (x: 4mm, y: 3mm), above: 3mm, below: 4mm, it)
+#show raw.where(block: true): it => fitblock((fill: pre-fill, stroke: 0.75pt + rule, radius: 5pt, inset: (x: 4mm, y: 3mm)), it, above: 3mm, below: 4mm, limit: 0.5)
 #show heading: set text(fill: headc, weight: 650)
 #show heading: set par(leading: 0.5em)
 #show heading.where(level: 1): set text(size: 21pt, tracking: -0.015em)
@@ -599,24 +705,40 @@ fn preamble(o: &Options, meta: Option<&Meta>) -> String {
   else if l == 3 {{ block(above: 6mm, below: 2mm, sticky: true, it.body) }}
   else {{ block(above: 5mm, below: 1.5mm, sticky: true, upper(it.body)) }}
 }}
-#show quote.where(block: true): it => block(above: 4mm, below: 4mm, stroke: (left: 1.5pt + accent), inset: (left: 4mm, y: 1mm), {{ set text(fill: muted); set par(spacing: 1.5mm); it.body }})
+#show quote.where(block: true): it => fitblock((stroke: (left: 1.5pt + accent), inset: (left: 4mm, y: 1mm)), {{ set text(fill: muted); set par(spacing: 1.5mm); it.body }}, above: 4mm, below: 4mm)
 #let noterule = block(above: 7mm, below: 7mm, line(length: 100%, stroke: 0.75pt + rule))
 #let taskbox(done) = box(width: 9pt, height: 9pt, baseline: 1pt, radius: 2.5pt, stroke: if done {{ 0.9pt + accent }} else {{ 0.9pt + rgb("#a3abb4") }}, fill: if done {{ accent }} else {{ none }}, if done {{ place(dx: 1.6pt, dy: 1.4pt, curve(stroke: (paint: white, thickness: 1.3pt, cap: "round", join: "round"), curve.move((0.2pt, 3.2pt)), curve.line((2.1pt, 5.1pt)), curve.line((5.8pt, 1.2pt)))) }})
-#let notelist(..cells) = block(above: 3mm, below: 3mm, grid(columns: (5.5mm, 1fr), column-gutter: 0pt, row-gutter: 0.9em + 1.2mm, align: (right + top, left + top), ..cells.pos().enumerate().map(((i, c)) => if calc.even(i) {{ box(inset: (right: 2.2mm), c) }} else {{ c }})))
-#let notetable(columns: 1, rows: 1, align: (left,), ..cells) = block(width: 100%, above: 2mm, below: 5mm, {{ set text(size: 9.5pt); table(columns: (auto,) * columns, align: align, inset: (x: 2.5mm, y: 2mm), stroke: (x, y) => if y == 0 {{ (bottom: 1.1pt + headc) }} else if y < rows - 1 {{ (bottom: 0.75pt + rule) }} else {{ none }}, table.header(..cells.pos().slice(0, columns).map(c => strong(c))), ..cells.pos().slice(columns)) }})
+#let notelist(..cells) = block(above: 3mm, below: 3mm, {{
+  set block(spacing: 0.9em + 1.2mm)
+  let c = cells.pos()
+  for i in range(0, c.len(), step: 2) {{
+    fitblock((:), grid(columns: (5.5mm, 1fr), column-gutter: 0pt, align: (right + top, left + top), box(inset: (right: 2.2mm), c.at(i)), c.at(i + 1)))
+  }}
+}})
+#let notetable(columns: 1, rows: 1, align: (left,), ..cells) = fitblock((:), {{ set text(size: 9.5pt); table(columns: (auto,) * columns, align: align, inset: (x: 2.5mm, y: 2mm), stroke: (x, y) => if y == 0 {{ (bottom: 1.1pt + headc) }} else if y < rows - 1 {{ (bottom: 0.75pt + rule) }} else {{ none }}, table.header(..cells.pos().slice(0, columns).map(c => strong(c))), ..cells.pos().slice(columns)) }}, above: 2mm, below: 5mm, limit: 0.5)
+#let keepfig(body) = block(breakable: false, body)
 #let fnref(n) = super(size: 7pt, text(fill: accent, str(n)))
 #let footnotes(..cells) = block(width: 100%, above: 8mm, stroke: (top: 0.75pt + rule), inset: (top: 3mm), {{ set text(size: 8.5pt, fill: muted); grid(columns: (5mm, 1fr), row-gutter: 1.2em, ..cells) }})
-#let fitimg(path) = layout(size => {{ let img = image(path); let w = measure(img).width; if w > size.width {{ image(path, width: 100%) }} else {{ img }} }})
-#let sizedimg(path, width) = box(layout(size => image(path, width: calc.min(width.pt(), size.width.pt()) * 1pt)))
+#let picmax = 420pt
+#let picsize(path, width, height, room) = {{
+  let m = measure(image(path))
+  let (w, h) = if width != none and height != none {{ (width, height) }} else if width != none {{ (width, m.height * (width / m.width)) }} else if height != none {{ (m.width * (height / m.height), height) }} else {{ (m.width, m.height) }}
+  let s = calc.min(1, room / w, picmax / h)
+  (w * s, h * s)
+}}
+#let bigimg(path, width: none, height: none) = box(layout(size => {{ let (w, h) = picsize(path, width, height, size.width); image(path, width: w, height: h, fit: "contain") }}))
+#let bigrow(body) = block(above: 3mm, below: 3mm, {{ set par(leading: 4pt, spacing: 4pt); body }})
+#let inlineimg(path, width, height) = box(baseline: 0.2em, layout(size => {{ let w = calc.min(width, size.width); image(path, width: w, height: height * (w / width), fit: "contain") }}))
+#let fitimg(path) = layout(size => {{ let img = image(path); let m = measure(img); let s = calc.min(1, size.width / m.width, 0.95 * texth / m.height); if s < 1 {{ image(path, width: m.width * s) }} else {{ img }} }})
 #let calloutcolors = (note: rgb("#3b7dd8"), info: rgb("#3b7dd8"), todo: rgb("#3b7dd8"), abstract: rgb("#1e9bb0"), tip: rgb("#1e9bb0"), success: rgb("#2f9e5b"), question: rgb("#d9822b"), warning: rgb("#d9822b"), failure: rgb("#d64545"), danger: rgb("#d64545"), bug: rgb("#d64545"), example: rgb("#7c5cd6"), quote: rgb("#8a939c"), embed: rule)
 #let callout(kind, body) = {{
   let c = calloutcolors.at(kind, default: accent)
   let frame = if kind == "embed" {{ (stroke: 0.75pt + rule, fill: none) }} else {{ (stroke: (left: 2.5pt + c), fill: c.transparentize(91%)) }}
-  block(width: 100%, above: 4mm, below: 4mm, inset: (x: 3.5mm, y: 3mm), radius: 3pt, ..frame, {{ set par(spacing: 2mm); body }})
+  fitblock((inset: (x: 3.5mm, y: 3mm), radius: 3pt, ..frame), {{ set par(spacing: 2mm); body }}, above: 4mm, below: 4mm)
 }}
 #let calloutitle(kind, title) = {{
-  if kind == "embed" {{ block(below: 2.5mm, text(size: 8.5pt, fill: muted, title)) }}
-  else {{ let c = calloutcolors.at(kind, default: accent); block(below: 2mm, text(weight: 650, fill: c.darken(12%), title)) }}
+  if kind == "embed" {{ block(below: 2.5mm, sticky: true, text(size: 8.5pt, fill: muted, title)) }}
+  else {{ let c = calloutcolors.at(kind, default: accent); block(below: 2mm, sticky: true, text(weight: 650, fill: c.darken(12%), title)) }}
 }}
 #let notetag(body) = box(fill: accent.transparentize(88%), inset: (x: 3pt), outset: (y: 1.5pt), radius: 4pt, text(fill: accent.darken(15%), size: 0.92em, body))
 #let kbd(body) = box(fill: code-fill, stroke: 0.6pt + rule, inset: (x: 3pt), outset: (y: 2pt), radius: 3pt, text(font: {MONO}, size: 9pt, body))
@@ -926,6 +1048,12 @@ pub fn export(markdown_text: &str, base: &Path, target: &Path, meta: Option<&Met
         e.to_string()
     })
 }
+
+#[cfg(test)]
+mod pagination;
+
+#[cfg(test)]
+mod pictures;
 
 #[cfg(test)]
 mod tests {

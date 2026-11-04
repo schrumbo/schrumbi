@@ -109,6 +109,8 @@ Hat eine andere App die Datei geändert, siehst du einen Hinweis. Nichts geht ve
 | {ui:Verlauf} | Ältere Stände vergleichen und wiederherstellen, wenn Sync eingerichtet ist |
 | {ui:Als Folien zeigen} | Teile mit `---` werden Folien |
 
+Im PDF bleiben Überschriften bei ihrem Text; kurze Tabellen, Codeblöcke, Hinweise, Zitate und Listenpunkte werden nicht über zwei Seiten geteilt, lange Tabellen wiederholen ihre Kopfzeile. Bilder erscheinen so groß wie in der Ansicht, nie breiter als der Text und nie höher als etwa eine halbe Seite; eine Bildunterschrift bleibt beim Bild.
+
 Liegt neben der Notiz schon ein früherer Export, fragt Schrumbi vor dem Ersetzen. {ui:Rückgängig} in der Meldung danach holt das alte PDF zurück.
 
 - {ui:Nicht mehr fragen} ersetzt künftig ohne Frage.
