@@ -150,6 +150,13 @@ pub struct Section {
     pub continuous: bool,
 }
 
+impl Page {
+    fn near(&self, other: &Page) -> bool {
+        let close = |a: f32, b: f32| (a - b).abs() < 1.;
+        close(self.width, other.width) && close(self.height, other.height) && close(self.top, other.top) && close(self.bottom, other.bottom) && close(self.left, other.left) && close(self.right, other.right) && close(self.header, other.header) && close(self.footer, other.footer)
+    }
+}
+
 /// Where a link goes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Link {
@@ -1471,7 +1478,7 @@ pub fn to_typst(doc: &Document) -> Source {
     for b in &doc.blocks {
         if let Block::Section(i) = b {
             let next = &doc.sections[*i];
-            let same = next.page == current.page && next.header == current.header && next.footer == current.footer;
+            let same = next.page.near(&current.page) && next.header == current.header && next.footer == current.footer;
             if !(next.continuous && same) {
                 let rule = w.page_rule(next);
                 w.out.push_str(&rule);
@@ -1677,6 +1684,28 @@ pub(crate) mod tests {
     fn margins_wider_than_the_page_still_draw_tables() {
         let table = r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
         let body = format!(r#"{table}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:left="8000" w:right="8000" w:top="1417" w:bottom="1134"/></w:sectPr>"#);
+        assert_eq!(page_sizes(&body), [PORTRAIT]);
+        let xml = format!(r#"<w:document {W}><w:body>{body}</w:body></w:document>"#);
+        let source = to_typst(&parse(zip(&[("word/document.xml", xml.as_bytes())])).unwrap());
+        assert!(source.text.contains("columns: (36.00pt,)"), "{}", source.text);
+    }
+
+    #[test]
+    fn a_continuous_section_with_another_header_starts_a_page() {
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>"#;
+        let header = format!(r#"<w:hdr {W}><w:p><w:r><w:t>Kopf</w:t></w:r></w:p></w:hdr>"#);
+        let with = format!(r#"<w:type w:val="continuous"/><w:headerReference w:type="default" r:id="rH"/>{A4}"#);
+        let xml = format!(r#"<w:document {W}><w:body>{}{}<w:sectPr>{with}</w:sectPr></w:body></w:document>"#, ending("oben", A4), para("unten"));
+        let bytes = zip(&[("word/document.xml", xml.as_bytes()), ("word/_rels/document.xml.rels", rels.as_bytes()), ("word/header1.xml", header.as_bytes())]);
+        let source = to_typst(&parse(bytes).unwrap());
+        assert_eq!(source.text.matches("#set page(").count(), 2);
+    }
+
+    #[test]
+    fn a_continuous_section_that_differs_by_a_twip_stays_on_the_page() {
+        let near = r#"<w:type w:val="continuous"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:header="709"/>"#;
+        let first = r#"<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:header="708"/>"#;
+        let body = format!("{}{}<w:sectPr>{near}</w:sectPr>", ending("oben", first), para("unten"));
         assert_eq!(page_sizes(&body), [PORTRAIT]);
     }
 
