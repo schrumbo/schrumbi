@@ -552,6 +552,9 @@ impl NoteView {
         let Some(at) = self.find.matches.get(self.find.current).cloned() else { return };
         let done = self.editor.update(cx, |s, cx| {
             let (Some(b), Some(view)) = (s.range_to_bounds(&at), s.text_bounds()) else { return false };
+            if b.top() < view.top() || b.bottom() > view.bottom() {
+                return false;
+            }
             let off = b.center().y - view.center().y;
             if off.abs() > view.size.height / 6. {
                 let mut o = s.scroll_offset();
@@ -561,6 +564,9 @@ impl NoteView {
             true
         });
         self.find.center = if done { 0 } else { self.find.center - 1 };
+        if !done {
+            cx.notify();
+        }
     }
 
     /// Selects the current match in the editor and brings it into view there and in the reader.
