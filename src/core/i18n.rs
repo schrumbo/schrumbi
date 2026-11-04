@@ -60,7 +60,7 @@ fn for_platform(text: String) -> String {
     if cfg!(target_os = "macos") {
         return text;
     }
-    let text = if text.contains(['⌃', '⌥', '⇧', '⌘']) { portable_shortcuts(&text) } else { text };
+    let text = if text.contains(['⌃', '⌥', '⇧', '⌘']) { portable_shortcuts(&text, ctrl_name(), shift_name()) } else { text };
     let text = if text == "Im Dock ablegen" { "Minimieren".to_string() } else { text };
     if !text.contains("Finder") {
         return text;
@@ -73,21 +73,36 @@ fn for_platform(text: String) -> String {
     text.replace("Finder", manager)
 }
 
+/// The label of the Ctrl key off macOS: `Strg` on a German keyboard.
+pub fn ctrl_name() -> &'static str {
+    if lang() == Lang::De { "Strg" } else { "Ctrl" }
+}
+
+/// The label of the Shift key off macOS: `Umschalt` on a German keyboard.
+pub fn shift_name() -> &'static str {
+    if lang() == Lang::De { "Umschalt" } else { "Shift" }
+}
+
+/// The label of the key that deletes backwards off macOS.
+pub fn backspace_name() -> &'static str {
+    if lang() == Lang::De { "Rücktaste" } else { "Backspace" }
+}
+
 /// `⇧⌘E` → `Ctrl+Shift+E`, `⌥⌘→` → `Ctrl+Alt+→`.
-fn portable_shortcuts(text: &str) -> String {
+fn portable_shortcuts(text: &str, ctrl: &str, shift: &str) -> String {
     static SHORTCUT: LazyLock<Regex> = LazyLock::new(|| Regex::new("([⌃⌥⇧⌘]+)(.)").unwrap());
     SHORTCUT
         .replace_all(text, |c: &regex::Captures| {
             let glyphs = &c[1];
             let mut parts: Vec<&str> = Vec::new();
             if glyphs.contains('⌘') || glyphs.contains('⌃') {
-                parts.push("Ctrl");
+                parts.push(ctrl);
             }
             if glyphs.contains('⌥') {
                 parts.push("Alt");
             }
             if glyphs.contains('⇧') {
-                parts.push("Shift");
+                parts.push(shift);
             }
             let key = match &c[2] {
                 "↩" => "Enter",
@@ -139,9 +154,10 @@ mod tests {
 
     #[test]
     fn writes_shortcuts_for_other_platforms() {
-        assert_eq!(portable_shortcuts("Sichern (⇧⌘E im Fenster), ⌘S und ⌥⌘→"), "Sichern (Ctrl+Shift+E im Fenster), Ctrl+S und Ctrl+Alt+→");
-        assert_eq!(portable_shortcuts("⌘↩ erledigt, ⇧⌘, öffnet"), "Ctrl+Enter erledigt, Ctrl+Shift+, öffnet");
-        assert_eq!(portable_shortcuts("ohne Kürzel"), "ohne Kürzel");
+        assert_eq!(portable_shortcuts("Sichern (⇧⌘E im Fenster), ⌘S und ⌥⌘→", "Ctrl", "Shift"), "Sichern (Ctrl+Shift+E im Fenster), Ctrl+S und Ctrl+Alt+→");
+        assert_eq!(portable_shortcuts("⌘↩ erledigt, ⇧⌘, öffnet", "Ctrl", "Shift"), "Ctrl+Enter erledigt, Ctrl+Shift+, öffnet");
+        assert_eq!(portable_shortcuts("⇧⌘E", "Strg", "Umschalt"), "Strg+Umschalt+E");
+        assert_eq!(portable_shortcuts("ohne Kürzel", "Ctrl", "Shift"), "ohne Kürzel");
     }
 
     #[test]

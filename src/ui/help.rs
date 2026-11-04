@@ -147,7 +147,7 @@ fn key_text(name: &str, cx: &App) -> Option<String> {
         let suffix = format!("::{name}");
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
-        return keymap.bindings().filter(|b| b.action().name().starts_with("schrumbi") && b.action().name().ends_with(&suffix)).find_map(binding_shortcut).map(|s| s.display());
+        return keymap.bindings().rev().filter(|b| b.action().name().starts_with("schrumbi") && b.action().name().ends_with(&suffix)).find_map(binding_shortcut).map(|s| s.display());
     }
     docs::plain_key(name)
 }

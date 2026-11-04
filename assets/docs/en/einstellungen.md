@@ -25,10 +25,10 @@ Search knows other words too: `dark` finds the appearance, `git` the sync. It al
 ## Change Shortcuts
 
 1. Open {ui:Tastenkürzel} and click a shortcut.
-2. Press the new keys. A modifier key must be included, for arrows, Tab and Return Shift is enough.
+2. Press the new keys. A modifier key must be included, for arrows, Tab and Return Shift is enough, F keys work alone. Without a modifier a hint appears.
 3. {key:escape} cancels, {key:delete} removes the shortcut.
 
-If a shortcut is used twice, {ui:Doppelt} appears next to it. {ui:Alle zurücksetzen} restores the defaults.
+If a shortcut is used twice, {ui:Doppelt} appears next to it. While recording, the key triggers nothing, so a key already in use can be set too. {ui:Alle zurücksetzen} restores the defaults, {ui:Rückgängig} in the notice brings your shortcuts back.
 
 ## Next Semester
 

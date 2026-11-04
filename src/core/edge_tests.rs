@@ -1133,6 +1133,36 @@ Text
     assert!(lib.convention_plan(&typed).is_none(), "without a convention neither");
 }
 
+#[test]
+fn naming_is_offered_for_any_file_in_a_submission_folder() {
+    use crate::core::library::ConventionOffer;
+    let (root, mut lib) = workspace("convention-offer", &config(1, 1));
+    let today = chrono::Local::now().date_naive();
+    for a in lib.assignments.iter_mut() {
+        a.file_pattern = "*.pdf".into();
+    }
+    let a = lib.assignments.iter().filter(|a| a.upload && crate::core::day::local_date(a.due) >= today).min_by_key(|a| a.due).cloned().unwrap();
+    std::fs::create_dir_all(&a.folder).unwrap();
+    let naming = lib.naming(&a.module_id).unwrap();
+
+    let odd = a.folder.join("zufaellig.xyz");
+    std::fs::write(&odd, b"x").unwrap();
+    assert_eq!(lib.convention_offer(&odd), ConventionOffer::NeedsDeadline, "a file of any name in the folder is offered, once it belongs to a deadline");
+    let fitting = a.folder.join("Anders.pdf");
+    std::fs::write(&fitting, b"x").unwrap();
+    assert_eq!(lib.convention_offer(&fitting), ConventionOffer::Ready, "a name the folder expects finds its deadline");
+
+    let right = a.folder.join(naming.render("Anders", today, "pdf", &[], a.week, a.iso_week, None));
+    std::fs::write(&right, b"x").unwrap();
+    assert_eq!(lib.convention_offer(&right), ConventionOffer::Hidden, "a name that follows the pattern needs nothing");
+
+    let elsewhere = lib.create_note("Lose", &root, "md").unwrap();
+    assert_eq!(lib.convention_offer(&elsewhere), ConventionOffer::Hidden);
+    lib.config.as_mut().unwrap().set_naming_convention(false);
+    assert_eq!(lib.convention_offer(&odd), ConventionOffer::Hidden, "nothing while the pattern is off");
+    let _ = std::fs::remove_dir_all(root);
+}
+
 fn name_of(p: &Path) -> String {
     p.file_name().unwrap().to_string_lossy().to_string()
 }
@@ -1366,6 +1396,20 @@ fn the_convention_follows_renaming_on_filing_and_a_name_check_keeps_it_on() {
     assert!(!plain.naming_convention());
     let legacy: crate::core::model::StudyConfig = serde_json::from_str(r#"{"checkNames":false}"#).unwrap();
     assert!(legacy.rename_on_filing, "without the switch the legacy default applies");
+}
+
+#[test]
+fn a_type_error_in_the_config_names_its_line() {
+    let text = "{
+  \"name\": \"Studium\",
+  \"author\": \"Beispiel\",
+  \"createFolders\": \"ja\",
+  \"inbox\": \"_Inbox\",
+  \"checkNames\": true
+}
+";
+    let error = serde_json::from_str::<crate::core::model::StudyConfig>(text).unwrap_err().to_string();
+    assert!(error.contains("line 4"), "{error}");
 }
 
 #[test]

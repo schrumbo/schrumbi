@@ -19,6 +19,9 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Aktualisieren} | {key:refresh} |
 | {ui:In Obsidian öffnen} | {key:openInObsidian} |
 | {ui:Widerrufen} | {key:Undo} |
+| {ui:Anderen Ordner öffnen…} | {key:openOtherWorkspace} |
+| {ui:Seitenleiste ein-/ausblenden} | {key:ToggleSidebar} |
+| {ui:Details ein-/ausblenden} | {key:toggleInspector} |
 
 ## Navigation
 
@@ -33,11 +36,13 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | Erstes, zweites, drittes Modul | {key:goModule1}, {key:goModule2}, {key:goModule3} |
 | {ui:Zurück} | {key:goBack} |
 | {ui:Vorwärts} | {key:goForward} |
+
+## Ansicht
+
+| Befehl | Kürzel |
+|---|---|
 | {ui:Graph zeigen} | {key:showGraph} |
-| {ui:Anderen Ordner öffnen…} | {key:openOtherWorkspace} |
 | {ui:Vollbild} | {key:toggleFullscreen} |
-| {ui:Seitenleiste ein-/ausblenden} | {key:ToggleSidebar} |
-| {ui:Details ein-/ausblenden} | {key:toggleInspector} |
 
 ## Dokumente
 

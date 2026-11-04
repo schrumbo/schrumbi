@@ -6,6 +6,17 @@ use gpui::{
 
 use crate::{ActiveTheme, StyledExt};
 
+static RELABEL: std::sync::OnceLock<fn(&str) -> String> = std::sync::OnceLock::new();
+
+/// Lets the app rename keys such as `Ctrl` or `Shift`, e.g. for its language; only the first call counts.
+pub fn set_relabel(f: fn(&str) -> String) {
+    let _ = RELABEL.set(f);
+}
+
+fn relabel(label: &str) -> String {
+    RELABEL.get().map_or_else(|| label.to_string(), |f| f(label))
+}
+
 /// A tag for displaying keyboard keybindings.
 #[derive(IntoElement, Clone, Debug)]
 pub struct Kbd {
@@ -219,7 +230,7 @@ impl Kbd {
         }
 
         parts.push(&keys);
-        parts.join(SEPARATOR)
+        parts.into_iter().map(relabel).collect::<Vec<_>>().join(SEPARATOR)
     }
 }
 

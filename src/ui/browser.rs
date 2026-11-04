@@ -851,10 +851,7 @@ impl FileBrowser {
                 deadline_submenu(menu.separator(), &p, window, cx)
                     .separator()
                     .item(PopupMenuItem::new(tr("Umbenennen…")).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
-                    .when(super::convention_rename::available(&p, cx), |m| {
-                        let n = p.clone();
-                        m.item(PopupMenuItem::new(tr("Nach Muster benennen…")).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| super::convention_rename::open(n.clone(), window, cx)))
-                    })
+                    .when_some(super::convention_rename::menu_item(&p, cx), |m, item| m.item(item))
                     .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| state::trash(vec![trash_path.clone()], cx)))
             })
             .into_any_element()

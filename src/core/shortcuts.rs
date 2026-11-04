@@ -1,6 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use super::i18n::tr;
+use super::i18n::{backspace_name, ctrl_name, shift_name, tr};
 use super::prefs::{self, Shortcut};
 
 /// Every action with a configurable shortcut. Defaults follow VS Code where it has an equivalent.
@@ -59,21 +59,23 @@ pub enum ShortcutAction {
 pub enum Group {
     General,
     Navigation,
+    View,
     Documents,
     Editor,
 }
 
 impl Group {
-    pub const ALL: [Group; 4] = [Group::General, Group::Navigation, Group::Documents, Group::Editor];
+    pub const ALL: [Group; 5] = [Group::General, Group::Navigation, Group::View, Group::Documents, Group::Editor];
 
     fn is_global(self) -> bool {
-        matches!(self, Group::General | Group::Navigation)
+        matches!(self, Group::General | Group::Navigation | Group::View)
     }
 
     pub fn label(self) -> String {
         tr(match self {
             Group::General => "Allgemein",
             Group::Navigation => "Navigation",
+            Group::View => "Ansicht",
             Group::Documents => "Dokumente & Notizen",
             Group::Editor => "Editor",
         })
@@ -92,19 +94,19 @@ impl ShortcutAction {
         Self::GoInbox,
         Self::GoNotes,
         Self::GoCards,
-        Self::GoForward,
-        Self::ShowGraph,
         Self::GoModule1,
         Self::GoModule2,
         Self::GoModule3,
-        Self::OpenOtherWorkspace,
+        Self::GoBack,
+        Self::GoForward,
+        Self::ShowGraph,
         Self::ToggleFullscreen,
         Self::ReopenTab,
         Self::QuickOpen,
         Self::SearchFiles,
+        Self::OpenOtherWorkspace,
         Self::NewEntry,
         Self::NewFile,
-        Self::GoBack,
         Self::CloseTab,
         Self::NextTab,
         Self::PreviousTab,
@@ -198,10 +200,24 @@ impl ShortcutAction {
 
     pub fn group(self) -> Group {
         match self {
-            Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::ShowGraph | Self::GoModule1 | Self::GoModule2 | Self::GoModule3 | Self::OpenOtherWorkspace | Self::ToggleFullscreen | Self::GoBack | Self::SearchFiles => Group::Navigation,
-            Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::Refresh => Group::General,
+            Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::GoModule1 | Self::GoModule2 | Self::GoModule3 | Self::GoBack => Group::Navigation,
+            Self::ShowGraph | Self::ToggleFullscreen => Group::View,
+            Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::OpenOtherWorkspace | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::Refresh => Group::General,
             Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf => Group::Documents,
             _ => Group::Editor,
+        }
+    }
+
+    /// The sidebar position of the module this shortcut opens.
+    pub fn module_index(self) -> Option<usize> {
+        Self::MODULES.iter().position(|m| *m == self)
+    }
+
+    /// The label, or the real name of the module this shortcut opens when `modules` lists it in sidebar order.
+    pub fn named(self, modules: &[String]) -> String {
+        match self.module_index().and_then(|i| modules.get(i)) {
+            Some(name) => name.clone(),
+            None => self.label(),
         }
     }
 
@@ -357,11 +373,17 @@ impl ShortcutAction {
         });
     }
 
-    pub fn reset_all() {
+    /// Drops every custom shortcut and returns them, so `restore` can bring them back.
+    pub fn reset_all() -> Customized {
+        let mut before = (BTreeMap::new(), BTreeSet::new());
         prefs::update(|p| {
-            p.shortcuts.clear();
-            p.disabled_shortcuts.clear();
+            before = (std::mem::take(&mut p.shortcuts), std::mem::take(&mut p.disabled_shortcuts));
         });
+        before
+    }
+
+    pub fn restore(custom: Customized) {
+        prefs::update(|p| (p.shortcuts, p.disabled_shortcuts) = custom);
     }
 
     /// The keys as a tooltip suffix, e.g. ` (⌘N)`; empty when the user cleared the shortcut.
@@ -379,29 +401,15 @@ impl ShortcutAction {
     }
 }
 
-/// The same keystroke with modifiers in one fixed order, so `shift-cmd-f` and `cmd-shift-f` compare equal.
-fn canonical(keystroke: &str) -> String {
-    let (modifiers, key) = match keystroke.strip_suffix('-') {
-        Some(rest) => (rest.strip_suffix('-').unwrap_or(rest), "-"),
-        None => keystroke.rsplit_once('-').unwrap_or(("", keystroke)),
-    };
-    let mut modifiers: Vec<&str> = modifiers.split('-').filter(|m| !m.is_empty()).collect();
-    modifiers.sort_unstable();
-    modifiers.dedup();
-    modifiers.into_iter().chain([key]).collect::<Vec<_>>().join("-")
-}
+/// The custom and the cleared shortcuts, as `reset_all` took them away.
+pub type Customized = (BTreeMap<String, Shortcut>, BTreeSet<String>);
 
-impl ShortcutAction {
-    /// The keystrokes of every effective app shortcut outside the editor.
-    pub fn bound_keystrokes() -> BTreeSet<String> {
-        Self::ALL.into_iter().filter(|a| a.group() != Group::Editor).filter_map(|a| a.shortcut()).map(|s| canonical(&s.keystroke())).collect()
-    }
-}
+/// A key binding as the keystroke and the name of the action it triggers.
+pub type Bound = (String, String);
 
-/// Keystrokes bound before but not now and not in `reserved`; they need an explicit unbinding because key bindings only accumulate.
-pub fn released_keystrokes(before: &BTreeSet<String>, now: &BTreeSet<String>, reserved: &[String]) -> Vec<String> {
-    let reserved: BTreeSet<String> = reserved.iter().map(|k| canonical(k)).collect();
-    before.iter().filter(|k| !now.contains(*k) && !reserved.contains(*k)).cloned().collect()
+/// Bindings present before but not now; they need an explicit unbinding because key bindings only accumulate.
+pub fn released_bindings(before: &BTreeSet<Bound>, now: &BTreeSet<Bound>) -> Vec<Bound> {
+    before.difference(now).cloned().collect()
 }
 
 impl Shortcut {
@@ -416,7 +424,7 @@ impl Shortcut {
                 }
             }
         } else {
-            for (on, label) in [(self.command || self.control, "Ctrl"), (self.option, "Alt"), (self.shift, "Shift")] {
+            for (on, label) in [(self.command || self.control, ctrl_name()), (self.option, "Alt"), (self.shift, shift_name())] {
                 if on {
                     parts.push(label.into());
                 }
@@ -434,7 +442,7 @@ impl Shortcut {
             ("escape", true) => "⎋".into(),
             ("tab", false) => "Tab".into(),
             ("return", false) => "Enter".into(),
-            ("delete", false) => "Backspace".into(),
+            ("delete", false) => backspace_name().into(),
             ("escape", false) => "Esc".into(),
             ("pageup", true) => "⇞".into(),
             ("pagedown", true) => "⇟".into(),
@@ -480,36 +488,51 @@ impl Shortcut {
 mod tests {
     use super::*;
 
-    fn set(keys: &[&str]) -> BTreeSet<String> {
-        keys.iter().map(|k| canonical(k)).collect()
+    fn bound(pairs: &[(&str, &str)]) -> BTreeSet<Bound> {
+        pairs.iter().map(|(k, a)| (k.to_string(), a.to_string())).collect()
     }
 
     #[test]
-    fn only_keys_that_were_bound_and_are_free_now_are_released() {
-        let before = set(&["cmd-1", "cmd-2", "cmd-shift-f", "ctrl-shift--"]);
-        let now = set(&["cmd-2", "cmd-x"]);
-        let released = released_keystrokes(&before, &now, &["shift-cmd-f".to_string()]);
-        assert_eq!(released.len(), 2);
-        assert!(released.contains(&canonical("cmd-1")) && released.contains(&canonical("ctrl-shift--")));
-        assert!(released_keystrokes(&BTreeSet::new(), &now, &[]).is_empty(), "the first call releases nothing");
-        assert!(released_keystrokes(&now, &now, &[]).is_empty());
+    fn only_bindings_that_are_gone_or_moved_are_released() {
+        let before = bound(&[("ctrl-1", "GoToday"), ("ctrl-2", "GoGrid"), ("ctrl-b", "Bold"), ("ctrl-q", "Quit")]);
+        let now = bound(&[("ctrl-2", "GoGrid"), ("ctrl-shift-b", "Bold"), ("ctrl-q", "Quit")]);
+        let released = released_bindings(&before, &now);
+        assert_eq!(released, vec![("ctrl-1".to_string(), "GoToday".to_string()), ("ctrl-b".to_string(), "Bold".to_string())]);
+        assert!(released_bindings(&BTreeSet::new(), &now).is_empty(), "the first call releases nothing");
+        assert!(released_bindings(&now, &now).is_empty());
     }
 
     #[test]
-    fn modifier_order_does_not_matter() {
-        assert_eq!(canonical("shift-cmd-f"), canonical("cmd-shift-f"));
-        assert_eq!(canonical("f11"), "f11");
-        assert_eq!(canonical("ctrl--"), "ctrl--");
-        assert_eq!(canonical("-"), "-");
+    fn a_key_taken_by_another_action_releases_only_the_old_one() {
+        let before = bound(&[("ctrl-z", "SyncNow"), ("ctrl-z", "Undo")]);
+        let now = bound(&[("ctrl-z", "Undo")]);
+        assert_eq!(released_bindings(&before, &now), vec![("ctrl-z".to_string(), "SyncNow".to_string())]);
+    }
+
+    #[test]
+    fn navigation_lists_pages_modules_then_history() {
+        let nav: Vec<ShortcutAction> = ShortcutAction::ALL.into_iter().filter(|a| a.group() == Group::Navigation).collect();
+        use ShortcutAction::*;
+        assert_eq!(nav, vec![GoToday, GoGrid, GoRecord, GoInbox, GoNotes, GoCards, GoModule1, GoModule2, GoModule3, GoBack, GoForward]);
+    }
+
+    #[test]
+    fn modules_show_their_real_name() {
+        let names = vec!["Analysis".to_string(), "Physik".to_string()];
+        assert_eq!(ShortcutAction::GoModule2.named(&names), "Physik");
+        assert_eq!(ShortcutAction::GoModule3.named(&names), ShortcutAction::GoModule3.label());
+        assert_eq!(ShortcutAction::GoToday.named(&names), ShortcutAction::GoToday.label());
     }
 
     #[test]
     fn rebinding_a_page_to_a_module_key_is_a_conflict() {
         assert_eq!(ShortcutAction::for_module(0), Some(ShortcutAction::GoModule1));
         assert_eq!(ShortcutAction::for_module(3), None);
-        for a in ShortcutAction::MODULES.into_iter().chain([ShortcutAction::OpenOtherWorkspace, ShortcutAction::ToggleFullscreen]) {
+        for a in ShortcutAction::MODULES {
             assert_eq!(a.group(), Group::Navigation);
         }
+        assert_eq!(ShortcutAction::OpenOtherWorkspace.group(), Group::General);
+        assert_eq!(ShortcutAction::ToggleFullscreen.group(), Group::View);
         let seven = ShortcutAction::GoModule1.default_shortcut();
         ShortcutAction::GoNotes.set(Some(seven));
         let conflicts = ShortcutAction::GoNotes.conflicts();

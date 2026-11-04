@@ -374,6 +374,8 @@ pub struct Library {
     pub show_conflicts: bool,
     /// The toast asked to take back the last conflict resolution.
     pub sync_undo_requested: bool,
+    /// The toast gave the custom shortcuts back; the key bindings are rebuilt.
+    pub shortcuts_restored: bool,
     /// A file was put where it belongs; automatic sync takes it up right away.
     pub sync_soon: bool,
     /// Undo or redo changed files; the index catches up right away.
@@ -513,6 +515,7 @@ impl Library {
             show_sync_setup: false,
             show_conflicts: false,
             sync_undo_requested: false,
+            shortcuts_restored: false,
             sync_soon: false,
             notes_touched: false,
             sync_gate: false,
@@ -2756,9 +2759,25 @@ impl Library {
         })
     }
 
-    /// Whether a file can be named by its module's convention; cheap enough for opening a menu.
-    pub fn can_name_by_convention(&self, file: &Path) -> bool {
-        self.convention_target(file).is_some_and(|(_, m)| self.naming(&m).is_some())
+    /// Whether naming a file by its module's convention is offered, and if not yet possible why; cheap enough for opening a menu.
+    pub fn convention_offer(&self, file: &Path) -> ConventionOffer {
+        if !self.config.as_ref().is_some_and(StudyConfig::naming_convention) {
+            return ConventionOffer::Hidden;
+        }
+        let name = name_of(file);
+        let target = self.convention_target(file);
+        let Some(module_id) = target.as_ref().map(|(_, m)| m.clone()).or_else(|| self.module_containing(file).map(|m| m.id.clone())) else { return ConventionOffer::Hidden };
+        let Some(naming) = self.naming(&module_id) else { return ConventionOffer::Hidden };
+        if naming.is_valid(&name) {
+            return ConventionOffer::Hidden;
+        }
+        if target.is_some() {
+            ConventionOffer::Ready
+        } else if self.assignments.iter().any(|a| a.module_id == module_id && a.upload && self.submission_holds(a, file)) {
+            ConventionOffer::NeedsDeadline
+        } else {
+            ConventionOffer::Hidden
+        }
     }
 
     fn convention_target(&self, file: &Path) -> Option<(Assignment, String)> {
@@ -2779,17 +2798,18 @@ impl Library {
         });
     }
 
+    /// Whether the folder of `a` holds `path`, directly or, for a folder of its own that looks into subfolders, below it.
+    fn submission_holds(&self, a: &Assignment, path: &Path) -> bool {
+        let (Some(raw), Some(root), Some(settled_root)) = (path.parent().map(Path::to_path_buf), self.root.as_ref(), self.settled_root.as_ref()) else { return false };
+        let settled = dunce::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
+        let other = a.folder.strip_prefix(root).map_or_else(|_| a.folder.clone(), |rest| settled_root.join(rest));
+        [&a.folder, &other].iter().any(|f| [&raw, &settled].iter().any(|d| *d == *f || (a.recursive && a.owns_folder() && d.starts_with(f))))
+    }
+
     /// The upload whose folder holds `path` and whose pattern fits its name, the next one due first.
     fn fitting_deadline(&self, path: &Path) -> Option<Assignment> {
         let name = name_of(path);
-        let raw = path.parent()?.to_path_buf();
-        let settled = dunce::canonicalize(&raw).unwrap_or_else(|_| raw.clone());
-        let (root, settled_root) = (self.root.clone()?, self.settled_root.clone()?);
-        let holds = |a: &Assignment| {
-            let other = a.folder.strip_prefix(&root).map_or_else(|_| a.folder.clone(), |rest| settled_root.join(rest));
-            [&a.folder, &other].iter().any(|f| [&raw, &settled].iter().any(|d| *d == *f || (a.recursive && a.owns_folder() && d.starts_with(f))))
-        };
-        let fitting: Vec<&Assignment> = self.assignments.iter().filter(|a| a.upload && a.tracks_files() && scanner::matches(&name, &a.file_pattern) && holds(a)).collect();
+        let fitting: Vec<&Assignment> = self.assignments.iter().filter(|a| a.upload && a.tracks_files() && scanner::matches(&name, &a.file_pattern) && self.submission_holds(a, path)).collect();
         let today = self.today();
         fitting.iter().filter(|a| day::local_date(a.due) >= today).min_by_key(|a| a.due).or_else(|| fitting.iter().max_by_key(|a| a.due)).map(|a| (*a).clone())
     }
@@ -3882,6 +3902,16 @@ pub fn reveal(path: &Path) {
 }
 
 /// What takes back filing `original` as `target`: moving it back, or trashing the copy of an outside file.
+/// Whether a file can be named by its module's convention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConventionOffer {
+    /// Not offered: no convention, no submission folder, or the name already fits.
+    Hidden,
+    /// In a submission folder, but no deadline is linked yet.
+    NeedsDeadline,
+    Ready,
+}
+
 /// How a deadline is named in short messages, e.g. "ÜB W03".
 /// What renaming one file by convention knows before reading the file.
 #[derive(Clone)]

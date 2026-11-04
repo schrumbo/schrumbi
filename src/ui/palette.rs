@@ -14,6 +14,7 @@ use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Route;
 use crate::core::model::Status;
+use crate::core::prefs::Shortcut;
 use crate::core::shortcuts::{Group, ShortcutAction as S};
 
 enum Run {
@@ -46,12 +47,16 @@ struct Recent(Vec<String>);
 
 impl Global for Recent {}
 
+fn fixed_shortcut(key: &str, shift: bool) -> Shortcut {
+    Shortcut { key: key.to_lowercase(), command: true, shift, option: false, control: false }
+}
+
 fn fixed_keys(key: &str) -> String {
-    if cfg!(target_os = "macos") { format!("⌘{key}") } else { format!("Ctrl+{key}") }
+    fixed_shortcut(key, false).display()
 }
 
 fn fixed_shift_keys(key: &str) -> String {
-    if cfg!(target_os = "macos") { format!("⇧⌘{key}") } else { format!("Ctrl+Shift+{key}") }
+    fixed_shortcut(key, true).display()
 }
 
 fn keys(action: S) -> Option<String> {
@@ -62,7 +67,7 @@ fn keys(action: S) -> Option<String> {
 fn commands(cx: &App) -> Vec<Command> {
     let mut list = Vec::new();
     let mut add = |group: &str, label: String, icon: &'static str, keys: Option<String>, run: Run| list.push(Command { label, group: group.to_string(), icon, keys, run });
-    let (go, new, file, view, edit, general) = (tr("Gehe zu"), tr("Neu"), tr("Ablage"), tr("Darstellung"), tr("Bearbeiten"), tr("Schrumbi"));
+    let (go, new, file, view, edit, general, cards) = (tr("Gehe zu"), tr("Neu"), tr("Ablage"), tr("Darstellung"), tr("Bearbeiten"), tr("Schrumbi"), tr("Karten"));
     let (git, conflicts) = (super::sync::enabled_here(cx), !super::sync::get(cx).conflicts.is_empty());
     let in_document = state::read(cx, |l| matches!(l.route(), Route::Doc(_)));
     let in_notes = in_document || state::read(cx, |l| matches!(l.route(), Route::Notes));
@@ -100,14 +105,14 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&go, S::GoInbox.label(), "inbox", keys(S::GoInbox), Run::Action(Box::new(app::GoInbox)));
         add(&go, S::GoNotes.label(), "book-open", keys(S::GoNotes), Run::Action(Box::new(app::GoNotes)));
         add(&go, S::GoCards.label(), "layers", keys(S::GoCards), Run::Action(Box::new(app::GoCards)));
-        add(&go, tr("Neue Karte…"), "plus", None, Run::InWindow(super::cards_page::new_card));
-        add(&go, tr("Karten lernen"), "graduation-cap", None, Run::Call(Rc::new(|cx| {
+        add(&cards, tr("Neue Karte…"), "plus", None, Run::InWindow(super::cards_page::new_card));
+        add(&cards, tr("Karten lernen"), "graduation-cap", None, Run::Call(Rc::new(|cx| {
             act(cx, |l| {
                 l.cards_request = Some(crate::core::prefs::get().card_deck);
                 l.set_route(Route::Cards);
             })
         })));
-        add(&go, tr("Aus Anki importieren…"), "download", None, Run::InWindow(super::cards_page::choose_import));
+        add(&cards, tr("Aus Anki importieren…"), "download", None, Run::InWindow(super::cards_page::choose_import));
         add(&go, S::SearchFiles.label(), "search", keys(S::SearchFiles), Run::Action(Box::new(app::SearchFiles)));
         add(&go, S::GoBack.label(), "arrow-left", keys(S::GoBack), Run::Action(Box::new(app::GoBack)));
         add(&go, S::GoForward.label(), "arrow-right", keys(S::GoForward), Run::Action(Box::new(app::GoForward)));
@@ -268,7 +273,7 @@ fn score(label: &str, group: &str, query: &str) -> Option<u32> {
     Some(total)
 }
 
-/// ⌘K: find and run any action of the app.
+/// ⇧⌘P: find and run any action of the app.
 pub struct Palette {
     query: Entity<InputState>,
     commands: Vec<Command>,
@@ -414,8 +419,8 @@ fn shortcut_row(label: String, parts: Vec<String>, t: &Theme) -> Div {
         .child(div().flex().flex_none().gap(px(space::XXS)).children(parts.into_iter().map(|p| kbd(p, t))))
 }
 
-fn fixed_parts(key: &str) -> Vec<String> {
-    if cfg!(target_os = "macos") { vec!["⌘".to_string(), key.to_string()] } else { vec!["Ctrl".to_string(), key.to_string()] }
+fn fixed_parts(key: &str, shift: bool) -> Vec<String> {
+    fixed_shortcut(key, shift).parts()
 }
 
 /// ⌘/: every shortcut at a glance, always showing the user's current keys.
@@ -427,19 +432,18 @@ impl Render for ShortcutSheet {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
         let section = |title: String, rows: Vec<Div>| div().flex().flex_col().gap(px(space::XS)).child(div().pb(px(space::XS)).font_weight(FontWeight::SEMIBOLD).child(title)).children(rows);
-        let group = |g: Group| -> Vec<Div> { S::ALL.into_iter().filter(|a| a.group() == g && !S::MODULES.contains(a)).filter_map(|a| a.shortcut().map(|s| shortcut_row(a.label(), s.parts(), &t))).collect() };
+        let modules = state::read(cx, |l| l.semester_modules().iter().take(S::MODULES.len()).map(|m| m.display_name()).collect::<Vec<_>>());
+        let group = |g: Group| -> Vec<Div> { S::ALL.into_iter().filter(|a| a.group() == g && a.module_index().is_none_or(|i| i < modules.len())).filter_map(|a| a.shortcut().map(|s| shortcut_row(a.named(&modules), s.parts(), &t))).collect() };
         let mut general = vec![
-            shortcut_row(tr("Befehl suchen …"), fixed_parts("K"), &t),
-            shortcut_row(tr("Tastenkürzel anzeigen"), fixed_parts("/"), &t),
+            shortcut_row(tr("Befehl suchen …"), fixed_parts("P", true), &t),
+            shortcut_row(tr("Tastenkürzel anzeigen"), fixed_parts("/", false), &t),
             shortcut_row(tr("Schrumbi-Anleitung"), vec!["F1".to_string()], &t),
             shortcut_row(tr("Suchen"), vec!["/".to_string()], &t),
-            shortcut_row(tr("Seitenleiste ein-/ausblenden"), fixed_parts("B"), &t),
-            shortcut_row(tr("Widerrufen"), fixed_parts("Z"), &t),
+            shortcut_row(tr("Seitenleiste ein-/ausblenden"), fixed_parts("B", false), &t),
+            shortcut_row(tr("Widerrufen"), fixed_parts("Z", false), &t),
         ];
         general.extend(group(Group::General));
-        let mut navigation = group(Group::Navigation);
-        let modules = state::read(cx, |l| l.semester_modules().iter().take(3).map(|m| m.display_name()).collect::<Vec<_>>());
-        navigation.extend(modules.into_iter().enumerate().filter_map(|(i, name)| S::for_module(i).and_then(|a| a.shortcut()).map(|s| shortcut_row(name, s.parts(), &t))));
+        let navigation = group(Group::Navigation);
         let close = cx.entity();
         div()
             .w_full()
@@ -479,6 +483,7 @@ impl Render for ShortcutSheet {
                                         .flex()
                                         .flex_col()
                                         .gap(px(space::XL))
+                                        .child(section(Group::View.label(), group(Group::View)))
                                         .child(section(Group::Documents.label(), group(Group::Documents)))
                                         .child(section(Group::Editor.label(), group(Group::Editor))),
                                 ),

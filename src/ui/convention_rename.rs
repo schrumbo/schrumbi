@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::base::actions::Confirm;
 use gpui_kit::component::Disableable;
 use gpui_kit::prelude::*;
@@ -12,13 +13,25 @@ use super::state::{self, act};
 use super::theme::{Theme, font, iconsize, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
-use crate::core::library::ConventionPlan;
+use crate::core::library::{ConventionOffer, ConventionPlan};
 
 const FORBIDDEN: &str = "\\/:*?\"<>|";
 
-/// Whether a file can be renamed by its module's convention; never offered while no naming convention is switched on in the settings.
+/// Whether a file can be renamed by its module's convention right now; never offered while no naming convention is switched on in the settings.
 pub fn available(path: &Path, cx: &App) -> bool {
-    state::read(cx, |l| l.can_name_by_convention(path))
+    state::read(cx, |l| l.convention_offer(path)) == ConventionOffer::Ready
+}
+
+/// The menu entry for renaming by convention: working, disabled with its reason for a file in a submission folder that belongs to no deadline yet, else none.
+pub fn menu_item(path: &Path, cx: &App) -> Option<PopupMenuItem> {
+    match state::read(cx, |l| l.convention_offer(path)) {
+        ConventionOffer::Hidden => None,
+        ConventionOffer::NeedsDeadline => Some(PopupMenuItem::new(tr("Nach Muster benennen… (erst einer Abgabe zuordnen)")).icon(menu_icon("wand-sparkles")).disabled(true)),
+        ConventionOffer::Ready => {
+            let path = path.to_path_buf();
+            Some(PopupMenuItem::new(tr("Nach Muster benennen…")).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| open(path.clone(), window, cx)))
+        }
+    }
 }
 
 /// Works out the convention name off the UI thread, then lets the user check and change it before renaming.

@@ -25,10 +25,10 @@ Die Suche kennt auch andere Wörter: `dark` findet das Erscheinungsbild, `git` d
 ## Kürzel ändern
 
 1. {ui:Tastenkürzel} öffnen und auf ein Kürzel klicken.
-2. Neue Tasten drücken. Dabei sein muss eine Sondertaste, bei Pfeilen, Tab und Return reicht Umschalt.
+2. Neue Tasten drücken. Dabei sein muss eine Sondertaste, bei Pfeilen, Tab und Return reicht Umschalt, F-Tasten gehen allein. Fehlt die Sondertaste, steht ein Hinweis da.
 3. {key:escape} bricht ab, {key:delete} entfernt das Kürzel.
 
-Ist ein Kürzel doppelt belegt, steht {ui:Doppelt} daneben. {ui:Alle zurücksetzen} stellt die Standards wieder her.
+Ist ein Kürzel doppelt belegt, steht {ui:Doppelt} daneben. Beim Aufnehmen löst die Taste nichts aus, so lässt sich auch ein belegtes Kürzel setzen. {ui:Alle zurücksetzen} stellt die Standards wieder her, {ui:Rückgängig} im Hinweis holt deine Kürzel zurück.
 
 ## Folgesemester
 

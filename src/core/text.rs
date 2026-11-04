@@ -18,6 +18,14 @@ pub fn middle_ellipsis(name: &str, max: usize) -> String {
     format!("{}…{}", chars[..head].iter().collect::<String>(), chars[chars.len() - tail..].iter().collect::<String>())
 }
 
+/// Cuts a name at the end with `…` so it stays within `max` characters.
+pub fn end_ellipsis(name: &str, max: usize) -> String {
+    if name.chars().count() <= max || max < 2 {
+        return name.to_string();
+    }
+    format!("{}…", name.chars().take(max - 1).collect::<String>().trim_end())
+}
+
 /// Removes accents, so "é" becomes "e".
 pub fn strip_diacritics(s: &str) -> String {
     s.nfd().filter(|c| !is_combining_mark(*c)).collect()

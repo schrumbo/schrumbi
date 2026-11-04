@@ -53,6 +53,15 @@ fn every_translation_key_exists_in_english() {
 }
 
 #[test]
+fn cuts_long_names_at_the_end() {
+    use super::text::end_ellipsis;
+    assert_eq!(end_ellipsis("Analysis", 28), "Analysis");
+    assert_eq!(end_ellipsis("Einführung in die Betriebswirtschaftslehre", 20), "Einführung in die B…");
+    assert_eq!(end_ellipsis("Übung-Übung-Übung", 8), "Übung-Ü…");
+    assert_eq!(end_ellipsis("abc", 1), "abc");
+}
+
+#[test]
 fn shortens_file_names_in_the_middle() {
     use super::text::middle_ellipsis;
     assert_eq!(middle_ellipsis("kurz.pdf", 26), "kurz.pdf");

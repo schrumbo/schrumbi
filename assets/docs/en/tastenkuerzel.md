@@ -19,6 +19,9 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Aktualisieren} | {key:refresh} |
 | {ui:In Obsidian öffnen} | {key:openInObsidian} |
 | {ui:Widerrufen} | {key:Undo} |
+| {ui:Anderen Ordner öffnen…} | {key:openOtherWorkspace} |
+| {ui:Seitenleiste ein-/ausblenden} | {key:ToggleSidebar} |
+| {ui:Details ein-/ausblenden} | {key:toggleInspector} |
 
 ## Navigation
 
@@ -33,11 +36,13 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | First, second, third module | {key:goModule1}, {key:goModule2}, {key:goModule3} |
 | {ui:Zurück} | {key:goBack} |
 | {ui:Vorwärts} | {key:goForward} |
+
+## View
+
+| Command | Shortcut |
+|---|---|
 | {ui:Graph zeigen} | {key:showGraph} |
-| {ui:Anderen Ordner öffnen…} | {key:openOtherWorkspace} |
 | {ui:Vollbild} | {key:toggleFullscreen} |
-| {ui:Seitenleiste ein-/ausblenden} | {key:ToggleSidebar} |
-| {ui:Details ein-/ausblenden} | {key:toggleInspector} |
 
 ## Documents
 

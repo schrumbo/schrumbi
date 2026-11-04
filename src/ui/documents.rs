@@ -1601,9 +1601,8 @@ impl NoteView {
                 menu = menu
                     .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| library::reveal(&b)))
                     .item(PopupMenuItem::new(tr("Mit Standard-App öffnen")).icon(menu_icon("square-arrow-out-up-right")).on_click(move |_, _, _| library::open_path(&c)));
-                if super::convention_rename::available(&d, cx) {
-                    let n = d.clone();
-                    menu = menu.item(PopupMenuItem::new(tr("Nach Muster benennen…")).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| super::convention_rename::open(n.clone(), window, cx)));
+                if let Some(item) = super::convention_rename::menu_item(&d, cx) {
+                    menu = menu.item(item);
                 }
                 let source_view = source_me.clone();
                 let is_source = current_mode == Mode::Source;
@@ -2977,11 +2976,11 @@ impl Render for FileViewer {
         let open_label = self.app.as_ref().map_or_else(|| tr("Mit Standard-App öffnen"), |a| trf("In %@ öffnen", &[a]));
         let actions = Button::new("viewer-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |m, _, cx| {
             let (a, b, c, o, n) = (p1.clone(), p2.clone(), p3.clone(), p4.clone(), p4.clone());
-            let named = super::convention_rename::available(&n, cx);
+            let named = super::convention_rename::menu_item(&n, cx);
             m.item(PopupMenuItem::new(open_label.clone()).icon(menu_icon("square-arrow-out-up-right")).on_click(move |_, _, _| library::open_path(&o)))
                 .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| library::reveal(&a)))
                 .item(PopupMenuItem::new(tr("Vorschau-Fenster (Leertaste)")).icon(menu_icon("eye")).on_click(move |_, _, cx| super::preview::show(&b, cx)))
-                .when(named, |m| m.item(PopupMenuItem::new(tr("Nach Muster benennen…")).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| super::convention_rename::open(n.clone(), window, cx))))
+                .when_some(named, |m, item| m.item(item))
                 .separator()
                 .item(PopupMenuItem::new(tr("Tab schließen")).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&c, cx)))
         });

@@ -54,6 +54,9 @@ pub struct StudyConfig {
     /// Folder inside each module where files for its deadlines go; empty = the module folder itself.
     #[serde(default = "submissions")]
     pub submission_folder: String,
+    /// Read from older configs only and folded into `rename_on_filing`; never written.
+    #[serde(default, rename = "checkNames", skip_serializing)]
+    pub legacy_check_names: bool,
 }
 
 struct Whole<'a>(&'a StudyConfig);
@@ -64,43 +67,22 @@ impl Serialize for Whole<'_> {
     }
 }
 
-struct WholeOwned(StudyConfig);
-
-impl<'de> Deserialize<'de> for WholeOwned {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        StudyConfig::deserialize(deserializer).map(Self)
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Written<'a> {
-    #[serde(flatten)]
-    config: Whole<'a>,
-    check_names: bool,
-    check_folders: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Read {
-    #[serde(flatten)]
-    config: WholeOwned,
-    #[serde(default)]
-    check_names: bool,
-}
-
 /// `checkNames` and `checkFolders` are written as mirrors for older builds; reading, `checkNames` only keeps a naming pattern that was on.
 impl Serialize for StudyConfig {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        Written { config: Whole(self), check_names: self.rename_on_filing, check_folders: false }.serialize(serializer)
+        let mut value = serde_json::to_value(Whole(self)).map_err(serde::ser::Error::custom)?;
+        if let serde_json::Value::Object(map) = &mut value {
+            map.insert("checkNames".into(), self.rename_on_filing.into());
+            map.insert("checkFolders".into(), false.into());
+        }
+        value.serialize(serializer)
     }
 }
 
 impl<'de> Deserialize<'de> for StudyConfig {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let Read { config: WholeOwned(mut config), check_names } = Read::deserialize(deserializer)?;
-        config.rename_on_filing |= check_names;
+        let mut config = StudyConfig::deserialize(deserializer)?;
+        config.rename_on_filing |= std::mem::take(&mut config.legacy_check_names);
         Ok(config)
     }
 }
@@ -123,6 +105,7 @@ impl Default for StudyConfig {
             rename_on_filing: false,
             create_folders: true,
             submission_folder: submissions(),
+            legacy_check_names: false,
         }
     }
 }

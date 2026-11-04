@@ -2,10 +2,11 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
-use crate::core::i18n::tr;
+use crate::core::i18n::{ctrl_name, shift_name, tr};
 use crate::core::library::{NewNoteRequest, Route};
 use crate::core::prefs;
-use crate::core::shortcuts::{ShortcutAction, released_keystrokes};
+use crate::core::text::end_ellipsis;
+use crate::core::shortcuts::{Bound, ShortcutAction, released_bindings};
 
 actions!(
     schrumbi,
@@ -82,6 +83,11 @@ fn route(r: Route) -> impl Fn(&mut App) {
 }
 
 pub fn init(cx: &mut App) {
+    gpui_kit::component::kbd::set_relabel(|label| match label {
+        "Ctrl" => ctrl_name().to_string(),
+        "Shift" => shift_name().to_string(),
+        other => other.to_string(),
+    });
     cx.on_action(|_: &Quit, cx| quit(cx));
     cx.on_action(|_: &OpenSettings, cx| super::settings::open(cx));
     cx.on_action(|_: &About, cx| super::settings::open_about(cx));
@@ -218,6 +224,8 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
+const MENU_NAME: usize = 28;
+
 fn close_active_window(cx: &mut App) {
     if let Some(w) = cx.active_window() {
         cx.defer(move |cx| {
@@ -271,31 +279,33 @@ pub fn cmd(k: &str) -> String {
     format!("{}-{k}", if cfg!(target_os = "macos") { "cmd" } else { "ctrl" })
 }
 
-static BOUND: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+static BOUND: std::sync::Mutex<std::collections::BTreeSet<Bound>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
 
-fn reserved_keys() -> Vec<String> {
-    ["q", "k", "p", "shift-p", "/", "shift-7", ",", "z", "shift-z", "y", "s", "shift-w", "shift-r", "m", "enter", "b", "shift-f", "a", "c", "v", "x"]
-        .into_iter()
-        .map(cmd)
-        .chain(["f1", "escape", "enter", "tab", "shift-tab", "up", "down"].map(String::from))
+fn bound_pairs(bindings: &[KeyBinding]) -> std::collections::BTreeSet<Bound> {
+    let os = if cfg!(target_os = "macos") {
+        OperatingSystem::Mac
+    } else if cfg!(windows) {
+        OperatingSystem::Windows
+    } else {
+        OperatingSystem::Linux
+    };
+    bindings
+        .iter()
+        .map(|b| (b.keystrokes().iter().map(|k| k.inner().unparse(os)).collect::<Vec<_>>().join(" "), b.action().name().to_string()))
         .collect()
 }
 
 /// Binds the app's keys on top of the component library's, using the user's custom shortcuts.
 /// Later bindings win, so rebinding after a settings change overrides the earlier ones.
 pub fn bind_keys(cx: &mut App) {
-    let now = ShortcutAction::bound_keystrokes();
-    let mut bound = BOUND.lock().unwrap_or_else(|e| e.into_inner());
-    let mut b: Vec<KeyBinding> = released_keystrokes(&bound, &now, &reserved_keys()).into_iter().map(|k| kb(k, NoAction, None)).collect();
-    *bound = now;
-    drop(bound);
+    let mut b: Vec<KeyBinding> = Vec::new();
     b.extend([
         kb(cmd("q"), Quit, None),
         kb(cmd("k"), CommandPalette, None),
         kb(cmd("p"), CommandPalette, None),
         kb(cmd("shift-p"), CommandPalette, None),
-        kb(cmd("/"), ShowShortcuts, None),
         kb(cmd("shift-7"), ShowShortcuts, None),
+        kb(cmd("/"), ShowShortcuts, None),
         kb("f1".into(), ShowHelp, None),
         kb(cmd(","), OpenSettings, None),
         kb(cmd("z"), Undo, Some("MainWindow")),
@@ -318,6 +328,11 @@ pub fn bind_keys(cx: &mut App) {
     b.extend([KeyBinding::new("cmd-h", Hide, None), KeyBinding::new("cmd-alt-h", HideOthers, None)]);
     b.extend(
         [
+            binding(ShortcutAction::GoModule1, GoModuleAt(0), None),
+            binding(ShortcutAction::GoModule2, GoModuleAt(1), None),
+            binding(ShortcutAction::GoModule3, GoModuleAt(2), None),
+            binding(ShortcutAction::OpenOtherWorkspace, OpenOtherWorkspace, None),
+            binding(ShortcutAction::ToggleFullscreen, ToggleFullscreen, None),
             binding(ShortcutAction::GoToday, GoToday, None),
             binding(ShortcutAction::GoGrid, GoGrid, None),
             binding(ShortcutAction::GoRecord, GoRecord, None),
@@ -326,11 +341,6 @@ pub fn bind_keys(cx: &mut App) {
             binding(ShortcutAction::GoCards, GoCards, None),
             binding(ShortcutAction::GoForward, GoForward, None),
             binding(ShortcutAction::ShowGraph, ShowGraph, None),
-            binding(ShortcutAction::GoModule1, GoModuleAt(0), None),
-            binding(ShortcutAction::GoModule2, GoModuleAt(1), None),
-            binding(ShortcutAction::GoModule3, GoModuleAt(2), None),
-            binding(ShortcutAction::OpenOtherWorkspace, OpenOtherWorkspace, None),
-            binding(ShortcutAction::ToggleFullscreen, ToggleFullscreen, None),
             binding(ShortcutAction::ReopenTab, ReopenTab, None),
             binding(ShortcutAction::QuickOpen, QuickOpen, None),
             binding(ShortcutAction::SearchFiles, SearchFiles, None),
@@ -357,7 +367,12 @@ pub fn bind_keys(cx: &mut App) {
     b.extend(super::editor::key_bindings());
     b.extend(super::pdf_view::key_bindings());
     b.extend(super::sheet_view::key_bindings());
-    cx.bind_keys(b);
+    let now = bound_pairs(&b);
+    let mut bound = BOUND.lock().unwrap_or_else(|e| e.into_inner());
+    let released: Vec<KeyBinding> = released_bindings(&bound, &now).into_iter().map(|(keys, name)| kb(keys, Unbind(name.into()), None)).collect();
+    *bound = now;
+    drop(bound);
+    cx.bind_keys(released.into_iter().chain(b));
     rebuild_menus(cx);
 }
 
@@ -391,7 +406,10 @@ pub fn rebuild_menus(cx: &mut App) {
         MenuItem::action(tr("Vorheriger Tab"), PreviousTab),
         MenuItem::separator(),
     ];
-    go.extend(modules.into_iter().enumerate().map(|(i, (id, name))| if ShortcutAction::for_module(i).is_some() { MenuItem::action(name, GoModuleAt(i)) } else { MenuItem::action(name, GoModule(id)) }));
+    go.extend(modules.into_iter().enumerate().map(|(i, (id, name))| {
+        let name = end_ellipsis(&name, MENU_NAME);
+        if ShortcutAction::for_module(i).is_some() { MenuItem::action(name, GoModuleAt(i)) } else { MenuItem::action(name, GoModule(id)) }
+    }));
     let mut app_menu = vec![
         MenuItem::action(tr("Über Schrumbi"), About),
         MenuItem::action(tr("Nach Updates suchen…"), CheckForUpdates),
