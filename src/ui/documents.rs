@@ -455,12 +455,7 @@ impl NoteView {
         let mode = std::mem::discriminant(&self.mode);
         let reveal = reveal || self.find.mode.is_some_and(|seen| seen != mode);
         self.find.mode = Some(mode);
-        let signature = {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            text.hash(&mut hasher);
-            (hasher.finish(), query, exact)
-        };
+        let signature = (crate::core::find::fingerprint(text), query, exact);
         if self.find.signature.as_ref() != Some(&signature) || reveal {
             let anchor = self.find.anchor.take().or_else(|| self.find.matches.get(self.find.current).map(|m| m.start)).unwrap_or(0);
             let found = crate::core::find::matches(text, &signature.1, exact);

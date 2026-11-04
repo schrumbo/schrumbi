@@ -19,20 +19,54 @@ pub fn matches(text: &str, query: &str, exact: bool) -> Vec<Range<usize>> {
     let mut needle = String::with_capacity(query.len());
     query.chars().for_each(|c| fold_into(c, &mut needle));
     let mut folded = String::with_capacity(text.len());
-    let mut origin: Vec<usize> = Vec::with_capacity(text.len());
+    let mut shifts: Vec<Shift> = Vec::new();
     for (at, c) in text.char_indices() {
+        let before = folded.len();
         fold_into(c, &mut folded);
-        origin.resize(folded.len(), at);
+        if folded.len() - before != c.len_utf8() || folded[before..].chars().count() != 1 {
+            shifts.push(Shift { folded: before, folded_len: folded.len() - before, text: at, text_len: c.len_utf8() });
+        }
     }
+    let to_text = |at: usize, end: bool| match shifts.partition_point(|s| s.folded <= at).checked_sub(1).map(|i| &shifts[i]) {
+        None => at,
+        Some(s) if at < s.folded + s.folded_len => {
+            if end && at > s.folded {
+                s.text + s.text_len
+            } else {
+                s.text
+            }
+        }
+        Some(s) => s.text + s.text_len + (at - s.folded - s.folded_len),
+    };
     let mut found: Vec<Range<usize>> = Vec::new();
     for (at, m) in folded.match_indices(&needle) {
-        let last = origin[at + m.len() - 1];
-        let range = origin[at]..last + text[last..].chars().next().map_or(0, char::len_utf8);
+        let range = to_text(at, false)..to_text(at + m.len(), true);
         if found.last().is_none_or(|prev| prev.end <= range.start) {
             found.push(range);
         }
     }
     found
+}
+
+struct Shift {
+    folded: usize,
+    folded_len: usize,
+    text: usize,
+    text_len: usize,
+}
+
+/// A fast fingerprint of `text`, to tell whether it changed since the last look.
+pub fn fingerprint(text: &str) -> u64 {
+    let mut hash = text.len() as u64;
+    let mut chunks = text.as_bytes().chunks_exact(8);
+    for chunk in chunks.by_ref() {
+        let word = u64::from_le_bytes(chunk.try_into().unwrap_or_default());
+        hash = (hash ^ word).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(29);
+    }
+    for byte in chunks.remainder() {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(29);
+    }
+    hash
 }
 
 /// The first match at or after `offset`, wrapping to the first one; `None` without matches.
@@ -78,6 +112,24 @@ mod tests {
         assert_eq!(matches("Maß", "s", false), vec![2..4]);
         assert_eq!(matches("saßas", "sas", false), vec![0..4]);
         assert_eq!(replace_all("Maß", &matches("Maß", "s", false), "x"), "Max");
+    }
+
+    #[test]
+    fn folded_matches_keep_their_places_around_changed_letters() {
+        let text = "ÄÖ Maß groß GROSS äö ß";
+        assert_eq!(found(text, "gross", false), vec!["groß", "GROSS"]);
+        assert_eq!(found(text, "äö", false), vec!["ÄÖ", "äö"]);
+        assert_eq!(found(text, "ss g", false), vec!["ß g", "ß G"]);
+        assert_eq!(found(text, "ß", false), vec!["ß", "ß", "SS", "ß"]);
+    }
+
+    #[test]
+    fn the_fingerprint_changes_with_every_edit() {
+        let base = "eins zwei drei vier fünf";
+        assert_eq!(fingerprint(base), fingerprint(&base.to_string()));
+        for edited in ["eins zwei drei vier fünF", "Eins zwei drei vier fünf", "eins zwei drei vier fün", "eins zwei drei vier fünf "] {
+            assert_ne!(fingerprint(base), fingerprint(edited));
+        }
     }
 
     #[test]
