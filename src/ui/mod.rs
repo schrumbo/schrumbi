@@ -33,7 +33,6 @@ pub mod apple_calendar;
 pub mod documents;
 pub mod editor;
 pub mod settings;
-pub mod checks;
 pub mod convention_rename;
 pub mod fields;
 pub mod time_field;

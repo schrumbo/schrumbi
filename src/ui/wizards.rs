@@ -460,15 +460,15 @@ impl Render for Setup {
                 }));
                 let sample_module = Module { code: self.draft.modules.first().map_or("ABC".into(), |m| m.code.clone()), ..Default::default() };
                 let author_text = if self.draft.author.is_empty() { tr("Nachname-V") } else { self.draft.author.clone() };
-                let folders = (self.draft.check_folders, self.draft.create_folders);
+                let folders = self.draft.create_folders;
                 let naming = self.draft.naming_convention();
                 let (help, own, named) = (me.clone(), me.clone(), me.clone());
                 let help = move |_: &ClickEvent, _: &mut Window, cx: &mut App| help.update(cx, |s, cx| {
-                    (s.draft.check_folders, s.draft.create_folders) = (true, true);
+                    s.draft.create_folders = true;
                     cx.notify();
                 });
                 let own = move |_: &ClickEvent, _: &mut Window, cx: &mut App| own.update(cx, |s, cx| {
-                    (s.draft.check_folders, s.draft.create_folders) = (false, false);
+                    s.draft.create_folders = false;
                     cx.notify();
                 });
                 let vault = state::read(cx, |l| l.is_vault);
@@ -520,8 +520,8 @@ impl Render for Setup {
                                 div()
                                     .flex()
                                     .gap(px(space::M))
-                                    .child(order_choice("setup-order-help", "wand-sparkles", tr("Schrumbi hilft beim Ordnen"), tr("Legt in jedem Modul einen Abgabeordner an, sobald du etwas ablegst, und benennt nach Muster."), folders == (true, true), help, &t))
-                                    .child(order_choice("setup-order-own", "folder-tree", tr("Meine eigene Struktur"), tr("Schrumbi liest nur. Dateien landen dort, wo du sie hinlegst."), folders == (false, false), own, &t)),
+                                    .child(order_choice("setup-order-help", "wand-sparkles", tr("Schrumbi hilft beim Ordnen"), tr("Legt in jedem Modul einen Abgabeordner an, sobald du etwas ablegst, und benennt nach Muster."), folders, help, &t))
+                                    .child(order_choice("setup-order-own", "folder-tree", tr("Meine eigene Struktur"), tr("Schrumbi liest nur. Dateien landen dort, wo du sie hinlegst."), !folders, own, &t)),
                             )
                             .child(caption(tr("Lässt sich jederzeit in den Einstellungen ändern, auch einzeln."), &t)),
                     )

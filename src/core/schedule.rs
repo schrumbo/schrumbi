@@ -1,5 +1,4 @@
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use chrono::{DateTime, Days, Local};
 
@@ -124,24 +123,6 @@ pub fn assignments(config: &StudyConfig, state: &StudyState, root: &Path) -> Vec
     }
     result.sort_by_key(|a| a.due);
     result
-}
-
-/// Folders that rules with a folder per week expect to exist for a semester.
-pub fn expected_folders(config: &StudyConfig, semester: &Semester, root: &Path) -> Vec<PathBuf> {
-    let mut urls = BTreeSet::new();
-    let weeks = lecture_weeks(semester);
-    for module in config.modules.iter().filter(|m| m.semester == semester.id) {
-        let module_dir = root.join(&module.folder);
-        urls.insert(module_dir.clone());
-        for week in &weeks {
-            for rule in module.rules.iter().filter(|r| r.is_per_week() && r.applies_to_week(week.index)) {
-                if let Some(due) = due_date(rule, week) {
-                    urls.insert(module_dir.join(resolve(&rule.folder, week, due)));
-                }
-            }
-        }
-    }
-    urls.into_iter().collect()
 }
 
 #[cfg(test)]

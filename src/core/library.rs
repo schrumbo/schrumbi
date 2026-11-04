@@ -35,7 +35,6 @@ pub enum Route {
     Grid,
     Inbox,
     Search,
-    Checks,
     Record,
     Module(String),
     Doc(PathBuf),
@@ -70,7 +69,7 @@ impl Route {
         match self {
             Route::Doc(_) => Some(InspectorKind::Document),
             Route::Graph => Some(InspectorKind::Graph),
-            Route::Today | Route::Grid | Route::Module(_) | Route::Checks => Some(InspectorKind::Assignments),
+            Route::Today | Route::Grid | Route::Module(_) => Some(InspectorKind::Assignments),
             Route::Inbox | Route::Search | Route::Record | Route::Notes | Route::Cards => None,
         }
     }
@@ -176,7 +175,6 @@ pub struct ScanResult {
     pub generation: u64,
     pub listings: Listings,
     pub inbox: Vec<PathBuf>,
-    pub missing: usize,
     pub gone: HashSet<PathBuf>,
 }
 
@@ -185,7 +183,6 @@ pub struct ScanJob {
     pub generation: u64,
     pub requests: HashSet<scanner::FolderRequest>,
     pub inbox: PathBuf,
-    pub expected: Vec<PathBuf>,
     pub linked: Vec<PathBuf>,
 }
 
@@ -195,7 +192,6 @@ impl ScanJob {
             generation: self.generation,
             listings: scanner::listings(&self.requests),
             inbox: scanner::files(&self.inbox, "*"),
-            missing: self.expected.iter().filter(|p| !p.exists()).count(),
             gone: self.linked.into_iter().filter(|p| !p.exists()).collect(),
         }
     }
@@ -325,7 +321,6 @@ pub struct Library {
     /// The dialog that names a set of tabs is wanted.
     pub show_save_layout: bool,
     pub filing_request: Option<FilingRequest>,
-    pub missing_folder_count: usize,
     /// Linked files the last scan did not find.
     gone_links: HashSet<PathBuf>,
     action_items: Vec<Assignment>,
@@ -496,7 +491,6 @@ impl Library {
             cards_request: None,
             show_save_layout: false,
             filing_request: None,
-            missing_folder_count: 0,
             gone_links: HashSet::new(),
             action_items: Vec::new(),
             listings: HashMap::new(),
@@ -722,14 +716,8 @@ impl Library {
         if self.config.as_ref() == Some(&c) {
             return false;
         }
-        let checks = |c: &StudyConfig| (c.check_names, c.check_folders);
-        let recheck = self.config.as_ref().map(checks) != Some(checks(&c));
         self.config = Some(c);
-        if recheck {
-            self.reevaluate();
-        } else {
-            self.changed();
-        }
+        self.changed();
         true
     }
 
@@ -1437,7 +1425,6 @@ impl Library {
             generation: self.scan_generation,
             requests: scanner::requests(&self.assignments),
             inbox: root.join(&config.inbox),
-            expected: self.semester().map(|s| schedule::expected_folders(config, s, root)).unwrap_or_default(),
             linked: self.state.linked_files.values().flatten().map(|rel| root.join(rel)).collect(),
         })
     }
@@ -1446,7 +1433,6 @@ impl Library {
         if r.generation != self.scan_generation {
             return;
         }
-        self.missing_folder_count = r.missing;
         self.listings = r.listings;
         self.inbox = r.inbox;
         self.gone_links = r.gone;
@@ -1864,10 +1850,6 @@ impl Library {
         count
     }
 
-    pub fn misnamed(&self) -> Vec<(&Assignment, PathBuf)> {
-        self.assignments.iter().flat_map(|a| self.evaluations.get(&a.id).into_iter().flat_map(|e| e.misnamed.iter().cloned()).map(move |f| (a, f))).collect()
-    }
-
     pub fn naming(&self, module_id: &str) -> Option<Naming> {
         let index = self.config.as_ref()?.modules.iter().position(|m| m.id == module_id)?;
         self.namings().get(index).cloned()
@@ -1893,17 +1875,6 @@ impl Library {
         let Some(c) = self.config.as_ref() else { return Vec::new() };
         let author = c.author.split('-').next().unwrap_or("").to_string();
         [c.name.clone(), author].into_iter().chain(c.modules.iter().flat_map(|m| [m.code.clone(), m.name.clone()])).chain(["Name", "Seite", "Lehrwoche"].map(String::from)).collect()
-    }
-
-    /// Convention name for an existing file, keeping its title, co-authors and date where recognizable.
-    pub fn suggested_name(&self, file: &Path, a: &Assignment) -> Option<String> {
-        let naming = self.naming(&a.module_id)?;
-        let facts = FileFacts::read(file);
-        let namings = self.namings();
-        let parsed = namings.iter().find_map(|n| n.parse(&name_of(file)));
-        let title = parsed.as_ref().map(|p| p.title.clone()).or_else(|| filing::title_suggestions(&facts, &namings, &self.title_ignore_words()).first().map(|s| s.title.clone())).unwrap_or_else(|| "Titel".into());
-        let date = parsed.as_ref().and_then(|p| p.date).or(facts.name_date).unwrap_or_else(|| day::local_date(facts.created.min(a.due)));
-        Some(naming.render(&title, date, extension(&name_of(file)), &parsed.map(|p| p.coauthors).unwrap_or_default(), a.week, a.iso_week, None))
     }
 
     pub fn module_containing(&self, path: &Path) -> Option<&Module> {
@@ -2223,19 +2194,6 @@ impl Library {
     fn below_root(&self, path: &Path) -> Option<PathBuf> {
         let (root, settled) = (self.root.as_ref()?, self.settled_root.as_ref()?);
         path.strip_prefix(root).or_else(|_| path.strip_prefix(settled)).map(Path::to_path_buf).ok()
-    }
-
-    pub fn missing_folders(&self) -> Vec<PathBuf> {
-        let (Some(root), Some(c), Some(s)) = (self.root.as_ref(), self.config.as_ref(), self.semester()) else { return Vec::new() };
-        if !c.check_folders {
-            return Vec::new();
-        }
-        schedule::expected_folders(c, s, root).into_iter().filter(|p| !p.exists()).collect()
-    }
-
-    /// Whether Aufräumen should show that folders are missing.
-    pub fn reports_missing_folders(&self) -> bool {
-        self.missing_folder_count > 0 && self.config.as_ref().is_some_and(|c| c.check_folders)
     }
 
     /// Where filing into an assignment puts the file: its folder, or when Schrumbi may not create folders,
@@ -2797,9 +2755,9 @@ impl Library {
     fn convention_target(&self, file: &Path) -> Option<(Option<Assignment>, String)> {
         self.config.as_ref().filter(|c| c.naming_convention())?;
         let linked = self.deadlines_of(file);
-        let deadline = linked.iter().find(|a| a.upload).or(linked.first()).cloned().or_else(|| self.fitting_deadline(file));
-        let module_id = deadline.as_ref().map(|a| a.module_id.clone()).or_else(|| self.module_containing(file).map(|m| m.id.clone()))?;
-        Some((deadline, module_id))
+        let deadline = linked.iter().find(|a| a.upload).or(linked.first()).cloned().or_else(|| self.fitting_deadline(file))?;
+        let module_id = deadline.module_id.clone();
+        Some((Some(deadline), module_id))
     }
 
     /// Renames a note named after its heading and brings the heading along; a convention name only has to say the same title.
@@ -2810,21 +2768,6 @@ impl Library {
             let same = super::markdown::first_heading(text).is_some_and(|h| if convention { Naming::clean(&h) == Naming::clean(title) } else { h == title });
             if same { text.to_string() } else { super::markdown::with_first_heading(text, title) }
         });
-    }
-
-    /// The convention a file in this place must follow: a checked upload it belongs to or whose folder holds it, the next one due first.
-    fn convention_at(&self, path: &Path) -> Option<(Naming, Assignment)> {
-        self.convention_for(path, path)
-    }
-
-    /// Like `convention_at`, for a file that is about to be at `place`: its links still sit on `file`.
-    fn convention_for(&self, file: &Path, place: &Path) -> Option<(Naming, Assignment)> {
-        self.config.as_ref().filter(|c| c.check_names)?;
-        if let Some(a) = self.deadlines_of(file).into_iter().find(|a| a.upload) {
-            return Some((self.naming(&a.module_id)?, a));
-        }
-        let a = self.fitting_deadline(place)?;
-        Some((self.naming(&a.module_id)?, a))
     }
 
     /// The upload whose folder holds `path` and whose pattern fits its name, the next one due first.
@@ -2984,23 +2927,6 @@ impl Library {
             });
         }
         self.save_documents();
-    }
-
-    pub fn rename_all(&mut self, items: Vec<(PathBuf, String)>) {
-        let mut done: Vec<Change> = Vec::new();
-        for (file, name) in items.into_iter().filter(|(f, n)| *n != name_of(f)) {
-            let target = rename_target(&file, &name);
-            if move_path(&file, &target).is_ok() {
-                self.path_moved(&file, &target);
-                let (changes, _) = self.relink(&file, &target);
-                done.push(Change::Move { from: target, to: file });
-                done.extend(changes);
-            }
-        }
-        self.refresh();
-        if !done.is_empty() {
-            self.commit(if done.len() == 1 { tr("1 Datei umbenannt") } else { trf("%lld Dateien umbenannt", &[&done.len()]) }, "pencil", done);
-        }
     }
 
     /// Drops files on their way to the trash from every list at once; scans until `trashed` keep them out too.
@@ -3361,18 +3287,6 @@ impl Library {
             let msg = if count == 1 { tr("1 Datei in der Inbox") } else { trf("%lld Dateien in der Inbox", &[&count]) };
             self.notify(msg, "inbox", None, None);
         }
-    }
-
-    pub fn create_missing_folders(&mut self) -> usize {
-        let missing = self.missing_folders();
-        for p in &missing {
-            let _ = std::fs::create_dir_all(p);
-        }
-        self.refresh();
-        if !missing.is_empty() {
-            self.notify(trf("%lld Ordner angelegt", &[&missing.len()]), "folder-plus", None, None);
-        }
-        missing.len()
     }
 
     // MARK: Documents

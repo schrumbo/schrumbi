@@ -112,7 +112,7 @@ const SYNONYMS: &[(&str, &str)] = &[
 ];
 
 /// Settings shown only while there is a naming convention; search leads to its switch instead.
-const NEEDS_CONVENTION: &[&str] = &["Matrikelnummer", "Mitautor:innen", "Beim Ablegen umbenennen", "Dateinamen prüfen", "Muster", "Beispiel"];
+const NEEDS_CONVENTION: &[&str] = &["Matrikelnummer", "Mitautor:innen", "Muster", "Beispiel"];
 
 /// Every labelled setting and the tab it lives on, for the search field.
 const SEARCHABLE: &[(&str, Tab)] = &[
@@ -128,9 +128,6 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Abgabeordner", Tab::General),
     ("Namenskonvention", Tab::General),
     ("Nach einem Muster benennen", Tab::General),
-    ("Beim Ablegen umbenennen", Tab::General),
-    ("Dateinamen prüfen", Tab::General),
-    ("Fehlende Wochenordner melden", Tab::General),
     ("Ordner anlegen", Tab::General),
     ("Noten", Tab::General),
     ("Notensystem", Tab::General),
@@ -494,17 +491,12 @@ fn filing_sections(c: &StudyConfig, extra: Vec<AnyElement>, submissions: AnyElem
     let on = c.naming_convention();
     let mut naming = vec![detail_row(tr("Nach einem Muster benennen"), naming_detail(on), naming_switch("g-naming", c), t)];
     if on {
-        naming.push(sub_row(tr("Beim Ablegen umbenennen"), switch("g-rename", c.rename_on_filing, |c, v| c.rename_on_filing = v), t));
-        naming.push(sub_row(tr("Dateinamen prüfen"), switch("g-check-names", c.check_names, |c, v| c.check_names = v), t));
         naming.extend(extra);
     }
-    let mut folders = vec![
+    let folders = vec![
         detail_row(tr("Abgabeordner"), tr("In jedem Modul. Hier landen abgelegte Dateien und neue Notizen für eine Abgabe. Leer: der Modulordner."), submissions, t),
         row(tr("Ordner anlegen"), switch("g-create-folders", c.create_folders, |c, v| c.create_folders = v), t),
     ];
-    if c.modules.iter().any(|m| m.rules.iter().any(|r| r.is_per_week())) {
-        folders.push(row(tr("Fehlende Wochenordner melden"), switch("g-check-folders", c.check_folders, |c, v| c.check_folders = v), t));
-    }
     (
         section(Some(tr("Namenskonvention")), on.then(|| tr("Das Muster steht in den Einstellungen jedes Moduls.")), naming, t),
         section(Some(tr("Ablegen und Ordner")), Some(tr("Schrumbi benennt und verschiebt nie etwas von selbst. Ohne „Ordner anlegen“ landen Dateien nur in Ordnern, die es schon gibt.")), folders, t),
@@ -1062,7 +1054,7 @@ impl Settings {
         let sidebar = section(
             Some(tr("Seitenleiste")),
             Some(tr("Ausgeblendete Einträge bleiben über Kürzel und Befehlspalette erreichbar. Rechtsklick auf einen Eintrag blendet ihn direkt aus.")),
-            [("semester", tr("Semester")), ("record", tr("Leistungen")), ("inbox", tr("Inbox")), ("notes", tr("Notizen")), ("cards", tr("Karten")), ("checks", tr("Aufräumen"))]
+            [("semester", tr("Semester")), ("record", tr("Leistungen")), ("inbox", tr("Inbox")), ("notes", tr("Notizen")), ("cards", tr("Karten"))]
                 .into_iter()
                 .map(|(key, label)| {
                     let shown = !hidden.iter().any(|k| k == key);

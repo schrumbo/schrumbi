@@ -30,13 +30,12 @@ Bei {ui:Module} sind passende Ordner schon angehakt: alles direkt in einem Semes
 
 | Bereich | Kürzel | Zeigt |
 |---|---|---|
-| {ui:Übersicht} | {key:GoToday} | Was jetzt dran ist |
-| {ui:Semester} | {key:GoGrid} | Alle Wochen und Module |
-| {ui:Leistungen} | {key:GoRecord} | Punkte und Noten |
-| {ui:Inbox} | {key:GoInbox} | Dateien, die noch einen Platz brauchen |
-| {ui:Notizen} | | Notizen, Suche, Tags, Aufgaben |
-| {ui:Karten} | {key:GoCards} | Karteikarten zum Lernen |
-| {ui:Aufräumen} | {key:GoChecks} | Erscheint nur, wenn etwas zu tun ist |
+| {ui:Übersicht} | {key:goToday} | Was jetzt dran ist |
+| {ui:Semester} | {key:goGrid} | Alle Wochen und Module |
+| {ui:Leistungen} | {key:goRecord} | Punkte und Noten |
+| {ui:Inbox} | {key:goInbox} | Dateien, die noch einen Platz brauchen |
+| {ui:Notizen} | {key:goNotes} | Notizen, Suche, Tags, Aufgaben |
+| {ui:Karten} | {key:goCards} | Karteikarten zum Lernen |
 
 - Klick auf den offenen Bereich oder {key:ToggleSidebar} blendet die Beschriftungen ein und aus.
 - Rechtsklick auf einen Bereich außer {ui:Übersicht}: {ui:Aus der Seitenleiste ausblenden}.

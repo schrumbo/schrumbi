@@ -1,6 +1,6 @@
 # Overview
 
-What is due now, at a glance. {key:GoToday} opens it.
+What is due now, at a glance. {key:goToday} opens it.
 
 ## Due Now
 

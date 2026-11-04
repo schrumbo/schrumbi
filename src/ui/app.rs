@@ -5,7 +5,7 @@ use super::state::{self, act};
 use crate::core::i18n::tr;
 use crate::core::library::{NewNoteRequest, Route};
 use crate::core::prefs;
-use crate::core::shortcuts::ShortcutAction;
+use crate::core::shortcuts::{Group, ShortcutAction};
 
 actions!(
     schrumbi,
@@ -49,7 +49,7 @@ actions!(
         GoRecord,
         GoInbox,
         GoCards,
-        GoChecks,
+        GoNotes,
         SearchFiles,
         NextTab,
         PreviousTab,
@@ -66,6 +66,11 @@ actions!(
 #[derive(Clone, PartialEq, Debug, serde::Deserialize, schemars::JsonSchema, Action)]
 #[action(namespace = schrumbi)]
 pub struct OpenRecent(pub usize);
+
+/// Shows the module at this position of the sidebar.
+#[derive(Clone, PartialEq, Debug, serde::Deserialize, schemars::JsonSchema, Action)]
+#[action(namespace = schrumbi)]
+pub struct GoModuleAt(pub usize);
 
 /// Shows a module page by id.
 #[derive(Clone, PartialEq, Debug, serde::Deserialize, schemars::JsonSchema, Action)]
@@ -170,9 +175,14 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &GoRecord, cx| route(Route::Record)(cx));
     cx.on_action(|_: &GoInbox, cx| route(Route::Inbox)(cx));
     cx.on_action(|_: &GoCards, cx| route(Route::Cards)(cx));
-    cx.on_action(|_: &GoChecks, cx| route(Route::Checks)(cx));
+    cx.on_action(|_: &GoNotes, cx| act(cx, |l| l.show_notes()));
     cx.on_action(|_: &SearchFiles, cx| route(Route::Search)(cx));
     cx.on_action(|a: &GoModule, cx| route(Route::Module(a.0.clone()))(cx));
+    cx.on_action(|a: &GoModuleAt, cx| {
+        if let Some(id) = state::read(cx, |l| l.semester_modules().get(a.0).map(|m| m.id.clone())) {
+            route(Route::Module(id))(cx);
+        }
+    });
     cx.on_action(|_: &CloseTab, cx| {
         let shown = state::read(cx, |l| if let Route::Doc(p) = l.route() { Some(p.clone()) } else { None });
         let main = super::main_window::is_active(cx);
@@ -261,14 +271,22 @@ pub fn cmd(k: &str) -> String {
     format!("{}-{k}", if cfg!(target_os = "macos") { "cmd" } else { "ctrl" })
 }
 
+static BOUND: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
 /// Binds the app's keys on top of the component library's, using the user's custom shortcuts.
 /// Later bindings win, so rebinding after a settings change overrides the earlier ones.
 pub fn bind_keys(cx: &mut App) {
-    let mut b: Vec<KeyBinding> = vec![
+    let mut bound = BOUND.lock().unwrap_or_else(|e| e.into_inner());
+    for a in ShortcutAction::ALL.into_iter().filter(|a| a.group() != Group::Editor) {
+        bound.insert(a.default_shortcut().keystroke());
+        bound.extend(a.shortcut().map(|s| s.keystroke()));
+    }
+    let mut b: Vec<KeyBinding> = bound.iter().map(|k| kb(k.clone(), NoAction, None)).collect();
+    drop(bound);
+    b.extend([
         kb(cmd("q"), Quit, None),
         kb(cmd("k"), CommandPalette, None),
         kb(cmd("p"), CommandPalette, None),
-        kb(cmd("g"), ShowGraph, None),
         kb(cmd("shift-p"), CommandPalette, None),
         kb(cmd("/"), ShowShortcuts, None),
         kb(cmd("shift-7"), ShowShortcuts, None),
@@ -279,16 +297,12 @@ pub fn bind_keys(cx: &mut App) {
         kb(cmd("s"), Save, None),
         kb(cmd("shift-w"), CloseWindow, None),
         kb(cmd("shift-r"), RevealWorkspace, None),
-        kb(cmd("1"), GoToday, None),
-        kb(cmd("2"), GoGrid, None),
-        kb(cmd("3"), GoRecord, None),
-        kb(cmd("4"), GoInbox, None),
-        kb(cmd("5"), GoChecks, None),
-        kb(cmd("6"), GoCards, None),
+        kb(cmd("7"), GoModuleAt(0), None),
+        kb(cmd("8"), GoModuleAt(1), None),
+        kb(cmd("9"), GoModuleAt(2), None),
+        kb(cmd("shift-o"), OpenOtherWorkspace, None),
         kb(cmd("m"), Minimize, None),
         kb(if cfg!(target_os = "macos") { "ctrl-cmd-f" } else { "f11" }.to_string(), ToggleFullscreen, None),
-        kb(cmd("shift-t"), ReopenTab, None),
-        kb(if cfg!(target_os = "macos") { "ctrl-shift--".into() } else { "alt-right".into() }, GoForward, None),
         kb(cmd("enter"), super::filing_form::CommitFiling, Some("FilingForm")),
         kb(cmd("b"), super::main_window::ToggleSidebar, Some("MainWindow")),
         kb("down".into(), super::quick::QuickDown, Some("QuickOpen")),
@@ -296,11 +310,22 @@ pub fn bind_keys(cx: &mut App) {
         kb("down".into(), super::main_window::SearchDown, Some("SearchField > Input")),
         kb("up".into(), super::main_window::SearchUp, Some("SearchField > Input")),
         KeyBinding::new("escape", super::main_window::Dismiss, Some("MainWindow")),
-    ];
+    ]);
+    #[cfg(not(target_os = "macos"))]
+    b.push(kb(cmd("y"), Redo, Some("MainWindow")));
     #[cfg(target_os = "macos")]
     b.extend([KeyBinding::new("cmd-h", Hide, None), KeyBinding::new("cmd-alt-h", HideOthers, None)]);
     b.extend(
         [
+            binding(ShortcutAction::GoToday, GoToday, None),
+            binding(ShortcutAction::GoGrid, GoGrid, None),
+            binding(ShortcutAction::GoRecord, GoRecord, None),
+            binding(ShortcutAction::GoInbox, GoInbox, None),
+            binding(ShortcutAction::GoNotes, GoNotes, None),
+            binding(ShortcutAction::GoCards, GoCards, None),
+            binding(ShortcutAction::GoForward, GoForward, None),
+            binding(ShortcutAction::ShowGraph, ShowGraph, None),
+            binding(ShortcutAction::ReopenTab, ReopenTab, None),
             binding(ShortcutAction::QuickOpen, QuickOpen, None),
             binding(ShortcutAction::SearchFiles, SearchFiles, None),
             binding(ShortcutAction::NewEntry, NewEntry, None),
@@ -327,6 +352,7 @@ pub fn bind_keys(cx: &mut App) {
     b.extend(super::pdf_view::key_bindings());
     b.extend(super::sheet_view::key_bindings());
     cx.bind_keys(b);
+    rebuild_menus(cx);
 }
 
 /// The menu bar: Schrumbi, Ablage, Bearbeiten, Darstellung, Gehe zu, Fenster.
@@ -347,9 +373,11 @@ pub fn rebuild_menus(cx: &mut App) {
         MenuItem::action(tr("Semester"), GoGrid),
         MenuItem::action(tr("Leistungen"), GoRecord),
         MenuItem::action(tr("Inbox"), GoInbox),
+        MenuItem::action(tr("Notizen"), GoNotes),
         MenuItem::action(tr("Karten"), GoCards),
-        MenuItem::action(tr("Aufräumen"), GoChecks),
         MenuItem::separator(),
+        MenuItem::action(tr("Tagesnotiz öffnen"), DailyNote),
+        MenuItem::action(tr("Graph zeigen"), ShowGraph),
         MenuItem::action(tr("In allen Dateien suchen"), SearchFiles),
         MenuItem::action(tr("Datei schnell öffnen…"), QuickOpen),
         MenuItem::separator(),
@@ -357,7 +385,7 @@ pub fn rebuild_menus(cx: &mut App) {
         MenuItem::action(tr("Vorheriger Tab"), PreviousTab),
         MenuItem::separator(),
     ];
-    go.extend(modules.into_iter().map(|(id, name)| MenuItem::action(name, GoModule(id))));
+    go.extend(modules.into_iter().enumerate().map(|(i, (id, name))| if i < 3 { MenuItem::action(name, GoModuleAt(i)) } else { MenuItem::action(name, GoModule(id)) }));
     let mut app_menu = vec![
         MenuItem::action(tr("Über Schrumbi"), About),
         MenuItem::action(tr("Nach Updates suchen…"), CheckForUpdates),
@@ -405,6 +433,7 @@ pub fn rebuild_menus(cx: &mut App) {
             MenuItem::action(tr("Geteilte Ansicht"), SplitPreview),
             MenuItem::action(tr("Notiz als PDF exportieren"), ExportPdf),
             MenuItem::separator(),
+            MenuItem::action(tr("Seitenleiste ein-/ausblenden"), super::main_window::ToggleSidebar),
             MenuItem::action(tr("Details ein-/ausblenden"), ToggleInspector),
             MenuItem::action(tr("Aktualisieren"), Refresh),
             MenuItem::separator(),

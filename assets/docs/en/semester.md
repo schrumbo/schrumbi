@@ -4,7 +4,7 @@ A semester has lecture weeks, a module has a folder. Schrumbi needs nothing more
 
 ## Semester
 
-{key:GoGrid} shows the whole semester.
+{key:goGrid} shows the whole semester.
 
 - Top: progress and a band of weeks. Clicking a lecture week jumps there.
 - {ui:Module}: every module with its next deadline. Clicking opens the module page.
@@ -56,7 +56,7 @@ Files belong to the week's submission once you file them, create a note for it o
 
 ## Grades
 
-{key:GoRecord} shows points and grades.
+{key:goRecord} shows points and grades.
 
 - A {ui:Note} sets {ui:Bestanden} to match the grading system.
 - Clicking a module name opens its partial results, such as exam 60 % and project 40 %.

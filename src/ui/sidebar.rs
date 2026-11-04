@@ -14,6 +14,7 @@ use super::widgets::{KeyNav, icon, tip};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library, Route};
 use crate::core::prefs;
+use crate::core::shortcuts::ShortcutAction;
 
 /// Height of the title band that holds the traffic lights.
 pub const BAND: f32 = if super::chrome::CUSTOM { 8. } else { 52. };
@@ -49,25 +50,20 @@ struct Entry {
     route: Route,
     icon: &'static str,
     label: String,
-    shortcut: Option<&'static str>,
+    shortcut: Option<ShortcutAction>,
     badge: usize,
     urgent: bool,
 }
 
 fn entries(lib: &Library) -> Vec<Entry> {
-    let issues = lib.misnamed().len() + usize::from(lib.reports_missing_folders());
-    let mut v = vec![
-        Entry { key: None, route: Route::Today, icon: "layout-grid", label: tr("Übersicht"), shortcut: Some("1"), badge: lib.action_items().len(), urgent: true },
-        Entry { key: Some("semester"), route: Route::Grid, icon: "table", label: tr("Semester"), shortcut: Some("2"), badge: 0, urgent: false },
-        Entry { key: Some("record"), route: Route::Record, icon: "award", label: tr("Leistungen"), shortcut: Some("3"), badge: 0, urgent: false },
-        Entry { key: Some("inbox"), route: Route::Inbox, icon: "inbox", label: tr("Inbox"), shortcut: Some("4"), badge: lib.inbox.len(), urgent: false },
-    ];
-    v.push(Entry { key: Some("notes"), route: Route::Notes, icon: "book-open", label: tr("Notizen"), shortcut: None, badge: 0, urgent: false });
-    v.push(Entry { key: Some("cards"), route: Route::Cards, icon: "layers", label: tr("Karten"), shortcut: Some("6"), badge: crate::core::cards::counts("", crate::core::cards::now()).total(), urgent: false });
-    if issues > 0 || matches!(lib.route(), Route::Checks) {
-    v.push(Entry { key: Some("checks"), route: Route::Checks, icon: "list-checks", label: tr("Aufräumen"), shortcut: Some("5"), badge: issues, urgent: false });
-    }
-    v
+    vec![
+        Entry { key: None, route: Route::Today, icon: "layout-grid", label: tr("Übersicht"), shortcut: Some(ShortcutAction::GoToday), badge: lib.action_items().len(), urgent: true },
+        Entry { key: Some("semester"), route: Route::Grid, icon: "table", label: tr("Semester"), shortcut: Some(ShortcutAction::GoGrid), badge: 0, urgent: false },
+        Entry { key: Some("record"), route: Route::Record, icon: "award", label: tr("Leistungen"), shortcut: Some(ShortcutAction::GoRecord), badge: 0, urgent: false },
+        Entry { key: Some("inbox"), route: Route::Inbox, icon: "inbox", label: tr("Inbox"), shortcut: Some(ShortcutAction::GoInbox), badge: lib.inbox.len(), urgent: false },
+        Entry { key: Some("notes"), route: Route::Notes, icon: "book-open", label: tr("Notizen"), shortcut: Some(ShortcutAction::GoNotes), badge: 0, urgent: false },
+        Entry { key: Some("cards"), route: Route::Cards, icon: "layers", label: tr("Karten"), shortcut: Some(ShortcutAction::GoCards), badge: crate::core::cards::counts("", crate::core::cards::now()).total(), urgent: false },
+    ]
 }
 
 /// Shows or hides a sidebar entry.
@@ -79,6 +75,11 @@ pub fn set_hidden(key: &str, hidden: bool, cx: &mut App) {
         }
     });
     super::state::lib(cx).update(cx, |_, cx| cx.notify());
+}
+
+/// The first three modules answer to ⌘7 to ⌘9, in sidebar order.
+fn module_help(name: String, index: usize) -> String {
+    if index < 3 { format!("{name}  {}", shortcut_label(&(index + 7).to_string())) } else { name }
 }
 
 fn shortcut_label(key: &str) -> String {
@@ -162,8 +163,8 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
             continue;
         }
         let (hide_key, hide_label) = (e.key, e.label.clone());
-        let help = match e.shortcut {
-            Some(k) => format!("{}  {}", e.label, shortcut_label(k)),
+        let help = match e.shortcut.and_then(|a| a.shortcut()) {
+            Some(k) => format!("{}  {}", e.label, k.display()),
             None => e.label.clone(),
         };
         let route = e.route.clone();
@@ -195,7 +196,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
         *by_module.entry(a.module_id.as_str()).or_default() += 1;
     }
     let mut mods = div().flex().flex_col();
-    for m in &modules {
+    for (index, m) in modules.iter().enumerate() {
         let route = Route::Module(m.id.clone());
         let active = is_active(lib, &route);
         let color = t.palette(&m.color);
@@ -218,7 +219,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
         let folder = lib.root.as_ref().map(|r| r.join(&m.folder));
         let (outside, inside, edit_id) = (m.id.clone(), m.id.clone(), m.id.clone());
         mods = mods.child(
-            tab(SharedString::from(format!("tab-module-{}", m.id)), active, false, chip, if m.name.is_empty() { m.code.clone() } else { m.name.clone() }, count, wide, m.display_name(), t)
+            tab(SharedString::from(format!("tab-module-{}", m.id)), active, false, chip, if m.name.is_empty() { m.code.clone() } else { m.name.clone() }, count, wide, module_help(m.display_name(), index), t)
                 .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(color.opacity(0.15)))
                 .drag_over::<super::browser::DraggedFile>(move |s, _, _, _| s.bg(color.opacity(0.15)))
                 .on_drop(move |paths: &ExternalPaths, _, cx| {

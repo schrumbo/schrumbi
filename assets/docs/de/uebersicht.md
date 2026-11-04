@@ -1,6 +1,6 @@
 # Übersicht
 
-Was jetzt dran ist, auf einen Blick. {key:GoToday} öffnet sie.
+Was jetzt dran ist, auf einen Blick. {key:goToday} öffnet sie.
 
 ## Jetzt dran
 

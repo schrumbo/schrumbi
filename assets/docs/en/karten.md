@@ -1,6 +1,6 @@
 # Cards
 
-Flashcards are text in your notes. Schrumbi finds them and schedules the reviews. {key:GoCards} opens them.
+Flashcards are text in your notes. Schrumbi finds them and schedules the reviews. {key:goCards} opens them.
 
 ## Write Cards
 

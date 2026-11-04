@@ -75,21 +75,21 @@ If another app changed the file, you see a notice. Nothing is lost until you cho
 
 - Type `[[` and choose a note.
 - {key:toggleInspector} shows {ui:Rückverweise}, {ui:Ausgehend} and {ui:Erwähnungen ohne Link}.
-- {key:ShowGraph} shows all notes as a graph.
+- {key:showGraph} shows all notes as a graph.
 
 ## Tabs
 
 | Shortcut | Effect |
 |---|---|
 | {key:closeTab} | Close tab |
-| {key:ReopenTab} | Reopen the last closed tab |
+| {key:reopenTab} | Reopen the last closed tab |
 | {key:nextTab} / {key:previousTab} | Next / previous tab |
 
 - A tab only closes when you close it: ×, middle click or {key:closeTab}.
 - A click on a file opens it as a preview with a slanted title. The next file replaces it.
 - Double-click, start writing or right-click → {ui:Tab behalten} to turn the preview into a kept tab.
 - A link opens its target as a preview; the note with the link stays open.
-- Drag a tab to change the order. {key:ReopenTab} brings a tab back to its old place.
+- Drag a tab to change the order. {key:reopenTab} brings a tab back to its old place.
 
 ### Side by side
 

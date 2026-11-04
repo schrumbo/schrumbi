@@ -18,7 +18,6 @@ fn real_workspace_summary() {
     println!("actions {}", lib.action_items().len());
     println!("next {:?}", lib.next_deadline().map(|a| (&a.title, a.due)));
     println!("inbox {}", lib.inbox.len());
-    println!("missing {}", lib.missing_folders().len());
     for a in lib.semester_assignments().iter().take(60) {
         println!("{} {} {:?}", a.id, a.due.format("%Y-%m-%d %H:%M"), lib.status(a));
     }

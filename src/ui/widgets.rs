@@ -543,9 +543,6 @@ pub fn assignment_row_with(lib: &Library, a: &Assignment, show_module: bool, sho
     } else if !e.briefs.is_empty() && !e.status.is_closed() {
         meta = meta.child(div().id(SharedString::from(format!("brief-{}", a.id))).flex().items_center().gap(px(space::XXS)).child(icon("clipboard-list", iconsize::XS, t.secondary)).child(tr("Aufgabe da")).tooltip(tip(tr("Aufgabenstellung liegt im Ordner, Abgabe fehlt noch"))));
     }
-    if !e.misnamed.is_empty() {
-        meta = meta.child(div().id(SharedString::from(format!("mis-{}", a.id))).child(icon("triangle-alert", iconsize::XS, t.orange)).tooltip(tip(tr("Dateiname entspricht nicht der Konvention"))));
-    }
     let tracks = a.tracks_files();
     let selected = lib.is_selected(&a.id);
     div()
