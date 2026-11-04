@@ -3724,7 +3724,7 @@ fn trash_with_copy(path: &Path) -> Result<Change> {
     let backup = stash(path)?;
     #[cfg(not(test))]
     let moved = match super::drive::trash_slot(path) {
-        Some(slot) => move_path(path, &slot).map_err(anyhow::Error::from),
+        Some(slot) => slot.and_then(|slot| move_path(path, &slot)).map_err(anyhow::Error::from),
         None => trash::delete(path).map_err(anyhow::Error::from),
     };
     #[cfg(test)]

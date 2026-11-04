@@ -254,12 +254,12 @@ fn ask(tx: &async_channel::Sender<Call>, body: Value, wait: Duration) -> Option<
 #[cfg(target_os = "windows")]
 mod native_menu {
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindowThreadProcessId, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_CANCELMODE};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, GetWindowThreadProcessId, IsWindowVisible, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_CANCELMODE};
 
     unsafe extern "system" fn collect(hwnd: HWND, list: LPARAM) -> BOOL {
         let mut pid = 0;
         unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
-        if pid == std::process::id() {
+        if pid == std::process::id() && unsafe { IsWindowVisible(hwnd) } != 0 {
             let mut class = [0u16; 16];
             let n = unsafe { GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32) };
             let menu = String::from_utf16_lossy(&class[..n.max(0) as usize]) == "#32768";
@@ -372,8 +372,7 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
             }))
         }
         "tree" => {
-            let handles = pick_windows(b, cx)?;
-            redraw(&handles, cx).await?;
+            let handles = redraw(b, cx).await?;
             let spots: Vec<Value> = handles.iter().flat_map(|h| shown(*h).into_iter().map(move |s| spot_json(*h, &s))).filter(|s| matches_filter(b, s)).collect();
             Ok(json!({ "spots": spots }))
         }
@@ -552,12 +551,22 @@ fn native(window: &Window) -> Value {
 #[cfg(target_os = "windows")]
 fn send_away(window: &Window) {
     use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetWindowLongPtrW, GetWindowRect, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_EX_APPWINDOW,
+        WS_EX_TOOLWINDOW,
+    };
     let Some(hwnd) = native(window).as_i64() else { return };
     let hwnd = hwnd as isize as windows_sys::Win32::Foundation::HWND;
     let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-    if unsafe { GetWindowRect(hwnd, &mut rect) } != 0 {
-        unsafe { SetWindowPos(hwnd, std::ptr::null_mut(), rect.left - AWAY, rect.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) };
+    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+        return;
+    }
+    unsafe {
+        ShowWindow(hwnd, SW_HIDE);
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style | WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize));
+        SetWindowPos(hwnd, std::ptr::null_mut(), rect.left - AWAY, rect.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     }
 }
 
@@ -691,15 +700,23 @@ fn matches(target: &str, s: &Value) -> bool {
     }
 }
 
-async fn redraw(handles: &[AnyWindowHandle], cx: &mut AsyncApp) -> Result<(), String> {
-    for handle in handles {
-        next_frame(*handle, true, Duration::from_millis(600), cx).await;
+async fn redraw(b: &Value, cx: &mut AsyncApp) -> Result<Vec<AnyWindowHandle>, String> {
+    let named = b.get("window").is_some_and(|w| !w.is_null());
+    let mut drawn = Vec::new();
+    let mut stuck = None;
+    for handle in pick_windows(b, cx)? {
+        next_frame(handle, true, Duration::from_millis(600), cx).await;
         let key = handle.window_id().as_u64();
         if WINDOWS.with_borrow(|w| w.get(&key).is_some_and(|d| d.forced)) {
-            return Err(format!("window {key} did not draw within 0.6 s (hidden, minimized or busy), so its elements would be stale"));
+            stuck.get_or_insert(key);
+        } else {
+            drawn.push(handle);
         }
     }
-    Ok(())
+    match stuck {
+        Some(key) if named || drawn.is_empty() => Err(format!("window {key} did not draw within 0.6 s (hidden, minimized or busy), so its elements would be stale")),
+        _ => Ok(drawn),
+    }
 }
 
 async fn settle(handle: AnyWindowHandle, cx: &mut AsyncApp) {
@@ -874,8 +891,7 @@ async fn find(b: &Value, cx: &mut AsyncApp) -> Result<(AnyWindowHandle, Spot), S
 async fn lookup(b: &Value, cx: &mut AsyncApp) -> Result<Result<(AnyWindowHandle, Spot), String>, String> {
     let target = b["target"].as_str().ok_or("target missing")?;
     let nth = b["nth"].as_u64().unwrap_or(0) as usize;
-    let handles = pick_windows(b, cx)?;
-    redraw(&handles, cx).await?;
+    let handles = redraw(b, cx).await?;
     let mut hits = Vec::new();
     let mut near = Vec::new();
     for handle in &handles {
@@ -918,6 +934,7 @@ async fn wait(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
             "window" => pick_windows(b, cx).is_ok(),
             _ => match lookup(b, cx).await {
                 Ok(found) => found.is_ok() == (what != "gone"),
+                Err(_) if what == "gone" && pick_windows(b, cx).is_err() => true,
                 Err(e) => {
                     trouble = Some(e);
                     false

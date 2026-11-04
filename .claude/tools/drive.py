@@ -256,30 +256,38 @@ def gc(quiet=True):
     if TREE.exists():
         for d in TREE.iterdir():
             inst = Instance(d.name) if d.is_dir() else None
-            if not inst or (inst.meta and inst.alive()) or time.time() - d.stat().st_mtime < 600:
+            try:
+                if not inst or (inst.meta and inst.alive()) or time.time() - d.stat().st_mtime < 600:
+                    continue
+            except OSError:
                 continue
             shutil.rmtree(d, ignore_errors=True)
             removed.append(d.name)
     for tree in BASE.iterdir() if BASE.exists() else []:
-        if tree == TREE or not tree.is_dir():
-            continue
-        for d in tree.iterdir():
-            meta = d / "meta.json"
+        if tree != TREE and tree.is_dir():
             try:
-                info = json.loads(meta.read_text(encoding="utf-8")) if meta.exists() else {}
-            except (OSError, ValueError):
-                info = {}
-            exe = d / "bin" / EXE
-            found = image(info["pid"]) if info.get("pid") else None
-            if found and os.path.normcase(os.path.realpath(found)) == os.path.normcase(os.path.realpath(exe)):
-                continue
-            if time.time() - d.stat().st_mtime > 86400:
-                shutil.rmtree(d, ignore_errors=True) if d.is_dir() else d.unlink(missing_ok=True)
-                removed.append(f"{tree.name}/{d.name}")
-        if not any(tree.iterdir()):
-            tree.rmdir()
+                removed += [f"{tree.name}/{d.name}" for d in tree.iterdir() if stale_elsewhere(d)]
+            except OSError:
+                pass
     if not quiet:
         print(f"removed {', '.join(removed)}" if removed else "nothing to clean")
+
+
+def stale_elsewhere(d):
+    try:
+        info = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        info = {}
+    found = image(info["pid"]) if info.get("pid") else None
+    if found and os.path.normcase(os.path.realpath(found)) == os.path.normcase(os.path.realpath(d / "bin" / EXE)):
+        return False
+    try:
+        if time.time() - d.stat().st_mtime <= 86400:
+            return False
+        shutil.rmtree(d, ignore_errors=True) if d.is_dir() else d.unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True
 
 
 def pick_instance(name):
