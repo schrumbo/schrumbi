@@ -2795,11 +2795,9 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
         let is_preview = preview.as_ref() == Some(doc);
         let is_beside = beside.as_ref() == Some(doc);
         let hint = if is_preview {
-            format!("{rel}
-{}", tr("Vorschau: Die nächste Datei, die du öffnest, ersetzt diesen Tab. Doppelklick oder Schreiben behält ihn."))
+            format!("{rel}\n{}", tr("Vorschau: Die nächste Datei, die du öffnest, ersetzt diesen Tab. Doppelklick oder Schreiben behält ihn."))
         } else if is_beside {
-            format!("{rel}
-{}", tr("Rechts geöffnet"))
+            format!("{rel}\n{}", tr("Rechts geöffnet"))
         } else {
             rel
         };
@@ -2841,8 +2839,8 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                 .rounded(px(radius::INNER))
                 .cursor_pointer().key_nav()
                 .when(active, |d| d.bg(t.ink.opacity(0.1)))
-                .when(is_beside, |d| d.bg(t.ink.opacity(0.05)))
-                .when(!active, |d| d.soft(hover, radius::INNER))
+                .when(is_beside, |d| d.bg(t.ink.opacity(0.04)).soft(t.ink.opacity(0.03), radius::INNER))
+                .when(!active && !is_beside, |d| d.soft(hover, radius::INNER))
                 .tooltip(tip(hint))
                 .on_click(move |e, _, cx| {
                     act(cx, |l| {

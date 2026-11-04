@@ -72,10 +72,72 @@ fn a_link_in_the_right_pane_opens_on_the_right() {
     let mut lib = opened(&p[..2]);
     lib.open_document(&p[0]);
     lib.set_split(Some(p[1].clone()));
-    lib.follow_path(&p[2], Some(&p[1]));
+    lib.beside_active = true;
+    let folder = p[1].parent().unwrap().join(".");
+    lib.follow_path(&p[2], Some(&folder));
     assert_eq!(lib.active_document, Some(p[0].clone()), "the left note stays");
     assert_eq!(lib.split_document, Some(p[2].clone()));
     assert!(lib.open_documents.contains(&p[1]), "the note that was on the right keeps its tab");
+    lib.set_route(Route::Today);
+    lib.follow_path(&p[1], Some(&folder));
+    assert_eq!((lib.route().clone(), lib.split_document.clone()), (Route::Doc(p[1].clone()), Some(p[2].clone())), "away from the notes, a link never lands in the hidden split");
+}
+
+#[test]
+fn links_from_the_details_open_on_the_left() {
+    let (_, p) = notes("link-details", &["a.md", "b.md", "c.md"]);
+    let mut lib = opened(&p[..2]);
+    lib.open_document(&p[0]);
+    lib.set_split(Some(p[1].clone()));
+    lib.beside_active = true;
+    lib.follow_path(&p[2], Some(&p[0]));
+    assert_eq!((lib.active_document.clone(), lib.split_document.clone()), (Some(p[2].clone()), Some(p[1].clone())));
+}
+
+#[test]
+fn back_never_swaps_out_a_preview_that_was_written_in() {
+    let (_, p) = notes("back-touched", &["a.md", "b.md"]);
+    let mut lib = Library::new();
+    lib.open_preview(&p[0]);
+    lib.follow_path(&p[1], None);
+    lib.buffer(&p[1]).replace("neu".into());
+    lib.go_back();
+    assert!(lib.open_documents.contains(&p[1]));
+}
+
+#[test]
+fn closed_tabs_come_back_in_order_after_closing_all() {
+    let (_, p) = notes("close-all", &["a.md", "b.md", "c.md", "d.md"]);
+    let mut lib = opened(&p);
+    lib.close_other_documents(&p[2]);
+    for _ in 0..3 {
+        lib.reopen_document();
+    }
+    assert_eq!(lib.open_documents, p);
+    lib.close_all_documents();
+    for _ in 0..4 {
+        lib.reopen_document();
+    }
+    assert_eq!(lib.open_documents, p);
+}
+
+#[test]
+fn back_between_tabs_moves_the_shown_tab() {
+    let (_, p) = notes("back-tabs", &["a.md", "b.md", "c.md"]);
+    let mut lib = opened(&p);
+    lib.open_document(&p[0]);
+    lib.open_document(&p[1]);
+    lib.go_back();
+    assert_eq!((lib.route().clone(), lib.active_document.clone()), (Route::Doc(p[0].clone()), Some(p[0].clone())));
+    lib.set_split(Some(p[1].clone()));
+    lib.open_document(&p[2]);
+    lib.go_back();
+    assert_eq!(*lib.route(), Route::Doc(p[0].clone()));
+    assert_eq!((lib.active_document.clone(), lib.split_document.clone()), (Some(p[0].clone()), Some(p[1].clone())));
+    lib.go_forward();
+    lib.set_split(Some(p[0].clone()));
+    lib.go_back();
+    assert_eq!((lib.active_document.clone(), lib.split_document.clone()), (Some(p[0].clone()), Some(p[2].clone())), "the note on the right comes left, the other goes right");
 }
 
 #[test]

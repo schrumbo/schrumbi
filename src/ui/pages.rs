@@ -416,7 +416,8 @@ impl Pages {
         let view = self.doc_view(&path, window, cx);
         let fallback = self.doc_recent.iter().find(|p| **p != path).cloned();
         let beside = state::read(cx, |l| l.split_document.clone()).filter(|p| *p != path);
-        let (quiet, asked, beside_asked) = state::lib(cx).update(cx, |l, _| (std::mem::take(&mut l.quiet_open), std::mem::take(&mut l.focus_document), std::mem::take(&mut l.focus_beside)));
+        let dialog = window.has_active_dialog(cx);
+        let (quiet, asked, beside_asked) = state::lib(cx).update(cx, |l, _| (std::mem::take(&mut l.quiet_open), std::mem::take(&mut l.focus_document), if dialog { false } else { std::mem::take(&mut l.focus_beside) }));
         if self.shown_doc.as_ref() != Some(&path) {
             self.shown_doc = Some(path);
             self.doc_needs_focus = !quiet;
@@ -434,7 +435,7 @@ impl Pages {
             Some(other) => {
                 let right = self.doc_view(&other, window, cx);
                 let right_canvas = canvas(&right);
-                if beside_asked && !window.has_active_dialog(cx) {
+                if beside_asked && !quiet {
                     let target = right.clone();
                     window.on_next_frame(move |window, cx| activate_doc(target, window, cx));
                 }

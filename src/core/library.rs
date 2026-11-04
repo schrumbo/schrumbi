@@ -863,7 +863,7 @@ impl Library {
     /// Only an untouched preview that is not on screen in the other pane makes room for it.
     fn preview_in(&mut self, path: &Path, right: bool) {
         let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        let right = right && self.split_document.is_some();
+        let right = right && self.split_document.is_some() && matches!(self.route, Route::Doc(_));
         if self.open_documents.contains(&path) || !Self::opens_in_app(&path) {
             if right && self.open_documents.contains(&path) && self.active_document.as_ref() != Some(&path) {
                 self.show_in(path, true);
@@ -982,7 +982,8 @@ impl Library {
             return;
         }
         let from = from.map(|f| dunce::canonicalize(f).unwrap_or_else(|_| f.to_path_buf()));
-        let right = self.beside_active || (from.is_some() && from == self.split_document);
+        let in_pane = matches!(self.route, Route::Doc(_)) && from.as_ref().is_some_and(|f| self.beside_active && !self.open_documents.contains(f));
+        let right = in_pane || (from.is_some() && from == self.split_document);
         self.preview_in(&path, right);
     }
 
@@ -996,7 +997,7 @@ impl Library {
 
     fn step_tab(&mut self, backwards: bool) -> bool {
         let Route::Doc(current) = self.route.clone() else { return false };
-        if self.preview_document.as_ref() != Some(&current) {
+        if self.preview_document.as_ref() != Some(&current) || self.buffers.get(&current).is_some_and(|b| b.touched) {
             return false;
         }
         let Some((mut back, mut forward)) = self.tab_trails.remove(&current) else { return false };
@@ -1090,6 +1091,7 @@ impl Library {
         }
         match self.buffer(path).restore(updated) {
             Ok(()) => {
+                self.pin_document(path);
                 self.record_edit(kind, label, Change::Note { path: path.to_path_buf(), text: before });
                 true
             }
@@ -1538,6 +1540,17 @@ impl Library {
         self.tab_can_step(true) || self.back_routes.iter().any(|r| self.route_exists(r))
     }
 
+    /// A note reached through the history becomes the shown tab; the note it leaves goes right when it was the right one.
+    fn land(&mut self, r: &Route) {
+        let Route::Doc(p) = r else { return };
+        if self.split_document.as_ref() == Some(p) {
+            self.split_document = self.active_document.clone().filter(|a| a != p);
+        }
+        self.active_document = Some(p.clone());
+        self.beside_active = false;
+        self.save_documents();
+    }
+
     pub fn can_go_forward(&self) -> bool {
         self.tab_can_step(false) || self.forward_routes.iter().any(|r| self.route_exists(r))
     }
@@ -1548,6 +1561,7 @@ impl Library {
         }
         while let Some(r) = self.forward_routes.pop() {
             if self.route_exists(&r) {
+                self.land(&r);
                 let from = std::mem::replace(&mut self.route, r);
                 self.arrived(&from);
                 self.back_routes.push(from);
@@ -3435,6 +3449,7 @@ impl Library {
             self.set_route(Route::Doc(left));
             return;
         }
+        self.beside_active = false;
         if !self.open_documents.contains(&path) {
             match self.active_document.as_ref().and_then(|a| self.open_documents.iter().position(|d| d == a)) {
                 Some(i) => self.open_documents.insert(i + 1, path.clone()),
@@ -3630,7 +3645,7 @@ impl Library {
     }
 
     pub fn close_other_documents(&mut self, path: &Path) {
-        self.closed_documents.extend(self.open_documents.iter().enumerate().filter(|(_, d)| *d != path).map(|(i, d)| (d.clone(), i)));
+        self.closed_documents.extend(self.open_documents.iter().enumerate().rev().filter(|(_, d)| *d != path).map(|(i, d)| (d.clone(), i)));
         self.split_document = None;
         let windows = self.note_windows.clone();
         self.buffers.retain(|p, _| p == path || windows.contains(p));
@@ -3640,7 +3655,7 @@ impl Library {
     }
 
     pub fn close_all_documents(&mut self) {
-        self.closed_documents.extend(self.open_documents.iter().cloned().enumerate().map(|(i, d)| (d, i)));
+        self.closed_documents.extend(self.open_documents.iter().cloned().enumerate().rev().map(|(i, d)| (d, i)));
         self.split_document = None;
         let windows = self.note_windows.clone();
         self.buffers.retain(|p, _| windows.contains(p));
@@ -3672,6 +3687,7 @@ impl Library {
         }
         while let Some(r) = self.back_routes.pop() {
             if self.route_exists(&r) {
+                self.land(&r);
                 let from = std::mem::replace(&mut self.route, r);
                 self.arrived(&from);
                 self.forward_routes.push(from);
