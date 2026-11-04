@@ -11,6 +11,12 @@ use super::OpenError;
 
 const MAX_ROWS: u32 = 1_048_576;
 const MAX_COLS: u32 = 16_384;
+const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+const LEGACY_FLAG: &str = "--read-legacy-workbook";
+const LEGACY_CELLS: usize = 4_000_000;
+const LEGACY_TEXT: usize = 256 << 20;
+const LEGACY_OUTPUT: u64 = 512 << 20;
+const LEGACY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HAlign {
@@ -761,6 +767,130 @@ pub struct Book {
 enum BookSource {
     Xlsx { pkg: Package, parts: Vec<String>, shared: Vec<String>, styles: Styles, date1904: bool, locale: Locale },
     Other { sheets: Box<calamine::Sheets<Cursor<Vec<u8>>>>, locale: Locale },
+    Legacy { sheets: Vec<Vec<(u32, u32, Value)>>, locale: Locale },
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+enum Value {
+    Int(i64),
+    Float(f64),
+    Text(String),
+    Bool(bool),
+    Date { value: f64, duration: bool },
+    Iso(String),
+    Error(String),
+}
+
+impl Value {
+    fn of(v: &calamine::Data) -> Option<Self> {
+        use calamine::Data;
+        Some(match v {
+            Data::Int(i) => Self::Int(*i),
+            Data::Float(f) => Self::Float(*f),
+            Data::String(s) => Self::Text(s.clone()),
+            Data::Bool(b) => Self::Bool(*b),
+            Data::DateTime(d) => Self::Date { value: d.as_f64(), duration: d.is_duration() },
+            Data::DateTimeIso(s) | Data::DurationIso(s) => Self::Iso(s.clone()),
+            Data::Error(e) => Self::Error(e.to_string()),
+            Data::Empty => return None,
+        })
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LegacyBook {
+    names: Vec<String>,
+    sheets: Vec<Vec<(u32, u32, Value)>>,
+}
+
+/// When started as the legacy workbook reader, parses the workbook on stdin, writes its cells to stdout and returns the exit code; otherwise None.
+pub fn legacy_reader() -> Option<i32> {
+    use std::io::{Read as _, Write as _};
+    if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new(LEGACY_FLAG)) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    if std::io::stdin().read_to_end(&mut bytes).is_err() {
+        return Some(2);
+    }
+    let Ok(out) = serde_json::to_vec(&legacy_read(bytes)) else { return Some(2) };
+    Some(if std::io::stdout().write_all(&out).is_ok() { 0 } else { 2 })
+}
+
+fn legacy_read(bytes: Vec<u8>) -> Result<LegacyBook, OpenError> {
+    use calamine::Reader as _;
+    let mut book = calamine::open_workbook_auto_from_rs(Cursor::new(bytes)).map_err(|e| calamine_error(&e))?;
+    let names: Vec<String> = book.sheets_metadata().iter().filter(|s| s.visible == calamine::SheetVisible::Visible).map(|s| s.name.clone()).collect();
+    let (mut cells, mut text) = (0, 0);
+    let mut sheets = Vec::new();
+    for name in &names {
+        let mut sheet = Vec::new();
+        if let Ok(range) = book.worksheet_range(name) {
+            let (r0, c0) = range.start().unwrap_or((0, 0));
+            for (r, c, v) in range.used_cells() {
+                let (r, c) = (r as u32 + r0, c as u32 + c0);
+                let Some(v) = Value::of(v).filter(|_| r < MAX_ROWS && c < MAX_COLS) else { continue };
+                cells += 1;
+                text += match &v {
+                    Value::Text(s) | Value::Iso(s) | Value::Error(s) => s.len(),
+                    _ => 0,
+                };
+                if cells > LEGACY_CELLS || text > LEGACY_TEXT {
+                    return Err(OpenError::Broken);
+                }
+                sheet.push((r, c, v));
+            }
+        }
+        sheets.push(sheet);
+    }
+    Ok(LegacyBook { names, sheets })
+}
+
+/// Parses a legacy workbook in a child process, so a file that makes calamine allocate without bound only takes the child down.
+fn legacy_in_child(bytes: Vec<u8>) -> Result<LegacyBook, OpenError> {
+    use std::io::{Read as _, Write as _};
+    use std::process::{Command, Stdio};
+    let exe = std::env::current_exe().map_err(|_| OpenError::Broken)?;
+    let mut command = Command::new(exe);
+    command.arg(LEGACY_FLAG).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        command.creation_flags(0x0800_0000);
+    }
+    let mut child = command.spawn().map_err(|_| OpenError::Broken)?;
+    let stdin = child.stdin.take();
+    let writer = std::thread::spawn(move || {
+        if let Some(mut stdin) = stdin {
+            let _ = stdin.write_all(&bytes);
+        }
+    });
+    let stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        if let Some(stdout) = stdout {
+            let _ = stdout.take(LEGACY_OUTPUT).read_to_end(&mut out);
+        }
+        out
+    });
+    let deadline = std::time::Instant::now() + LEGACY_TIMEOUT;
+    let finished = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break false;
+            }
+        }
+    };
+    let _ = writer.join();
+    let out = reader.join().unwrap_or_default();
+    if !finished {
+        return Err(OpenError::Broken);
+    }
+    serde_json::from_slice::<Result<LegacyBook, OpenError>>(&out).unwrap_or(Err(OpenError::Broken))
 }
 
 fn calamine_error(e: &calamine::Error) -> OpenError {
@@ -782,6 +912,13 @@ impl Book {
         match ext {
             "xlsx" | "xlsm" | "xltx" | "xltm" => Self::xlsx(bytes, locale),
             _ => {
+                if bytes.starts_with(&CFB_MAGIC) {
+                    let book = legacy_in_child(bytes)?;
+                    if book.names.is_empty() {
+                        return Err(OpenError::Broken);
+                    }
+                    return Ok(Self { names: book.names, active: 0, source: BookSource::Legacy { sheets: book.sheets, locale } });
+                }
                 let sheets = calamine::open_workbook_auto_from_rs(Cursor::new(bytes)).map_err(|e| calamine_error(&e))?;
                 use calamine::Reader as _;
                 let names: Vec<String> = sheets.sheets_metadata().iter().filter(|s| s.visible == calamine::SheetVisible::Visible).map(|s| s.name.clone()).collect();
@@ -832,6 +969,7 @@ impl Book {
                 Some(bytes) => worksheet(&bytes, shared, styles, *date1904, *locale),
                 None => Builder::new().finish(styles.styles.clone()),
             },
+            BookSource::Legacy { sheets, locale } => from_cells(sheets.get(index).into_iter().flatten().map(|(r, c, v)| (*r, *c, v)), *locale),
             BookSource::Other { sheets, locale } => {
                 use calamine::Reader as _;
                 let name = self.names.get(index).cloned().unwrap_or_default();
@@ -840,8 +978,8 @@ impl Book {
                     let mut cells = Vec::new();
                     while let Ok(Some(cell)) = reader.next_cell() {
                         let (r, c) = cell.get_position();
-                        if r < MAX_ROWS && c < MAX_COLS {
-                            cells.push((r, c, calamine::Data::from(cell.get_value().clone())));
+                        if let Some(v) = Value::of(&calamine::Data::from(cell.get_value().clone())).filter(|_| r < MAX_ROWS && c < MAX_COLS) {
+                            cells.push((r, c, v));
                         }
                     }
                     return from_cells(cells.iter().map(|(r, c, v)| (*r, *c, v)), *locale);
@@ -849,7 +987,8 @@ impl Book {
                 match sheets.worksheet_range(&name) {
                     Ok(range) => {
                         let (r0, c0) = range.start().unwrap_or((0, 0));
-                        from_cells(range.used_cells().map(|(r, c, v)| (r as u32 + r0, c as u32 + c0, v)).filter(|(r, c, _)| *r < MAX_ROWS && *c < MAX_COLS), *locale)
+                        let cells: Vec<_> = range.used_cells().map(|(r, c, v)| (r as u32 + r0, c as u32 + c0, v)).filter(|(r, c, _)| *r < MAX_ROWS && *c < MAX_COLS).filter_map(|(r, c, v)| Some((r, c, Value::of(v)?))).collect();
+                        from_cells(cells.iter().map(|(r, c, v)| (*r, *c, v)), *locale)
                     }
                     Err(_) => Builder::new().finish(vec![Style::default()]),
                 }
@@ -858,8 +997,7 @@ impl Book {
     }
 }
 
-fn from_cells<'a>(cells: impl Iterator<Item = (u32, u32, &'a calamine::Data)>, locale: Locale) -> Sheet {
-    use calamine::Data;
+fn from_cells<'a>(cells: impl Iterator<Item = (u32, u32, &'a Value)>, locale: Locale) -> Sheet {
     let mut b = Builder::new();
     let mut widths: Vec<usize> = Vec::new();
     let mut rows: HashMap<u32, Vec<Cell>> = HashMap::new();
@@ -868,25 +1006,24 @@ fn from_cells<'a>(cells: impl Iterator<Item = (u32, u32, &'a calamine::Data)>, l
     let date_time = Format::parse(if locale.german { "dd.mm.yyyy hh:mm" } else { "m/d/yyyy h:mm" });
     let duration = Format::parse("[h]:mm:ss");
     for (r, c, v) in cells {
-        let plain = matches!(v, Data::Int(_) | Data::Float(_));
+        let plain = matches!(v, Value::Int(_) | Value::Float(_));
         let (text, kind) = match v {
-            Data::Int(i) => (general.number(*i as f64, false, locale).text, CellKind::Number),
-            Data::Float(f) => (general.number(*f, false, locale).text, CellKind::Number),
-            Data::String(s) => (s.clone(), CellKind::Text),
-            Data::Bool(v) => (bool_text(*v, locale.german), CellKind::Bool),
-            Data::DateTime(d) => {
-                let f = if d.is_duration() {
+            Value::Int(i) => (general.number(*i as f64, false, locale).text, CellKind::Number),
+            Value::Float(f) => (general.number(*f, false, locale).text, CellKind::Number),
+            Value::Text(s) => (s.clone(), CellKind::Text),
+            Value::Bool(v) => (bool_text(*v, locale.german), CellKind::Bool),
+            Value::Date { value, duration: is_duration } => {
+                let f = if *is_duration {
                     &duration
-                } else if d.as_f64().fract() == 0. {
+                } else if value.fract() == 0. {
                     &date
                 } else {
                     &date_time
                 };
-                (f.number(d.as_f64(), false, locale).text, CellKind::Number)
+                (f.number(*value, false, locale).text, CellKind::Number)
             }
-            Data::DateTimeIso(s) | Data::DurationIso(s) => (s.clone(), CellKind::Number),
-            Data::Error(e) => (error_text(&e.to_string(), locale.german), CellKind::Error),
-            Data::Empty => continue,
+            Value::Iso(s) => (s.clone(), CellKind::Number),
+            Value::Error(e) => (error_text(e, locale.german), CellKind::Error),
         };
         if widths.len() <= c as usize {
             widths.resize(c as usize + 1, 0);
@@ -903,6 +1040,19 @@ fn from_cells<'a>(cells: impl Iterator<Item = (u32, u32, &'a calamine::Data)>, l
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_legacy_book_survives_the_trip_from_the_reader_process() {
+        use super::{LegacyBook, Value};
+        let cells = vec![(0, 0, Value::Text("Note".into())), (1, 0, Value::Float(1.5)), (1, 1, Value::Date { value: 45000.25, duration: false }), (2, 3, Value::Error("#DIV/0!".into()))];
+        let sent: Result<LegacyBook, crate::core::office::OpenError> = Ok(LegacyBook { names: vec!["Noten".into()], sheets: vec![cells.clone()] });
+        let back: Result<LegacyBook, crate::core::office::OpenError> = serde_json::from_slice(&serde_json::to_vec(&sent).unwrap()).unwrap();
+        let back = back.ok().unwrap();
+        assert_eq!((back.names, back.sheets), (vec!["Noten".to_string()], vec![cells]));
+        let locked: Result<LegacyBook, _> = serde_json::from_slice(&serde_json::to_vec(&Err::<LegacyBook, _>(crate::core::office::OpenError::Locked)).unwrap()).unwrap();
+        assert_eq!(locked.err(), Some(crate::core::office::OpenError::Locked), "a password stays a password, not a broken file");
+    }
+
+
     use super::*;
     use crate::core::office::docx::tests::zip;
 

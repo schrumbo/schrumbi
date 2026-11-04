@@ -29,6 +29,9 @@ impl AssetSource for Assets {
 }
 
 fn main() {
+    if let Some(code) = core::office::sheet::legacy_reader() {
+        std::process::exit(code);
+    }
     core::drive::check();
     core::crash::install();
     core::i18n::init(&core::prefs::get().language);

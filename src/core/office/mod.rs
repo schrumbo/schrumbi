@@ -21,7 +21,7 @@ pub enum Kind {
 }
 
 /// Why a file could not be shown.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OpenError {
     Broken,
     Locked,
