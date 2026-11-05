@@ -243,6 +243,21 @@ impl NoteBuffer {
         }
     }
 
+    /// Puts the note back to a decision still open: `theirs` on disk, `mine` here and waiting.
+    pub fn put_conflict(&mut self, mine: String, theirs: String) -> std::io::Result<()> {
+        write_atomic(&self.path, theirs.as_bytes())?;
+        self.missing = false;
+        self.known = self.modified();
+        self.last_saved = theirs.clone();
+        self.dirty = mine != theirs;
+        self.conflict = self.dirty.then_some(theirs);
+        self.text = mine;
+        self.version += 1;
+        self.revision += 1;
+        self.touched = true;
+        Ok(())
+    }
+
     /// Resolves a conflict in favour of the file on disk and hands back the text it replaced.
     pub fn take_disk(&mut self) -> Option<String> {
         self.conflict.take()?;

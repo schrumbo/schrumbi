@@ -3506,6 +3506,9 @@ impl Render for NoteView {
         let t = Theme::get(cx);
         let lib = state::lib(cx);
         let wheel = super::image_view::wheel_zoom(|factor, _, _, cx| scale_font(factor, cx));
+        if !lib.read(cx).buffers.contains_key(&self.path) {
+            self.follow_buffer(window, cx);
+        }
         let (missing, snapshot, conflict) = lib.update(cx, |l, _| {
             let b = l.buffer(&self.path);
             (b.missing, b.snapshot(), b.conflict.is_some())

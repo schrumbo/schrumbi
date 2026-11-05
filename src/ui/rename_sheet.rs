@@ -83,9 +83,13 @@ impl RenameSheet {
             return;
         }
         let path = self.path.clone();
+        let note = crate::core::markdown::is_markdown(&path);
         match act(cx, |l| l.rename_checked(&path, &name)) {
             Ok(()) => {
                 state::reindex(cx);
+                if note {
+                    act(cx, |l| l.focus_document = true);
+                }
                 cx.emit(Dismissed);
             }
             Err(e) => {
