@@ -44,7 +44,7 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Graph zeigen} | {key:showGraph} |
 | {ui:Vollbild} | {key:toggleFullscreen} |
 
-## Documents
+## Documents & Notes
 
 | Command | Shortcut |
 |---|---|

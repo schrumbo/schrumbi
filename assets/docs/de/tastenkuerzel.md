@@ -44,7 +44,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Graph zeigen} | {key:showGraph} |
 | {ui:Vollbild} | {key:toggleFullscreen} |
 
-## Dokumente
+## Dokumente & Notizen
 
 | Befehl | Kürzel |
 |---|---|

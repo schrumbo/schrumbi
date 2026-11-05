@@ -32,7 +32,7 @@ Word, Excel and PowerPoint open in Schrumbi, read-only.
 
 | File | View |
 |---|---|
-| `.docx` | Pages like a PDF: zoom, search, copy text |
+| `.docx` | Pages like a PDF, portrait and landscape per section: zoom, search, copy text |
 | `.pptx` | One slide below the other, with slide numbers, zoom and search |
 | `.xlsx` `.xlsm` `.xls` `.ods` | Spreadsheet with sheets at the bottom |
 
@@ -64,14 +64,15 @@ You choose the editor in {key:OpenSettings} → {ui:Notizen}: {ui:Live: Text ble
 | Shortcut | Effect |
 |---|---|
 | {key:findInNote} | Open search, selected text is filled in |
+| {key:cmd-alt-f} | Open search with the replace row |
 | {key:return} / {key:shift-return} | Next / previous match |
 | {key:escape} | Close search |
 
-The shortcut also works while the focus is in the file list or on the tabs. Without an open note, {ui:In Notiz suchen} and {ui:In Notiz ersetzen} are greyed out in the {ui:Bearbeiten} menu.
+The shortcut also works while the focus is in the file list or on the tabs. In PDFs and spreadsheets it opens their search. Without an open note, {ui:In Notiz suchen} and {ui:In Notiz ersetzen} are greyed out in the {ui:Bearbeiten} menu.
 
 All matches are marked, the current one stronger. Case and umlauts do not matter until you choose {ui:Groß-/Kleinschreibung beachten}.
 
-{ui:In Notiz ersetzen} (arrow on the left of the search) shows the replace row. {key:return} replaces one match, {ui:Alle ersetzen} all of them. One {key:Undo} takes it back. Reading mode has no replace.
+{ui:In Notiz ersetzen} or the arrow on the left of the search shows the replace row. {key:return} replaces one match, {ui:Alle ersetzen} all of them. One {key:Undo} takes it back. Reading mode has no replace.
 
 ## Spelling
 
@@ -113,7 +114,7 @@ If another app changed the file, you see a notice. Nothing is lost until you cho
 
 ### Side by side
 
-- Right-click a tab → {ui:Daneben öffnen}, or drag the tab into the right half.
+- Right-click a tab → {ui:Daneben öffnen}, or drag a tab or a file from the list into the right half. It says {ui:Rechts öffnen} there.
 - The tab of the right note shows a window with a filled right half as its icon. Clicking it jumps into the right note.
 - A coloured line under the bar shows which note you are in.
 - Links in the right note open on the right.

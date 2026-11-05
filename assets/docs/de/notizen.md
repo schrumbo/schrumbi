@@ -32,7 +32,7 @@ Word, Excel und PowerPoint öffnen in Schrumbi, nur zum Lesen.
 
 | Datei | Ansicht |
 |---|---|
-| `.docx` | Seiten wie im PDF: Zoom, Suche, Text kopieren |
+| `.docx` | Seiten wie im PDF, Hoch- und Querformat je Abschnitt: Zoom, Suche, Text kopieren |
 | `.pptx` | Eine Folie unter der anderen, mit Foliennummer, Zoom und Suche |
 | `.xlsx` `.xlsm` `.xls` `.ods` | Tabelle mit Blättern unten |
 
@@ -64,14 +64,15 @@ Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live: 
 | Kürzel | Wirkung |
 |---|---|
 | {key:findInNote} | Suche öffnen, markierter Text wird eingesetzt |
+| {key:cmd-alt-f} | Suche mit Ersetzen-Zeile öffnen |
 | {key:return} / {key:shift-return} | Nächster / vorheriger Treffer |
 | {key:escape} | Suche schließen |
 
-Das Kürzel gilt auch, wenn der Fokus in der Dateiliste oder bei den Tabs liegt. Ohne offene Notiz sind {ui:In Notiz suchen} und {ui:In Notiz ersetzen} im Menü {ui:Bearbeiten} ausgegraut.
+Das Kürzel gilt auch, wenn der Fokus in der Dateiliste oder bei den Tabs liegt. Bei PDFs und Tabellen öffnet es deren Suche. Ohne offene Notiz sind {ui:In Notiz suchen} und {ui:In Notiz ersetzen} im Menü {ui:Bearbeiten} ausgegraut.
 
 Alle Treffer sind markiert, der aktuelle kräftiger. Groß- und Kleinschreibung sowie Umlaute sind egal, bis du {ui:Groß-/Kleinschreibung beachten} wählst.
 
-{ui:In Notiz ersetzen} (Pfeil links in der Suche) zeigt die Ersetzen-Zeile. {key:return} ersetzt einen Treffer, {ui:Alle ersetzen} alle. Ein {key:Undo} nimmt es zurück. Im Lesen-Modus gibt es kein Ersetzen.
+{ui:In Notiz ersetzen} oder der Pfeil links in der Suche zeigt die Ersetzen-Zeile. {key:return} ersetzt einen Treffer, {ui:Alle ersetzen} alle. Ein {key:Undo} nimmt es zurück. Im Lesen-Modus gibt es kein Ersetzen.
 
 ## Rechtschreibung
 
@@ -113,7 +114,7 @@ Hat eine andere App die Datei geändert, siehst du einen Hinweis. Nichts geht ve
 
 ### Nebeneinander
 
-- Rechtsklick auf einen Tab → {ui:Daneben öffnen}, oder den Tab in die rechte Hälfte ziehen.
+- Rechtsklick auf einen Tab → {ui:Daneben öffnen}, oder einen Tab oder eine Datei aus der Liste in die rechte Hälfte ziehen. Dort steht {ui:Rechts öffnen}.
 - Der Tab der rechten Notiz zeigt als Symbol ein Fenster mit gefüllter rechter Hälfte. Ein Klick darauf springt in die rechte Notiz.
 - Eine farbige Linie unter der Leiste zeigt, in welcher Notiz du gerade bist.
 - Links in der rechten Notiz öffnen rechts.
