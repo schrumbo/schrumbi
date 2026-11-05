@@ -103,6 +103,9 @@ const PARA_LINES: usize = 8;
 /// How many bytes of text a row of a long paragraph holds before it ends at the next inline, and the longest run of plain text left whole.
 const PARA_BYTES: usize = 2048;
 
+/// How many lines a paragraph with math may have for the live view to draw it as one block; a longer one is drawn line by line, as one block of it would be laid out whole.
+const LIVE_WHOLE_LINES: usize = 200;
+
 /// One row of the reader: a top-level block, or a stretch of the items of a long list, the rows of a long table or the lines of a long paragraph.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ReaderRow {
@@ -2506,7 +2509,7 @@ impl ParsedNote {
                 let many = source.end_line > source.line + 1;
                 let shape = match block {
                     Block::Table { .. } => Shape::Table,
-                    Block::Paragraph(inl) if inl.iter().any(|i| matches!(i, Inline::Math(_))) && many => Shape::Whole,
+                    Block::Paragraph(inl) if inl.iter().any(|i| matches!(i, Inline::Math(_))) && many && source.end_line - source.line <= LIVE_WHOLE_LINES => Shape::Whole,
                     Block::Paragraph(_) | Block::Rule | Block::Nothing => Shape::Lines,
                     Block::Heading(..) if !many => Shape::Lines,
                     Block::Quote(inner) if inner.iter().all(|b| matches!(b, Block::Paragraph(_) | Block::Nothing)) => Shape::Lines,
@@ -3437,6 +3440,14 @@ Ende
         assert_eq!(current.iter().filter(|c| c.is_some()).count(), 1);
         assert_eq!(current[holding], Some(2 * (70 - rows[holding].line) + 1));
         assert_eq!(super::current_in_part(inl, note.sources()[0].hash, &rows[holding], &super::FindMarks { block: 3, ..marks(70, 0) }, &[]), None);
+    }
+
+    #[test]
+    fn a_paragraph_of_hundreds_of_lines_is_written_line_by_line_even_with_math() {
+        use crate::core::live_text::Shape;
+        let paragraph = |lines: usize| (0..lines).map(|i| format!("Zeile {i} mit $x_{i}$")).collect::<Vec<_>>().join("\n");
+        assert_eq!(parse(&paragraph(3)).shapes()[0].2, Shape::Whole);
+        assert_eq!(parse(&paragraph(2 * super::LIVE_WHOLE_LINES)).shapes()[0].2, Shape::Lines);
     }
 
     fn one_line(count: usize) -> String {

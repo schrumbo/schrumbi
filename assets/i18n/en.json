@@ -1592,5 +1592,7 @@
   "Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück in die Live-Ansicht.": "A line this long stays fast in the source. Click to go back to Live.",
   "Diese Zeile ist zu lang für Live. Esc kehrt zurück.": "This line is too long for Live. Esc goes back.",
   "Zeilenumbruch an": "Line wrapping on",
-  "Zeilenumbruch aus": "Line wrapping off"
+  "Zeilenumbruch aus": "Line wrapping off",
+  "Hier steht nur der Anfang dieser langen Zeile, %@ KB mehr. Lesen zeigt alles.": "Only the start of this long line is shown here, %@ KB more. Reading shows all of it.",
+  "Diese Notiz ist zu lang zum Umbrechen, der Editor bleibt so schnell.": "This note is too long to wrap; the editor stays fast this way."
 }
