@@ -57,6 +57,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Geteilte Ansicht} | {key:splitPreview} |
 | {ui:Als PDF exportieren} | {key:exportPDF} |
 | {ui:In Notiz suchen} | {key:findInNote} |
+| {ui:Umbenennen…} | {key:renameNote} |
 
 ## Editor
 

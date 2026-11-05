@@ -684,7 +684,7 @@ impl NotesPage {
 
     fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((path, ..)) = self.renaming.take() else { return };
-        if self.pending_folder.as_ref() == Some(&path) || path.is_dir() {
+        if self.pending_folder.as_ref() == Some(&path) || path.is_dir() || !markdown::is_markdown(&path) {
             self.pending_folder = None;
             window.focus(&self.focus, cx);
         } else {
@@ -712,7 +712,7 @@ impl NotesPage {
         if is_folder {
             self.pending_folder = None;
         }
-        if hand && is_folder {
+        if hand && (is_folder || !was_note) {
             window.focus(&self.focus, cx);
         } else if hand {
             act(cx, |l| l.focus_document = true);
@@ -818,13 +818,6 @@ impl NotesPage {
                 Some(row) => self.activate_row(&row, false, window, cx),
                 None => {}
             },
-            "f2" => {
-                match selected {
-                    Some(Row::File { path, .. }) => self.start_rename(path, window, cx),
-                    Some(Row::Folder { rel, .. }) => self.start_rename(Self::folder_path(&rel), window, cx),
-                    _ => {}
-                }
-            }
             "space" => {
                 if let Some(Row::Task { path, line, text, .. }) = selected {
                     finish(&path, line, &text, cx);
@@ -946,7 +939,7 @@ impl NotesPage {
                         }))
                         .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| crate::core::library::reveal(&r)))
                         .separator()
-                        .item(PopupMenuItem::new(format!("{} (F2)", tr("Umbenennen…"))).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
+                        .item(PopupMenuItem::new(format!("{}{}", tr("Umbenennen…"), crate::core::shortcuts::ShortcutAction::RenameNote.hint())).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
                             let p = rename_path.clone();
                             rename_me.update(cx, |s, cx| s.start_rename(p, window, cx));
                         }))
@@ -979,7 +972,7 @@ impl NotesPage {
                         let (r, m2, x) = (rename.clone(), rename_me.clone(), trash.clone());
                         deadline_submenu(file_menu(m, menu.clone()).separator(), &menu, window, cx)
                             .separator()
-                            .item(PopupMenuItem::new(format!("{} (F2)", tr("Umbenennen…"))).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
+                            .item(PopupMenuItem::new(format!("{}{}", tr("Umbenennen…"), crate::core::shortcuts::ShortcutAction::RenameNote.hint())).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
                                 let p = r.clone();
                                 m2.update(cx, |s, cx| s.start_rename(p, window, cx));
                             }))
@@ -1075,6 +1068,13 @@ impl Render for NotesPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(path) = state::lib(cx).update(cx, |l, _| l.rename_request.take()) {
             self.start_rename(path, window, cx);
+        }
+        if state::lib(cx).update(cx, |l, _| std::mem::take(&mut l.rename_selected)) {
+            match self.selected.clone() {
+                Some(Row::File { path, .. }) => self.start_rename(path, window, cx),
+                Some(Row::Folder { rel, .. }) => self.start_rename(Self::folder_path(&rel), window, cx),
+                _ => {}
+            }
         }
         let t = Theme::get(cx);
         let (tag, active, obsidian) = state::read(cx, |l| (l.notes_tag.clone(), l.active_document.clone(), l.is_vault));

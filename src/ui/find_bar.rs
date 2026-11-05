@@ -187,7 +187,7 @@ impl Render for FindBar {
             .items_center()
             .gap(px(space::XS))
             .when(self.can_replace, |d| {
-                d.child(Button::new("find-replace-toggle").ghost().size(px(control::S)).icon(menu_icon(if self.replacing { "chevron-down" } else { "chevron-right" })).tooltip(tr("Ersetzen ein-/ausblenden")).on_click(move |_, _, cx| {
+                d.child(Button::new("find-replace-toggle").ghost().size(px(control::S)).flex_none().icon(menu_icon(if self.replacing { "chevron-down" } else { "chevron-right" })).tooltip(tr("Ersetzen ein-/ausblenden")).on_click(move |_, _, cx| {
                     toggle.update(cx, |b, cx| {
                         b.replacing = !b.replacing;
                         cx.notify();
@@ -203,10 +203,10 @@ impl Render for FindBar {
                 })
             }))
             .child(div().min_w(px(76.)).flex_none().font_features(tabular()).text_size(px(font::CAPTION)).text_color(t.secondary).child(summary))
-            .child(Button::new("find-prev").ghost().size(px(control::S)).icon(menu_icon("chevron-up")).disabled(!has).tooltip(format!("{} ({})", tr("Vorheriger Treffer"), step_hint(false))).on_click(move |_, _, cx| prev.update(cx, |_, cx| cx.emit(FindEvent::Step(false)))))
-            .child(Button::new("find-next").ghost().size(px(control::S)).icon(menu_icon("chevron-down")).disabled(!has).tooltip(format!("{} ({})", tr("Nächster Treffer"), step_hint(true))).on_click(move |_, _, cx| next.update(cx, |_, cx| cx.emit(FindEvent::Step(true)))))
+            .child(Button::new("find-prev").ghost().size(px(control::S)).flex_none().icon(menu_icon("chevron-up")).disabled(!has).tooltip(format!("{} ({})", tr("Vorheriger Treffer"), step_hint(false))).on_click(move |_, _, cx| prev.update(cx, |_, cx| cx.emit(FindEvent::Step(false)))))
+            .child(Button::new("find-next").ghost().size(px(control::S)).flex_none().icon(menu_icon("chevron-down")).disabled(!has).tooltip(format!("{} ({})", tr("Nächster Treffer"), step_hint(true))).on_click(move |_, _, cx| next.update(cx, |_, cx| cx.emit(FindEvent::Step(true)))))
             .child(div().flex_1())
-            .child(Button::new("find-close").ghost().size(px(control::S)).icon(menu_icon("x")).tooltip(format!("{} (Esc)", tr("Schließen"))).on_click(move |_, _, cx| close.update(cx, |_, cx| cx.emit(FindEvent::Close))));
+            .child(Button::new("find-close").ghost().size(px(control::S)).flex_none().icon(menu_icon("x")).tooltip(format!("{} (Esc)", tr("Schließen"))).on_click(move |_, _, cx| close.update(cx, |_, cx| cx.emit(FindEvent::Close))));
         div()
             .id("find-bar")
             .key_context("FindBar")

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use gpui_kit::base::actions::Confirm;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -25,6 +25,7 @@ struct RenameSheet {
     input: Entity<InputState>,
     error: Option<String>,
     focused: bool,
+    _sub: Subscription,
 }
 
 impl EventEmitter<Dismissed> for RenameSheet {}
@@ -34,7 +35,12 @@ impl RenameSheet {
         let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let (stem, ext) = if path.is_dir() { (name, String::new()) } else { (crate::core::naming::stem(&name).to_string(), crate::core::naming::extension(&name).to_string()) };
         let input = cx.new(|cx| InputState::new(window, cx).default_value(stem));
-        Self { path, ext, input, error: None, focused: false }
+        let sub = cx.subscribe(&input, |this: &mut Self, _, e: &InputEvent, cx| {
+            if matches!(e, InputEvent::Change) && this.error.take().is_some() {
+                cx.notify();
+            }
+        });
+        Self { path, ext, input, error: None, focused: false, _sub: sub }
     }
 
     fn name(&self, cx: &App) -> String {
@@ -51,23 +57,33 @@ impl RenameSheet {
             return;
         }
         let target = self.path.with_file_name(&name);
-        self.error = if stem.is_empty() {
+        let error = if stem.is_empty() {
             Some(tr("Gib einen Namen ein."))
-        } else if stem.contains(|c| FORBIDDEN.contains(c)) || stem.ends_with('.') {
-            Some(trf("Diese Zeichen gehen nicht: %@", &[&"\\ / : * ? \" < > |".to_string()]))
+        } else if let Some(bad) = stem.chars().find(|c| FORBIDDEN.contains(*c)) {
+            Some(trf("Das Zeichen „%@“ geht in einem Namen nicht.", &[&bad.to_string()]))
+        } else if stem.ends_with('.') {
+            Some(tr("Ein Name darf nicht mit einem Punkt enden."))
         } else if target.exists() && !crate::core::library::same_file(&self.path, &target) {
             Some(tr("Diesen Namen gibt es hier schon. Wähle einen anderen."))
         } else {
             None
         };
-        if self.error.is_some() {
+        if error.is_some() {
+            self.error = error;
             cx.notify();
             return;
         }
         let path = self.path.clone();
-        act(cx, |l| l.rename(&path, &name));
-        state::reindex(cx);
-        cx.emit(Dismissed);
+        match act(cx, |l| l.rename_checked(&path, &name)) {
+            Ok(()) => {
+                state::reindex(cx);
+                cx.emit(Dismissed);
+            }
+            Err(e) => {
+                self.error = Some(e);
+                cx.notify();
+            }
+        }
     }
 }
 
@@ -82,14 +98,14 @@ impl Render for RenameSheet {
         }
         let t = Theme::get(cx);
         let field = Input::new(&self.input).when(!self.ext.is_empty(), |i| i.suffix(div().text_color(t.secondary).child(format!(".{}", self.ext))));
-        let status = self.error.clone().map(|e| div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red).child(icon("triangle-alert", iconsize::XS, t.red)).child(div().min_w_0().child(e)));
+        let status = div().h(px(space::L)).flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red).children(self.error.clone().map(|e| div().flex().items_center().gap(px(space::XS)).min_w_0().child(icon("triangle-alert", iconsize::XS, t.red)).child(div().min_w_0().truncate().child(e))));
         div()
             .w_full()
             .flex()
             .flex_col()
             .on_action(cx.listener(|s, _: &Confirm, window, cx| if super::sheets::typing(window) { s.confirm(cx) } else { cx.propagate() }))
             .child(div().px(px(space::XL)).pt(px(space::L)).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(tr("Umbenennen"))))
-            .child(div().px(px(space::XL)).py(px(space::L)).flex().flex_col().gap(px(space::S)).child(field).children(status))
+            .child(div().px(px(space::XL)).py(px(space::L)).flex().flex_col().gap(px(space::S)).child(field).child(status))
             .child(
                 div()
                     .flex()

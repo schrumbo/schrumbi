@@ -115,6 +115,7 @@ pub enum Change {
 pub struct Step {
     pub label: String,
     pub changes: Vec<Change>,
+    series: bool,
 }
 
 const HISTORY_LIMIT: usize = 100;
@@ -291,6 +292,7 @@ pub struct Library {
     pub note_windows: HashSet<PathBuf>,
     /// A note that is shown in its own window was asked for; that window comes to the front instead of a second editor.
     pub raise_note_window: Option<PathBuf>,
+    moves: HashMap<PathBuf, PathBuf>,
     route: Route,
     closed_documents: Vec<(PathBuf, usize)>,
     /// The open document shown beside the current one.
@@ -332,6 +334,7 @@ pub struct Library {
     /// A step ran since the last check, so lists may have changed order.
     rows_moved: bool,
     undo_steps: Vec<Step>,
+    in_series: bool,
     redo_steps: Vec<Step>,
     /// The kind and time of the last edit that merges with the following ones, e.g. typing in a settings field.
     coalescing: Option<(String, std::time::Instant)>,
@@ -360,6 +363,8 @@ pub struct Library {
     tab_trails: HashMap<PathBuf, (Vec<PathBuf>, Vec<PathBuf>)>,
     /// A file whose name the explorer should turn into a field.
     pub rename_request: Option<PathBuf>,
+    /// The explorer should turn the name of the row it has selected into a field.
+    pub rename_selected: bool,
     /// A folder the explorer should open and select.
     pub reveal_folder: Option<String>,
     pub focus_explorer: bool,
@@ -457,6 +462,7 @@ impl Library {
             exporting_pdfs: HashSet::new(),
             note_windows: HashSet::new(),
             raise_note_window: None,
+            moves: HashMap::new(),
             route: Route::Today,
             closed_documents: Vec::new(),
             split_document: None,
@@ -470,6 +476,7 @@ impl Library {
             graph_selection: None,
             tab_trails: HashMap::new(),
             rename_request: None,
+            rename_selected: false,
             reveal_folder: None,
             focus_explorer: false,
             focus_document: false,
@@ -501,6 +508,7 @@ impl Library {
             toast_counter: 0,
             rows_moved: false,
             undo_steps: Vec::new(),
+            in_series: false,
             redo_steps: Vec::new(),
             coalescing: None,
             buffers: HashMap::new(),
@@ -2247,7 +2255,7 @@ impl Library {
         self.rows_moved = true;
         self.redo_steps.clear();
         self.coalescing = None;
-        self.undo_steps.push(Step { label, changes });
+        self.undo_steps.push(Step { label, changes, series: self.in_series });
         if self.undo_steps.len() > HISTORY_LIMIT {
             self.undo_steps.remove(0);
         }
@@ -2316,7 +2324,7 @@ impl Library {
         }
         self.coalescing = None;
         if !failed.is_empty() {
-            self.undo_steps.push(Step { label, changes: failed });
+            self.undo_steps.push(Step { label, changes: failed, series: false });
             return;
         }
         if !changed {
@@ -2339,7 +2347,7 @@ impl Library {
         }
         self.coalescing = None;
         if !failed.is_empty() {
-            self.redo_steps.push(Step { label, changes: failed });
+            self.redo_steps.push(Step { label, changes: failed, series: false });
             return;
         }
         if !changed {
@@ -2366,7 +2374,7 @@ impl Library {
         inverse.reverse();
         failed.reverse();
         self.refresh();
-        (Step { label: step.label, changes: inverse }, failed)
+        (Step { label: step.label, changes: inverse, series: false }, failed)
     }
 
     fn apply_change(&mut self, change: Change) -> Option<Change> {
@@ -2716,13 +2724,19 @@ impl Library {
 
     /// Gives a file the name typed. A note named after its heading keeps that heading; a convention name only has to say the same title.
     pub fn rename(&mut self, file: &Path, name: &str) {
+        if let Err(e) = self.rename_checked(file, name) {
+            self.last_error = Some(e);
+        }
+    }
+
+    /// Like `rename`, but the error comes back instead of an alert, so a sheet can show it next to the field.
+    pub fn rename_checked(&mut self, file: &Path, name: &str) -> Result<(), String> {
         if !heading_titled(file) {
-            self.rename_file(file, name);
-            return;
+            return self.rename_recorded(file, name, true);
         }
         match self.convention_title(file, name) {
-            Some(title) => self.rename_titled(file, name, &title, true),
-            None => self.rename_titled(file, name, super::naming::stem(name), false),
+            Some(title) => self.rename_titled_checked(file, name, &title, true),
+            None => self.rename_titled_checked(file, name, super::naming::stem(name), false),
         }
     }
 
@@ -2808,12 +2822,19 @@ impl Library {
 
     /// Renames a note named after its heading and brings the heading along; a convention name only has to say the same title.
     fn rename_titled(&mut self, file: &Path, name: &str, title: &str, convention: bool) {
-        self.rename_file(file, name);
-        let Some(target) = self.last_renamed.clone().filter(|t| t.file_name().is_some_and(|n| n.to_string_lossy() == name)) else { return };
+        if let Err(e) = self.rename_titled_checked(file, name, title, convention) {
+            self.last_error = Some(e);
+        }
+    }
+
+    fn rename_titled_checked(&mut self, file: &Path, name: &str, title: &str, convention: bool) -> Result<(), String> {
+        self.rename_recorded(file, name, true)?;
+        let Some(target) = self.last_renamed.clone().filter(|t| t.file_name().is_some_and(|n| n.to_string_lossy() == name)) else { return Ok(()) };
         self.edit_note(&target, "title", tr("Überschrift angepasst"), |text| {
             let same = super::markdown::first_heading(text).is_some_and(|h| if convention { Naming::clean(&h) == Naming::clean(title) } else { h == title });
             if same { text.to_string() } else { super::markdown::with_first_heading(text, title) }
         });
+        Ok(())
     }
 
     /// Whether the folder of `a` holds `path`, directly or, for a folder of its own that looks into subfolders, below it.
@@ -2869,19 +2890,34 @@ impl Library {
 
     /// Renames one file of a series by a name picked by hand, without toast and without error alert; the error comes back instead. `finish_series` announces the series.
     pub fn rename_in_series(&mut self, file: &Path, name: &str) -> Result<(), String> {
-        self.rename_recorded(file, name, false)
+        self.in_series = true;
+        let renamed = self.rename_recorded(file, name, false);
+        self.in_series = false;
+        renamed
     }
 
-    /// Joins the last `count` steps into one and offers to take them all back at once.
+    /// Joins the rename steps of the latest series, at most `count`, into one and offers to take them all back at once.
+    /// Other steps in between stay as they are.
     pub fn finish_series(&mut self, count: usize) {
-        let count = count.min(self.undo_steps.len());
-        if count == 0 {
+        let mut joined = Vec::new();
+        let mut rest = Vec::new();
+        for step in std::mem::take(&mut self.undo_steps).into_iter().rev() {
+            if step.series && joined.len() < count {
+                joined.push(step);
+            } else {
+                rest.push(step);
+            }
+        }
+        rest.reverse();
+        joined.reverse();
+        rest.iter_mut().for_each(|s| s.series = false);
+        self.undo_steps = rest;
+        if joined.is_empty() {
             return;
         }
-        let steps: Vec<Step> = self.undo_steps.split_off(self.undo_steps.len() - count);
-        let message = if count == 1 { steps[0].label.clone() } else { trf("%@ Dateien umbenannt", &[&count.to_string()]) };
-        let changes = steps.into_iter().flat_map(|s| s.changes).collect();
-        self.undo_steps.push(Step { label: message.clone(), changes });
+        let message = if joined.len() == 1 { joined[0].label.clone() } else { trf("%@ Dateien umbenannt", &[&joined.len().to_string()]) };
+        let changes = joined.into_iter().flat_map(|s| s.changes).collect();
+        self.undo_steps.push(Step { label: message.clone(), changes, series: false });
         let undo = self.undo_latest();
         self.notify(message, "pencil", None, Some(undo));
     }
@@ -2943,6 +2979,11 @@ impl Library {
         followed
     }
 
+    /// Where a note went that was open at `from`, so a view that still shows the old path can follow.
+    pub fn moved_path(&self, from: &Path) -> Option<PathBuf> {
+        self.moves.get(from).filter(|to| self.buffers.contains_key(*to)).cloned()
+    }
+
     /// Keeps tabs, open notes, links and remembered positions on a file that moved.
     fn path_moved(&mut self, from: &Path, to: &Path) {
         let (old, new) = (self.relative_path(from), self.relative_path(to));
@@ -2979,6 +3020,10 @@ impl Library {
         if let Some(mut buffer) = self.buffers.remove(&from) {
             buffer.moved_to(&to);
             self.buffers.insert(to.clone(), buffer);
+            self.moves.values_mut().filter(|v| **v == from).for_each(|v| v.clone_from(&to));
+            self.moves.insert(from.clone(), to.clone());
+            self.moves.remove(&to);
+            self.moves.retain(|k, v| k != v);
         }
         let mut relinked = false;
         let inside = format!("{old}/");
@@ -3525,6 +3570,9 @@ impl Library {
             return;
         }
         let path = self.dropped_path(path);
+        if self.raise_if_windowed(&path) {
+            return;
+        }
         let shown = self.shown_document().cloned();
         match to {
             DocDrop::Here => {
@@ -3571,6 +3619,9 @@ impl Library {
     /// The buffer for a note, created on first use.
     pub fn buffer(&mut self, path: &Path) -> &mut NoteBuffer {
         let gate = self.sync_gate;
+        if !self.buffers.contains_key(path) && path.exists() {
+            self.moves.remove(path);
+        }
         self.buffers.entry(path.to_path_buf()).or_insert_with(|| {
             let mut b = NoteBuffer::open(path);
             if gate {
@@ -3634,6 +3685,9 @@ impl Library {
     pub fn reopen_document(&mut self) {
         while let Some((path, at)) = self.closed_documents.pop() {
             if path.exists() {
+                if self.raise_if_windowed(&path) {
+                    return;
+                }
                 if !self.open_documents.contains(&path) {
                     self.open_documents.insert(at.min(self.open_documents.len()), path.clone());
                 }

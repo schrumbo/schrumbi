@@ -279,3 +279,60 @@ fn a_note_in_its_own_window_is_raised_and_never_opened_as_a_second_editor() {
     assert!(lib.raise_note_window.is_none());
     assert!(lib.open_documents.contains(&p[0]));
 }
+
+#[test]
+fn a_closed_tab_of_a_note_that_got_its_own_window_comes_back_as_that_window() {
+    let (_, p) = notes("reopen-windowed", &["a.md", "b.md"]);
+    let mut lib = opened(&p);
+    lib.close_document(&p[0]);
+    lib.note_windows.insert(p[0].clone());
+    lib.reopen_document();
+    assert_eq!(lib.raise_note_window.take(), Some(p[0].clone()));
+    assert_eq!(lib.open_documents, vec![p[1].clone()], "one editor for the file");
+    assert!(!lib.can_reopen_document());
+}
+
+#[test]
+fn dropping_a_note_that_has_its_own_window_raises_it_and_adds_no_second_editor() {
+    use super::library::DocDrop;
+    let (_, p) = notes("drop-windowed", &["a.md", "b.md", "c.md"]);
+    let mut lib = opened(&p[..2]);
+    lib.note_windows.insert(p[2].clone());
+    lib.drop_document(&p[2], DocDrop::Beside, None);
+    assert_eq!(lib.raise_note_window.take(), Some(p[2].clone()));
+    assert_eq!(lib.split_document, None);
+    assert_eq!(lib.open_documents, vec![p[0].clone(), p[1].clone()]);
+    lib.drop_document(&p[2], DocDrop::Here, None);
+    assert_eq!(lib.raise_note_window.take(), Some(p[2].clone()));
+    assert_eq!(lib.open_documents.len(), 2);
+}
+
+#[test]
+fn a_rename_leaves_a_trail_for_views_that_still_show_the_old_path() {
+    let (root, p) = notes("rename-trail", &["a.md", "b.md"]);
+    let mut lib = opened(&p[..1]);
+    lib.buffer(&p[0]);
+    lib.note_windows.insert(p[0].clone());
+    lib.rename(&p[0], "neu.md");
+    let new = root.join("neu.md");
+    assert_eq!(lib.moved_path(&p[0]), Some(new.clone()));
+    assert!(lib.note_windows.contains(&new) && lib.buffers.contains_key(&new));
+    lib.rename(&new, "neuer.md");
+    assert_eq!(lib.moved_path(&p[0]), Some(root.join("neuer.md")), "a second move extends the trail");
+    lib.rename(&root.join("neuer.md"), "a.md");
+    assert_eq!(lib.moved_path(&p[0]), None, "back at the start nothing moved");
+    assert_eq!(lib.moved_path(&new), Some(p[0].clone()));
+    assert_eq!(lib.moved_path(&p[1]), None);
+}
+
+#[test]
+fn a_new_note_at_a_former_path_does_not_inherit_the_trail() {
+    let (_, p) = notes("rename-trail-new", &["a.md"]);
+    let mut lib = opened(&p);
+    lib.buffer(&p[0]);
+    lib.rename(&p[0], "neu.md");
+    assert!(lib.moved_path(&p[0]).is_some());
+    std::fs::write(&p[0], "x").unwrap();
+    lib.buffer(&p[0]);
+    assert_eq!(lib.moved_path(&p[0]), None);
+}

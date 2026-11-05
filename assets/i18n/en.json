@@ -1586,5 +1586,9 @@
   "Rechtschreibung nur um die Schreibmarke": "Spelling near the caret only",
   "Zeilenumbruch ein-/ausschalten": "Turn line wrapping on or off",
   "Eine so lange Zeile bleibt im Quelltext schnell. Esc geht zurück in die Live-Ansicht.": "A line this long stays fast in the source. Esc goes back to Live.",
-  "Diese Zeile ist zu lang für Live": "This line is too long for Live"
+  "Diese Zeile ist zu lang für Live": "This line is too long for Live",
+  "Das Zeichen „%@“ geht in einem Namen nicht.": "The character “%@” cannot be used in a name.",
+  "Ein Name darf nicht mit einem Punkt enden.": "A name cannot end with a period.",
+  "Klicken zum Umbenennen": "Click to rename",
+  "Ausgeblendete Ordner: %@": "Hidden folders: %@"
 }

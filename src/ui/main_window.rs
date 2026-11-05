@@ -250,7 +250,7 @@ impl MainWindow {
             if skipped > 0 {
                 let hidden: Vec<String> = folders[..skipped].to_vec();
                 let all = folders.clone();
-                let more = Button::new("crumb-hidden").ghost().xsmall().label("…").tooltip(hidden.join("/")).dropdown_menu(move |mut menu, _, _| {
+                let more = Button::new("crumb-hidden").ghost().small().min_w(px(control::S)).rounded(px(radius::SMALL)).cursor_pointer().tooltip(trf("Ausgeblendete Ordner: %@", &[&hidden.join("/")])).child(div().text_size(px(font::CALLOUT)).text_color(t.secondary).child("…")).dropdown_menu(move |mut menu, _, _| {
                     for (i, name) in hidden.iter().enumerate() {
                         let rel = all[..=i].join("/");
                         menu = menu.item(PopupMenuItem::new(crate::core::text::end_ellipsis(name, 40)).icon(menu_icon("folder")).on_click(move |_, _, cx| {
@@ -282,7 +282,7 @@ impl MainWindow {
                 .text_size(px(font::TITLE3))
                 .font_weight(FontWeight::BOLD)
                 .soft(hover, radius::SMALL)
-                .tooltip(tip(format!("{name}\n{}", tr("Klicken zum Umbenennen (F2)"))))
+                .tooltip(tip(format!("{name}\n{}{}", tr("Klicken zum Umbenennen"), ShortcutAction::RenameNote.hint())))
                 .on_click(move |_, _, cx| super::app::rename_file(rename.clone(), cx))
                 .child(name),
         );
@@ -433,9 +433,14 @@ impl Render for MainWindow {
                 }
             })
             .on_action(|_: &super::app::RenameNote, window, cx| {
-                let elsewhere = window.context_stack().iter().any(|c| c.contains("Explorer") || c.contains("SearchField"));
+                let stack = window.context_stack();
+                if stack.iter().any(|c| c.contains("Explorer")) {
+                    act(cx, |l| l.rename_selected = true);
+                    return;
+                }
+                let searching = stack.iter().any(|c| c.contains("SearchField"));
                 match state::read(cx, |l| l.focused_document().map(std::path::Path::to_path_buf).filter(|_| matches!(l.route(), Route::Doc(_)))) {
-                    Some(path) if !elsewhere => super::app::rename_file(path, cx),
+                    Some(path) if !searching => super::app::rename_file(path, cx),
                     _ => cx.propagate(),
                 }
             })
