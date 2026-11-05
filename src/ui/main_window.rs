@@ -458,6 +458,12 @@ impl Render for MainWindow {
                     None => cx.propagate(),
                 }
             })
+            .capture_action(|_: &Dismiss, _, cx| {
+                if state::read(cx, |l| l.last_error.is_some()) {
+                    act(cx, |l| l.last_error = None);
+                    cx.stop_propagation();
+                }
+            })
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
                 if window.context_stack().iter().any(|c| c.contains("NoteEditor")) {
                     return;

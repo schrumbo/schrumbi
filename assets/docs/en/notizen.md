@@ -83,7 +83,7 @@ The words are listed in the settings under {ui:Eigenes Wörterbuch}; the cross r
 
 ## Long notes
 
-From about 100 KB the source does not wrap lines. Press {key:toggleWrap}, or use {ui:Zeilenumbruch ein-/ausschalten} in the {key:CommandPalette}, to turn wrapping on or off for this note, up to about 120 KB; Schrumbi remembers it. Above that it tells you why it does not work. From about 200 KB the source also shows no highlighting, so typing stays fast. The bar below says {ui:Lange Notiz: ohne Zeilenumbruch und Hervorhebung}.
+From about 20 KB the source does not wrap lines. Press {key:toggleWrap}, or use {ui:Zeilenumbruch ein-/ausschalten} in the {key:CommandPalette}, to turn wrapping on or off for this note, up to about 35 KB; Schrumbi remembers it. Above that it tells you why it does not work. From about 200 KB the source also shows no highlighting, so typing stays fast. The bar below says {ui:Lange Notiz: ohne Zeilenumbruch und Hervorhebung}.
 
 A single line over about 250 KB opens in the source instead of Live. The bar below says {ui:Diese Zeile ist zu lang für Live. Esc: zurück zu Live}; {key:escape} or a click on it goes back.
 
