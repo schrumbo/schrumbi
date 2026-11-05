@@ -68,10 +68,14 @@ pub fn open(path: &Path, cx: &mut App) {
     };
     let options = super::chrome::window_options(options, title_for_bar);
     let _ = super::chrome::open_window(options, cx, |window, cx| {
+        let id = window.window_handle().window_id();
         window.on_window_should_close(cx, |window, cx| {
             request_close(window, cx);
             false
         });
-        cx.new(|cx| NoteView::new(target, false, window, cx))
+        cx.new(|cx| {
+            cx.observe_window_activation(window, move |_, window, cx| super::app::note_window_front(id, window.is_window_active(), cx)).detach();
+            NoteView::new(target, false, window, cx)
+        })
     });
 }

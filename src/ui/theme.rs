@@ -63,7 +63,7 @@ pub mod control {
     /// The most a row of the shortcut list gives to naming what else uses its keys.
     pub const CLASH: f32 = 240.;
     /// A small icon button, like the reset button at the end of a shortcut row.
-    pub const ICON_BUTTON: f32 = 26.;
+    pub const ICON_BUTTON: f32 = M;
 }
 
 /// Widths of the document tab row.
@@ -86,14 +86,12 @@ pub mod tab {
 
 /// Widths in the toolbar's row for the open note: folders, name and deadline.
 pub mod crumb {
-    /// Narrowest the note's name gets while there is anything else in the row to give way.
+    /// Narrowest the note's name gets before the row gives up showing it.
     pub const NAME_MIN: f32 = 64.;
-    /// How little the name shrinks next to the folders (1) and the deadline.
-    pub const NAME_SHRINK: f32 = 0.05;
-    /// How much faster than the folders the deadline gives way.
-    pub const PILL_SHRINK: f32 = 4.;
-    /// Narrowest the deadline gets: its icon.
-    pub const PILL_MIN: f32 = 28.;
+    /// Narrowest the deadline gets: its icon, an ellipsis and the menu caret.
+    pub const PILL_MIN: f32 = 56.;
+    /// Widest a folder in the row gets.
+    pub const FOLDER_MAX: f32 = 160.;
     /// Widest the deadline gets.
     pub const PILL_MAX: f32 = 240.;
 }

@@ -1,6 +1,7 @@
 use std::ops::Range;
 use std::sync::LazyLock;
 
+use pulldown_cmark::{Event, Parser};
 use regex::Regex;
 
 /// One undoable edit: replace `range` with `text`, then select `select` (offsets in the new text).
@@ -66,7 +67,7 @@ fn is_punct(c: char) -> bool {
     !c.is_alphanumeric() && !c.is_whitespace()
 }
 
-fn opaque_ranges(line: &str) -> Vec<(Range<usize>, bool)> {
+fn opaque_ranges(line: &str) -> Vec<Range<usize>> {
     let bytes = line.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -74,7 +75,7 @@ fn opaque_ranges(line: &str) -> Vec<(Range<usize>, bool)> {
         match bytes[i] {
             b'\\' => {
                 let next = line[i + 1..].chars().next().map_or(0, char::len_utf8);
-                out.push((i..i + 1 + next, false));
+                out.push(i..i + 1 + next);
                 i += 1 + next;
             }
             b'`' => {
@@ -95,29 +96,7 @@ fn opaque_ranges(line: &str) -> Vec<(Range<usize>, bool)> {
                 }
                 match closed {
                     Some(end) => {
-                        out.push((i..end, false));
-                        i = end;
-                    }
-                    None => i += len,
-                }
-            }
-            b'$' => {
-                let len = bytes[i..].iter().take_while(|b| **b == b'$').count();
-                let mut j = i + len;
-                let mut closed = None;
-                while j < bytes.len() {
-                    match bytes[j] {
-                        b'\\' => j += 2,
-                        b'$' => {
-                            closed = Some(j + bytes[j..].iter().take_while(|b| **b == b'$').count());
-                            break;
-                        }
-                        _ => j += 1,
-                    }
-                }
-                match closed {
-                    Some(end) => {
-                        out.push((i..end, true));
+                        out.push(i..end);
                         i = end;
                     }
                     None => i += len,
@@ -129,19 +108,20 @@ fn opaque_ranges(line: &str) -> Vec<(Range<usize>, bool)> {
     out
 }
 
-fn in_math(s: &str, at: usize) -> bool {
-    let ls = line_start(s, at);
-    let line = &s[ls..line_end(s, at)];
-    let rel = at - ls;
-    opaque_ranges(line).iter().any(|(r, math)| *math && r.start < rel && rel < r.end)
+fn math_ranges(s: &str) -> Vec<Range<usize>> {
+    Parser::new_ext(s, super::markdown::options()).into_offset_iter().filter_map(|(event, range)| matches!(event, Event::InlineMath(_) | Event::DisplayMath(_)).then_some(range)).collect()
 }
 
-fn emphasis_spans(line: &str) -> Vec<Span> {
-    let opaque = opaque_ranges(line);
+fn in_math(math: &[Range<usize>], at: usize) -> bool {
+    math.iter().any(|r| r.start < at && at < r.end)
+}
+
+fn emphasis_spans(line: &str, math: &[Range<usize>]) -> Vec<Span> {
+    let opaque: Vec<Range<usize>> = opaque_ranges(line).into_iter().chain(math.iter().cloned()).collect();
     let mut runs: Vec<Run> = Vec::new();
     let mut chars = line.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
-        if (c != '*' && c != '_') || opaque.iter().any(|(r, _)| r.contains(&i)) {
+        if (c != '*' && c != '_') || opaque.iter().any(|r| r.contains(&i)) {
             continue;
         }
         let mut len = 1;
@@ -199,15 +179,40 @@ fn hugged(text: &str, token: &str) -> String {
     format!("{lead}{token}{core}{token}{trail}")
 }
 
-fn toggle_emphasis(s: &str, sel: &Range<usize>, token: &str) -> Option<Edit> {
-    let inner = s.get(sel.clone())?;
-    if inner.contains('\n') {
+/// The selection grown to the edges of every span it only partly covers, so a toggle never interleaves markers.
+fn widened(sel: &Range<usize>, spans: &[Span]) -> Range<usize> {
+    let mut out = sel.clone();
+    if out.is_empty() {
+        return out;
+    }
+    loop {
+        let before = out.clone();
+        for p in spans {
+            let overlaps = p.start < out.end && out.start < p.end;
+            let inside = p.start <= out.start && out.end <= p.end;
+            let covers = out.start <= p.start && p.end <= out.end;
+            if overlaps && !inside && !covers {
+                out = out.start.min(p.start)..out.end.max(p.end);
+            }
+        }
+        if out == before {
+            return out;
+        }
+    }
+}
+
+fn toggle_emphasis(s: &str, sel: &Range<usize>, token: &str, math: &[Range<usize>]) -> Option<Edit> {
+    if s.get(sel.clone())?.contains('\n') {
         return None;
     }
     let n = token.len();
     let ls = line_start(s, sel.start);
     let line = &s[ls..line_end(s, sel.start)];
-    let all: Vec<Span> = emphasis_spans(line).into_iter().map(|p| Span { start: p.start + ls, end: p.end + ls, n: p.n }).collect();
+    let local: Vec<Range<usize>> = math.iter().filter(|r| r.end > ls && r.start < ls + line.len()).map(|r| r.start.saturating_sub(ls)..(r.end - ls).min(line.len())).collect();
+    let all: Vec<Span> = emphasis_spans(line, &local).into_iter().map(|p| Span { start: p.start + ls, end: p.end + ls, n: p.n }).collect();
+    let inside = all.iter().any(|p| p.n == n && p.start + n <= sel.start && sel.end + n <= p.end);
+    let sel = &if inside { sel.clone() } else { widened(sel, &all) };
+    let inner = s.get(sel.clone())?;
     let spans: Vec<&Span> = all.iter().filter(|p| p.n == n).collect();
     let (a, b) = (sel.start, sel.end);
     let unwrap = |p: &Span, select: Range<usize>| Edit { range: p.start..p.end, text: s[p.start + n..p.end - n].to_string(), select };
@@ -237,6 +242,10 @@ fn toggle_emphasis(s: &str, sel: &Range<usize>, token: &str) -> Option<Edit> {
         return Some(Edit { range: p.start..p.end, text, select });
     }
     if a == b {
+        if let Some(p) = spans.iter().find(|p| (p.start < a && a < p.start + n) || (p.end - n < a && a < p.end)) {
+            let at = if a < p.start + n { p.start } else { p.end - 2 * n };
+            return Some(unwrap(p, at..at));
+        }
         let used = all.iter().any(|p| [p.start..p.start + p.n, p.end - p.n..p.end].iter().any(|m| m.start < a + n && a.saturating_sub(n) < m.end));
         let before = s[..a].chars().rev().take_while(|c| *c == '*').count();
         let after = s[a..].chars().take_while(|c| *c == '*').count();
@@ -271,10 +280,11 @@ fn toggle_emphasis(s: &str, sel: &Range<usize>, token: &str) -> Option<Edit> {
 pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
     let inner = &s[sel.clone()];
     if token == "**" || token == "*" {
-        if in_math(s, sel.start) || in_math(s, sel.end) {
+        let math = math_ranges(s);
+        if in_math(&math, sel.start) || in_math(&math, sel.end) {
             return Edit { range: sel.clone(), text: inner.to_string(), select: sel };
         }
-        if let Some(edit) = toggle_emphasis(s, &sel, token) {
+        if let Some(edit) = toggle_emphasis(s, &sel, token, &math) {
             return edit;
         }
         if !inner.contains('\n') {
@@ -838,6 +848,51 @@ mod tests {
         assert_eq!(toggled("a $x$ *b|* c", "*"), "a $x$ b| c");
         assert_eq!(toggled("5 \\$ **b|** 6", "**"), "5 \\$ b| 6");
         assert_eq!(toggled("$f^*(x)$ ‹g› $h^*(y)$", "*"), "$f^*(x)$ ‹*g*› $h^*(y)$");
+    }
+
+    #[test]
+    fn display_math_over_several_lines_is_opaque() {
+        assert_eq!(toggled("$$\na_|b\n$$", "**"), "$$\na_|b\n$$");
+        assert_eq!(toggled("$$\nx\n‹a*b›\n$$", "*"), "$$\nx\n‹a*b›\n$$");
+        assert_eq!(toggled("$$\nx\n$$\n‹a› b", "**"), "$$\nx\n$$\n‹**a**› b");
+    }
+
+    #[test]
+    fn a_lone_dollar_is_no_math() {
+        assert_eq!(toggled("Preis 5 $ *billig|* und 7 $", "*"), "Preis 5 $ billig| und 7 $");
+        assert_eq!(toggled("Preis 5 $ ‹billig› und 7 $", "**"), "Preis 5 $ ‹**billig**› und 7 $");
+        assert_eq!(toggled("$ a $ $x_|y$", "**"), "$ a $ $x_|y$");
+    }
+
+    #[test]
+    fn a_caret_between_the_stars_of_a_marker_unwraps_the_span() {
+        assert_eq!(toggled("alpha *|*beta gamma**", "**"), "alpha |beta gamma");
+        assert_eq!(toggled("alpha **beta gamma*|*", "**"), "alpha beta gamma|");
+        assert_eq!(toggled("alpha *|*beta gamma** x", "**"), "alpha |beta gamma x");
+    }
+
+    #[test]
+    fn a_selection_never_interleaves_markers_with_a_partly_covered_span() {
+        let out = toggled("alpha **beta gam‹ma** delta *e›ps zeta* eta", "**");
+        assert_eq!(out, "alpha ‹**beta gamma delta *eps zeta***› eta");
+        let out = toggled("alpha **beta gamma** ‹delta *eps zeta* e›ta", "**");
+        assert_eq!(out, "alpha **beta gamma** ‹**delta *eps zeta* e**›ta");
+        let out = toggled("alpha *beta ‹gamma* delta *eps› zeta* eta", "**");
+        assert!(!out.contains("****"), "{out}");
+    }
+
+    #[test]
+    fn bold_twice_gives_back_the_word() {
+        for start in ["a ‹word› b", "a ‹two words› b", "a ‹wor›d b", "a w‹or›d b"] {
+            let once = toggled(start, "**");
+            let twice = toggled(&once, "**");
+            assert!(!once.contains("****") && !twice.contains("****"), "{start}: {once} {twice}");
+            let plain: String = start.replace(['‹', '›'], "");
+            assert_eq!(twice.replace(['‹', '›'], ""), plain, "{start}: {once} {twice}");
+        }
+        let once = toggled("a wor|d b", "**");
+        let twice = toggled(&once, "**");
+        assert_eq!(twice.replace('|', ""), "a word b", "{once} {twice}");
     }
 
     #[test]

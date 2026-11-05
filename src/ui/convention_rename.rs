@@ -17,6 +17,7 @@ use crate::core::library::{ConventionOffer, ConventionPlan};
 use crate::core::text::end_ellipsis;
 
 const NAME_IN_MENU: usize = 40;
+const NAMED_ENTRIES: usize = 5;
 
 const FORBIDDEN: &str = "\\/:*?\"<>|";
 
@@ -41,6 +42,16 @@ pub fn named_menu_item(path: &Path, cx: &App) -> Option<PopupMenuItem> {
     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
     let path = path.to_path_buf();
     Some(PopupMenuItem::new(trf("„%@“ nach Muster benennen…", &[&end_ellipsis(&name, NAME_IN_MENU)])).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| open(path.clone(), window, cx)))
+}
+
+/// Entries for the misnamed files of one deadline: one named entry each for up to `NAMED_ENTRIES`, else a single entry that starts with the first.
+pub fn named_menu_items(files: &[PathBuf], cx: &App) -> Vec<PopupMenuItem> {
+    let ready: Vec<&PathBuf> = files.iter().filter(|f| state::read(cx, |l| l.convention_offer(f)) == ConventionOffer::Ready).collect();
+    if ready.len() <= NAMED_ENTRIES {
+        return ready.into_iter().filter_map(|f| named_menu_item(f, cx)).collect();
+    }
+    let first = ready[0].clone();
+    vec![PopupMenuItem::new(trf("Nach Muster benennen… (%@ Dateien)", &[&ready.len().to_string()])).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| open(first.clone(), window, cx))]
 }
 
 /// Like `menu_item`, but for a file in a submission folder that belongs to no deadline yet the entry is disabled with its reason; for menus that also offer to assign a deadline.

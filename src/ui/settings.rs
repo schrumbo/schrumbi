@@ -2165,6 +2165,10 @@ impl Settings {
         self.recording.and_then(|a| self.key_buttons.get(a.id())).is_some_and(|h| h.is_focused(window))
     }
 
+    fn rejected_is_reserved(&self) -> bool {
+        matches!(self.rejected, Some(Rejected::Reserved(_)))
+    }
+
     fn key_button(&mut self, a: ShortcutAction, cx: &mut Context<Self>) -> FocusHandle {
         self.key_buttons.entry(a.id()).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
@@ -2220,15 +2224,17 @@ impl Settings {
             Some(n) => div()
                 .id("sc-notice")
                 .aria_label(n.text.clone())
+                .w_full()
+                .min_w_0()
                 .flex()
                 .items_center()
                 .gap(px(space::S))
                 .text_size(px(font::CAPTION))
                 .text_color(t.secondary)
-                .child(icon("check", iconsize::XS, t.green_text))
-                .child(n.text.clone())
-                .child(div().text_color(t.tertiary).child("·"))
-                .child(link_button("sc-undo", tr("Rückgängig"), t).on_click(cx.listener(|s, _, _, cx| {
+                .child(div().flex_none().child(icon("check", iconsize::XS, t.green_text)))
+                .child(div().min_w_0().truncate().child(n.text.clone()))
+                .child(div().flex_none().text_color(t.tertiary).child("·"))
+                .child(div().flex_none().child(link_button("sc-undo", tr("Rückgängig"), t).on_click(cx.listener(|s, _, _, cx| {
                     if let Some(n) = s.notice.take() {
                         ShortcutAction::restore(n.before);
                         s.recording = None;
@@ -2236,9 +2242,13 @@ impl Settings {
                         super::app::bind_keys(cx);
                     }
                     cx.notify();
+                }))))
+                .child(Button::new("sc-notice-close").ghost().xsmall().icon(menu_icon("x")).tooltip(format!("{} ({})", tr("Schließen"), escape)).on_click(cx.listener(|s, _, _, cx| {
+                    s.notice = None;
+                    cx.notify();
                 })))
                 .into_any_element(),
-            None => caption(trf("Klick auf ein Kürzel und drück die neuen Tasten. %@ bricht ab, %@ entfernt das Kürzel.", &[&escape, &delete]), t).into_any_element(),
+            None => caption(trf("Klick auf ein Kürzel und drück die neuen Tasten. %@ bricht ab, %@ entfernt das Kürzel.", &[&escape, &delete]), t).w_full().min_w_0().truncate().into_any_element(),
         };
         let header = div()
             .flex_none()
@@ -2251,7 +2261,7 @@ impl Settings {
             .border_b_1()
             .border_color(t.separator)
             .child(head)
-            .child(div().h(px(control::S)).flex().items_center().child(line));
+            .child(div().h(px(control::S)).w_full().min_w_0().flex().items_center().child(line));
         let mut col = div().flex().flex_col().gap(px(space::XL));
         let modules = module_names(cx);
         let all_clashes = ShortcutAction::all_conflicts();
@@ -2270,13 +2280,17 @@ impl Settings {
                 let customized = a.is_customized();
                 let rejected = self.rejected.clone().filter(|_| recording);
                 let handle = self.key_button(a, cx);
-                let blocked = a.blocked().map(|why| trf("%@ – inaktiv", &[&why]));
-                let reason: Option<String> = rejected.map(|why| match why {
+                let blocked_why = a.blocked();
+                let blocked = blocked_why.as_ref().map(|why| trf("%@ – inaktiv", &[why]));
+                let reason_chip: Option<String> = rejected.map(|why| match why {
                     Rejected::NeedsModifier if cfg!(target_os = "macos") => tr("Dazu ⌘, ⌥ oder ⌃ halten"),
                     Rejected::NeedsModifier => trf("Dazu %@ oder Alt halten", &[&ctrl_name()]),
-                    Rejected::Reserved(why) => trf("%@ – andere Tasten drücken", &[&why]),
+                    Rejected::Reserved(why) => why,
                 });
+                let reason: Option<String> = reason_chip.as_ref().map(|chip| if self.rejected_is_reserved() { trf("%@ – andere Tasten drücken", &[chip]) } else { chip.clone() });
                 let note = |text: String| div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.orange_text).child(text).into_any_element();
+                let quiet = |text: String| div().min_w_0().truncate().px(px(space::XS)).rounded(px(radius::SMALL)).bg(t.ink.opacity(0.04)).border_1().border_color(t.ink.opacity(0.08)).text_size(px(font::CAPTION)).text_color(t.secondary).child(text).into_any_element();
+                let dimmed = blocked.is_some() && reason.is_none() && !recording;
                 let name = a.named(&modules);
                 let state = if let Some(text) = reason.clone().or(blocked.clone()) {
                     text
@@ -2285,12 +2299,12 @@ impl Settings {
                 } else {
                     a.shortcut().map_or_else(|| tr("Kein Kürzel"), |s| s.display())
                 };
-                let caps: AnyElement = if let Some(text) = reason.clone() {
+                let caps: AnyElement = if let Some(text) = reason_chip.clone() {
                     note(text)
                 } else if recording {
                     div().text_size(px(font::CALLOUT)).text_color(t.accent_text).child(tr("Tasten drücken…")).into_any_element()
-                } else if let Some(text) = blocked.clone() {
-                    note(text)
+                } else if let Some(text) = blocked_why.clone() {
+                    quiet(text)
                 } else if let Some(s) = a.shortcut() {
                     div().flex().flex_none().gap(px(space::XS)).children(Shortcut::parts(&s).into_iter().map(|c| div().min_w(px(iconsize::M)).h(px(iconsize::M)).px(px(space::XS)).flex().items_center().justify_center().rounded(px(radius::SMALL)).bg(t.ink.opacity(0.07)).border_1().border_color(t.ink.opacity(0.12)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).child(c))).into_any_element()
                 } else {
@@ -2298,6 +2312,7 @@ impl Settings {
                 };
                 let hover = t.ink.opacity(0.06);
                 let help = reason.or(blocked).unwrap_or_else(|| if recording { trf("%@ bricht ab, %@ entfernt das Kürzel", &[&escape, &delete]) } else { tr("Klicken zum Ändern") });
+                let help = if clashes.is_empty() { help } else { format!("{help}\n{}", trf("Auch belegt: %@", &[&clashes.join(", ")])) };
                 let recorder = div()
                     .id(SharedString::from(format!("rec-{}", a.id())))
                     .track_focus(&handle)
@@ -2320,7 +2335,7 @@ impl Settings {
                     .child(caps)
                     .tooltip(tip(help))
                     .on_click(cx.listener(move |s, _, window, cx| s.start_recording(a, true, window, cx)));
-                let default = a.default_shortcut().map_or_else(|| tr("kein Kürzel"), |d| d.display());
+                let default = a.default_shortcut().map_or_else(|| tr("Kein Kürzel"), |d| d.display());
                 let clash = (!clashes.is_empty()).then(|| {
                     let full = trf("Auch belegt: %@", &[&clashes.join(", ")]);
                     div()
@@ -2333,7 +2348,6 @@ impl Settings {
                         .rounded(px(radius::SMALL))
                         .text_size(px(font::CAPTION))
                         .text_color(t.orange_text)
-                        .key_nav()
                         .aria_label(format!("{} · {}", tr("Doppelt"), full))
                         .child(icon("triangle-alert", iconsize::XS, t.orange_text))
                         .child(div().flex_none().child(tr("Doppelt")))
@@ -2359,7 +2373,7 @@ impl Settings {
                                 .cursor_pointer()
                                 .soft(hover, radius::SMALL)
                                 .on_click(cx.listener(move |s, _, window, cx| s.start_recording(a, false, window, cx)))
-                                .child(div().min_w_0().truncate().child(a.named(&modules)))
+                                .child(div().min_w_0().truncate().when(dimmed, |d| d.text_color(t.secondary)).child(a.named(&modules)))
                                 .children(clash),
                         )
                         .child(recorder)
@@ -2482,6 +2496,8 @@ impl Render for Settings {
                         s.filter.update(cx, |f, cx| f.set_value("", window, cx));
                     } else if window.context_stack().iter().any(|c| c.contains("Input")) {
                         window.focus(&s.focus, cx);
+                    } else if s.tab == Tab::Shortcuts && s.notice.take().is_some() {
+                        cx.notify();
                     } else {
                         window.remove_window();
                     }

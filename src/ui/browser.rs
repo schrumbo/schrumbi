@@ -850,7 +850,7 @@ impl FileBrowser {
                 let (rename, trash_path, e) = (p.clone(), p.clone(), entity.clone());
                 deadline_submenu(menu.separator(), &p, window, cx)
                     .separator()
-                    .item(PopupMenuItem::new(tr("Umbenennen…")).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
+                    .item(PopupMenuItem::new(format!("{} (F2)", tr("Umbenennen…"))).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
                     .when_some(super::convention_rename::menu_item_or_hint(&p, cx), |m, item| m.item(item))
                     .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| state::trash(vec![trash_path.clone()], cx)))
             })

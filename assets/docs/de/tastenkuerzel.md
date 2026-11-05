@@ -18,7 +18,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Jetzt synchronisieren} | {key:syncNow} |
 | {ui:Aktualisieren} | {key:refresh} |
 | {ui:In Obsidian öffnen} | {key:openInObsidian} |
-| {ui:Widerrufen} | {key:Undo} |
+| {ui:Rückgängig} | {key:Undo} |
 | {ui:Anderen Ordner öffnen…} | {key:openOtherWorkspace} |
 | {ui:Seitenleiste ein-/ausblenden} | {key:ToggleSidebar} |
 | {ui:Details ein-/ausblenden} | {key:toggleInspector} |

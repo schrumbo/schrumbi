@@ -1040,7 +1040,6 @@
   "Weitere Datei hierher ziehen": "Drop another file here",
   "Weniger": "Less",
   "Weniger zeigen": "Show less",
-  "Widerrufen": "Undo",
   "Wiederholen": "Redo",
   "Wiederholt: %@": "Redone: %@",
   "Wiederkehrende Abgaben": "Recurring submissions",
@@ -1573,7 +1572,7 @@
   "Gib einen Namen ein.": "Enter a name.",
   "Jetzt: %@": "Now: %@",
   "Früheren Export ersetzen?": "Replace the earlier export?",
-  "Das PDF neben der Notiz wird überschrieben. Widerrufen holt es zurück.": "The PDF next to the note is overwritten. Undo brings it back.",
+  "Das PDF neben der Notiz wird überschrieben. Rückgängig holt es zurück.": "The PDF next to the note is overwritten. Undo brings it back.",
   "Nicht mehr fragen": "Don’t ask again",
   "Ersetzen": "Replace",
   "Vor dem Ersetzen eines früheren Exports fragen": "Ask before replacing an earlier export",
@@ -1652,12 +1651,12 @@
   "Befehl suchen…": "Search commands…",
   "Kürzel suchen": "Search shortcuts",
   "Dazu %@ oder Alt halten": "Also hold %@ or Alt",
-  "Für %@ reserviert": "Reserved for %@",
+  "Reserviert: %@": "Reserved: %@",
   "Tastaturnavigation": "keyboard navigation",
-  "kein Kürzel": "no shortcut",
   "Nach Muster benennen – erst Abgabe zuordnen": "Name by pattern – assign to a submission first",
   "Suche…": "Searching…",
   "Textbearbeitung": "text editing",
   "%@ – andere Tasten drücken": "%@ – press other keys",
-  "%@ – inaktiv": "%@ – inactive"
+  "%@ – inaktiv": "%@ – inactive",
+  "Nach Muster benennen… (%@ Dateien)": "Rename by pattern… (%@ files)"
 }

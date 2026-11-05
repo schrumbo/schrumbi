@@ -104,7 +104,7 @@ impl Render for ReplaceExport {
                     .flex()
                     .flex_col()
                     .gap(px(space::M))
-                    .child(div().text_size(px(font::BODY)).text_color(t.primary).child(tr("Das PDF neben der Notiz wird überschrieben. Widerrufen holt es zurück.")))
+                    .child(div().text_size(px(font::BODY)).text_color(t.primary).child(tr("Das PDF neben der Notiz wird überschrieben. Rückgängig holt es zurück.")))
                     .child(Checkbox::new("export-ask").label(tr("Nicht mehr fragen")).checked(!ask_again).on_click(cx.listener(|s, v: &bool, _, cx| {
                         s.ask_again = !*v;
                         cx.notify();
