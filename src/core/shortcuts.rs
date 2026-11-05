@@ -469,6 +469,26 @@ impl ShortcutAction {
     }
 }
 
+/// The desktop systems whose text fields bind different editing keys.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Os {
+    Mac,
+    Windows,
+    Linux,
+}
+
+impl Os {
+    fn here() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Mac
+        } else if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Linux
+        }
+    }
+}
+
 /// Where a fixed key exists.
 #[derive(Clone, Copy)]
 enum Platform {
@@ -506,7 +526,7 @@ const fn fixed_on(platform: Platform, key: &'static str, command: bool, shift: b
     Fixed { key, command, shift, option, label, notes_only, platform }
 }
 
-const FIXED: [Fixed; 26] = [
+const FIXED: [Fixed; 25] = [
     fixed("k", true, false, false, "Befehl suchen…", false),
     fixed("p", true, false, false, "Befehl suchen…", false),
     fixed("p", true, true, false, "Befehl suchen…", false),
@@ -525,7 +545,6 @@ const FIXED: [Fixed; 26] = [
     fixed_on(Platform::Mac, "h", true, false, true, "Andere ausblenden", false),
     fixed("h", true, true, false, "Markiert", true),
     fixed("m", true, true, false, "Formel", true),
-    fixed("return", false, true, false, "Zeilenumbruch ohne Liste", true),
     fixed("x", true, true, false, "Durchgestrichen", true),
     fixed(".", true, true, false, "Zitat", true),
     fixed("8", true, true, false, "Liste", true),
@@ -550,14 +569,9 @@ impl Shortcut {
     /// What the system and every text field do with these keys, e.g. "Für Kopieren reserviert".
     pub fn reserved_for(&self) -> Option<String> {
         let mac = cfg!(target_os = "macos");
-        let arrow = ["up", "down", "left", "right"].contains(&self.key.as_str());
-        let word_mod = if mac { (self.command || self.option) && !self.control } else { self.command && !self.option && !self.control };
-        let plain_shift = self.shift && !self.command && !self.option && !self.control;
         let what = if self.key == "tab" && !self.command && !self.option && !self.control {
             "Tastaturnavigation"
-        } else if plain_shift && (arrow || ["return", "home", "end"].contains(&self.key.as_str())) {
-            "Textbearbeitung"
-        } else if word_mod && (arrow || (!mac && ["home", "end"].contains(&self.key.as_str())) || self.key == "delete") {
+        } else if self.edits_text(Os::here()) || (self.key == "return" && self.shift && !self.command && !self.option && !self.control) {
             "Textbearbeitung"
         } else if self.command && !self.option && !self.control {
             match (self.key.as_str(), self.shift) {
@@ -576,6 +590,29 @@ impl Shortcut {
             return None;
         };
         Some(trf("Für %@ reserviert", &[&tr(what)]))
+    }
+
+    fn edits_text(&self, os: Os) -> bool {
+        if self.control {
+            return false;
+        }
+        let key = self.key.as_str();
+        let horizontal = matches!(key, "left" | "right");
+        let vertical = matches!(key, "up" | "down");
+        let edge = matches!(key, "home" | "end");
+        let delete = key == "delete" && !self.shift;
+        match (self.command, self.option) {
+            (false, false) => self.shift && (horizontal || vertical || edge),
+            (true, false) => match os {
+                Os::Mac => horizontal || vertical || delete,
+                Os::Windows | Os::Linux => horizontal || edge || delete,
+            },
+            (false, true) => match os {
+                Os::Mac => horizontal || delete,
+                Os::Windows | Os::Linux => self.shift && horizontal,
+            },
+            (true, true) => os == Os::Windows && vertical && !self.shift,
+        }
     }
 
     /// The modifier and key labels in this platform's order, e.g. ⇧ ⌘ E or Ctrl Shift E.
@@ -722,27 +759,87 @@ mod tests {
         assert!(ShortcutAction::CloseTab.reserved_for(&k("w", false)).is_none(), "an action may keep its own default");
     }
 
+    fn edits(os: Os, key: &str, command: bool, shift: bool, option: bool) -> bool {
+        s(key, command, shift, option, false).edits_text(os)
+    }
+
     #[test]
-    fn text_editing_keys_cannot_be_taken() {
-        let mac = cfg!(target_os = "macos");
-        let key = |k: &str, command: bool, shift: bool, option: bool| s(k, command, shift, option, false);
-        for k in ["up", "down", "left", "right", "home", "end", "return"] {
-            assert!(ShortcutAction::Bold.reserved_for(&key(k, false, true, false)).is_some(), "Shift+{k}");
-        }
-        for k in ["up", "down", "left", "right"] {
-            for shift in [false, true] {
-                assert!(ShortcutAction::Bold.reserved_for(&key(k, true, shift, false)).is_some(), "{k} {shift}");
-                assert_eq!(ShortcutAction::Bold.reserved_for(&key(k, false, shift, true)).is_some(), mac, "alt {k} {shift}");
+    fn text_editing_keys_are_what_the_input_binds_on_macos() {
+        let mac = |key: &str, command, shift, option| edits(Os::Mac, key, command, shift, option);
+        for shift in [false, true] {
+            for key in ["left", "right"] {
+                assert!(mac(key, true, shift, false), "cmd {key} {shift}");
+                assert!(mac(key, false, shift, true), "alt {key} {shift}");
+            }
+            for key in ["up", "down"] {
+                assert!(mac(key, true, shift, false), "cmd {key} {shift}");
+                assert!(!mac(key, false, shift, true), "alt {key} {shift}");
+                assert!(!mac(key, true, shift, true), "cmd alt {key} {shift}");
             }
         }
-        for k in ["home", "end"] {
-            assert_eq!(ShortcutAction::Bold.reserved_for(&key(k, true, false, false)).is_some(), !mac, "{k}");
-            assert_eq!(ShortcutAction::Bold.reserved_for(&key(k, true, true, false)).is_some(), !mac, "{k}");
+        for key in ["up", "down", "left", "right", "home", "end"] {
+            assert!(mac(key, false, true, false), "shift {key}");
         }
-        assert!(ShortcutAction::Bold.reserved_for(&key("delete", true, false, false)).is_some());
-        assert_eq!(ShortcutAction::Bold.reserved_for(&key("delete", false, false, true)).is_some(), mac);
+        assert!(mac("delete", true, false, false) && mac("delete", false, false, true));
+        assert!(!mac("home", true, false, false) && !mac("end", true, true, false));
+        assert!(!mac("left", false, false, false));
+        assert!(!mac("return", true, false, false) && !mac("b", false, true, false));
+    }
+
+    #[test]
+    fn text_editing_keys_are_what_the_input_binds_on_windows() {
+        let win = |key: &str, command, shift, option| edits(Os::Windows, key, command, shift, option);
+        for shift in [false, true] {
+            for key in ["left", "right", "home", "end"] {
+                assert!(win(key, true, shift, false), "ctrl {key} {shift}");
+            }
+            for key in ["up", "down"] {
+                assert!(!win(key, true, shift, false), "ctrl {key} {shift}");
+                assert_eq!(win(key, true, shift, true), !shift, "ctrl alt {key} {shift}");
+                assert!(!win(key, false, shift, true), "alt {key} {shift}");
+            }
+        }
+        for key in ["up", "down", "left", "right", "home", "end"] {
+            assert!(win(key, false, true, false), "shift {key}");
+        }
+        for key in ["left", "right"] {
+            assert!(win(key, false, true, true), "alt shift {key}");
+            assert!(!win(key, false, false, true), "alt {key}");
+        }
+        assert!(win("delete", true, false, false));
+        assert!(!win("delete", false, false, true));
+        assert!(!win("return", true, false, false) && !win("b", true, true, false));
+    }
+
+    #[test]
+    fn text_editing_keys_are_what_the_input_binds_on_linux() {
+        let linux = |key: &str, command, shift, option| edits(Os::Linux, key, command, shift, option);
+        for shift in [false, true] {
+            for key in ["left", "right", "home", "end"] {
+                assert!(linux(key, true, shift, false), "ctrl {key} {shift}");
+            }
+            for key in ["up", "down"] {
+                assert!(!linux(key, true, shift, false), "ctrl {key} {shift}");
+                assert!(!linux(key, true, shift, true), "ctrl alt {key} {shift}");
+            }
+        }
+        for key in ["left", "right"] {
+            assert!(linux(key, false, true, true), "alt shift {key}");
+            assert!(!linux(key, false, false, true), "alt {key}");
+        }
+        for key in ["up", "down", "left", "right", "home", "end"] {
+            assert!(linux(key, false, true, false), "shift {key}");
+        }
+        assert!(linux("delete", true, false, false));
+        assert!(!linux("delete", false, false, true));
+    }
+
+    #[test]
+    fn shift_return_and_the_systems_own_keys_stay_reserved() {
+        let key = |k: &str, command: bool, shift: bool, option: bool| s(k, command, shift, option, false);
+        assert!(ShortcutAction::Bold.reserved_for(&key("return", false, true, false)).is_some());
         assert!(ShortcutAction::Bold.reserved_for(&key("return", true, false, false)).is_none());
-        assert!(ShortcutAction::Bold.reserved_for(&key("b", false, true, false)).is_none());
+        assert!(ShortcutAction::Bold.reserved_for(&key("left", false, true, false)).is_some());
         assert!(ShortcutAction::MoveLineUp.reserved_for(&key("up", false, false, true)).is_none(), "an action may keep its own default");
     }
 

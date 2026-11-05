@@ -67,6 +67,8 @@ Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live: 
 | {key:return} / {key:shift-return} | Nächster / vorheriger Treffer |
 | {key:escape} | Suche schließen |
 
+Das Kürzel gilt auch, wenn der Fokus in der Dateiliste oder bei den Tabs liegt. Ohne offene Notiz sind {ui:In Notiz suchen} und {ui:In Notiz ersetzen} im Menü {ui:Bearbeiten} ausgegraut.
+
 Alle Treffer sind markiert, der aktuelle kräftiger. Groß- und Kleinschreibung sowie Umlaute sind egal, bis du {ui:Groß-/Kleinschreibung beachten} wählst.
 
 {ui:In Notiz ersetzen} (Pfeil links in der Suche) zeigt die Ersetzen-Zeile. {key:return} ersetzt einen Treffer, {ui:Alle ersetzen} alle. Ein {key:Undo} nimmt es zurück. Im Lesen-Modus gibt es kein Ersetzen.

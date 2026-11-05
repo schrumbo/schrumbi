@@ -25,10 +25,10 @@ Die Suche kennt auch andere Wörter: `dark` findet das Erscheinungsbild, `git` d
 ## Kürzel ändern
 
 1. {ui:Tastenkürzel} öffnen und auf ein Kürzel oder seinen Namen klicken, oder mit Tab hinfahren und {key:return} drücken.
-2. Neue Tasten drücken. Dabei sein muss eine Sondertaste, bei Pfeilen, Tab und Return reicht Umschalt, F-Tasten gehen allein. Fehlt die Sondertaste, steht ein Hinweis da. Nicht setzen lassen sich Kopieren, Einsetzen, Ausschneiden, Alles auswählen, Widerrufen, Wiederholen, Tab schließen, Beenden, {key:tab} und die Tasten der Textbearbeitung (Pfeile mit Umschalt, Wort- und Zeilensprünge, Wörter löschen); der Grund steht an der Zeile. Alle anderen Tasten von Schrumbi lassen sich neu belegen.
+2. Neue Tasten drücken. Dabei sein muss eine Sondertaste, F-Tasten gehen allein. Fehlt die Sondertaste, steht ein Hinweis da. Nicht setzen lassen sich Kopieren, Einsetzen, Ausschneiden, Alles auswählen, Widerrufen, Wiederholen, Tab schließen, Beenden, {key:tab} und die Tasten der Textbearbeitung (Umschalt mit Pfeilen und {key:return}, Wort- und Zeilensprünge, Wörter löschen); der Grund steht an der Zeile. Alle anderen Tasten von Schrumbi lassen sich neu belegen.
 3. {key:escape} bricht ab, {key:delete} entfernt das Kürzel.
 
-Ein Klick ins Suchfeld oder woandershin beendet das Aufnehmen. Steht etwas im Suchfeld, leert {key:escape} es. Ist ein Kürzel doppelt belegt, steht {ui:Doppelt} und der andere Befehl an der Zeile. Beim Aufnehmen löst die Taste nichts aus, so lässt sich auch ein belegtes Kürzel setzen. {ui:Alle zurücksetzen} stellt die Standards wieder her. Nach jeder Änderung steht unter dem Suchfeld ein Hinweis mit {ui:Rückgängig}, der den letzten Stand zurückholt; er verschwindet nach wenigen Sekunden.
+Ein Klick ins Suchfeld oder woandershin beendet das Aufnehmen. Steht etwas im Suchfeld, leert {key:escape} es. Ist ein Kürzel doppelt belegt, steht {ui:Doppelt} und der andere Befehl an der Zeile. Beim Aufnehmen löst die Taste nichts aus, so lässt sich auch ein belegtes Kürzel setzen. {ui:Alle zurücksetzen} stellt die Standards wieder her. Nach jeder Änderung steht unter dem Suchfeld ein Hinweis, der den Befehl und seine Tasten nennt, mit {ui:Rückgängig}, der den letzten Stand zurückholt. Er bleibt beim Scrollen stehen und verschwindet nach wenigen Sekunden. In {ui:Tastenkürzel} springt {key:cmd-f} ins Filterfeld.
 
 ## Folgesemester
 

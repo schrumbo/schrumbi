@@ -58,6 +58,12 @@ pub mod control {
     pub const TIME: f32 = 92.;
     /// The widest a control at the end of a settings row gets.
     pub const ROW_CONTROL: f32 = 460.;
+    /// The shortcut column of the settings: four key chips, or the reason that replaces them.
+    pub const KEYS: f32 = 216.;
+    /// The most a row of the shortcut list gives to naming what else uses its keys.
+    pub const CLASH: f32 = 240.;
+    /// A small icon button, like the reset button at the end of a shortcut row.
+    pub const ICON_BUTTON: f32 = 26.;
 }
 
 /// Widths of the document tab row.
@@ -78,6 +84,20 @@ pub mod tab {
     pub const SPLIT_GRIP: f32 = 12.;
 }
 
+/// Widths in the toolbar's row for the open note: folders, name and deadline.
+pub mod crumb {
+    /// Narrowest the note's name gets while there is anything else in the row to give way.
+    pub const NAME_MIN: f32 = 64.;
+    /// How little the name shrinks next to the folders (1) and the deadline.
+    pub const NAME_SHRINK: f32 = 0.05;
+    /// How much faster than the folders the deadline gives way.
+    pub const PILL_SHRINK: f32 = 4.;
+    /// Narrowest the deadline gets: its icon.
+    pub const PILL_MIN: f32 = 28.;
+    /// Widest the deadline gets.
+    pub const PILL_MAX: f32 = 240.;
+}
+
 /// Corner radii used across the app.
 pub mod radius {
     /// Keyboard chips, small marks.
@@ -94,15 +114,29 @@ pub mod radius {
 
 /// The fill a control gets while the keyboard has the focus.
 pub mod ring {
-    use gpui_kit::{Hsla, rgb};
+    use gpui_kit::Hsla;
+    use std::sync::RwLock;
 
-    const COLOR: u32 = 0x0A84FF;
     const OPACITY: f32 = 0.28;
     /// The tint of a shortcut chip that is waiting for keys.
     pub const ARMED: f32 = 0.08;
+    /// The edge of a shortcut chip, clear while it has no state to show.
+    pub const BORDER: f32 = 1.5;
+
+    static ACCENT: RwLock<Hsla> = RwLock::new(Hsla { h: 0.58, s: 1., l: 0.5, a: 1. });
+
+    /// The focus fill for a theme with this accent.
+    pub fn of(accent: Hsla) -> Hsla {
+        accent.opacity(OPACITY)
+    }
+
+    /// Remembers the accent of the theme now drawn, so `fill` follows it.
+    pub fn set(accent: Hsla) {
+        *ACCENT.write().unwrap_or_else(|e| e.into_inner()) = accent;
+    }
 
     pub fn fill() -> Hsla {
-        Hsla::from(rgb(COLOR)).opacity(OPACITY)
+        of(*ACCENT.read().unwrap_or_else(|e| e.into_inner()))
     }
 }
 
@@ -212,14 +246,14 @@ impl Theme {
             tertiary: ink.opacity(if dark { 0.47 } else { 0.56 }),
             separator: ink.opacity(if dark { 0.12 } else { 0.1 }),
             accent: if dark { c(0x0A84FF) } else { c(0x007AFF) },
-            accent_text: if dark { c(0x409CFF) } else { c(0x0062CC) },
+            accent_text: if dark { c(0x6CB3FF) } else { c(0x0053B4) },
             green_text: if dark { c(0x30D158) } else { c(0x248A3D) },
             on_accent: c(0xFFFFFF),
             selection: if dark { c(0x3172D4) } else { c(0x0A6CF0) },
             green: if dark { c(0x30D158) } else { c(0x34C759) },
             blue: if dark { c(0x0A84FF) } else { c(0x007AFF) },
             orange: if dark { c(0xFF9F0A) } else { c(0xFF9500) },
-            orange_text: if dark { c(0xFF9F0A) } else { c(0x854A00) },
+            orange_text: if dark { c(0xFF9F0A) } else { c(0x824800) },
             red: if dark { c(0xFF453A) } else { c(0xFF3B30) },
             gray: c(0x8E8E93),
             ink,
@@ -243,14 +277,14 @@ impl Theme {
             tertiary: ink.opacity(0.5),
             separator: ink.opacity(0.11),
             accent: c(0x5E81AC),
-            accent_text: c(0x88C0D0),
+            accent_text: c(0xA4CFDC),
             green_text: c(0xA3BE8C),
             on_accent: c(0xECEFF4),
             selection: c(0x4C6A92),
             green: c(0xA3BE8C),
             blue: c(0x81A1C1),
             orange: c(0xD08770),
-            orange_text: c(0xF0A78E),
+            orange_text: c(0xF5BCA8),
             red: c(0xBF616A),
             gray: c(0x8591A8),
             ink,
@@ -274,14 +308,14 @@ impl Theme {
             tertiary: ink.opacity(0.5),
             separator: ink.opacity(0.11),
             accent: c(0xBD93F9),
-            accent_text: c(0xBD93F9),
+            accent_text: c(0xDBC4FC),
             green_text: c(0x50FA7B),
             on_accent: c(0x21222C),
             selection: c(0x6A5A9C),
             green: c(0x50FA7B),
             blue: c(0x8BE9FD),
             orange: c(0xFFB86C),
-            orange_text: c(0xFFB86C),
+            orange_text: c(0xFFC282),
             red: c(0xFF5555),
             gray: c(0x8A94B8),
             ink,
@@ -443,6 +477,7 @@ pub fn apply(kind: Kind, window: Option<&mut Window>, cx: &mut App) {
     let t = Theme::new(kind);
     let dark = t.dark;
     cx.set_global(t);
+    ring::set(t.accent);
     set_note_scale(crate::core::prefs::get().editor_font_size);
     ComponentTheme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, window, cx);
     let ct = ComponentTheme::global_mut(cx);
@@ -549,13 +584,16 @@ mod tests {
         for kind in [Kind::Light, Kind::Dark, Kind::Nord, Kind::Dracula] {
             let dark = kind;
             let t = Theme::new(kind);
-            let ring = ring::fill();
+            let ring = ring::of(t.accent);
             for background in [t.content, t.sidebar, t.secondary_bg, t.column] {
                 let focused = background.blend(ring);
                 let armed = background.blend(t.accent.opacity(ring::ARMED));
                 assert!(contrast(t.orange_text, armed) >= 4.5, "orange text on the armed chip, {dark:?}: {}", contrast(t.orange_text, armed));
-                assert!(!matches!(kind, Kind::Light | Kind::Dark) || contrast(t.accent_text, armed) >= 4.5, "accent text on the armed chip, {dark:?}: {}", contrast(t.accent_text, armed));
-                assert!(!matches!(kind, Kind::Light | Kind::Dark) || contrast(t.orange_text, focused) >= 4.5, "orange text on the focus fill, {dark:?}: {}", contrast(t.orange_text, focused));
+                assert!(contrast(t.accent_text, armed) >= 4.5, "accent text on the armed chip, {dark:?}: {}", contrast(t.accent_text, armed));
+                assert!(contrast(t.orange_text, focused) >= 4.5, "orange text on the focus fill, {dark:?}: {}", contrast(t.orange_text, focused));
+                assert!(contrast(t.accent_text, focused) >= 4.5, "accent text on the focus fill, {dark:?}: {}", contrast(t.accent_text, focused));
+                assert!(contrast(t.primary, focused) >= 4.5, "text on the focus fill, {dark:?}: {}", contrast(t.primary, focused));
+                assert!(contrast(focused, background) >= 1.25, "the focus fill shows on the background, {dark:?}: {}", contrast(focused, background));
                 assert!(contrast(t.primary, background) >= 7., "primary, {dark:?}");
                 assert!(contrast(t.secondary, background) >= 4.5, "secondary, {dark:?}: {}", contrast(t.secondary, background));
                 assert!(contrast(t.accent_text, background) >= 4.5, "accent, {dark:?}: {}", contrast(t.accent_text, background));

@@ -244,7 +244,7 @@ pub fn status_menu(menu: PopupMenu, id: &str, cx: &App) -> PopupMenu {
             .item(item(tr("Neue Notiz"), "square-pen", Box::new(move |cx| new_assignment_note(&id3, cx))))
             .item(item(tr("Datei zuordnen…"), "link", Box::new(move |cx| act(cx, |l| l.link_pick = Some(id2.clone())))))
             .item(item(tr("Abgabeordner öffnen"), "folder", Box::new(move |_| library::open_path(&folder))));
-        if let Some(rename) = e.files.iter().find_map(|f| super::convention_rename::menu_item(f, cx)) {
+        for rename in e.files.iter().filter_map(|f| super::convention_rename::named_menu_item(f, cx)) {
             menu = menu.item(rename);
         }
     }

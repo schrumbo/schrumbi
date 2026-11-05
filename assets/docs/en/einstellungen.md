@@ -25,10 +25,10 @@ Search knows other words too: `dark` finds the appearance, `git` the sync. It al
 ## Change Shortcuts
 
 1. Open {ui:Tastenkürzel} and click a shortcut or its name, or Tab to it and press {key:return}.
-2. Press the new keys. A modifier key must be included, for arrows, Tab and Return Shift is enough, F keys work alone. Without a modifier a hint appears. Copy, paste, cut, select all, undo, redo, close tab, quit, {key:tab} and the text editing keys (arrows with Shift, word and line jumps, deleting words) cannot be set; the reason appears on the row. All other Schrumbi keys can be reassigned.
+2. Press the new keys. A modifier key must be included, F keys work alone. Without a modifier a hint appears. Copy, paste, cut, select all, undo, redo, close tab, quit, {key:tab} and the text editing keys (Shift with arrows and {key:return}, word and line jumps, deleting words) cannot be set; the reason appears on the row. All other Schrumbi keys can be reassigned.
 3. {key:escape} cancels, {key:delete} removes the shortcut.
 
-A click in the search field or elsewhere ends recording. If something is in the search field, {key:escape} clears it. If a shortcut is used twice, {ui:Doppelt} and the other command appear on the row. While recording, the key triggers nothing, so a key already in use can be set too. {ui:Alle zurücksetzen} restores the defaults. After every change a notice with {ui:Rückgängig} appears below the search field and brings the previous state back; it disappears after a few seconds.
+A click in the search field or elsewhere ends recording. If something is in the search field, {key:escape} clears it. If a shortcut is used twice, {ui:Doppelt} and the other command appear on the row. While recording, the key triggers nothing, so a key already in use can be set too. {ui:Alle zurücksetzen} restores the defaults. After every change a notice naming the command and its keys appears below the search field, with {ui:Rückgängig}, which brings the previous state back. It stays in place while you scroll and disappears after a few seconds. In {ui:Tastenkürzel}, {key:cmd-f} jumps into the filter field.
 
 ## Next Semester
 

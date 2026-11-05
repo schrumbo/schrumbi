@@ -15,6 +15,9 @@ pub const MEDIUM: Duration = Duration::from_millis(180);
 /// Elements travelling across the window.
 pub const SLOW: Duration = Duration::from_millis(240);
 
+/// How long the offer to take back a settings change stays.
+pub const NOTICE: Duration = Duration::from_secs(8);
+
 /// How long a section found by search stays lit.
 pub const FLASH: Duration = Duration::from_millis(1400);
 

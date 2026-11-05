@@ -67,6 +67,8 @@ You choose the editor in {key:OpenSettings} → {ui:Notizen}: {ui:Live: Text ble
 | {key:return} / {key:shift-return} | Next / previous match |
 | {key:escape} | Close search |
 
+The shortcut also works while the focus is in the file list or on the tabs. Without an open note, {ui:In Notiz suchen} and {ui:In Notiz ersetzen} are greyed out in the {ui:Bearbeiten} menu.
+
 All matches are marked, the current one stronger. Case and umlauts do not matter until you choose {ui:Groß-/Kleinschreibung beachten}.
 
 {ui:In Notiz ersetzen} (arrow on the left of the search) shows the replace row. {key:return} replaces one match, {ui:Alle ersetzen} all of them. One {key:Undo} takes it back. Reading mode has no replace.

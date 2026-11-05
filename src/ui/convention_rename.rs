@@ -14,6 +14,9 @@ use super::theme::{Theme, font, iconsize, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{ConventionOffer, ConventionPlan};
+use crate::core::text::end_ellipsis;
+
+const NAME_IN_MENU: usize = 40;
 
 const FORBIDDEN: &str = "\\/:*?\"<>|";
 
@@ -28,6 +31,16 @@ pub fn menu_item(path: &Path, cx: &App) -> Option<PopupMenuItem> {
         ConventionOffer::Ready => menu_item_or_hint(path, cx),
         ConventionOffer::Hidden | ConventionOffer::NeedsDeadline => None,
     }
+}
+
+/// The working entry for one file, named after it, for menus that list one entry per misnamed file; none unless the file is ready to rename.
+pub fn named_menu_item(path: &Path, cx: &App) -> Option<PopupMenuItem> {
+    if state::read(cx, |l| l.convention_offer(path)) != ConventionOffer::Ready {
+        return None;
+    }
+    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let path = path.to_path_buf();
+    Some(PopupMenuItem::new(trf("„%@“ nach Muster benennen…", &[&end_ellipsis(&name, NAME_IN_MENU)])).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| open(path.clone(), window, cx)))
 }
 
 /// Like `menu_item`, but for a file in a submission folder that belongs to no deadline yet the entry is disabled with its reason; for menus that also offer to assign a deadline.

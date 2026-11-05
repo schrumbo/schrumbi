@@ -14,7 +14,7 @@ use super::motion::Soft;
 use super::motion;
 use super::pages::Pages;
 use super::state::{self, act};
-use super::theme::{self, Theme, font, space, iconsize, radius, control};
+use super::theme::{self, Theme, crumb, font, space, iconsize, radius, control};
 use super::widgets::*;
 use super::{sheets, sidebar, today};
 use crate::core::i18n::{tr, trf};
@@ -232,8 +232,8 @@ impl MainWindow {
         row = row.child(
             div()
                 .id("crumb-name")
-                .flex_shrink(1.)
-                .min_w(px(40.))
+                .flex_shrink(crumb::NAME_SHRINK)
+                .min_w(px(crumb::NAME_MIN))
                 .truncate()
                 .px(px(space::XS))
                 .rounded(px(radius::SMALL))
@@ -255,7 +255,7 @@ impl MainWindow {
         if !linked.is_empty() || lib.module_containing(path).is_some() {
             let menu_path = path.to_path_buf();
             let shown = linked.first().map(|a| (a.module_id.clone(), a.id.clone()));
-            let pill = Button::new("note-deadline").ghost().small().icon(menu_icon("link"));
+            let pill = Button::new("note-deadline").ghost().small().min_w_0().icon(menu_icon("link"));
             let pill = match linked.first() {
                 Some(a) => {
                     let more = if linked.len() > 1 { format!(" +{}", linked.len() - 1) } else { String::new() };
@@ -263,7 +263,7 @@ impl MainWindow {
                 }
                 None => pill.tooltip(tr("Einer Abgabe zuordnen")),
             };
-            row = row.child(div().flex_none().max_w(px(240.)).overflow_hidden().ml(px(space::S)).child(pill.dropdown_menu(move |menu, _, cx| {
+            row = row.child(div().flex().flex_shrink(crumb::PILL_SHRINK).min_w(px(crumb::PILL_MIN)).max_w(px(crumb::PILL_MAX)).overflow_hidden().ml(px(space::S)).child(pill.dropdown_menu(move |menu, _, cx| {
                 let mut menu = deadline_items(menu.label(tr("Gehört zu")), &menu_path, cx);
                 if let Some((module, id)) = shown.clone() {
                     menu = menu.separator().item(PopupMenuItem::new(tr("Abgabe anzeigen")).icon(menu_icon("arrow-right")).on_click(move |_, _, cx| {
@@ -388,6 +388,8 @@ impl Render for MainWindow {
             .text_size(px(font::BODY))
             .line_height(relative(font::LINE))
             .text_color(t.primary)
+            .on_action(|_: &super::find_bar::FindInNote, _, cx| super::app::in_active_note(super::find_bar::FindInNote, cx))
+            .on_action(|_: &super::find_bar::ReplaceInNote, _, cx| super::app::in_active_note(super::find_bar::ReplaceInNote, cx))
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
                 if window.context_stack().iter().any(|c| c.contains("NoteEditor")) {
                     return;

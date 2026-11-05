@@ -1162,6 +1162,41 @@ fn naming_is_offered_for_any_file_in_a_submission_folder() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn naming_is_offered_in_the_general_submission_folder() {
+    use crate::core::library::ConventionOffer;
+    let (root, mut lib) = workspace("convention-general-folder", &config(1, 1));
+    let today = chrono::Local::now().date_naive();
+    for a in lib.assignments.iter_mut() {
+        a.file_pattern = "*.nothing".into();
+    }
+    let a = lib.assignments.iter().filter(|a| a.upload && crate::core::day::local_date(a.due) >= today).min_by_key(|a| a.due).cloned().unwrap();
+    let module = lib.config.as_ref().unwrap().module(&a.module_id).cloned().unwrap();
+    let general = root.join(lib.config.as_ref().unwrap().submissions_of(&module));
+    assert!(!a.folder.starts_with(&general) || a.folder != general, "the deadline has a folder of its own");
+    std::fs::create_dir_all(&general).unwrap();
+
+    let loose = general.join("Zufaellig.xyz");
+    std::fs::write(&loose, b"x").unwrap();
+    assert_eq!(lib.convention_offer(&loose), ConventionOffer::NeedsDeadline, "a loose file there is offered once it belongs to a deadline");
+    lib.link(&[loose.clone()], &a.id);
+    assert_eq!(lib.convention_offer(&loose), ConventionOffer::Ready, "with a deadline the entry works");
+
+    let right = general.join(lib.naming(&a.module_id).unwrap().render("Anders", today, "pdf", &[], a.week, a.iso_week, None));
+    std::fs::write(&right, b"x").unwrap();
+    assert_eq!(lib.convention_offer(&right), ConventionOffer::Hidden, "a name that follows the pattern needs nothing");
+
+    let beside = root.join(&module.folder).join("Zufaellig.xyz");
+    std::fs::write(&beside, b"x").unwrap();
+    assert_eq!(lib.convention_offer(&beside), ConventionOffer::Hidden, "the module folder itself is not a submission folder");
+
+    lib.config.as_mut().unwrap().submission_folder = String::new();
+    let bare = general.join("Bare.xyz");
+    std::fs::write(&bare, b"x").unwrap();
+    assert_eq!(lib.convention_offer(&bare), ConventionOffer::Hidden, "without a submission folder setting only deadline folders count");
+    let _ = std::fs::remove_dir_all(root);
+}
+
 fn name_of(p: &Path) -> String {
     p.file_name().unwrap().to_string_lossy().to_string()
 }

@@ -2772,11 +2772,24 @@ impl Library {
         }
         if target.is_some() {
             ConventionOffer::Ready
-        } else if self.assignments.iter().any(|a| a.module_id == module_id && a.upload && self.submission_holds(a, file)) {
+        } else if self.assignments.iter().any(|a| a.module_id == module_id && a.upload && self.submission_holds(a, file)) || self.in_general_submissions(&module_id, file) {
             ConventionOffer::NeedsDeadline
         } else {
             ConventionOffer::Hidden
         }
+    }
+
+    /// Whether `file` lies in the module's own submission folder from the settings, e.g. "Abgaben", and the module has a deadline to take it.
+    fn in_general_submissions(&self, module_id: &str, file: &Path) -> bool {
+        let Some(config) = self.config.as_ref() else { return false };
+        let Some(module) = config.module(module_id) else { return false };
+        if config.submission_folder.trim().trim_matches(['/', '\\']).is_empty() || !self.assignments.iter().any(|a| a.module_id == module_id && a.upload) {
+            return false;
+        }
+        let (Some(root), Some(settled_root), Some(raw)) = (self.root.as_ref(), self.settled_root.as_ref(), file.parent()) else { return false };
+        let settled = dunce::canonicalize(raw).unwrap_or_else(|_| raw.to_path_buf());
+        let folder = config.submissions_of(module);
+        [root.join(&folder), settled_root.join(&folder)].iter().any(|f| [raw, settled.as_path()].iter().any(|d| d.starts_with(f)))
     }
 
     fn convention_target(&self, file: &Path) -> Option<(Assignment, String)> {

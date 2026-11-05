@@ -1562,6 +1562,7 @@
   "Im Dateibaum zeigen": "Show in the file tree",
   "Nichts offen in den nächsten zwei Wochen": "Nothing open in the next two weeks",
   "Nach Muster benennen…": "Name by pattern…",
+  "„%@“ nach Muster benennen…": "Name “%@” by pattern…",
   "Muster von %@ · für %@": "Pattern of %@ · for %@",
   "Muster von %@": "Pattern of %@",
   "Passt zum Namensmuster": "Follows the naming pattern",
@@ -1658,6 +1659,5 @@
   "Suche…": "Searching…",
   "Textbearbeitung": "text editing",
   "%@ – andere Tasten drücken": "%@ – press other keys",
-  "Zeilenumbruch ohne Liste": "Line break without a list item",
-  "Kürzel geändert": "Shortcut changed"
+  "%@ – inaktiv": "%@ – inactive"
 }

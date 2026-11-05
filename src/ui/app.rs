@@ -210,10 +210,13 @@ pub fn init(cx: &mut App) {
     rebuild_menus(cx);
     let lib = state::lib(cx);
     let mut modules: Vec<String> = Vec::new();
+    let mut note = note_is_active(cx);
     cx.observe(&lib, move |lib, cx| {
         let now: Vec<String> = lib.read(cx).semester_modules().iter().map(|m| format!("{}{}", m.id, m.display_name())).collect();
-        if now != modules {
+        let open = note_is_active(cx);
+        if now != modules || open != note {
             modules = now;
+            note = open;
             rebuild_menus(cx);
         }
     })
@@ -221,6 +224,19 @@ pub fn init(cx: &mut App) {
 }
 
 const MENU_NAME: usize = 28;
+
+/// Whether the main window shows a note, which find and replace then act on.
+pub fn note_is_active(cx: &App) -> bool {
+    state::read(cx, |l| matches!(l.route(), Route::Doc(_)) && l.active_document.as_deref().is_some_and(crate::core::markdown::is_markdown))
+}
+
+/// Hands an action meant for the open note to it when the focus is elsewhere in the main window, like the explorer or the tab strip.
+pub fn in_active_note(action: impl Action, cx: &mut App) {
+    if note_is_active(cx) {
+        cx.default_global::<super::palette::PendingNoteAction>().0 = Some(Box::new(action));
+        act(cx, |l| l.focus_document = true);
+    }
+}
 
 fn close_active_window(cx: &mut App) {
     if let Some(w) = cx.active_window() {
@@ -363,8 +379,6 @@ pub fn bind_keys(cx: &mut App) {
             Some(kb(cmd("alt-f"), super::find_bar::ReplaceInNote, None)),
             #[cfg(not(target_os = "macos"))]
             Some(kb("ctrl-h".into(), super::find_bar::ReplaceInNote, None)),
-            binding(ShortcutAction::FindInNote, super::find_bar::FindInNote, Some("NoteView")),
-            Some(kb(cmd("alt-f"), super::find_bar::ReplaceInNote, Some("NoteView"))),
         ]
         .into_iter()
         .flatten(),
@@ -383,6 +397,7 @@ pub fn bind_keys(cx: &mut App) {
 
 /// The menu bar: Schrumbi, Ablage, Bearbeiten, Darstellung, Gehe zu, Fenster.
 pub fn rebuild_menus(cx: &mut App) {
+    let note = note_is_active(cx);
     let modules: Vec<(String, String)> = state::read(cx, |l| l.semester_modules().iter().map(|m| (m.id.clone(), m.display_name())).collect());
     let recents: Vec<MenuItem> = prefs::get()
         .recent_workspaces
@@ -457,8 +472,8 @@ pub fn rebuild_menus(cx: &mut App) {
             MenuItem::os_action(tr("Einsetzen"), gpui_kit::component::input::Paste, OsAction::Paste),
             MenuItem::os_action(tr("Alles auswählen"), gpui_kit::component::input::SelectAll, OsAction::SelectAll),
             MenuItem::separator(),
-            MenuItem::action(tr("In Notiz suchen"), super::find_bar::FindInNote),
-            MenuItem::action(tr("In Notiz ersetzen"), super::find_bar::ReplaceInNote),
+            MenuItem::action(tr("In Notiz suchen"), super::find_bar::FindInNote).disabled(!note),
+            MenuItem::action(tr("In Notiz ersetzen"), super::find_bar::ReplaceInNote).disabled(!note),
         ]),
         Menu::new(tr("Darstellung")).items([
             MenuItem::action(tr("Lesen / Bearbeiten"), TogglePreview),
