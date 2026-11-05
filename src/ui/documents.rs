@@ -22,7 +22,7 @@ use super::state::{self, act};
 use super::motion::Soft;
 use super::bar_fit::{self, BarFit, Room};
 use crate::core::vault::index;
-use super::theme::{Theme, control, font, note_size, note_scale, radius, space, iconsize, tab};
+use super::theme::{Theme, control, font, hover, note_size, note_scale, radius, space, iconsize, tab};
 use super::widgets::*;
 use crate::core::live_text::{self, LiveStyle, Segment, SegmentKind};
 use crate::core::edit_ops::{self, Edit};
@@ -1517,7 +1517,7 @@ impl NoteView {
         let width = if cell { px(160.) } else { self.field_width(&value, window) };
         let style = window.text_style();
         let run = TextRun { len: value.len(), font: style.font(), color: style.color, background_color: None, underline: None, strikethrough: None };
-        let rows: usize = window.text_system().shape_text(value.clone().into(), px(size), &[run], Some(width), None).map_or(1, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum());
+        let rows: usize = if cell { 1 } else { window.text_system().shape_text(value.clone().into(), px(size), &[run], Some(width), None).map_or(1, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum()) };
         let line = px(size * 1.5);
         let height = line * (rows.max(1) as f32);
         let left = if single { self.drawn_text_left(&value, depth) - self.hang_width(&value, size, window) } else { 0. };
@@ -1543,8 +1543,9 @@ impl NoteView {
         let caret = self.block.read(cx).cursor();
         let preview = self.live_preview_of(&value, caret, single, &t);
         let bar = !selection.is_empty() && !self.block.read(cx).completion_menu_state().open;
-        let below = bar && preview.is_none() && self.blank_room_above() < control::M + space::XS;
-        let deficit = if below { (control::M + 2. * space::XS - self.blank_room_below()).max(0.) } else { 0. };
+        let room_above = if self.live.is_some_and(|l| l.cell.is_some_and(|c| c.row >= 1)) { 0. } else { self.blank_room_above() };
+        let below = bar && room_above < control::M + space::XS;
+        let deficit = if below && preview.is_none() { (control::M + 2. * space::XS - self.blank_room_below()).max(0.) } else { 0. };
         let toolbar = bar.then(|| self.format_bar(&t, height, below, cx));
         let hint = value.is_empty().then(|| div().absolute().top(px(if cell { LIVE_INSET } else { 0. })).left(px(if cell { LIVE_GUTTER } else { left })).when(cell, |d| d.right_0().overflow_hidden().whitespace_nowrap()).font_family(Theme::font_family()).text_size(px(size)).line_height(line).text_color(t.secondary).child(if cell { tr("Text") } else { tr("Schreibe oder tippe / für Befehle") }));
         let wrapper = self.note_editor_wrapper(field.into_any_element(), cx);
@@ -1601,7 +1602,7 @@ impl NoteView {
 
     /// Floats over a selection with the formats it can get.
     fn format_bar(&self, t: &Theme, height: Pixels, below: bool, cx: &mut Context<Self>) -> AnyElement {
-        let hover = t.ink.opacity(0.1);
+        let lit = t.ink.opacity(hover::FLOAT);
         let button = |id: &'static str, name: &'static str, help: String, token: &'static str, cx: &mut Context<Self>| {
             div()
                 .id(id)
@@ -1611,7 +1612,8 @@ impl NoteView {
                 .justify_center()
                 .rounded(px(radius::SMALL))
                 .cursor_pointer()
-                .soft(hover, radius::SMALL)
+                .key_nav()
+                .soft(lit, radius::SMALL)
                 .tooltip(tip(help))
                 .on_mouse_down(MouseButton::Left, |_, window, cx| {
                     window.prevent_default();
@@ -1746,8 +1748,8 @@ impl NoteView {
     #[allow(clippy::too_many_arguments)]
     fn gutter(me: &Entity<Self>, i: usize, line: usize, count: usize, is_table: bool, label: String, group: SharedString, extra: Option<AnyElement>, t: &Theme) -> Div {
         let (add_me, menu_me) = (me.clone(), me.clone());
-        let hover = t.ink.opacity(0.1);
-        let handle = |id: (&'static str, usize), name: &'static str| div().id(id).size(px(iconsize::L)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().soft(hover, radius::SMALL).child(icon(name, iconsize::S, t.tertiary));
+        let lit = t.ink.opacity(hover::FLOAT);
+        let handle = |id: (&'static str, usize), name: &'static str| div().id(id).size(px(iconsize::L)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().soft(lit, radius::SMALL).child(icon(name, iconsize::S, t.tertiary));
         div()
             .flex()
             .justify_end()
