@@ -3491,7 +3491,11 @@ fn save_buffer(path: &Path, cx: &mut App) -> bool {
 
 /// Saves the given notes, then runs `done`. A failed save keeps everything open.
 pub fn resolve_unsaved(paths: Vec<PathBuf>, cx: &mut App, done: impl FnOnce(&mut App) + 'static) {
-    let dirty: Vec<PathBuf> = state::read(cx, |l| paths.into_iter().filter(|p| l.buffers.get(p).is_some_and(|b| b.dirty)).collect());
+    let dirty: Vec<PathBuf> = state::read(cx, |l| {
+        let mut keys: Vec<PathBuf> = paths.iter().map(|p| l.buffer_key(p)).filter(|k| l.buffers.get(k).is_some_and(|b| b.dirty)).collect();
+        keys.dedup();
+        keys
+    });
     if dirty.iter().all(|p| save_buffer(p, cx)) {
         done(cx);
     }
