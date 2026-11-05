@@ -18,7 +18,7 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Jetzt synchronisieren} | {key:syncNow} |
 | {ui:Aktualisieren} | {key:refresh} |
 | {ui:In Obsidian öffnen} | {key:openInObsidian} |
-| {ui:Widerrufen} | {key:Undo} |
+| {ui:Rückgängig} | {key:Undo} |
 | {ui:Anderen Ordner öffnen…} | {key:openOtherWorkspace} |
 | {ui:Seitenleiste ein-/ausblenden} | {key:ToggleSidebar} |
 | {ui:Details ein-/ausblenden} | {key:toggleInspector} |

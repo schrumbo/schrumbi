@@ -200,6 +200,7 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
     cx.on_window_closed(|cx, closed| {
+        note_window_front(closed, false, cx);
         let keep_running = cfg!(target_os = "macos") && !super::main_window::is_main(closed, cx);
         if cx.windows().is_empty() && !keep_running && !(super::tray::AVAILABLE && prefs::get().tray) {
             quit(cx);
@@ -225,17 +226,39 @@ pub fn init(cx: &mut App) {
 
 const MENU_NAME: usize = 28;
 
-/// Whether the main window shows a note, which find and replace then act on.
+#[derive(Default)]
+struct NoteWindowFront(Option<WindowId>);
+
+impl Global for NoteWindowFront {}
+
+/// Remembers which separate note window is frontmost, so the Edit menu offers find and replace for it.
+pub fn note_window_front(id: WindowId, front: bool, cx: &mut App) {
+    let now = cx.default_global::<NoteWindowFront>();
+    let next = match (front, now.0) {
+        (true, _) => Some(id),
+        (false, Some(open)) if open == id => None,
+        (false, open) => open,
+    };
+    if now.0 != next {
+        now.0 = next;
+        rebuild_menus(cx);
+    }
+}
+
+/// Whether a separate note window or the pane of the main window that has the focus shows a note, which find and replace then act on.
 pub fn note_is_active(cx: &App) -> bool {
-    state::read(cx, |l| matches!(l.route(), Route::Doc(_)) && l.active_document.as_deref().is_some_and(crate::core::markdown::is_markdown))
+    cx.try_global::<NoteWindowFront>().is_some_and(|f| f.0.is_some()) || state::read(cx, |l| matches!(l.route(), Route::Doc(_)) && l.focused_document().is_some_and(crate::core::markdown::is_markdown))
 }
 
 /// Hands an action meant for the open note to it when the focus is elsewhere in the main window, like the explorer or the tab strip.
-pub fn in_active_note(action: impl Action, cx: &mut App) {
-    if note_is_active(cx) {
-        cx.default_global::<super::palette::PendingNoteAction>().0 = Some(Box::new(action));
-        act(cx, |l| l.focus_document = true);
+/// Returns false when the focused pane is no note, so the action can go on to a PDF or sheet.
+pub fn in_active_note(action: impl Action, cx: &mut App) -> bool {
+    if !note_is_active(cx) {
+        return false;
     }
+    cx.default_global::<super::palette::PendingNoteAction>().0 = Some(Box::new(action));
+    act(cx, |l| if l.beside_active && l.split_document.is_some() { l.focus_beside = true } else { l.focus_document = true });
+    true
 }
 
 fn close_active_window(cx: &mut App) {
@@ -464,7 +487,7 @@ pub fn rebuild_menus(cx: &mut App) {
             MenuItem::action(tr("Fenster schließen"), CloseWindow),
         ]),
         Menu::new(tr("Bearbeiten")).items([
-            MenuItem::action(tr("Widerrufen"), Undo),
+            MenuItem::action(tr("Rückgängig"), Undo),
             MenuItem::action(tr("Wiederholen"), Redo),
             MenuItem::separator(),
             MenuItem::os_action(tr("Ausschneiden"), gpui_kit::component::input::Cut, OsAction::Cut),

@@ -2789,7 +2789,7 @@ impl Library {
         let (Some(root), Some(settled_root), Some(raw)) = (self.root.as_ref(), self.settled_root.as_ref(), file.parent()) else { return false };
         let settled = dunce::canonicalize(raw).unwrap_or_else(|_| raw.to_path_buf());
         let folder = config.submissions_of(module);
-        [root.join(&folder), settled_root.join(&folder)].iter().any(|f| [raw, settled.as_path()].iter().any(|d| d.starts_with(f)))
+        [root.join(&folder), settled_root.join(&folder)].iter().any(|f| [raw, settled.as_path()].iter().any(|d| *d == f.as_path()))
     }
 
     fn convention_target(&self, file: &Path) -> Option<(Assignment, String)> {
@@ -3447,6 +3447,15 @@ impl Library {
             let i = self.open_documents.iter().position(|d| d == path)?;
             self.open_documents.get(i + 1).or_else(|| i.checked_sub(1).and_then(|j| self.open_documents.get(j))).filter(|d| *d != path).cloned()
         })
+    }
+
+    /// The document of the pane that has the focus: the split on the right while it is the active pane, else the active tab.
+    pub fn focused_document(&self) -> Option<&Path> {
+        let left = self.active_document.as_deref();
+        match self.split_document.as_deref() {
+            Some(right) if self.beside_active && Some(right) != left => Some(right),
+            _ => left,
+        }
     }
 
     /// Whether dropping a dragged document there changes anything. `fallback` takes the shown pane when the shown document itself moves beside.

@@ -210,9 +210,33 @@ pub fn row(items: &[f32], gap: f32) -> f32 {
     shown.iter().sum::<f32>() + gap * shown.len().saturating_sub(1) as f32
 }
 
+/// How the toolbar's row for the open note divides its room.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Crumbs {
+    pub folders: bool,
+    pub name: f32,
+    pub pill: f32,
+}
+
+/// Divides `room` between the folders, the note's name and the deadline: the folders collapse into one "…"
+/// before anything shrinks, then the deadline gives way down to `pill_min`, and the name last, down to `name_min`.
+pub fn crumb_widths(room: f32, folders: f32, collapsed: f32, name: f32, pill: f32, pill_min: f32, name_min: f32) -> Crumbs {
+    if folders + name + pill <= room {
+        return Crumbs { folders: true, name, pill };
+    }
+    let rest = (room - collapsed).max(0.);
+    if name + pill <= rest {
+        return Crumbs { folders: false, name, pill };
+    }
+    let pill_min = pill.min(pill_min);
+    let name_w = (rest - pill_min).max(name_min.min(rest)).min(name);
+    let pill_w = (rest - name_w).clamp(0., pill);
+    Crumbs { folders: false, name: name_w, pill: pill_w }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Room, fold, fold_room, overflows, reveal, row, tab_widths};
+    use super::{Crumbs, Room, crumb_widths, fold, fold_room, overflows, reveal, row, tab_widths};
     use crate::ui::theme::tab::{ACTIVE_MIN, MIN as TAB_MIN};
 
     #[test]
@@ -298,6 +322,37 @@ mod tests {
         assert!(!overflows(&[120., 120.], Some(0), 300.));
         assert!(overflows(&[120., 120.], Some(0), 200.));
         assert!(!overflows(&[], None, 0.));
+    }
+
+    #[test]
+    fn everything_stays_while_it_fits() {
+        assert_eq!(crumb_widths(500., 100., 24., 200., 100., 40., 64.), Crumbs { folders: true, name: 200., pill: 100. });
+    }
+
+    #[test]
+    fn folders_collapse_before_the_name_or_the_deadline_shrink() {
+        assert_eq!(crumb_widths(350., 100., 24., 200., 100., 40., 64.), Crumbs { folders: false, name: 200., pill: 100. });
+    }
+
+    #[test]
+    fn the_deadline_gives_way_before_the_name_and_keeps_its_minimum() {
+        assert_eq!(crumb_widths(260., 100., 24., 200., 100., 40., 64.), Crumbs { folders: false, name: 196., pill: 40. });
+        assert_eq!(crumb_widths(200., 100., 24., 200., 100., 40., 64.), Crumbs { folders: false, name: 136., pill: 40. });
+    }
+
+    #[test]
+    fn the_name_shrinks_last_and_the_parts_never_exceed_the_room() {
+        for room in [0., 30., 80., 120., 200.] {
+            let c = crumb_widths(room, 100., 24., 200., 100., 40., 64.);
+            assert!(!c.folders);
+            assert!(c.name + c.pill + 24. <= room.max(24.) + 0.01, "{room}: {c:?}");
+        }
+        assert_eq!(crumb_widths(120., 100., 24., 200., 100., 40., 64.), Crumbs { folders: false, name: 64., pill: 32. });
+    }
+
+    #[test]
+    fn no_deadline_leaves_all_of_it_to_the_name() {
+        assert_eq!(crumb_widths(150., 100., 24., 200., 0., 40., 64.), Crumbs { folders: false, name: 126., pill: 0. });
     }
 
     #[test]

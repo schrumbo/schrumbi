@@ -247,3 +247,15 @@ fn back_and_forward_never_stop_on_the_page_already_shown() {
     assert_eq!(*lib.route(), before);
     assert!(!lib.can_go_forward(), "nothing left ahead");
 }
+
+#[test]
+fn the_focused_document_follows_the_active_pane() {
+    let (_, p) = notes("focused-pane", &["a.md", "b.pdf"]);
+    let mut lib = opened(&p);
+    lib.open_document(&p[0]);
+    lib.set_split(Some(p[1].clone()));
+    lib.beside_active = false;
+    assert_eq!(lib.focused_document(), Some(p[0].as_path()));
+    lib.beside_active = true;
+    assert_eq!(lib.focused_document(), Some(p[1].as_path()));
+}

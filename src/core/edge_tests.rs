@@ -1190,6 +1190,12 @@ fn naming_is_offered_in_the_general_submission_folder() {
     std::fs::write(&beside, b"x").unwrap();
     assert_eq!(lib.convention_offer(&beside), ConventionOffer::Hidden, "the module folder itself is not a submission folder");
 
+    let nested = general.join("Unterordner");
+    std::fs::create_dir_all(&nested).unwrap();
+    let deep = nested.join("Zufaellig.xyz");
+    std::fs::write(&deep, b"x").unwrap();
+    assert_eq!(lib.convention_offer(&deep), ConventionOffer::Hidden, "only files directly in the submission folder are offered");
+
     lib.config.as_mut().unwrap().submission_folder = String::new();
     let bare = general.join("Bare.xyz");
     std::fs::write(&bare, b"x").unwrap();

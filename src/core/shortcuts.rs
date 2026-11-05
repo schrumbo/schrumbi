@@ -566,7 +566,7 @@ pub fn released_bindings(before: &BTreeSet<Bound>, now: &BTreeSet<Bound>) -> Vec
 }
 
 impl Shortcut {
-    /// What the system and every text field do with these keys, e.g. "Für Kopieren reserviert".
+    /// What the system and every text field do with these keys, e.g. "Reserviert: Kopieren".
     pub fn reserved_for(&self) -> Option<String> {
         let mac = cfg!(target_os = "macos");
         let what = if self.key == "tab" && !self.command && !self.option && !self.control {
@@ -579,7 +579,7 @@ impl Shortcut {
                 ("v", false) => "Einsetzen",
                 ("x", false) => "Ausschneiden",
                 ("a", false) => "Alles auswählen",
-                ("z", false) => "Widerrufen",
+                ("z", false) => "Rückgängig",
                 ("z", true) => "Wiederholen",
                 ("y", false) if !mac => "Wiederholen",
                 ("w", false) => "Tab schließen",
@@ -589,29 +589,30 @@ impl Shortcut {
         } else {
             return None;
         };
-        Some(trf("Für %@ reserviert", &[&tr(what)]))
+        Some(trf("Reserviert: %@", &[&tr(what)]))
     }
 
     fn edits_text(&self, os: Os) -> bool {
-        if self.control {
-            return false;
-        }
         let key = self.key.as_str();
+        if self.control {
+            return os == Os::Mac && !self.command && !self.option && (matches!(key, "a" | "e") || (key == "delete" && !self.shift));
+        }
         let horizontal = matches!(key, "left" | "right");
         let vertical = matches!(key, "up" | "down");
         let edge = matches!(key, "home" | "end");
         let delete = key == "delete" && !self.shift;
         match (self.command, self.option) {
-            (false, false) => self.shift && (horizontal || vertical || edge),
+            (false, false) => self.shift && (horizontal || vertical || edge || key == "delete"),
             (true, false) => match os {
                 Os::Mac => horizontal || vertical || delete,
                 Os::Windows | Os::Linux => horizontal || edge || delete,
             },
             (false, true) => match os {
                 Os::Mac => horizontal || delete,
-                Os::Windows | Os::Linux => self.shift && horizontal,
+                Os::Windows => self.shift && horizontal,
+                Os::Linux => self.shift && (horizontal || vertical),
             },
-            (true, true) => os == Os::Windows && vertical && !self.shift,
+            (true, true) => os != Os::Linux && vertical && !self.shift,
         }
     }
 
@@ -774,7 +775,7 @@ mod tests {
             for key in ["up", "down"] {
                 assert!(mac(key, true, shift, false), "cmd {key} {shift}");
                 assert!(!mac(key, false, shift, true), "alt {key} {shift}");
-                assert!(!mac(key, true, shift, true), "cmd alt {key} {shift}");
+                assert_eq!(mac(key, true, shift, true), !shift, "cmd alt {key} {shift}");
             }
         }
         for key in ["up", "down", "left", "right", "home", "end"] {
@@ -832,6 +833,30 @@ mod tests {
         }
         assert!(linux("delete", true, false, false));
         assert!(!linux("delete", false, false, true));
+    }
+
+    #[test]
+    fn the_kits_remaining_editing_keys_are_reserved_per_system() {
+        let ctrl = |key: &str, shift: bool| s(key, false, shift, false, true).edits_text(Os::Mac);
+        assert!(ctrl("a", false) && ctrl("e", false) && ctrl("a", true) && ctrl("e", true) && ctrl("delete", false));
+        assert!(!ctrl("b", false) && !ctrl("delete", true));
+        for os in [Os::Windows, Os::Linux] {
+            assert!(!s("a", false, false, false, true).edits_text(os));
+        }
+        for os in [Os::Mac, Os::Windows, Os::Linux] {
+            assert!(edits(os, "delete", false, true, false), "shift backspace and delete");
+        }
+        assert!(edits(Os::Linux, "up", false, true, true) && edits(Os::Linux, "down", false, true, true));
+        assert!(!edits(Os::Windows, "up", false, true, true) && !edits(Os::Mac, "up", false, true, true));
+    }
+
+    #[test]
+    fn no_default_shortcut_is_taken_by_a_text_field() {
+        for action in ShortcutAction::ALL {
+            if let Some(keys) = action.default_shortcut() {
+                assert!(!keys.edits_text(Os::here()), "{} {}", action.label(), keys.display());
+            }
+        }
     }
 
     #[test]

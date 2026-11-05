@@ -154,6 +154,44 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&edit, S::FindInNote.label(), "search", keys(S::FindInNote), Run::NoteAction(Box::new(super::find_bar::FindInNote)));
         add(&edit, tr("Zum Wörterbuch hinzufügen"), "plus", None, Run::NoteAction(Box::new(super::spell_card::AddWordAtCaret)));
         add(&edit, tr("In Notiz ersetzen"), "replace", Some(if cfg!(target_os = "macos") { Shortcut { key: "f".into(), command: true, shift: false, option: true, control: false } } else { fixed_shortcut("h", false) }.display()), Run::NoteAction(Box::new(super::find_bar::ReplaceInNote)));
+        use super::documents as d;
+        let chord = |key: &str, shift: bool, option: bool| Shortcut { key: key.into(), command: true, shift, option, control: false }.display();
+        let configurable: [(S, &'static str, Box<dyn Action>); 14] = [
+            (S::Bold, "bold", Box::new(d::Bold)),
+            (S::Italic, "italic", Box::new(d::Italic)),
+            (S::Link, "link", Box::new(d::InsertLink)),
+            (S::InlineCode, "code", Box::new(d::InlineCode)),
+            (S::ToggleTask, "square-check", Box::new(d::ToggleTask)),
+            (S::ToggleComment, "text", Box::new(d::ToggleComment)),
+            (S::MoveLineUp, "arrow-up", Box::new(d::MoveLineUp)),
+            (S::MoveLineDown, "arrow-down", Box::new(d::MoveLineDown)),
+            (S::CopyLineUp, "copy", Box::new(d::CopyLineUp)),
+            (S::CopyLineDown, "copy", Box::new(d::CopyLineDown)),
+            (S::DeleteLine, "trash-2", Box::new(d::DeleteLine)),
+            (S::SelectLine, "text-search", Box::new(d::SelectLine)),
+            (S::Indent, "arrow-right", Box::new(d::IndentLines)),
+            (S::Outdent, "arrow-left", Box::new(d::OutdentLines)),
+        ];
+        for (action, icon_name, run) in configurable {
+            add(&edit, action.label(), icon_name, keys(action), Run::NoteAction(run));
+        }
+        let fixed: [(&str, &'static str, String, Box<dyn Action>); 9] = [
+            ("Durchgestrichen", "strikethrough", chord("x", true, false), Box::new(d::Strike)),
+            ("Markiert", "highlighter", chord("h", true, false), Box::new(d::Mark)),
+            ("Formel", "sigma", chord("m", true, false), Box::new(d::InlineMath)),
+            ("Zitat", "quote", chord(".", true, false), Box::new(d::Quote)),
+            ("Liste", "list", chord("8", true, false), Box::new(d::BulletList)),
+            ("Nummerierte Liste", "list-ordered", chord("7", true, false), Box::new(d::NumberedList)),
+            ("Überschrift 1", "heading-1", chord("1", false, true), Box::new(d::Heading1)),
+            ("Überschrift 2", "heading-2", chord("2", false, true), Box::new(d::Heading2)),
+            ("Überschrift 3", "heading-3", chord("3", false, true), Box::new(d::Heading3)),
+        ];
+        for (label, icon_name, shown, run) in fixed {
+            add(&edit, tr(label), icon_name, Some(shown), Run::NoteAction(run));
+        }
+        for (action, icon_name, run) in [(S::ZoomIn, "zoom-in", Box::new(d::ZoomIn) as Box<dyn Action>), (S::ZoomOut, "zoom-out", Box::new(d::ZoomOut)), (S::ZoomReset, "scan", Box::new(d::ZoomReset))] {
+            add(&view, action.label(), icon_name, keys(action), Run::NoteAction(run));
+        }
         let full = crate::core::prefs::get().reader_full_width;
         add(&view, if full { tr("Text in voller Breite ausschalten") } else { tr("Text in voller Breite einschalten") }, "move-horizontal", None, Run::Call(Rc::new(move |cx| super::documents::set_reader_full_width(!full, cx))));
         add(&file, tr("Sichern"), "save", Some(fixed_keys("S")), Run::NoteAction(Box::new(app::Save)));
@@ -167,11 +205,18 @@ fn commands(cx: &App) -> Vec<Command> {
     if let Some(doc) = state::read(cx, |l| l.active_document.clone()).filter(|p| in_document && super::convention_rename::available(p, cx)) {
         add(&file, tr("Nach Muster benennen…"), "wand-sparkles", None, Run::WindowCall(Rc::new(move |window, cx| super::convention_rename::open(doc.clone(), window, cx))));
     }
+    if let Some(doc) = state::read(cx, |l| l.active_document.clone()).filter(|_| in_document) {
+        add(&file, tr("Umbenennen…"), "pencil", None, Run::Call(Rc::new(move |cx| act(cx, |l| {
+            crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
+            l.rename_request = Some(doc.clone());
+            l.quiet_open = true;
+        }))));
+    }
     if in_document && state::read(cx, |l| l.split_document.is_some()) {
         add(&view, tr("Geteilte Ansicht schließen"), "columns-2", None, Run::Call(Rc::new(|cx| act(cx, |l| l.set_split(None)))));
     }
     if state::read(cx, |l| l.can_undo()) {
-        add(&edit, tr("Widerrufen"), "undo-2", Some(fixed_keys("Z")), Run::Action(Box::new(app::Undo)));
+        add(&edit, tr("Rückgängig"), "undo-2", Some(fixed_keys("Z")), Run::Action(Box::new(app::Undo)));
     }
     if state::read(cx, |l| l.can_redo()) {
         add(&edit, tr("Wiederholen"), "redo-2", Some(fixed_shift_keys("Z")), Run::Action(Box::new(app::Redo)));
@@ -443,7 +488,7 @@ impl Render for ShortcutSheet {
             shortcut_row(tr("Schrumbi-Anleitung"), vec!["F1".to_string()], &t),
             shortcut_row(tr("Suchen"), vec!["/".to_string()], &t),
             shortcut_row(tr("Seitenleiste ein-/ausblenden"), fixed_parts("B", false), &t),
-            shortcut_row(tr("Widerrufen"), fixed_parts("Z", false), &t),
+            shortcut_row(tr("Rückgängig"), fixed_parts("Z", false), &t),
         ];
         general.extend(group(Group::General));
         let navigation = group(Group::Navigation);

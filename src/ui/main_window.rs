@@ -9,6 +9,7 @@ use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
+use super::bar_fit;
 use super::inspector::Inspector;
 use super::motion::Soft;
 use super::motion;
@@ -195,53 +196,82 @@ impl MainWindow {
     }
 
     /// Where the open note lives: each folder leads into the explorer, the name renames it.
-    fn crumbs(lib: &Library, path: &std::path::Path, t: &Theme) -> Div {
+    /// Narrow rows fold the folders into one "…" first, then the deadline gives way, the name last.
+    fn crumbs(lib: &Library, path: &std::path::Path, room: f32, window: &Window, t: &Theme) -> Div {
         let hover = t.ink.opacity(0.06);
         let vault = crate::core::vault::index::current();
         let folders: Vec<String> = path.parent().and_then(|p| p.strip_prefix(&vault.root).ok()).map(|p| p.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect()).unwrap_or_default();
         let skipped = folders.len().saturating_sub(3);
-        let mut row = div().flex_1().min_w(px(80.)).flex().items_center().gap(px(space::XS)).overflow_hidden();
-        if skipped > 0 {
-            row = row.child(div().flex_none().text_color(t.tertiary).child("…")).child(div().flex_none().text_color(t.tertiary).child("/"));
-        }
-        for (i, name) in folders.iter().enumerate().skip(skipped) {
-            let rel = folders[..=i].join("/");
-            row = row
-                .child(
-                    div()
-                        .id(("crumb", i))
-                        .flex_shrink(1.)
-                        .min_w(px(24.))
-                        .truncate()
-                        .px(px(space::XS))
-                        .rounded(px(radius::SMALL))
-                        .cursor_pointer()
-                        .text_size(px(font::CALLOUT))
-                        .text_color(t.secondary)
-                        .soft(hover, radius::SMALL)
-                        .tooltip(tip(rel.clone()))
-                        .on_click(move |_, _, cx| {
-                            crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
-                            act(cx, |l| l.reveal_folder = Some(rel.clone()));
-                        })
-                        .child(name.clone()),
-                )
-                .child(div().flex_none().text_color(t.tertiary).child("/"));
+        let name = lib.note_title(path);
+        let linked = lib.deadlines_of(path);
+        let has_pill = !linked.is_empty() || lib.module_containing(path).is_some();
+        let label = linked.first().map(|a| {
+            let more = if linked.len() > 1 { format!(" +{}", linked.len() - 1) } else { String::new() };
+            format!("{}{more} · {}", crate::core::library::deadline_label(a), crate::core::day::countdown(a.due, lib.now))
+        });
+
+        let width = |text: &str, size: f32, weight: FontWeight| bar_fit::text_width(text, size, weight, window);
+        let slash = width("/", font::CALLOUT, FontWeight::NORMAL) + space::XS;
+        let crumb_w = |text: &str| 2. * space::XS + width(text, font::CALLOUT, FontWeight::NORMAL) + space::XS + slash;
+        let shown_w: f32 = folders.iter().skip(skipped).map(|n| crumb_w(n).min(crumb::FOLDER_MAX)).sum::<f32>() + if skipped > 0 { crumb_w("…") } else { 0. };
+        let collapsed_w = if folders.is_empty() { 0. } else { crumb_w("…") };
+        let name_w = width(&name, font::TITLE3, FontWeight::BOLD) + 2. * space::XS + 2. + space::XS;
+        let caret = iconsize::XS + space::XS;
+        let pill_natural = if has_pill {
+            space::S + (match &label { Some(l) => bar_fit::button_width(l, window), None => 2. * space::S + iconsize::S } + caret).min(crumb::PILL_MAX)
+        } else {
+            0.
+        };
+        let plan = bar_fit::crumb_widths(room, shown_w, collapsed_w, name_w, pill_natural, if has_pill { space::S + crumb::PILL_MIN } else { 0. }, crumb::NAME_MIN);
+
+        let mut row = div().flex_1().min_w_0().flex().items_center().gap(px(space::XS)).overflow_hidden();
+        let folder = |i: usize, name: &str, rel: String| {
+            div()
+                .id(("crumb", i))
+                .flex_none()
+                .max_w(px(crumb::FOLDER_MAX))
+                .truncate()
+                .px(px(space::XS))
+                .rounded(px(radius::SMALL))
+                .cursor_pointer()
+                .key_nav()
+                .text_size(px(font::CALLOUT))
+                .text_color(t.secondary)
+                .soft(hover, radius::SMALL)
+                .tooltip(tip(rel.clone()))
+                .on_click(move |_, _, cx| {
+                    crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
+                    act(cx, |l| l.reveal_folder = Some(rel.clone()));
+                })
+                .child(name.to_string())
+        };
+        let separator = || div().flex_none().text_color(t.tertiary).child("/");
+        if plan.folders {
+            if skipped > 0 {
+                row = row.child(div().flex_none().text_color(t.tertiary).child("…")).child(separator());
+            }
+            for (i, name) in folders.iter().enumerate().skip(skipped) {
+                row = row.child(folder(i, name, folders[..=i].join("/"))).child(separator());
+            }
+        } else if let Some(last) = folders.last() {
+            let rel = folders.join("/");
+            row = row.child(folder(folders.len() - 1, "…", rel).tooltip(tip(last.clone()))).child(separator());
         }
         let rename = path.to_path_buf();
         row = row.child(
             div()
                 .id("crumb-name")
-                .flex_shrink(crumb::NAME_SHRINK)
-                .min_w(px(crumb::NAME_MIN))
+                .flex_none()
+                .w(px(plan.name))
                 .truncate()
                 .px(px(space::XS))
                 .rounded(px(radius::SMALL))
                 .cursor_pointer()
+                .key_nav()
                 .text_size(px(font::TITLE3))
                 .font_weight(FontWeight::BOLD)
                 .soft(hover, radius::SMALL)
-                .tooltip(tip(tr("Umbenennen")))
+                .tooltip(tip(name.clone()))
                 .on_click(move |_, _, cx| {
                     crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
                     act(cx, |l| {
@@ -249,21 +279,17 @@ impl MainWindow {
                         l.quiet_open = true;
                     });
                 })
-                .child(lib.note_title(path)),
+                .child(name),
         );
-        let linked = lib.deadlines_of(path);
-        if !linked.is_empty() || lib.module_containing(path).is_some() {
+        if has_pill && plan.pill > space::S {
             let menu_path = path.to_path_buf();
             let shown = linked.first().map(|a| (a.module_id.clone(), a.id.clone()));
-            let pill = Button::new("note-deadline").ghost().small().min_w_0().icon(menu_icon("link"));
-            let pill = match linked.first() {
-                Some(a) => {
-                    let more = if linked.len() > 1 { format!(" +{}", linked.len() - 1) } else { String::new() };
-                    pill.label(format!("{}{more} · {}", crate::core::library::deadline_label(a), crate::core::day::countdown(a.due, lib.now))).tooltip(trf("Gehört zu %@", &[&a.title]))
-                }
+            let pill = Button::new("note-deadline").ghost().small().min_w_0().w(px(plan.pill - space::S)).icon(menu_icon("link"));
+            let pill = match label {
+                Some(full) => pill.label(full.clone()).tooltip(full),
                 None => pill.tooltip(tr("Einer Abgabe zuordnen")),
             };
-            row = row.child(div().flex().flex_shrink(crumb::PILL_SHRINK).min_w(px(crumb::PILL_MIN)).max_w(px(crumb::PILL_MAX)).overflow_hidden().ml(px(space::S)).child(pill.dropdown_menu(move |menu, _, cx| {
+            row = row.child(div().flex().flex_none().w(px(plan.pill - space::S)).overflow_hidden().ml(px(space::S)).child(pill.dropdown_menu(move |menu, _, cx| {
                 let mut menu = deadline_items(menu.label(tr("Gehört zu")), &menu_path, cx);
                 if let Some((module, id)) = shown.clone() {
                     menu = menu.separator().item(PopupMenuItem::new(tr("Abgabe anzeigen")).icon(menu_icon("arrow-right")).on_click(move |_, _, cx| {
@@ -279,11 +305,13 @@ impl MainWindow {
         row
     }
 
-    fn toolbar(&self, lib: &Library, left: f32, page_width: f32, t: &Theme) -> Div {
+    fn toolbar(&self, lib: &Library, left: f32, page_width: f32, total: f32, window: &Window, t: &Theme) -> Div {
         let show = lib.show_inspector();
         let offered = lib.inspector_kind().is_some();
         let module = if let Route::Module(id) = lib.route() { Some(id.clone()) } else { None };
         let module2 = module.clone();
+        let toolbar_padding = (if super::chrome::CUSTOM { space::M } else { (92. - left).max(space::M) }) + space::M;
+        let search_width = if page_width < 760. { 200. } else { 325. };
         div()
             .h(px(control::BAR))
             .flex_none()
@@ -292,13 +320,13 @@ impl MainWindow {
             .border_b_1()
             .border_color(t.separator)
             .gap(px(space::S))
-            .pl(px(if super::chrome::CUSTOM { space::M } else { (92. - left).max(space::M) }))
+            .pl(px(toolbar_padding - space::M))
             .pr(px(space::M))
             .child(Button::new("go-back").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-left")).disabled(!lib.can_go_back()).tooltip(format!("{}{}", tr("Zurück"), ShortcutAction::GoBack.hint())).on_click(|_, _, cx| act(cx, |l| l.go_back())))
             .child(Button::new("go-forward").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-right")).disabled(!lib.can_go_forward()).tooltip(tr("Vorwärts")).on_click(|_, _, cx| act(cx, |l| l.go_forward())))
             
             .child(match lib.route() {
-                Route::Doc(path) => Self::crumbs(lib, path, t),
+                Route::Doc(path) => Self::crumbs(lib, path, total - toolbar_padding - 4. * control::M - search_width - 5. * space::S, window, t),
                 _ => div().flex_1().min_w(px(80.)).truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)),
             })
             .child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().bg(t.ink.opacity(0.06)).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("plus")).tooltip(tr("Neu")).dropdown_menu(move |menu, _, _| {
@@ -320,7 +348,7 @@ impl MainWindow {
                     .tooltip(if offered { format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()) } else { tr("Diese Seite hat keine Details") })
                     .on_click(|_, _, cx| act(cx, |l| l.toggle_inspector())),
             )
-            .child(div().w(px(if page_width < 760. { 200. } else { 325. })).flex_none().key_context("SearchField").child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true)))
+            .child(div().w(px(search_width)).flex_none().key_context("SearchField").child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true)))
     }
 }
 
@@ -388,8 +416,16 @@ impl Render for MainWindow {
             .text_size(px(font::BODY))
             .line_height(relative(font::LINE))
             .text_color(t.primary)
-            .on_action(|_: &super::find_bar::FindInNote, _, cx| super::app::in_active_note(super::find_bar::FindInNote, cx))
-            .on_action(|_: &super::find_bar::ReplaceInNote, _, cx| super::app::in_active_note(super::find_bar::ReplaceInNote, cx))
+            .on_action(|_: &super::find_bar::FindInNote, _, cx| {
+                if !super::app::in_active_note(super::find_bar::FindInNote, cx) {
+                    cx.propagate();
+                }
+            })
+            .on_action(|_: &super::find_bar::ReplaceInNote, _, cx| {
+                if !super::app::in_active_note(super::find_bar::ReplaceInNote, cx) {
+                    cx.propagate();
+                }
+            })
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
                 if window.context_stack().iter().any(|c| c.contains("NoteEditor")) {
                     return;
@@ -492,7 +528,7 @@ impl Render for MainWindow {
                     .border_color(t.separator)
                     .flex()
                     .flex_col()
-                    .child(self.toolbar(l, left, page_width + inspector_target, &t))
+                    .child(self.toolbar(l, left, page_width + inspector_target, width - left - 1., window, &t))
                     .child(div().id("page-area").flex_1().min_h_0().mr(px(inspector_target))
                         .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, window, cx| {
                             this.press_stamp = (!window.default_prevented()).then(|| (state::read(cx, Library::selection_stamp), e.position));
