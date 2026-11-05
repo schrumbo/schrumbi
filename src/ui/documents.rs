@@ -249,6 +249,7 @@ pub struct NoteView {
     item_hashes: Vec<u64>,
     split_sync: (f32, f32),
     split_hold: Option<std::time::Instant>,
+    split_lead: Option<bool>,
     reparse: Option<Task<()>>,
     /// Edits wait for this to end before the reader parses the note again.
     parse_hold: bool,
@@ -449,7 +450,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, split_lead: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -808,6 +809,7 @@ impl NoteView {
         let keep_line = self.top_line();
         self.finish_block(cx);
         self.drop_spell_marks(cx);
+        let kept_scroll = (self.mode == Mode::Source && mode == Mode::Split).then(|| self.editor.read(cx).scroll_offset());
         if matches!(mode, Mode::Source | Mode::Split) {
             let text = state::read(cx, |l| l.buffers.get(&self.path).map(|b| b.text.clone()).unwrap_or_default());
             let (plain, language) = (text.len() > RICH_EDITOR_UNTIL, editor_language(text.len()));
@@ -820,6 +822,9 @@ impl NoteView {
                 }
                 s.set_soft_wrap(wrap, window, cx);
                 s.set_value(text, window, cx);
+                if let Some(offset) = kept_scroll {
+                    s.set_scroll_offset(offset, cx);
+                }
             });
             self.syncing = false;
         }
@@ -830,7 +835,10 @@ impl NoteView {
         self.item_hashes.clear();
         self.reader_list.reset(0);
         self.keep_line = Some(keep_line);
-        self.mode = mode;
+        let from = std::mem::replace(&mut self.mode, mode);
+        if mode == Mode::Split {
+            self.split_lead = Some(from == Mode::Source);
+        }
         if let Some(bar) = self.find.bar.clone().filter(|_| self.find.open) {
             self.find.signature = None;
             bar.update(cx, |b, cx| b.focus_query(window, cx));
@@ -2037,7 +2045,34 @@ impl NoteView {
             let settled = (editor_y - self.split_sync.0).abs() <= 1. && (reader_y - self.split_sync.1).abs() <= 1.;
             self.split_hold = if !settled { Some(std::time::Instant::now()) } else if since.elapsed() >= SPLIT_HOLD { None } else { Some(since) };
             self.split_sync = (editor_y, reader_y);
-            return;
+            if self.split_hold.is_some() {
+                return;
+            }
+        }
+        if line > 0. && reader_max > 0. && self.split_hold.is_none() {
+            if let Some(editor_leads) = self.split_lead.filter(|_| self.parsed.is_some() && self.keep_line.is_none()) {
+                let width = f32::from(self.reader_list.viewport_bounds().size.width);
+                let per_row = if self.editor_wrap { ((width - 56.) / (prefs::get().editor_font_size * 0.6)).max(20.) } else { f32::INFINITY };
+                let rows_of = |l: &str| (l.chars().count() as f32 / per_row).ceil().max(1.);
+                if editor_leads {
+                    let target = editor_y / line;
+                    let mut rows = 0.;
+                    let mut at = 0;
+                    for (i, l) in text.lines().enumerate() {
+                        at = i;
+                        rows += rows_of(l);
+                        if rows > target {
+                            break;
+                        }
+                    }
+                    self.keep_line = Some(at);
+                } else {
+                    let rows: f32 = text.lines().take(self.top_line()).map(rows_of).sum();
+                    self.editor.update(cx, |e, cx| e.set_scroll_offset(point(px(0.), px(-rows * line)), cx));
+                }
+                self.split_hold = Some(std::time::Instant::now());
+                self.split_lead = None;
+            }
         }
         let (last_editor, last_reader) = self.split_sync;
         let (editor_moved, reader_moved) = ((editor_y - last_editor).abs() > 1., (reader_y - last_reader).abs() > 1.);
@@ -2204,6 +2239,8 @@ impl NoteView {
                 n.save(cx);
                 if n.save_problem.is_some() {
                     n.flash_problem(cx);
+                    let name = n.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                    act(cx, |l| l.notify(trf("„%@“ ließ sich wieder nicht sichern.", &[&name]), "triangle-alert", None, None));
                 }
                 cx.notify();
             });
@@ -2258,9 +2295,9 @@ impl NoteView {
             .flex()
             .items_center()
             .gap(px(space::S))
-            .child(Button::new("conflict-compare").small().label(tr("Vergleichen")).on_click(move |_, _, cx| compare_note(compare.clone(), cx)))
+            .child(Button::new("conflict-compare").small().label(tr("Vergleichen")).on_click(move |_, window, cx| compare_note(compare.clone(), Some(window.window_handle()), cx)))
             .child(Button::new("conflict-reload").small().label(tr("Neu laden")).on_click(move |_, _, cx| act(cx, |l| l.load_note_disk(&reload))))
-            .child(Button::new("conflict-keep").small().primary().label(tr("Meine behalten")).on_click(move |_, _, cx| act(cx, |l| l.keep_note_mine(&keep))));
+            .child(Button::new("conflict-keep").small().primary().label(tr("Meine behalten")).tooltip(tr("Die andere Version bleibt als Kopie neben der Notiz erhalten.")).on_click(move |_, _, cx| act(cx, |l| l.keep_note_mine(&keep))));
         super::motion::reveal("note-conflict", open, div().p(px(space::S)).child(notice("triangle-alert", t.orange, tr("Diese Notiz wurde außerhalb von Schrumbi geändert."), Some(tr("Deine Änderungen sind noch da. Gesichert wird erst, wenn du dich entschieden hast.")), actions, t)))
     }
 
@@ -2551,7 +2588,7 @@ impl NoteView {
                     });
                 }));
                 if embedded {
-                    menu = menu.separator().item(PopupMenuItem::new(tr("Tab schließen")).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&d, cx)));
+                    menu = menu.separator().item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&d, cx)));
                 }
                 menu
             }))
@@ -3608,9 +3645,9 @@ pub fn set_font_size(size: f32, cx: &mut App) {
 }
 
 /// Opens both versions of a note side by side; the diff is worked out in the background, notes can be long.
-pub fn compare_note(path: PathBuf, cx: &mut App) {
+pub fn compare_note(path: PathBuf, window: Option<AnyWindowHandle>, cx: &mut App) {
     let Some((mine, theirs)) = state::read(cx, |l| l.buffers.get(&path).and_then(|b| b.conflict.clone().map(|c| (b.text.clone(), c)))) else { return };
-    let Some(window) = cx.active_window() else { return };
+    let Some(window) = window.or_else(|| cx.active_window()) else { return };
     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
     let task = cx.background_spawn(async move {
         let closed = |t: String| if t.ends_with('\n') { t } else { t + "\n" };
@@ -3699,6 +3736,10 @@ fn save_buffer(path: &Path, cx: &mut App) -> bool {
 fn unsaved_message(names: &[String]) -> String {
     match names {
         [one] => trf("„%@“ ließ sich nicht sichern und bleibt offen. Erneut versuchen steht in der Notiz.", &[one]),
+        [_, _] | [_, _, _] => {
+            let quoted: Vec<String> = names.iter().map(|n| format!("„{n}“")).collect();
+            trf("%@ ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.", &[&quoted.join(", ")])
+        }
         _ => trf("%@ Notizen ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.", &[&crate::core::i18n::grouped(names.len())]),
     }
 }
@@ -3888,7 +3929,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                     .context_menu(move |m, _, _| {
                         let (pin, shut) = (close.clone(), close.clone());
                         m.when(is_preview, |m| m.item(PopupMenuItem::new(tr("Tab behalten")).icon(menu_icon("bookmark")).on_click(move |_, _, cx| act(cx, |l| l.pin_document(&pin)))))
-                            .item(PopupMenuItem::new(tr("Tab schließen")).on_click(move |_, _, cx| close_tab(&shut, cx)))
+                            .item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).on_click(move |_, _, cx| close_tab(&shut, cx)))
                             .separator()
                             .item(PopupMenuItem::new(tr("Geteilte Ansicht schließen")).icon(menu_icon("columns-2")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))))
                     })
@@ -4015,7 +4056,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                     m.when(is_preview, |m| m.item(PopupMenuItem::new(tr("Tab behalten")).icon(menu_icon("bookmark")).on_click(move |_, _, cx| act(cx, |l| l.pin_document(&keep)))))
                         .when(!active && !is_beside, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.set_split(Some(beside.clone()))))))
                         .when(active && can_beside, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.drop_document(&shown, library::DocDrop::Beside, None)))))
-                        .item(PopupMenuItem::new(tr("Tab schließen")).on_click(move |_, _, cx| close_tab(&a, cx)))
+                        .item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).on_click(move |_, _, cx| close_tab(&a, cx)))
                         .item(PopupMenuItem::new(tr("Andere Tabs schließen")).on_click(move |_, _, cx| close_other_tabs(&b, cx)))
                         .item(PopupMenuItem::new(tr("Alle Tabs schließen")).on_click(|_, _, cx| close_all_tabs(cx)))
                         .separator()
@@ -4110,7 +4151,7 @@ impl Render for FileViewer {
                 .item(PopupMenuItem::new(tr("Vorschau-Fenster (Leertaste)")).icon(menu_icon("eye")).on_click(move |_, _, cx| super::preview::show(&b, cx)))
                 .when_some(named, |m, item| m.item(item))
                 .separator()
-                .item(PopupMenuItem::new(tr("Tab schließen")).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&c, cx)))
+                .item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&c, cx)))
         });
         let body: AnyElement = if !self.path.exists() {
             unavailable("file-question", tr("Datei nicht gefunden"), self.path.file_name().unwrap_or_default().to_string_lossy().to_string(), &t).into_any_element()
@@ -4256,6 +4297,9 @@ mod window_tests {
     #[test]
     fn the_toast_for_notes_that_stay_open_names_one_and_counts_several() {
         assert_eq!(unsaved_message(&["Analysis".to_string()]), "„Analysis“ ließ sich nicht sichern und bleibt offen. Erneut versuchen steht in der Notiz.");
-        assert_eq!(unsaved_message(&["A".to_string(), "B".to_string(), "C".to_string()]), "3 Notizen ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.");
+        let names: Vec<String> = ["A", "B", "C", "D"].iter().map(|n| n.to_string()).collect();
+        assert_eq!(unsaved_message(&names), "4 Notizen ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.");
+        assert_eq!(unsaved_message(&names[..2]), "„A“, „B“ ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.");
+        assert!(unsaved_message(&names[..3]).starts_with("„A“, „B“, „C“ ließen"));
     }
 }

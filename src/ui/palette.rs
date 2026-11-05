@@ -93,7 +93,7 @@ fn commands(cx: &App) -> Vec<Command> {
         if let Some(path) = l.active_document.clone().filter(|p| l.buffers.get(p).is_some_and(|b| b.conflict.is_some())) {
             let group = tr("Notiz außerhalb geändert");
             let (compare, reload, keep) = (path.clone(), path.clone(), path);
-            add(&group, tr("Vergleichen"), "file-text", None, Run::Call(Rc::new(move |cx| super::documents::compare_note(compare.clone(), cx))));
+            add(&group, tr("Vergleichen"), "file-text", None, Run::Call(Rc::new(move |cx| super::documents::compare_note(compare.clone(), None, cx))));
             add(&group, tr("Neu laden"), "refresh-cw", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.load_note_disk(&reload)))));
             add(&group, tr("Meine behalten"), "check", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.keep_note_mine(&keep)))));
         }

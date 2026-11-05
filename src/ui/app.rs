@@ -196,10 +196,10 @@ pub fn init(cx: &mut App) {
     });
     cx.on_action(|_: &CloseTab, cx| {
         let shown = state::read(cx, |l| if let Route::Doc(p) = l.route() { Some(p.clone()) } else { None });
-        let main = super::main_window::is_active(cx);
-        match shown.filter(|_| main) {
-            Some(path) => super::documents::close_tab(&path, cx),
-            None => close_active_window(cx),
+        match (shown, super::main_window::is_active(cx)) {
+            (Some(path), true) => super::documents::close_tab(&path, cx),
+            (_, true) => {}
+            (_, false) => close_active_window(cx),
         }
     });
     cx.on_action(|_: &CloseWindow, cx| close_active_window(cx));

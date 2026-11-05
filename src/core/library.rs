@@ -1327,12 +1327,24 @@ impl Library {
     pub fn keep_note_mine(&mut self, path: &Path) {
         let Some(buffer) = self.buffers.get_mut(path) else { return };
         let Some(theirs) = buffer.conflict.clone() else { return };
-        buffer.keep_mine();
-        if let Err(e) = buffer.save() {
+        let name = name_of(path);
+        let (stem, ext) = (super::naming::stem(&name), extension(&name));
+        let suffix = if ext.is_empty() { String::new() } else { format!(".{ext}") };
+        let copy = unique_path(&path.with_file_name(format!("{stem} ({}){suffix}", tr("andere Version"))));
+        if let Err(e) = std::fs::copy(path, &copy) {
             self.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]));
             return;
         }
-        self.commit(tr("Deine Version behalten"), "check", vec![Change::Note { path: path.to_path_buf(), text: theirs }]);
+        let Some(buffer) = self.buffers.get_mut(path) else { return };
+        buffer.keep_mine();
+        if let Err(e) = buffer.save() {
+            let _ = std::fs::remove_file(&copy);
+            self.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]));
+            return;
+        }
+        self.refresh();
+        let kept = trf("Andere Version gesichert als „%@“", &[&name_of(&copy)]);
+        self.commit(kept, "check", vec![Change::Note { path: path.to_path_buf(), text: theirs }, Change::Trash(copy)]);
     }
 
     /// Shows the version another app wrote; the text here stays in the undo history.
