@@ -1489,8 +1489,8 @@ impl NoteView {
         deferred(
             div()
                 .absolute()
-                .when(!below, |d| d.top(px(-(control::M + space::M))))
-                .when(below, |d| d.top(px(control::M)))
+                .when(!below, |d| d.top(px(-(control::M + space::M + LIVE_INSET))))
+                .when(below, |d| d.top(px(control::M - LIVE_INSET)))
                 .left_0()
                 .flex()
                 .items_center()
