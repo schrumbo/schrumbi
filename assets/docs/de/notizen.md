@@ -19,6 +19,7 @@ Notizen sind Markdown-Dateien in deinem Ordner. Obsidian liest sie genauso.
 | {key:f2} | Umbenennen |
 | {key:/} | Filtern |
 
+- {key:f2} benennt auch die offene Notiz um, ebenso ein Klick auf ihren Titel oben.
 - Einfacher Klick öffnet eine Vorschau, Doppelklick behält den Tab.
 - Datei auf einen Ordner ziehen verschiebt sie.
 - Rechtsklick → {ui:Abgabe zuordnen} zählt die Datei für eine Abgabe. Die Pille oben in der Notiz zeigt, wozu sie gehört.
@@ -68,7 +69,7 @@ Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live: 
 | {key:return} / {key:shift-return} | Nächster / vorheriger Treffer |
 | {key:escape} | Suche schließen |
 
-Das Kürzel gilt auch, wenn der Fokus in der Dateiliste oder bei den Tabs liegt. Bei PDFs und Tabellen öffnet es deren Suche. Ohne offene Notiz sind {ui:In Notiz suchen} und {ui:In Notiz ersetzen} im Menü {ui:Bearbeiten} ausgegraut.
+Das Kürzel gilt auch, wenn der Fokus in der Dateiliste oder bei den Tabs liegt. Bei PDFs und Tabellen öffnet es deren Suche, auch wenn sie nur zuletzt aktiv waren. Ohne offene Notiz, PDF oder Tabelle ist {ui:In Notiz suchen} im Menü {ui:Bearbeiten} ausgegraut, {ui:In Notiz ersetzen} ohne Notiz.
 
 Alle Treffer sind markiert, der aktuelle kräftiger. Groß- und Kleinschreibung sowie Umlaute sind egal, bis du {ui:Groß-/Kleinschreibung beachten} wählst.
 

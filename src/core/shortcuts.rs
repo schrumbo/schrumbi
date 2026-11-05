@@ -279,10 +279,14 @@ impl ShortcutAction {
 
     /// The keys the action has until the user changes them; `None` when it ships without any.
     pub fn default_shortcut(self) -> Option<Shortcut> {
+        self.default_on(Os::here())
+    }
+
+    fn default_on(self, os: Os) -> Option<Shortcut> {
         if self == Self::ToggleComment {
             return None;
         }
-        if !cfg!(target_os = "macos") {
+        if os != Os::Mac {
             match self {
                 Self::GoBack => return Some(s("left", false, false, true, false)),
                 Self::GoForward => return Some(s("right", false, false, true, false)),
@@ -444,10 +448,14 @@ impl ShortcutAction {
 
     /// Why these keys cannot be recorded for `self`: what they already do everywhere.
     pub fn reserved_for(self, keys: &Shortcut) -> Option<String> {
-        if Some(keys) == self.default_shortcut().as_ref() {
+        self.reserved_on(keys, Os::here())
+    }
+
+    fn reserved_on(self, keys: &Shortcut, os: Os) -> Option<String> {
+        if Some(keys) == self.default_on(os).as_ref() {
             return None;
         }
-        keys.reserved_for()
+        keys.reserved_on(os)
     }
 
     /// Other actions using the same keys in an overlapping scope.
@@ -526,13 +534,14 @@ const fn fixed_on(platform: Platform, key: &'static str, command: bool, shift: b
     Fixed { key, command, shift, option, label, notes_only, platform }
 }
 
-const FIXED: [Fixed; 25] = [
+const FIXED: [Fixed; 26] = [
     fixed("k", true, false, false, "Befehl suchen…", false),
     fixed("p", true, false, false, "Befehl suchen…", false),
     fixed("p", true, true, false, "Befehl suchen…", false),
     fixed("/", true, false, false, "Tastenkürzel anzeigen", false),
     fixed("7", true, true, false, "Tastenkürzel anzeigen", false),
     fixed("f1", false, false, false, "Schrumbi-Anleitung", false),
+    fixed("f2", false, false, false, "Umbenennen", false),
     fixed(",", true, false, false, "Einstellungen", false),
     fixed("s", true, false, false, "Sichern", false),
     fixed("w", true, true, false, "Fenster schließen", false),
@@ -568,10 +577,13 @@ pub fn released_bindings(before: &BTreeSet<Bound>, now: &BTreeSet<Bound>) -> Vec
 impl Shortcut {
     /// What the system and every text field do with these keys, e.g. "Reserviert: Kopieren".
     pub fn reserved_for(&self) -> Option<String> {
-        let mac = cfg!(target_os = "macos");
+        self.reserved_on(Os::here())
+    }
+
+    fn reserved_on(&self, os: Os) -> Option<String> {
         let what = if self.key == "tab" && !self.command && !self.option && !self.control {
             "Tastaturnavigation"
-        } else if self.edits_text(Os::here()) || (self.key == "return" && self.shift && !self.command && !self.option && !self.control) {
+        } else if self.edits_text(os) || (self.key == "return" && self.shift && !self.command && !self.option && !self.control) {
             "Textbearbeitung"
         } else if self.command && !self.option && !self.control {
             match (self.key.as_str(), self.shift) {
@@ -581,7 +593,7 @@ impl Shortcut {
                 ("a", false) => "Alles auswählen",
                 ("z", false) => "Rückgängig",
                 ("z", true) => "Wiederholen",
-                ("y", false) if !mac => "Wiederholen",
+                ("y", false) if os != Os::Mac => "Wiederholen",
                 ("w", false) => "Tab schließen",
                 ("q", false) => "Beenden",
                 _ => return None,
@@ -852,9 +864,13 @@ mod tests {
 
     #[test]
     fn no_default_shortcut_is_taken_by_a_text_field() {
-        for action in ShortcutAction::ALL {
-            if let Some(keys) = action.default_shortcut() {
-                assert!(!keys.edits_text(Os::here()), "{} {}", action.label(), keys.display());
+        for os in [Os::Mac, Os::Windows, Os::Linux] {
+            for action in ShortcutAction::ALL {
+                let Some(keys) = action.default_on(os) else { continue };
+                assert!(action.reserved_on(&keys, os).is_none(), "{} {}", action.label(), keys.display());
+                if action.group() != Group::Editor {
+                    assert!(!keys.edits_text(os), "{} {}", action.label(), keys.display());
+                }
             }
         }
     }

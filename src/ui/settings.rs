@@ -247,6 +247,7 @@ pub struct Settings {
     recording: Option<ShortcutAction>,
     rejected: Option<Rejected>,
     key_buttons: HashMap<&'static str, FocusHandle>,
+    last_changed: Option<ShortcutAction>,
     notice: Option<Notice>,
     notices: u64,
     focus: FocusHandle,
@@ -641,6 +642,7 @@ impl Settings {
             recording: None,
             rejected: None,
             key_buttons: HashMap::new(),
+            last_changed: None,
             notice: None,
             notices: 0,
             focus: cx.focus_handle(),
@@ -2213,6 +2215,7 @@ impl Settings {
             .child(div().flex_1().child(Input::new(&self.filter).prefix(icon("search", iconsize::S, t.secondary)).cleanable(true)))
             .child(Button::new("sc-reset-all").label(tr("Alle zurücksetzen")).disabled(!any_custom).on_click(cx.listener(|s, _, _, cx| {
                 let before = ShortcutAction::reset_all();
+                s.last_changed = None;
                 s.recording = None;
                 s.rejected = None;
                 super::app::bind_keys(cx);
@@ -2232,7 +2235,7 @@ impl Settings {
                 .text_size(px(font::CAPTION))
                 .text_color(t.secondary)
                 .child(div().flex_none().child(icon("check", iconsize::XS, t.green_text)))
-                .child(div().min_w_0().truncate().child(n.text.clone()))
+                .child(div().id("sc-notice-text").min_w_0().truncate().tooltip(tip(n.text.clone())).child(n.text.clone()))
                 .child(div().flex_none().text_color(t.tertiary).child("·"))
                 .child(div().flex_none().child(link_button("sc-undo", tr("Rückgängig"), t).on_click(cx.listener(|s, _, _, cx| {
                     if let Some(n) = s.notice.take() {
@@ -2243,12 +2246,17 @@ impl Settings {
                     }
                     cx.notify();
                 }))))
-                .child(Button::new("sc-notice-close").ghost().xsmall().icon(menu_icon("x")).tooltip(format!("{} ({})", tr("Schließen"), escape)).on_click(cx.listener(|s, _, _, cx| {
+                .child(Button::new("sc-notice-close").ghost().small().icon(menu_icon("x")).tooltip(format!("{} ({})", tr("Schließen"), escape)).on_click(cx.listener(|s, _, window, cx| {
                     s.notice = None;
+                    let back = s.last_changed.and_then(|a| s.key_buttons.get(a.id())).unwrap_or(&s.focus).clone();
+                    window.focus(&back, cx);
                     cx.notify();
                 })))
                 .into_any_element(),
-            None => caption(trf("Klick auf ein Kürzel und drück die neuen Tasten. %@ bricht ab, %@ entfernt das Kürzel.", &[&escape, &delete]), t).w_full().min_w_0().truncate().into_any_element(),
+            None => {
+                let idle = trf("Klick auf ein Kürzel und drück die neuen Tasten. %@ bricht ab, %@ entfernt das Kürzel.", &[&escape, &delete]);
+                caption(idle.clone(), t).id("sc-idle").w_full().min_w_0().truncate().tooltip(tip(idle)).into_any_element()
+            }
         };
         let header = div()
             .flex_none()
@@ -2289,7 +2297,10 @@ impl Settings {
                 });
                 let reason: Option<String> = reason_chip.as_ref().map(|chip| if self.rejected_is_reserved() { trf("%@ – andere Tasten drücken", &[chip]) } else { chip.clone() });
                 let note = |text: String| div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.orange_text).child(text).into_any_element();
-                let quiet = |text: String| div().min_w_0().truncate().px(px(space::XS)).rounded(px(radius::SMALL)).bg(t.ink.opacity(0.04)).border_1().border_color(t.ink.opacity(0.08)).text_size(px(font::CAPTION)).text_color(t.secondary).child(text).into_any_element();
+                let quiet = |text: String| {
+                    let suffix = trf("%@ – inaktiv", &[&""]);
+                    div().min_w_0().flex().px(px(space::XS)).rounded(px(radius::SMALL)).bg(t.ink.opacity(0.04)).border_1().border_color(t.ink.opacity(0.08)).text_size(px(font::CAPTION)).text_color(t.secondary).child(div().min_w_0().truncate().child(text)).child(div().flex_none().whitespace_nowrap().child(suffix)).into_any_element()
+                };
                 let dimmed = blocked.is_some() && reason.is_none() && !recording;
                 let name = a.named(&modules);
                 let state = if let Some(text) = reason.clone().or(blocked.clone()) {
@@ -2380,6 +2391,7 @@ impl Settings {
                         .child(div().flex_none().w(px(control::ICON_BUTTON + space::S + space::L)).pl(px(space::S)).pr(px(space::L)).when(customized, |d| {
                             d.child(Button::new(SharedString::from(format!("rst-{}", a.id()))).ghost().small().icon(menu_icon("rotate-ccw")).tooltip(trf("Zurücksetzen auf %@", &[&default])).on_click(cx.listener(move |s, _, _, cx| {
                                 let before = ShortcutAction::snapshot();
+                                s.last_changed = Some(a);
                                 a.reset();
                                 super::app::bind_keys(cx);
                                 let text = changed(a, cx);
@@ -2422,6 +2434,7 @@ impl Settings {
         } else if key == "delete" && plain {
             let before = ShortcutAction::snapshot();
             action.set(None);
+            self.last_changed = Some(action);
             self.recording = None;
             super::app::bind_keys(cx);
             let text = changed(action, cx);
@@ -2438,6 +2451,7 @@ impl Settings {
             if s.command || s.option || s.control || function {
                 let before = ShortcutAction::snapshot();
                 action.set(Some(s));
+                self.last_changed = Some(action);
                 self.recording = None;
                 super::app::bind_keys(cx);
                 let text = changed(action, cx);

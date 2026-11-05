@@ -945,7 +945,7 @@ impl NotesPage {
                         }))
                         .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| crate::core::library::reveal(&r)))
                         .separator()
-                        .item(PopupMenuItem::new(format!("{} (F2)", tr("Umbenennen"))).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
+                        .item(PopupMenuItem::new(format!("{} (F2)", tr("Umbenennen…"))).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
                             let p = rename_path.clone();
                             rename_me.update(cx, |s, cx| s.start_rename(p, window, cx));
                         }))
@@ -978,7 +978,7 @@ impl NotesPage {
                         let (r, m2, x) = (rename.clone(), rename_me.clone(), trash.clone());
                         deadline_submenu(file_menu(m, menu.clone()).separator(), &menu, window, cx)
                             .separator()
-                            .item(PopupMenuItem::new(format!("{} (F2)", tr("Umbenennen"))).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
+                            .item(PopupMenuItem::new(format!("{} (F2)", tr("Umbenennen…"))).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
                                 let p = r.clone();
                                 m2.update(cx, |s, cx| s.start_rename(p, window, cx));
                             }))

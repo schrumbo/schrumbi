@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -59,7 +61,8 @@ actions!(
         Zoom,
         Hide,
         HideOthers,
-        ShowAll
+        ShowAll,
+        RenameNote
     ]
 );
 
@@ -211,10 +214,10 @@ pub fn init(cx: &mut App) {
     rebuild_menus(cx);
     let lib = state::lib(cx);
     let mut modules: Vec<String> = Vec::new();
-    let mut note = note_is_active(cx);
+    let mut note = (note_is_active(cx), find_is_available(cx));
     cx.observe(&lib, move |lib, cx| {
         let now: Vec<String> = lib.read(cx).semester_modules().iter().map(|m| format!("{}{}", m.id, m.display_name())).collect();
-        let open = note_is_active(cx);
+        let open = (note_is_active(cx), find_is_available(cx));
         if now != modules || open != note {
             modules = now;
             note = open;
@@ -250,6 +253,15 @@ pub fn note_is_active(cx: &App) -> bool {
     cx.try_global::<NoteWindowFront>().is_some_and(|f| f.0.is_some()) || state::read(cx, |l| matches!(l.route(), Route::Doc(_)) && l.focused_document().is_some_and(crate::core::markdown::is_markdown))
 }
 
+/// Asks the explorer to rename `path`, showing it first when it was hidden.
+pub fn rename_file(path: PathBuf, cx: &mut App) {
+    prefs::update(|p| p.notes_explorer_hidden = false);
+    act(cx, |l| {
+        l.rename_request = Some(path);
+        l.quiet_open = true;
+    });
+}
+
 /// Hands an action meant for the open note to it when the focus is elsewhere in the main window, like the explorer or the tab strip.
 /// Returns false when the focused pane is no note, so the action can go on to a PDF or sheet.
 pub fn in_active_note(action: impl Action, cx: &mut App) -> bool {
@@ -258,6 +270,38 @@ pub fn in_active_note(action: impl Action, cx: &mut App) -> bool {
     }
     cx.default_global::<super::palette::PendingNoteAction>().0 = Some(Box::new(action));
     act(cx, |l| if l.beside_active && l.split_document.is_some() { l.focus_beside = true } else { l.focus_document = true });
+    true
+}
+
+fn searchable(path: &std::path::Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) || crate::core::office::kind(path).is_some()
+}
+
+fn find_panes(l: &crate::core::library::Library) -> Vec<(bool, bool)> {
+    if !matches!(l.route(), Route::Doc(_)) {
+        return Vec::new();
+    }
+    let left = l.active_document.clone();
+    let right = l.split_document.clone().filter(|r| Some(r) != left.as_ref());
+    let findable = |p: &Option<PathBuf>| p.as_deref().is_some_and(|p| crate::core::markdown::is_markdown(p) || searchable(p));
+    let panes = [(findable(&left), false), (findable(&right), true)];
+    if l.beside_active && right.is_some() { vec![panes[1], panes[0]] } else { panes.to_vec() }
+}
+
+/// Whether Find has a note, PDF or sheet to go to in the main window, in the focused pane or else the other one.
+pub fn find_is_available(cx: &App) -> bool {
+    note_is_active(cx) || state::read(cx, |l| find_panes(l).into_iter().any(|(findable, _)| findable))
+}
+
+/// Opens find in the focused PDF or sheet pane, or in the other pane when the focused one has nothing to search.
+/// Returns false when no pane offers it.
+pub fn find_in_pane(cx: &mut App) -> bool {
+    let Some((_, beside)) = state::read(cx, find_panes).into_iter().find(|(findable, _)| *findable) else { return false };
+    cx.default_global::<super::palette::PendingNoteAction>().0 = Some(Box::new(super::find_bar::FindInNote));
+    act(cx, |l| {
+        l.beside_active = beside;
+        if beside { l.focus_beside = true } else { l.focus_document = true }
+    });
     true
 }
 
@@ -342,6 +386,7 @@ pub fn bind_keys(cx: &mut App) {
         kb(cmd("shift-7"), ShowShortcuts, None),
         kb(cmd("/"), ShowShortcuts, None),
         kb("f1".into(), ShowHelp, None),
+        kb("f2".into(), RenameNote, Some("MainWindow")),
         kb(cmd(","), OpenSettings, None),
         kb(cmd("x"), gpui_kit::component::input::Cut, Some("Root")),
         kb(cmd("v"), gpui_kit::component::input::Paste, Some("Root")),
@@ -420,7 +465,7 @@ pub fn bind_keys(cx: &mut App) {
 
 /// The menu bar: Schrumbi, Ablage, Bearbeiten, Darstellung, Gehe zu, Fenster.
 pub fn rebuild_menus(cx: &mut App) {
-    let note = note_is_active(cx);
+    let (note, find) = (note_is_active(cx), find_is_available(cx));
     let modules: Vec<(String, String)> = state::read(cx, |l| l.semester_modules().iter().map(|m| (m.id.clone(), m.display_name())).collect());
     let recents: Vec<MenuItem> = prefs::get()
         .recent_workspaces
@@ -495,7 +540,7 @@ pub fn rebuild_menus(cx: &mut App) {
             MenuItem::os_action(tr("Einsetzen"), gpui_kit::component::input::Paste, OsAction::Paste),
             MenuItem::os_action(tr("Alles auswählen"), gpui_kit::component::input::SelectAll, OsAction::SelectAll),
             MenuItem::separator(),
-            MenuItem::action(tr("In Notiz suchen"), super::find_bar::FindInNote).disabled(!note),
+            MenuItem::action(tr("In Notiz suchen"), super::find_bar::FindInNote).disabled(!find),
             MenuItem::action(tr("In Notiz ersetzen"), super::find_bar::ReplaceInNote).disabled(!note),
         ]),
         Menu::new(tr("Darstellung")).items([

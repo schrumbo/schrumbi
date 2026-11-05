@@ -219,7 +219,7 @@ pub struct Crumbs {
 }
 
 /// Divides `room` between the folders, the note's name and the deadline: the folders collapse into one "…"
-/// before anything shrinks, then the deadline gives way down to `pill_min`, and the name last, down to `name_min`.
+/// before anything shrinks, then the deadline gives way down to `pill_min` and vanishes below it, and the name last, down to `name_min`.
 pub fn crumb_widths(room: f32, folders: f32, collapsed: f32, name: f32, pill: f32, pill_min: f32, name_min: f32) -> Crumbs {
     if folders + name + pill <= room {
         return Crumbs { folders: true, name, pill };
@@ -231,6 +231,9 @@ pub fn crumb_widths(room: f32, folders: f32, collapsed: f32, name: f32, pill: f3
     let pill_min = pill.min(pill_min);
     let name_w = (rest - pill_min).max(name_min.min(rest)).min(name);
     let pill_w = (rest - name_w).clamp(0., pill);
+    if pill_w < pill_min {
+        return Crumbs { folders: false, name: rest.min(name), pill: 0. };
+    }
     Crumbs { folders: false, name: name_w, pill: pill_w }
 }
 
@@ -347,7 +350,17 @@ mod tests {
             assert!(!c.folders);
             assert!(c.name + c.pill + 24. <= room.max(24.) + 0.01, "{room}: {c:?}");
         }
-        assert_eq!(crumb_widths(120., 100., 24., 200., 100., 40., 64.), Crumbs { folders: false, name: 64., pill: 32. });
+        assert_eq!(crumb_widths(120., 100., 24., 200., 100., 40., 64.), Crumbs { folders: false, name: 96., pill: 0. });
+    }
+
+    #[test]
+    fn the_deadline_is_either_whole_enough_or_gone_and_the_name_takes_its_width() {
+        for room in (0..400).map(|r| r as f32) {
+            let c = crumb_widths(room, 100., 24., 200., 100., 40., 64.);
+            assert!(c.pill == 0. || c.pill >= 40., "{room}: {c:?}");
+        }
+        assert_eq!(crumb_widths(130., 100., 24., 200., 100., 40., 64.), Crumbs { folders: false, name: 66., pill: 40. });
+        assert_eq!(crumb_widths(110., 100., 24., 200., 100., 40., 64.), Crumbs { folders: false, name: 86., pill: 0. });
     }
 
     #[test]

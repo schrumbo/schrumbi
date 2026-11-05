@@ -249,8 +249,17 @@ fn toggle_emphasis(s: &str, sel: &Range<usize>, token: &str, math: &[Range<usize
         let used = all.iter().any(|p| [p.start..p.start + p.n, p.end - p.n..p.end].iter().any(|m| m.start < a + n && a.saturating_sub(n) < m.end));
         let before = s[..a].chars().rev().take_while(|c| *c == '*').count();
         let after = s[a..].chars().take_while(|c| *c == '*').count();
-        if !used && before == n && after == n {
-            return Some(Edit { range: a - n..a + n, text: String::new(), select: a - n..a - n });
+        let run = before + after;
+        if !used && run >= 2 * n && (run == 2 * n || (before > 0 && after > 0)) {
+            let behind = before.min(n).max((2 * n).saturating_sub(after)).min(before);
+            let start = a - behind;
+            return Some(Edit { range: start..a + 2 * n - behind, text: String::new(), select: start..start });
+        }
+        let (prev, next) = (s[..a].chars().next_back(), s[a..].chars().next());
+        if prev.is_some_and(char::is_alphanumeric) && next.is_some_and(char::is_alphanumeric) {
+            let from = s[..a].char_indices().rev().take_while(|(_, c)| c.is_alphanumeric()).last().map_or(a, |(i, _)| i);
+            let to = a + s[a..].char_indices().find(|(_, c)| !c.is_alphanumeric()).map_or(s.len() - a, |(i, _)| i);
+            return Some(Edit { range: from..to, text: format!("{token}{}{token}", &s[from..to]), select: a + n..a + n });
         }
         return None;
     }
@@ -276,12 +285,18 @@ fn toggle_emphasis(s: &str, sel: &Range<usize>, token: &str, math: &[Range<usize
     Some(Edit { range: start..end, text, select })
 }
 
+fn on_fence(s: &str, sel: &Range<usize>) -> bool {
+    let end = line_end(s, sel.start);
+    sel.end <= end && s[line_start(s, sel.start)..end].trim() == "$$"
+}
+
 /// `**sel**`, `*sel*` or `` `sel` ``; with no selection the caret lands between the tokens.
 pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
     let inner = &s[sel.clone()];
-    if token == "**" || token == "*" {
-        let math = math_ranges(s);
-        if in_math(&math, sel.start) || in_math(&math, sel.end) {
+    let emphasis = token == "**" || token == "*";
+    let math = if emphasis { math_ranges(s) } else { Vec::new() };
+    if emphasis {
+        if in_math(&math, sel.start) || in_math(&math, sel.end) || on_fence(s, &sel) {
             return Edit { range: sel.clone(), text: inner.to_string(), select: sel };
         }
         if let Some(edit) = toggle_emphasis(s, &sel, token, &math) {
@@ -305,11 +320,15 @@ pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
             return Edit { range: sel.clone(), text: bare.to_string(), select: sel.start..sel.start + bare.len() };
         }
         if inner.contains('\n') {
+            let mut at = sel.start;
             let text = inner
                 .split('\n')
                 .map(|line| {
+                    let range = at..at + line.len();
+                    at = range.end + 1;
+                    let display = line.trim() == "$$" || math.iter().any(|r| r.start <= range.start && range.end <= r.end && s[r.clone()].starts_with("$$"));
                     let marks = super::live_text::prefix_len(line);
-                    if line[marks..].trim().is_empty() { line.to_string() } else { format!("{}{token}{}{token}", &line[..marks], &line[marks..]) }
+                    if display || line[marks..].trim().is_empty() { line.to_string() } else { format!("{}{token}{}{token}", &line[..marks], &line[marks..]) }
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -811,6 +830,51 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_marker_pair_is_removed_whatever_the_stars_around_the_caret() {
+        assert_eq!(toggled("Ende**|**", "**"), "Ende|");
+        assert_eq!(toggled("Ende*|***", "**"), "Ende|");
+        assert_eq!(toggled("Ende***|*", "**"), "Ende|");
+        assert_eq!(toggled("Ende|****", "**"), "Ende|");
+        assert_eq!(toggled("Ende**|**", "*"), "Ende*|*");
+        assert_eq!(toggled("Ende*|***", "*"), "Ende|**");
+        assert_eq!(toggled("Ende*|*", "*"), "Ende|");
+    }
+
+    #[test]
+    fn a_caret_inside_a_word_wraps_the_word() {
+        assert_eq!(toggled("Wor|t", "**"), "**Wor|t**");
+        assert_eq!(toggled("ein Wor|t hier", "*"), "ein *Wor|t* hier");
+        assert_eq!(toggled("Grö|ße x", "**"), "**Grö|ße** x");
+        assert_eq!(toggled("**Wor|t**", "**"), "Wor|t");
+        assert_eq!(toggled("*Wor|t*", "**"), "***Wor|t***");
+        assert_eq!(toggled("Wor|t", "**").replace('|', ""), "**Wort**");
+    }
+
+    #[test]
+    fn a_caret_on_whitespace_or_at_a_word_edge_keeps_inserting_the_pair() {
+        assert_eq!(toggled("a |b", "**"), "a **|**b");
+        assert_eq!(toggled("a| b", "**"), "a**|** b");
+        assert_eq!(toggled("a |", "**"), "a **|**");
+        assert_eq!(toggled("|", "*"), "*|*");
+    }
+
+    #[test]
+    fn display_math_fences_are_never_touched() {
+        assert_eq!(toggled("|$$\nx\n$$", "**"), "|$$\nx\n$$");
+        assert_eq!(toggled("$$|\nx\n$$", "**"), "$$|\nx\n$$");
+        assert_eq!(toggled("$$\nx\n|$$", "**"), "$$\nx\n|$$");
+        assert_eq!(toggled("$$\nx\n$$|", "*"), "$$\nx\n$$|");
+        assert_eq!(toggled("a|\n$$\nx\n$$", "**"), "a**|**\n$$\nx\n$$");
+    }
+
+    #[test]
+    fn a_selection_over_display_math_wraps_only_the_prose_around_it() {
+        assert_eq!(toggled("‹a\n$$\nx\n$$\nb›", "**"), "‹**a**\n$$\nx\n$$\n**b**›");
+        assert_eq!(toggled("‹a\n$$x$$\nb›", "*"), "‹*a*\n$$x$$\n*b*›");
+        assert_eq!(toggled("‹$$\nx\n$$›", "**"), "‹$$\nx\n$$›");
+    }
+
+    #[test]
     fn selection_of_a_span_unwraps() {
         assert_eq!(toggled("x **‹ab›** y", "**"), "x ‹ab› y");
         assert_eq!(toggled("x ‹**ab**› y", "**"), "x ‹ab› y");
@@ -970,7 +1034,7 @@ mod tests {
         let e = wrap("a word b", 2..6, "**");
         assert_eq!(apply("a word b", &e), "a **word** b");
         let e = wrap("ab", 1..1, "*");
-        assert_eq!((apply("ab", &e), e.select), ("a**b".into(), 2..2));
+        assert_eq!((apply("ab", &e), e.select), ("*ab*".into(), 2..2));
         let e = link("see x", 4..5);
         assert_eq!((apply("see x", &e), e.select), ("see [x]()".into(), 8..8));
         let e = link("https://a.b", 0..11);

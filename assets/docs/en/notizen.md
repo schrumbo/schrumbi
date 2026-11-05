@@ -19,6 +19,7 @@ Notes are Markdown files in your folder. Obsidian reads them the same way.
 | {key:f2} | Rename |
 | {key:/} | Filter |
 
+- {key:f2} also renames the open note, as does a click on its title at the top.
 - A single click opens a preview, a double click keeps the tab.
 - Dragging a file onto a folder moves it.
 - Right-click → {ui:Abgabe zuordnen} makes the file count for a submission. The pill at the top of the note shows what it belongs to.
@@ -68,7 +69,7 @@ You choose the editor in {key:OpenSettings} → {ui:Notizen}: {ui:Live: Text ble
 | {key:return} / {key:shift-return} | Next / previous match |
 | {key:escape} | Close search |
 
-The shortcut also works while the focus is in the file list or on the tabs. In PDFs and spreadsheets it opens their search. Without an open note, {ui:In Notiz suchen} and {ui:In Notiz ersetzen} are greyed out in the {ui:Bearbeiten} menu.
+The shortcut also works while the focus is in the file list or on the tabs. In PDFs and spreadsheets it opens their search, even when they were only last active. Without an open note, PDF or spreadsheet, {ui:In Notiz suchen} is greyed out in the {ui:Bearbeiten} menu, {ui:In Notiz ersetzen} without a note.
 
 All matches are marked, the current one stronger. Case and umlauts do not matter until you choose {ui:Groß-/Kleinschreibung beachten}.
 

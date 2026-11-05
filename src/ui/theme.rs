@@ -94,6 +94,13 @@ pub mod crumb {
     pub const FOLDER_MAX: f32 = 160.;
     /// Widest the deadline gets.
     pub const PILL_MAX: f32 = 240.;
+    /// Room the name's bold glyphs and rounded hover need beyond its text and padding.
+    pub const NAME_SLACK: f32 = 2.;
+    /// Round buttons and gaps in the toolbar row that share its width with the title.
+    pub const TOOLBAR_BUTTONS: f32 = 4.;
+    pub const TOOLBAR_GAPS: f32 = 5.;
+    /// The border between the sidebar and the toolbar.
+    pub const BORDER: f32 = 1.;
 }
 
 /// Corner radii used across the app.

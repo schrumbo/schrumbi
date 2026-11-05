@@ -1621,6 +1621,7 @@ impl Render for PdfView {
             .key_context("PdfView")
             .on_key_down(cx.listener(Self::on_key))
             .on_action(cx.listener(Self::on_escape))
+            .on_action(cx.listener(|v, _: &super::find_bar::FindInNote, window, cx| v.open_search(window, cx)))
             .on_action(cx.listener(|v, _: &gpui_kit::component::input::Copy, window, cx| {
                 if window.context_stack().iter().any(|c| c.contains("Input")) {
                     cx.propagate();

@@ -50,8 +50,8 @@ pub fn named_menu_items(files: &[PathBuf], cx: &App) -> Vec<PopupMenuItem> {
     if ready.len() <= NAMED_ENTRIES {
         return ready.into_iter().filter_map(|f| named_menu_item(f, cx)).collect();
     }
-    let first = ready[0].clone();
-    vec![PopupMenuItem::new(trf("Nach Muster benennen… (%@ Dateien)", &[&ready.len().to_string()])).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| open(first.clone(), window, cx))]
+    let all: Vec<PathBuf> = ready.into_iter().cloned().collect();
+    vec![PopupMenuItem::new(trf("Nach Muster benennen… (%@ Dateien)", &[&all.len().to_string()])).icon(menu_icon("wand-sparkles")).on_click(move |_, window, cx| open_all(all.clone(), window, cx))]
 }
 
 /// Like `menu_item`, but for a file in a submission folder that belongs to no deadline yet the entry is disabled with its reason; for menus that also offer to assign a deadline.
@@ -68,13 +68,25 @@ pub fn menu_item_or_hint(path: &Path, cx: &App) -> Option<PopupMenuItem> {
 
 /// Works out the convention name off the UI thread, then lets the user check and change it before renaming.
 pub fn open(path: PathBuf, window: &mut Window, cx: &mut App) {
+    start(path, Vec::new(), window, cx);
+}
+
+/// Like `open` for the first file; after each rename or skip the sheet goes on with the next file that is still ready.
+pub fn open_all(mut files: Vec<PathBuf>, window: &mut Window, cx: &mut App) {
+    if !files.is_empty() {
+        let first = files.remove(0);
+        start(first, files, window, cx);
+    }
+}
+
+fn start(path: PathBuf, rest: Vec<PathBuf>, window: &mut Window, cx: &mut App) {
     let Some(plan) = state::read(cx, |l| l.convention_plan(&path)) else { return };
     let (file, reader) = (path.clone(), plan.clone());
     let task = cx.background_spawn(async move { reader.name(&file) });
     let handle = window.window_handle();
     cx.spawn(async move |cx| {
         let suggested = task.await;
-        let _ = handle.update(cx, move |_, window, cx| super::sheets::show_sheet(460., window, cx, move |window, cx| ConventionRename::new(path, plan, suggested, window, cx)));
+        let _ = handle.update(cx, move |_, window, cx| super::sheets::show_sheet(460., window, cx, move |window, cx| ConventionRename::new(path, plan, suggested, rest, window, cx)));
     })
     .detach();
 }
@@ -97,6 +109,9 @@ struct ConventionRename {
     input: Entity<InputState>,
     verdict: Verdict,
     focused: bool,
+    rest: Vec<PathBuf>,
+    total: usize,
+    busy: bool,
     _sub: Subscription,
 }
 
@@ -111,14 +126,15 @@ fn split(name: &str) -> (String, String) {
 }
 
 impl ConventionRename {
-    fn new(path: PathBuf, plan: ConventionPlan, suggested: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(path: PathBuf, plan: ConventionPlan, suggested: String, rest: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (stem, ext) = split(&suggested);
         let input = cx.new(|cx| InputState::new(window, cx).default_value(stem));
         let sub = cx.subscribe(&input, |this: &mut Self, _, _: &InputEvent, cx| {
             this.verdict = this.judge(cx);
             cx.notify();
         });
-        let mut sheet = Self { path, plan, suggested, ext, input, verdict: Verdict::Empty, focused: false, _sub: sub };
+        let total = rest.len() + 1;
+        let mut sheet = Self { path, plan, suggested, ext, input, verdict: Verdict::Empty, focused: false, rest, total, busy: false, _sub: sub };
         sheet.verdict = sheet.judge(cx);
         sheet
     }
@@ -151,14 +167,50 @@ impl ConventionRename {
         }
     }
 
-    fn confirm(&mut self, cx: &mut Context<Self>) {
-        if !matches!(self.verdict, Verdict::Fits | Verdict::Off) {
+    fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy || !matches!(self.verdict, Verdict::Fits | Verdict::Off) {
             return;
         }
         let (path, name) = (self.path.clone(), self.name(cx));
         act(cx, |l| l.rename_keeping_heading(&path, &name));
         state::reindex(cx);
+        self.next(window, cx);
+    }
+
+    fn skip(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.busy {
+            self.next(window, cx);
+        }
+    }
+
+    fn next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        while !self.rest.is_empty() {
+            let path = self.rest.remove(0);
+            let Some(plan) = state::read(cx, |l| (l.convention_offer(&path) == ConventionOffer::Ready).then(|| l.convention_plan(&path)).flatten()) else { continue };
+            self.busy = true;
+            cx.notify();
+            let (reader, file) = (plan.clone(), path.clone());
+            let task = cx.background_spawn(async move { reader.name(&file) });
+            cx.spawn_in(window, async move |this, cx| {
+                let suggested = task.await;
+                let _ = this.update_in(cx, |s, window, cx| s.show(path, plan, suggested, window, cx));
+            })
+            .detach();
+            return;
+        }
         cx.emit(Dismissed);
+    }
+
+    fn show(&mut self, path: PathBuf, plan: ConventionPlan, suggested: String, window: &mut Window, cx: &mut Context<Self>) {
+        let (stem, ext) = split(&suggested);
+        (self.path, self.plan, self.suggested, self.ext, self.busy) = (path, plan, suggested, ext, false);
+        self.input.update(cx, |s, cx| {
+            s.set_value(stem.clone(), window, cx);
+            s.focus(window, cx);
+            s.set_selected_range(0..stem.len(), cx);
+        });
+        self.verdict = self.judge(cx);
+        cx.notify();
     }
 
     fn restore(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -201,8 +253,8 @@ impl Render for ConventionRename {
             .w_full()
             .flex()
             .flex_col()
-            .on_action(cx.listener(|s, _: &Confirm, window, cx| if super::sheets::typing(window) { s.confirm(cx) } else { cx.propagate() }))
-            .child(div().px(px(space::XL)).pt(px(space::L)).flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(tr("Nach Muster benennen"))).child(caption(context, &t).truncate()))
+            .on_action(cx.listener(|s, _: &Confirm, window, cx| if super::sheets::typing(window) { s.confirm(window, cx) } else { cx.propagate() }))
+            .child(div().px(px(space::XL)).pt(px(space::L)).flex().flex_col().gap(px(space::XXS)).child(div().flex().items_baseline().gap(px(space::S)).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(tr("Nach Muster benennen"))).when(self.total > 1, |d| d.child(caption(trf("%lld von %lld", &[&(self.total - self.rest.len()), &self.total]), &t)))).child(caption(context, &t).truncate()))
             .child(
                 div()
                     .px(px(space::XL))
@@ -225,7 +277,8 @@ impl Render for ConventionRename {
                     .when(edited, |d| d.child(Button::new("convention-restore").ghost().icon(super::widgets::menu_icon("rotate-ccw")).label(tr("Zurück zum Vorschlag")).on_click(cx.listener(|s, _, window, cx| s.restore(window, cx)))))
                     .child(div().flex_1())
                     .child(Button::new("convention-cancel").label(tr("Abbrechen")).on_click(cx.listener(|_, _, _, cx| cx.emit(Dismissed))))
-                    .child(Button::new("convention-rename").primary().label(tr("Umbenennen")).disabled(!ready).on_click(cx.listener(|s, _, _, cx| s.confirm(cx)))),
+                    .when(!self.rest.is_empty(), |d| d.child(Button::new("convention-skip").label(tr("Überspringen")).disabled(self.busy).on_click(cx.listener(|s, _, window, cx| s.skip(window, cx)))))
+                    .child(Button::new("convention-rename").primary().label(if self.rest.is_empty() { tr("Umbenennen") } else { tr("Umbenennen & weiter") }).disabled(!ready || self.busy).on_click(cx.listener(|s, _, window, cx| s.confirm(window, cx)))),
             )
     }
 }

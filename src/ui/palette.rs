@@ -71,7 +71,8 @@ fn commands(cx: &App) -> Vec<Command> {
     let (git, conflicts) = (super::sync::enabled_here(cx), !super::sync::get(cx).conflicts.is_empty());
     let in_document = state::read(cx, |l| matches!(l.route(), Route::Doc(_)));
     let in_notes = in_document || state::read(cx, |l| matches!(l.route(), Route::Notes));
-    let active = state::read(cx, |l| l.active_document.clone().filter(|p| crate::core::markdown::is_markdown(p) && in_document));
+    let focused = state::read(cx, |l| l.focused_document().map(std::path::Path::to_path_buf).filter(|_| in_document));
+    let active = focused.clone().filter(|p| crate::core::markdown::is_markdown(p));
     state::read(cx, |l| {
         if let Some(id) = l.selection().map(String::from)
             && let Some(a) = l.assignment(&id).cloned()
@@ -202,15 +203,11 @@ fn commands(cx: &App) -> Vec<Command> {
     if let Some(doc) = state::read(cx, |l| l.preview_document.clone().filter(|p| *l.route() == Route::Doc(p.clone()) && l.is_preview(p))) {
         add(&view, tr("Tab behalten"), "bookmark", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.pin_document(&doc)))));
     }
-    if let Some(doc) = state::read(cx, |l| l.active_document.clone()).filter(|p| in_document && super::convention_rename::available(p, cx)) {
+    if let Some(doc) = focused.clone().filter(|p| super::convention_rename::available(p, cx)) {
         add(&file, tr("Nach Muster benennen…"), "wand-sparkles", None, Run::WindowCall(Rc::new(move |window, cx| super::convention_rename::open(doc.clone(), window, cx))));
     }
-    if let Some(doc) = state::read(cx, |l| l.active_document.clone()).filter(|_| in_document) {
-        add(&file, tr("Umbenennen…"), "pencil", None, Run::Call(Rc::new(move |cx| act(cx, |l| {
-            crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
-            l.rename_request = Some(doc.clone());
-            l.quiet_open = true;
-        }))));
+    if let Some(doc) = focused {
+        add(&file, tr("Umbenennen…"), "pencil", Some(Shortcut { key: "f2".into(), command: false, shift: false, option: false, control: false }.display()), Run::Call(Rc::new(move |cx| app::rename_file(doc.clone(), cx))));
     }
     if in_document && state::read(cx, |l| l.split_document.is_some()) {
         add(&view, tr("Geteilte Ansicht schließen"), "columns-2", None, Run::Call(Rc::new(|cx| act(cx, |l| l.set_split(None)))));
@@ -386,7 +383,7 @@ impl Palette {
             Run::NoteAction(action) => {
                 let action = action.boxed_clone();
                 cx.default_global::<PendingNoteAction>().0 = Some(action);
-                act(cx, |l| l.focus_document = true);
+                act(cx, |l| if l.beside_active && l.split_document.is_some() { l.focus_beside = true } else { l.focus_document = true });
             }
             Run::InWindow(call) => window.defer(cx, *call),
             Run::Call(call) => {

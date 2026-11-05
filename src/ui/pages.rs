@@ -703,5 +703,8 @@ fn activate_doc(target: AnyView, window: &mut Window, cx: &mut App) {
         base.update(cx, |b, cx| b.activate(window, cx));
     } else if let Ok(file) = target.downcast::<super::documents::FileViewer>() {
         file.update(cx, |f, cx| f.activate(window, cx));
+        if let Some(action) = cx.default_global::<super::palette::PendingNoteAction>().0.take() {
+            window.dispatch_action(action, cx);
+        }
     }
 }
