@@ -814,6 +814,8 @@ impl NoteView {
         }
         let old = self.editor.read(cx).value().to_string();
         if old != text {
+            self.history.clear();
+            self.future.clear();
             let (changed, inserted) = edit_ops::minimal_change(&old, &text);
             self.drop_spell_marks(cx);
             self.syncing = true;
