@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState, TextDecorationCollection};
@@ -8,10 +9,11 @@ use gpui_kit::*;
 
 use super::theme::{Theme, control, font, iconsize, space};
 use super::widgets::*;
-use crate::core::i18n::{tr, trf};
+use crate::core::i18n::{Lang, lang, shift_name, tr, trf};
 use crate::core::shortcuts::ShortcutAction;
 
 const CASE_LABEL: &str = "Aa";
+const SEARCH_SHOWN_AFTER: Duration = Duration::from_millis(200);
 
 actions!(schrumbi_find, [FindInNote, ReplaceInNote, CloseFind]);
 
@@ -54,7 +56,18 @@ pub struct FindBar {
     count: usize,
     current: usize,
     searching: bool,
+    searching_shown: bool,
+    search_epoch: u64,
     _subs: Vec<Subscription>,
+}
+
+/// The shortcut for stepping to the next or previous match, as this platform writes keys.
+fn step_hint(forward: bool) -> String {
+    if cfg!(target_os = "macos") {
+        return if forward { "↩" } else { "⇧↩" }.to_string();
+    }
+    let enter = if lang() == Lang::De { "Eingabe" } else { "Enter" };
+    if forward { enter.to_string() } else { format!("{}+{enter}", shift_name()) }
 }
 
 impl EventEmitter<FindEvent> for FindBar {}
@@ -75,7 +88,7 @@ impl FindBar {
                 }
             }),
         ];
-        Self { query, replacement, exact: false, replacing: false, can_replace: false, count: 0, current: 0, searching: false, _subs: subs }
+        Self { query, replacement, exact: false, replacing: false, can_replace: false, count: 0, current: 0, searching: false, searching_shown: false, search_epoch: 0, _subs: subs }
     }
 
     pub fn text(&self, cx: &App) -> String {
@@ -97,14 +110,27 @@ impl FindBar {
             self.replacing &= can_replace;
             cx.notify();
         }
+        self.searching_shown = false;
     }
 
-    /// Shows that a search is still running, so the count of the last one is not taken for the answer.
+    /// Marks a search as running; only one that takes longer than a moment says so, so a quick one does not flicker.
     pub fn searching(&mut self, cx: &mut Context<Self>) {
-        if !self.searching {
-            self.searching = true;
-            cx.notify();
+        if self.searching {
+            return;
         }
+        self.searching = true;
+        self.search_epoch += 1;
+        let epoch = self.search_epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SEARCH_SHOWN_AFTER).await;
+            let _ = this.update(cx, |b, cx| {
+                if b.searching && b.search_epoch == epoch {
+                    b.searching_shown = true;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Puts the caret in the search field with its text selected; `seed` replaces the text, `replacing` opens the replace row.
@@ -143,16 +169,17 @@ impl Render for FindBar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
         let empty = self.query.read(cx).value().is_empty();
+        let waiting = self.searching && self.searching_shown;
         let summary = if empty {
             String::new()
-        } else if self.searching {
+        } else if waiting {
             tr("Suche…")
         } else if self.count == 0 {
             tr("Keine Treffer")
         } else {
             trf("%lld von %lld", &[&(self.current + 1), &self.count])
         };
-        let has = self.count > 0 && !self.searching;
+        let has = self.count > 0 && !waiting;
         let (prev, next, close, exact, toggle) = (cx.entity(), cx.entity(), cx.entity(), cx.entity(), cx.entity());
         let (replace_one, replace_all) = (cx.entity(), cx.entity());
         let first = div()
@@ -176,8 +203,8 @@ impl Render for FindBar {
                 })
             }))
             .child(div().min_w(px(76.)).flex_none().font_features(tabular()).text_size(px(font::CAPTION)).text_color(t.secondary).child(summary))
-            .child(Button::new("find-prev").ghost().xsmall().icon(menu_icon("chevron-up")).disabled(!has).tooltip(format!("{} ({})", tr("Vorheriger Treffer"), if cfg!(target_os = "macos") { "⇧↩" } else { "Shift+Enter" })).on_click(move |_, _, cx| prev.update(cx, |_, cx| cx.emit(FindEvent::Step(false)))))
-            .child(Button::new("find-next").ghost().xsmall().icon(menu_icon("chevron-down")).disabled(!has).tooltip(format!("{} ({})", tr("Nächster Treffer"), if cfg!(target_os = "macos") { "↩" } else { "Enter" })).on_click(move |_, _, cx| next.update(cx, |_, cx| cx.emit(FindEvent::Step(true)))))
+            .child(Button::new("find-prev").ghost().xsmall().icon(menu_icon("chevron-up")).disabled(!has).tooltip(format!("{} ({})", tr("Vorheriger Treffer"), step_hint(false))).on_click(move |_, _, cx| prev.update(cx, |_, cx| cx.emit(FindEvent::Step(false)))))
+            .child(Button::new("find-next").ghost().xsmall().icon(menu_icon("chevron-down")).disabled(!has).tooltip(format!("{} ({})", tr("Nächster Treffer"), step_hint(true))).on_click(move |_, _, cx| next.update(cx, |_, cx| cx.emit(FindEvent::Step(true)))))
             .child(div().flex_1())
             .child(Button::new("find-close").ghost().xsmall().icon(menu_icon("x")).tooltip(format!("{} (Esc)", tr("Schließen"))).on_click(move |_, _, cx| close.update(cx, |_, cx| cx.emit(FindEvent::Close))));
         div()
