@@ -256,11 +256,9 @@ pub fn note_is_active(cx: &App) -> bool {
     cx.try_global::<NoteWindowFront>().is_some_and(|f| f.0.is_some()) || state::read(cx, |l| matches!(l.route(), Route::Doc(_)) && l.focused_document().is_some_and(crate::core::markdown::is_markdown))
 }
 
-/// Whether the line wrapping of a note can be switched: its source editor is in use, not Live and not the reader, and the note is not too long to wrap.
+/// Whether the line wrapping of a note can be switched: its source editor is in use, not Live and not the reader. A note too long to wrap says so when asked.
 pub fn wrap_is_available(cx: &App) -> bool {
-    note_is_active(cx)
-        && prefs::with(|p| p.note_editor == prefs::NoteEditor::Code && p.note_mode != prefs::NoteMode::Read)
-        && state::read(cx, |l| l.focused_document().and_then(|p| l.buffers.get(p)).is_none_or(|b| super::documents::can_wrap(b.text.len())))
+    note_is_active(cx) && prefs::with(|p| p.note_editor == prefs::NoteEditor::Code && p.note_mode != prefs::NoteMode::Read)
 }
 
 /// Whether a text field other than a note's own editor has the focus, where a key like F2 belongs to the field. A cell of a table being written counts as a field.

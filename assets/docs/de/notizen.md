@@ -58,7 +58,7 @@ Bearbeiten geht in der Standard-App: ⋯ → {ui:Mit Standard-App öffnen}. Sich
 | {ui:Lesen} / {ui:Bearbeiten} | {key:togglePreview} |
 | {ui:Geteilte Ansicht}, nur im Code-Editor | {key:splitPreview} |
 
-Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live: Text bleibt gezeichnet} oder {ui:Code-Editor: Quelltext mit Zeilennummern}.
+Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live: Text bleibt gezeichnet} oder {ui:Code-Editor: Quelltext mit Zeilennummern}. {ui:Live-Ansicht ein/aus} in der {key:CommandPalette} wechselt sofort.
 
 ## In der Notiz suchen
 
@@ -81,9 +81,9 @@ Unbekannte Wörter sind unterstrichen. Zeige auf eins, dann {ui:Zum Wörterbuch 
 
 Die Wörter stehen in den Einstellungen unter {ui:Eigenes Wörterbuch}; das Kreuz nimmt eins wieder heraus. Alle offenen Notizen übernehmen das sofort.
 
-## Große Notizen
+## Lange Notizen
 
-Ab etwa 100 KB bricht der Quelltext Zeilen nicht um. {key:toggleWrap} oder {ui:Zeilenumbruch ein-/ausschalten} in der {key:CommandPalette} schaltet den Umbruch für diese Notiz um, bis etwa 120 KB; Schrumbi merkt sich das. Ab etwa 200 KB zeigt der Quelltext auch keine Hervorhebung, damit das Tippen schnell bleibt. Das steht unten als {ui:Große Notiz: ohne Zeilenumbruch und Hervorhebung}.
+Ab etwa 100 KB bricht der Quelltext Zeilen nicht um. {key:toggleWrap} oder {ui:Zeilenumbruch ein-/ausschalten} in der {key:CommandPalette} schaltet den Umbruch für diese Notiz um, bis etwa 120 KB; Schrumbi merkt sich das. Darüber erklärt Schrumbi, warum es nicht geht. Ab etwa 200 KB zeigt der Quelltext auch keine Hervorhebung, damit das Tippen schnell bleibt. Das steht unten als {ui:Lange Notiz: ohne Zeilenumbruch und Hervorhebung}.
 
 Eine einzelne Zeile über etwa 250 KB öffnet Schrumbi im Quelltext statt in Live. Unten steht {ui:Diese Zeile ist zu lang für Live. Esc: zurück zu Live}; {key:escape} oder ein Klick darauf führt zurück.
 

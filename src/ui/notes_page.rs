@@ -149,12 +149,13 @@ pub fn prepare_tree(cx: &mut App) {
         && let Some((gone, came)) = changed_files(&ready.source.files, &vault.files)
     {
         let tree = Arc::make_mut(&mut ready.tree);
+        let mut listings = Listings::new();
         for path in &gone {
-            tree.remove(&vault, path);
+            tree.remove(&vault, path, &mut listings);
         }
         for path in &came {
             if !hidden.hides(path) {
-                tree.add(&vault, path);
+                tree.add(&vault, path, &mut listings);
             }
         }
         ready.generation.0 = vault.generation;
@@ -240,13 +241,13 @@ impl Tree {
         }
     }
 
-    fn add(&mut self, vault: &index::VaultIndex, path: &Path) {
+    fn add(&mut self, vault: &index::VaultIndex, path: &Path, listings: &mut Listings) {
         let Some(rel) = listed(vault, path) else { return };
         let dir = folder_of(&rel);
         self.add_folders(dir);
         if is_folder(vault, path) {
-            self.folders.entry(dir.to_string()).or_default().insert(rel);
-            self.drop_gone_folders(&vault.root);
+            self.folders.entry(dir.to_string()).or_default().insert(rel.clone());
+            self.drop_gone_folders(&vault.root, folder_of(&rel), listings);
             return;
         }
         let files = self.files.entry(dir.to_string()).or_default();
@@ -268,27 +269,27 @@ impl Tree {
     }
 
     /// Drops the folders gone from disk: a moved folder leaves its old place before the next scan.
-    fn drop_gone_folders(&mut self, root: &Path) {
-        let mut listings = HashMap::new();
-        let gone: Vec<String> = self.folders.values().flatten().filter(|f| !spelled_dir(root, f, &mut listings)).cloned().collect();
+    /// Only the siblings of the folder that arrived are checked for their spelling, where a case-only rename leaves the old one.
+    fn drop_gone_folders(&mut self, root: &Path, arrived_in: &str, listings: &mut Listings) {
+        let gone: Vec<String> = self.folders.values().flatten().filter(|f| if folder_of(f) == arrived_in { !spelled_dir(root, f, listings) } else { !root.join(f.as_str()).is_dir() }).cloned().collect();
         for f in gone {
             self.remove_folder(&f);
         }
     }
 
-    fn remove(&mut self, vault: &index::VaultIndex, path: &Path) {
+    fn remove(&mut self, vault: &index::VaultIndex, path: &Path, listings: &mut Listings) {
         let Ok(rel) = path.strip_prefix(&vault.root) else { return };
         let rel = rel.to_string_lossy().replace('\\', "/");
         if let Some(files) = self.files.get_mut(folder_of(&rel)) {
             files.retain(|p| p != path);
         }
         let mut dir = folder_of(&rel);
-        let mut listings = HashMap::new();
-        while vault.root.is_dir() && !dir.is_empty() && !spelled_dir(&vault.root, dir, &mut listings) {
+        while vault.root.is_dir() && !dir.is_empty() && !spelled_dir(&vault.root, dir, listings) {
             self.remove_folder(dir);
             dir = folder_of(dir);
         }
-        if !spelled_dir(&vault.root, &rel, &mut listings)
+        if self.folders.get(folder_of(&rel)).is_some_and(|f| f.contains(&rel))
+            && !spelled_dir(&vault.root, &rel, listings)
             && let Some(folders) = self.folders.get_mut(folder_of(&rel))
         {
             folders.remove(&rel);
@@ -310,8 +311,11 @@ fn follow_folder(open: &mut BTreeSet<String>, target: &mut Option<String>, selec
     }
 }
 
+/// The names in the folders looked at, read once per batch of changes.
+type Listings = HashMap<PathBuf, Option<Vec<OsString>>>;
+
 /// Whether `rel` is a folder under exactly this spelling; a case-insensitive disk also answers for the spelling a folder had before a case-only rename.
-fn spelled_dir(root: &Path, rel: &str, listings: &mut HashMap<PathBuf, Option<Vec<OsString>>>) -> bool {
+fn spelled_dir(root: &Path, rel: &str, listings: &mut Listings) -> bool {
     let mut dir = root.to_path_buf();
     for part in rel.split('/').filter(|p| !p.is_empty()) {
         let names = listings.entry(dir.clone()).or_insert_with(|| std::fs::read_dir(&dir).ok().map(|d| d.flatten().map(|e| e.file_name()).collect()));
@@ -661,7 +665,7 @@ impl NotesPage {
     }
 
     /// Where a new note goes: the chosen folder, or next to the open note.
-    fn new_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn new_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let folder = self.target_folder.as_deref().map(Self::folder_path);
         let made = act(cx, |l| {
             let made = l.new_untitled_note(folder.as_deref());
@@ -1290,7 +1294,7 @@ impl Render for NotesPage {
 
 #[cfg(test)]
 mod tests {
-    use super::{Row, build_tree, changed_files, follow_folder, unlisted_rename};
+    use super::{Listings, Row, build_tree, changed_files, follow_folder, unlisted_rename};
     use crate::core::vault::index::{Hidden, VaultIndex};
     use std::collections::BTreeSet;
     use std::path::PathBuf;
@@ -1309,10 +1313,10 @@ mod tests {
         assert_eq!(came, vec![PathBuf::from("/vault/C/D/Beispiel.md")]);
         let mut tree = build_tree(&before, &Hidden::default());
         for p in &gone {
-            tree.remove(&after, p);
+            tree.remove(&after, p, &mut Listings::new());
         }
         for p in &came {
-            tree.add(&after, p);
+            tree.add(&after, p, &mut Listings::new());
         }
         let mut fresh = build_tree(&after, &Hidden::default());
         fresh.files.entry("A".into()).or_default();
@@ -1333,10 +1337,10 @@ mod tests {
         let mut tree = build_tree(&before, &Hidden::default());
         let (gone, came) = changed_files(&before.files, &after.files).unwrap();
         for p in &gone {
-            tree.remove(&after, p);
+            tree.remove(&after, p, &mut Listings::new());
         }
         for p in &came {
-            tree.add(&after, p);
+            tree.add(&after, p, &mut Listings::new());
         }
         let fresh = build_tree(&after, &Hidden::default());
         let _ = std::fs::remove_dir_all(&root);
@@ -1372,10 +1376,10 @@ mod tests {
         let after = VaultIndex { root: root.clone(), files: vec![at("kurs/Sub/n.md")], ..Default::default() };
         let (gone, came) = changed_files(&before.files, &after.files).unwrap();
         for p in &gone {
-            tree.remove(&after, p);
+            tree.remove(&after, p, &mut Listings::new());
         }
         for p in &came {
-            tree.add(&after, p);
+            tree.add(&after, p, &mut Listings::new());
         }
         let fresh = build_tree(&after, &Hidden::default());
         let _ = std::fs::remove_dir_all(&root);
@@ -1390,10 +1394,10 @@ mod tests {
         let (gone, came) = changed_files(&before.files, &after.files).unwrap();
         let mut tree = build_tree(&before, &Hidden::default());
         for p in &gone {
-            tree.remove(&after, p);
+            tree.remove(&after, p, &mut Listings::new());
         }
         for p in &came {
-            tree.add(&after, p);
+            tree.add(&after, p, &mut Listings::new());
         }
         assert_eq!(tree, build_tree(&after, &Hidden::default()));
     }

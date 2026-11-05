@@ -106,6 +106,9 @@ const PARA_BYTES: usize = 2048;
 /// How many lines a paragraph with math may have for the live view to draw it as one block; a longer one is drawn line by line, as one block of it would be laid out whole.
 const LIVE_WHOLE_LINES: usize = 200;
 
+/// How many lines a paragraph may have for a formula across several of them to keep it one block; a longer one is written line by line.
+const LIVE_SPANNING_LINES: usize = 4 * LIVE_WHOLE_LINES;
+
 /// One row of the reader: a top-level block, or a stretch of the items of a long list, the rows of a long table or the lines of a long paragraph.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ReaderRow {
@@ -2509,7 +2512,7 @@ impl ParsedNote {
                 let many = source.end_line > source.line + 1;
                 let shape = match block {
                     Block::Table { .. } => Shape::Table,
-                    Block::Paragraph(inl) if many && (source.end_line - source.line <= LIVE_WHOLE_LINES && inl.iter().any(|i| matches!(i, Inline::Math(_))) || inl.iter().any(|i| matches!(i, Inline::Math(m) if m.contains('\n')))) => Shape::Whole,
+                    Block::Paragraph(inl) if many && (source.end_line - source.line <= LIVE_WHOLE_LINES && inl.iter().any(|i| matches!(i, Inline::Math(_))) || source.end_line - source.line <= LIVE_SPANNING_LINES && inl.iter().any(|i| matches!(i, Inline::Math(m) if m.contains('\n')))) => Shape::Whole,
                     Block::Paragraph(_) | Block::Rule | Block::Nothing => Shape::Lines,
                     Block::Heading(..) if !many => Shape::Lines,
                     Block::Quote(inner) if inner.iter().all(|b| matches!(b, Block::Paragraph(_) | Block::Nothing)) => Shape::Lines,
@@ -3450,6 +3453,8 @@ Ende
         assert_eq!(parse(&paragraph(2 * super::LIVE_WHOLE_LINES)).shapes()[0].2, Shape::Lines);
         let spanning = format!("{}\nund $a +\n b$ zum Schluss", (0..2 * super::LIVE_WHOLE_LINES).map(|i| format!("Zeile {i}")).collect::<Vec<_>>().join("\n"));
         assert_eq!(parse(&spanning).shapes()[0].2, Shape::Whole);
+        let endless = format!("{}\nund $a +\n b$ zum Schluss", (0..2 * super::LIVE_SPANNING_LINES).map(|i| format!("Zeile {i}")).collect::<Vec<_>>().join("\n"));
+        assert_eq!(parse(&endless).shapes()[0].2, Shape::Lines);
     }
 
     fn one_line(count: usize) -> String {

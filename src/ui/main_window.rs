@@ -447,6 +447,17 @@ impl Render for MainWindow {
                     None => cx.propagate(),
                 }
             })
+            .on_action(cx.listener(|this, _: &super::app::NewFile, window, cx| {
+                if !this.pages.update(cx, |p, cx| p.new_note_in_explorer(window, cx)) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(|_: &super::app::CloseTab, _, cx| {
+                match state::read(cx, |l| if let Route::Doc(p) = l.route() { Some(p.clone()) } else { None }) {
+                    Some(path) => super::documents::close_tab(&path, cx),
+                    None => cx.propagate(),
+                }
+            })
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
                 if window.context_stack().iter().any(|c| c.contains("NoteEditor")) {
                     return;
@@ -522,6 +533,7 @@ impl Render for MainWindow {
         let page_motion = motion::timed(motion::FAST, cx);
         let toast_id = l.toast.as_ref().map_or(0, |toast| toast.id);
         let toast = l.toast.as_ref().map(|toast| toast_view(toast.message.clone(), toast.icon, toast.undo.is_some().then(|| toast.action_title.clone()), &t));
+        let notice_room = if matches!(l.route(), Route::Doc(_)) && [l.active_document.as_ref(), l.split_document.as_ref()].into_iter().flatten().any(|d| l.save_problems.contains(d) && l.buffers.get(d).is_some_and(|b| b.dirty)) { control::SAVE_NOTICE } else { 0. };
         let working = (!l.exporting_pdfs.is_empty() && l.toast.is_none()).then(|| toast_view(tr("PDF wird erstellt …"), "loader", None, &t));
         let error = l.last_error.clone();
         let broken = l.config_broken;
@@ -577,7 +589,7 @@ impl Render for MainWindow {
                     .flex()
                     .justify_center()
                     .child(v)
-                    .with_animation(("toast", toast_id), Animation::new(toast_motion).with_easing(ease_out_quint()), |d, p| d.bottom(px(10. + 12. * p)).opacity(p))
+                    .with_animation(("toast", toast_id), Animation::new(toast_motion).with_easing(ease_out_quint()), move |d, p| d.bottom(px(10. + notice_room + 12. * p)).opacity(p))
             }));
         if let Some(message) = error {
             root = root.child(error_alert(message, broken, config_path, &t));
