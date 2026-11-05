@@ -2,6 +2,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::prelude::*;
@@ -88,6 +90,8 @@ pub struct ParsedNote {
     footnote_homes: HashMap<String, usize>,
     footnote_order: Vec<String>,
     rows: Vec<ReaderRow>,
+    /// For each paragraph drawn in parts, the line height they share.
+    floors: HashMap<usize, Arc<AtomicU64>>,
 }
 
 /// How many list items or table rows one row of the reader holds, so a long list only builds what is on screen.
@@ -95,6 +99,9 @@ const PART: usize = 8;
 
 /// How many lines of a long paragraph one row of the reader holds.
 const PARA_LINES: usize = 8;
+
+/// How many bytes of text a row of a long paragraph holds before it ends at the next inline, and the longest run of plain text left whole.
+const PARA_BYTES: usize = 2048;
 
 /// One row of the reader: a top-level block, or a stretch of the items of a long list, the rows of a long table or the lines of a long paragraph.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,6 +116,10 @@ pub struct ReaderRow {
     links_before: usize,
     /// Where this row starts counting what it draws, growing in reading order.
     order: u64,
+    /// The first inline of the source line this part of a paragraph begins on, which earlier parts may already hold.
+    pub line_from: usize,
+    /// The bytes of text this part of a paragraph draws.
+    pub bytes: usize,
 }
 
 struct Breaks(Vec<usize>);
@@ -257,7 +268,12 @@ pub fn parse(src: &str) -> ParsedNote {
                     }
                     stack.last_mut().unwrap().1.extend(inner);
                     if !(had_blocks && inl.is_empty()) {
-                        let block = if strip_block_id(&mut inl) && plain_text(&inl).trim().is_empty() { Block::Nothing } else { Block::Paragraph(inl) };
+                        let block = if strip_block_id(&mut inl) && plain_text(&inl).trim().is_empty() {
+                            Block::Nothing
+                        } else {
+                            split_long_text(&mut inl);
+                            Block::Paragraph(inl)
+                        };
                         stack.last_mut().unwrap().1.push(block);
                     }
                 }
@@ -458,7 +474,8 @@ pub fn parse(src: &str) -> ParsedNote {
         collect_links(std::slice::from_ref(block), i, &mut links);
     }
     let rows = reader_rows(src, &breaks, &blocks, &sources);
-    ParsedNote { sources, links, blocks, footnotes, footnote_homes, footnote_order, rows }
+    let floors = rows.iter().filter(|r| r.part.is_some() && matches!(blocks.get(r.block), Some(Block::Paragraph(_)))).map(|r| (r.block, Arc::new(AtomicU64::new(0)))).collect();
+    ParsedNote { sources, links, blocks, footnotes, footnote_homes, footnote_order, rows, floors }
 }
 
 /// Splits long lists and tables into rows of `PART` items, each knowing its lines, links and drawing order.
@@ -505,13 +522,23 @@ fn reader_rows(src: &str, breaks: &Breaks, blocks: &[Block], sources: &[BlockSou
             _ => Vec::new(),
         };
         if parts.is_empty() {
-            rows.push(ReaderRow { block, part: None, line: source.line, end_line: source.end_line, hash: source.hash, links_before, order });
+            rows.push(ReaderRow { block, part: None, line: source.line, end_line: source.end_line, hash: source.hash, links_before, order, line_from: 0, bytes: 0 });
             links_before += links_in(std::slice::from_ref(b));
             continue;
         }
+        let shares_next = |k: usize| match b {
+            Block::Paragraph(inl) => parts.get(k + 1).is_some_and(|next| next.2 <= parts[k].2 + inl[parts[k].0..parts[k].1].iter().filter(|i| is_break(i)).count()),
+            _ => false,
+        };
         let mut order = order;
+        let mut line_from = 0;
         for (k, (from, to, line, links, room)) in parts.iter().copied().enumerate() {
-            let end_line = parts.get(k + 1).map_or(source.end_line, |next| next.2).max(line);
+            let end_line = parts.get(k + 1).map_or(source.end_line, |next| next.2 + usize::from(shares_next(k))).max(line);
+            line_from = if k > 0 && shares_next(k - 1) { line_from } else { from };
+            let bytes = match b {
+                Block::Paragraph(inl) => inl[from..to].iter().map(inline_bytes).sum(),
+                _ => 0,
+            };
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             match b {
                 Block::Paragraph(inl) => inline_hash(&inl[from..to], &mut hash),
@@ -523,7 +550,7 @@ fn reader_rows(src: &str, breaks: &Breaks, blocks: &[Block], sources: &[BlockSou
             if let Block::List { start, .. } = b {
                 start.hash(&mut hash);
             }
-            rows.push(ReaderRow { block, part: Some((from, to)), line, end_line, hash: hash.finish(), links_before, order });
+            rows.push(ReaderRow { block, part: Some((from, to)), line, end_line, hash: hash.finish(), links_before, order, line_from, bytes });
             links_before += links;
             order += room + 1;
         }
@@ -532,29 +559,81 @@ fn reader_rows(src: &str, breaks: &Breaks, blocks: &[Block], sources: &[BlockSou
 }
 
 /// Where a long paragraph breaks into rows: the inlines of each row and the line breaks before it.
-/// A paragraph with a picture, too short, or whose line breaks are not its source lines, stays whole.
+/// Rows end at line breaks, and in a paragraph with a long stretch without any, at the next inline once a row holds `PARA_BYTES`.
+/// A paragraph with a picture, or too short, stays whole.
 fn paragraph_parts(inlines: &[Inline], source_lines: usize) -> Vec<(usize, usize, usize)> {
-    let is_break = |i: &Inline| matches!(i, Inline::Text(t, st) if t == "\n" && !st.code);
     let breaks = inlines.iter().filter(|i| is_break(i)).count();
-    if breaks < 2 * PARA_LINES || breaks + 1 != source_lines || inlines.iter().any(|i| matches!(i, Inline::Image(..))) {
+    let by_lines = breaks >= 2 * PARA_LINES && breaks + 1 == source_lines;
+    if inlines.iter().any(|i| matches!(i, Inline::Image(..))) || (!by_lines && inlines.iter().map(inline_bytes).sum::<usize>() < 2 * PARA_BYTES) {
         return Vec::new();
     }
     let mut parts = Vec::new();
-    let (mut from, mut breaks, mut seen) = (0, 0, 0);
+    let (mut from, mut before, mut seen, mut bytes) = (0, 0, 0, 0);
     for (at, inline) in inlines.iter().enumerate() {
-        if !is_break(inline) {
+        if is_break(inline) {
+            seen += 1;
+            let neighbours_ok = at > from && inlines.get(at + 1).is_some_and(|next| !is_break(next)) && !is_break(&inlines[at - 1]);
+            if neighbours_ok && ((by_lines && seen - before >= PARA_LINES) || bytes >= PARA_BYTES) {
+                parts.push((from, at, before));
+                from = at + 1;
+                before = seen;
+                bytes = 0;
+            }
             continue;
         }
-        seen += 1;
-        let neighbours_ok = at > from && inlines.get(at + 1).is_some_and(|next| !is_break(next));
-        if seen - breaks >= PARA_LINES && neighbours_ok && !is_break(&inlines[at - 1]) {
-            parts.push((from, at, breaks));
-            from = at + 1;
-            breaks = seen;
+        if bytes >= PARA_BYTES && at > from && !is_break(&inlines[at - 1]) {
+            parts.push((from, at, before));
+            from = at;
+            before = seen;
+            bytes = 0;
         }
+        bytes += inline_bytes(inline);
     }
-    parts.push((from, inlines.len(), breaks));
+    parts.push((from, inlines.len(), before));
     parts
+}
+
+/// Whether an inline is a line break of the paragraph's source.
+fn is_break(inline: &Inline) -> bool {
+    matches!(inline, Inline::Text(t, st) if t == "\n" && !st.code)
+}
+
+/// About how many bytes of text an inline draws.
+fn inline_bytes(inline: &Inline) -> usize {
+    match inline {
+        Inline::Text(s, _) | Inline::Link(s, ..) | Inline::Tag(s) => s.len(),
+        Inline::Math(source) => source.len() + 4,
+        Inline::FootnoteRef(_) => 4,
+        Inline::Image(..) => 0,
+    }
+}
+
+/// Cuts runs of plain text longer than twice `PARA_BYTES` into pieces after spaces, so a paragraph without formats can still be drawn in rows.
+fn split_long_text(inlines: &mut Vec<Inline>) {
+    let long = |i: &Inline| matches!(i, Inline::Text(t, st) if !st.code && t.len() > 2 * PARA_BYTES);
+    if !inlines.iter().any(long) {
+        return;
+    }
+    let mut out = Vec::with_capacity(inlines.len());
+    for inline in std::mem::take(inlines) {
+        let Inline::Text(text, style) = inline else {
+            out.push(inline);
+            continue;
+        };
+        if style.code || text.len() <= 2 * PARA_BYTES {
+            out.push(Inline::Text(text, style));
+            continue;
+        }
+        let mut rest = text.as_str();
+        while rest.len() > 2 * PARA_BYTES {
+            let from = (PARA_BYTES..).find(|i| rest.is_char_boundary(*i)).unwrap_or(rest.len());
+            let cut = rest[from..].find(' ').filter(|i| *i < 256).map_or(from, |i| from + i + 1);
+            out.push(Inline::Text(rest[..cut].to_string(), style));
+            rest = &rest[cut..];
+        }
+        out.push(Inline::Text(rest.to_string(), style));
+    }
+    *inlines = out;
 }
 
 /// Feeds what is drawn for these inlines to `hash`, so a part of a paragraph is known again by its content.
@@ -1316,6 +1395,8 @@ struct Ctx<'a> {
     open_cell: Option<(usize, usize, RefCell<Option<AnyElement>>)>,
     /// The matches of the find bar to mark in this block.
     find: Option<FindDraw>,
+    /// The line height the parts of a long paragraph share.
+    floor: Option<Arc<AtomicU64>>,
 }
 
 /// Whether an image is small enough to stand in a line of text.
@@ -1386,6 +1467,34 @@ fn text_click_of(cx: &Ctx) -> Option<super::selectable::TextClick> {
     Some(Rc::new(move |text, at, window, app| click(block, cell, text, at, window, app)))
 }
 
+/// Appends what an inline draws as text: tags with their `#`, external links with `↗`, footnote references as raised numbers; pictures and formulas draw no text.
+fn push_drawn(text: &mut String, inline: &Inline, footnote_order: &[String]) {
+    match inline {
+        Inline::Tag(tag) => {
+            text.push('#');
+            text.push_str(tag);
+        }
+        Inline::Text(s, _) => text.push_str(s),
+        Inline::Link(s, _, url) => {
+            text.push_str(s);
+            if is_external(url) {
+                text.push_str(" ↗");
+            }
+        }
+        Inline::FootnoteRef(id) => text.push_str(&superscript(&footnote_order.iter().position(|f| f == id).map_or(0, |p| p + 1).to_string())),
+        Inline::Image(..) | Inline::Math(_) => {}
+    }
+}
+
+/// The text these inlines draw, as `styled_line` lays it out.
+fn drawn_text(inlines: &[Inline], footnote_order: &[String]) -> String {
+    let mut text = String::new();
+    for inline in inlines {
+        push_drawn(&mut text, inline, footnote_order);
+    }
+    text
+}
+
 fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
     let t = cx.t;
     let mut text = String::new();
@@ -1399,8 +1508,7 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
         match i {
             Inline::Tag(tag) => {
                 let start = text.len();
-                text.push('#');
-                text.push_str(tag);
+                push_drawn(&mut text, i, cx.footnote_order);
                 let name = tag.clone();
                 if !sample {
                     links.push((start..text.len(), Rc::new(move |cx| super::state::act(cx, |l| l.show_tag(&name)))));
@@ -1408,15 +1516,12 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                 pills.push(start..text.len());
                 highlights.push((start..text.len(), HighlightStyle { color: Some(t.accent_text), ..Default::default() }));
             }
-            Inline::Text(s, st) | Inline::Link(s, st, _) => {
+            Inline::Text(_, st) | Inline::Link(_, st, _) => {
                 let start = text.len();
-                text.push_str(s);
+                push_drawn(&mut text, i, cx.footnote_order);
                 let (mut unresolved, mut focused) = (false, false);
                 if let Inline::Link(_, _, url) = i {
                     unresolved = !is_external(url) && !link_exists(url, cx.base);
-                    if is_external(url) {
-                        text.push_str(" ↗");
-                    }
                     if !sample {
                         links.push((start..text.len(), link_action(url, cx.base)));
                         hovers.push((start..text.len(), url.clone()));
@@ -1467,10 +1572,9 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                     highlights.push((start..text.len(), h));
                 }
             }
-            Inline::FootnoteRef(id) => {
-                let n = cx.footnote_order.iter().position(|f| f == id).map_or(0, |p| p + 1);
+            Inline::FootnoteRef(_) => {
                 let start = text.len();
-                text.push_str(&superscript(&n.to_string()));
+                push_drawn(&mut text, i, cx.footnote_order);
                 highlights.push((start..text.len(), HighlightStyle { color: Some(t.accent_text), ..Default::default() }));
                 if let Some(list) = cx.focus.and_then(|f| f.list.clone()) {
                     links.push((start..text.len(), Rc::new(move |_| reveal_item(&list, list.item_count().saturating_sub(1)))));
@@ -1491,7 +1595,7 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
         Some(find) => find.overlay(&text, highlights, t),
         None => highlights,
     };
-    let body = div().text_size(px(size)).line_height(relative(1.5)).child(selectable(("md-text", order), text, highlights, order, t.accent.opacity(0.3)).links(links).hovers(hovers, base).inline(slots).pills(pills, t.accent.opacity(0.14)).on_text_click(text_click_of(cx)));
+    let body = div().text_size(px(size)).line_height(relative(1.5)).child(selectable(("md-text", order), text, highlights, order, t.accent.opacity(0.3)).links(links).hovers(hovers, base).inline(slots).line_floor(cx.floor.clone()).pills(pills, t.accent.opacity(0.14)).on_text_click(text_click_of(cx)));
     body.into_any_element()
 }
 
@@ -1907,7 +2011,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
     let note = embedded_note(&path, target);
     let mut chain = cx.chain.clone();
     chain.push(path.clone());
-    let inner = Ctx { t, base: path.parent(), on_toggle: None, footnote_order: &note.footnote_order, order: cx.order, chain, focus: None, links_seen: cx.links_seen, block: cx.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
+    let inner = Ctx { floor: None, t, base: path.parent(), on_toggle: None, footnote_order: &note.footnote_order, order: cx.order, chain, focus: None, links_seen: cx.links_seen, block: cx.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
     let blocks = render_blocks(&note.blocks, &inner);
     div()
         .flex()
@@ -2448,8 +2552,27 @@ impl ParsedNote {
     }
 
     /// The reader row a source line is drawn in.
+    /// When several rows share the line, the first of them.
     pub fn row_of_line(&self, line: usize) -> usize {
-        self.rows.iter().rposition(|r| r.line <= line).unwrap_or(0)
+        let last = self.rows.iter().rposition(|r| r.line <= line).unwrap_or(0);
+        let Some(row) = self.rows.get(last) else { return 0 };
+        self.rows[..last].iter().rposition(|r| r.block != row.block || r.line != row.line).map_or(0, |i| i + 1)
+    }
+
+    /// The reader row that draws the `nth` match of `query` on a source line that several rows share, counted in the text they draw.
+    pub fn row_of_match(&self, line: usize, nth: usize, query: &str, exact: bool) -> usize {
+        let first = self.row_of_line(line);
+        let Some(Block::Paragraph(inl)) = self.rows.get(first).and_then(|r| self.blocks.get(r.block)) else { return first };
+        let mut left = nth;
+        for (at, row) in self.rows.iter().enumerate().skip(first).take_while(|(_, r)| r.block == self.rows[first].block && r.line == self.rows[first].line) {
+            let Some((from, to)) = row.part else { return first };
+            let count = crate::core::find::matches(&drawn_text(inl.get(from..to.min(inl.len())).unwrap_or_default(), &self.footnote_order), query, exact).len();
+            if left < count || row.end_line > row.line + 1 {
+                return at;
+            }
+            left -= count;
+        }
+        first
     }
 
     /// The reader row a link is drawn in, by its place in `links`.
@@ -2715,7 +2838,7 @@ pub const FOUND_HOLD: std::time::Duration = std::time::Duration::from_millis(300
 /// Renders a parsed note; task boxes call `on_toggle` with their source line.
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
     let (order, links_seen) = (Cell::new(0), Cell::new(0));
-    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
+    let cx = Ctx { floor: None, t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
     div().flex().flex_col().gap(px(space::M)).children(render_blocks(&note.blocks, &cx)).children(render_footnotes(note, None, t))
 }
 
@@ -2774,7 +2897,7 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
     let together = note.blocks.get(i..(i + live.count).min(note.blocks.len())).filter(|b| b.len() > 1);
     let order = Cell::new((item as u64 + 1) * 100_000);
     let links_seen = Cell::new(note.links.iter().take_while(|(_, top)| *top < i).count());
-    let cx = Ctx { t, base, on_toggle, footnote_order: live.footnotes.unwrap_or(&note.footnote_order), order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: item, head_text: Cell::new(false), cell: Cell::new(None), open_cell: live.open_cell, find: FindDraw::new(focus, |m| match (live.item, live.footnotes) {
+    let cx = Ctx { floor: None, t, base, on_toggle, footnote_order: live.footnotes.unwrap_or(&note.footnote_order), order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: item, head_text: Cell::new(false), cell: Cell::new(None), open_cell: live.open_cell, find: FindDraw::new(focus, |m| match (live.item, live.footnotes) {
         (Some(_), Some(_)) => (live.line == m.line).then_some(m.line_nth),
         _ => (m.block == i).then_some(m.nth),
     }) };
@@ -2842,10 +2965,10 @@ pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_to
     let Some((from, to)) = row.part else { return render_live(note, row.block, base, on_toggle, found, focus, LiveDraw::default(), t) };
     let (order, links_seen) = (Cell::new(row.order), Cell::new(row.links_before));
     let paragraph = match note.blocks.get(row.block) {
-        Some(Block::Paragraph(inl)) => Some(inl.get(from..to.min(inl.len())).unwrap_or_default()),
+        Some(Block::Paragraph(inl)) => Some(inl.as_slice()),
         _ => None,
     };
-    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: row.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: FindDraw::new(focus, |m| paragraph.and_then(|inl| current_in_part(inl, row, m, &note.footnote_order))) };
+    let cx = Ctx { floor: note.floors.get(&row.block).cloned(), t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: row.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: FindDraw::new(focus, |m| paragraph.and_then(|inl| current_in_part(inl, row, m, &note.footnote_order))) };
     let element = match note.blocks.get(row.block) {
         Some(Block::List { start, items }) => list_items(start, items.get(from..to.min(items.len())).unwrap_or_default(), from, &cx).into_any_element(),
         Some(Block::Table { head, rows, aligns }) => table(head, rows, aligns, Some((from, to, note.sources.get(row.block).map_or((0, 0), |s| (s.hash, s.line)))), &cx),
@@ -2856,30 +2979,38 @@ pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_to
 }
 
 /// Which match of a paragraph part is the current one, counted in what the part draws, when the current match lies on one of its lines.
-fn current_in_part(inlines: &[Inline], row: &ReaderRow, m: &FindMarks, footnote_order: &[String]) -> Option<usize> {
+/// `whole` is the paragraph; the text of the line before the part, when an earlier part holds it, is counted off.
+fn current_in_part(whole: &[Inline], row: &ReaderRow, m: &FindMarks, footnote_order: &[String]) -> Option<usize> {
     if m.block != row.block || !(row.line..row.end_line).contains(&m.line) {
         return None;
     }
-    let mut text = String::new();
-    for i in inlines {
-        match i {
-            Inline::Tag(tag) => {
-                text.push('#');
-                text.push_str(tag);
-            }
-            Inline::Text(s, _) => text.push_str(s),
-            Inline::Link(s, _, url) => {
-                text.push_str(s);
-                if is_external(url) {
-                    text.push_str(" ↗");
-                }
-            }
-            Inline::FootnoteRef(id) => text.push_str(&superscript(&(footnote_order.iter().position(|f| f == id).map_or(0, |p| p + 1)).to_string())),
-            Inline::Image(..) | Inline::Math(_) => {}
-        }
-    }
+    let (from, to) = row.part.map_or((0, whole.len()), |(from, to)| (from, to.min(whole.len())));
+    let text = drawn_text(whole.get(from..to)?, footnote_order);
     let line_at = text.split_inclusive('\n').take(m.line - row.line).map(str::len).sum::<usize>();
-    Some(crate::core::find::matches(&text[..line_at], &m.query, m.exact).len() + m.line_nth)
+    let count = |text: &str| crate::core::find::matches(text, &m.query, m.exact).len();
+    let carried = if m.line == row.line && row.line_from < from { carried_matches(whole, row.line_from, from, m, footnote_order) } else { 0 };
+    (count(&text[..line_at]) + m.line_nth).checked_sub(carried)
+}
+
+thread_local! {
+    static CARRIED: RefCell<HashMap<(usize, usize, usize, String, bool), usize>> = RefCell::new(HashMap::new());
+}
+
+/// How many matches the inlines `from..to` of a paragraph draw, remembered while the find bar looks for the same.
+fn carried_matches(whole: &[Inline], line_from: usize, from: usize, m: &FindMarks, footnote_order: &[String]) -> usize {
+    let key = (whole.as_ptr() as usize, line_from, from, m.query.clone(), m.exact);
+    if let Some(known) = CARRIED.with(|c| c.borrow().get(&key).copied()) {
+        return known;
+    }
+    let count = crate::core::find::matches(&drawn_text(&whole[line_from..from], footnote_order), &m.query, m.exact).len();
+    CARRIED.with(|c| {
+        let mut known = c.borrow_mut();
+        if known.len() > 256 {
+            known.clear();
+        }
+        known.insert(key, count);
+    });
+    count
 }
 
 /// Brings an item into view with the row before it for context, and leaves the list alone when the item already shows.
@@ -2916,7 +3047,7 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<(ListState, Rc<dyn Fn(us
         return None;
     }
     let (order, links_seen) = (Cell::new(u64::MAX / 2), Cell::new(0));
-    let cx = Ctx { t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
+    let cx = Ctx { floor: None, t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
     let rows = used.iter().enumerate().map(|(i, (id, blocks))| {
         let home = note.footnote_homes.get(id).copied().unwrap_or(0);
         let list = list.clone();
@@ -3245,11 +3376,79 @@ Ende
         let rows = note.rows();
         let Some(super::Block::Paragraph(inl)) = note.blocks.first() else { panic!("no paragraph") };
         let marks = |line: usize, line_nth: usize| super::FindMarks { query: "apfel".into(), exact: false, block: 0, nth: 2 * line + line_nth, line, line_nth };
-        let current: Vec<Option<usize>> = rows.iter().map(|r| super::current_in_part(&inl[r.part.map_or(0, |p| p.0)..r.part.map_or(inl.len(), |p| p.1)], r, &marks(70, 1), &[])).collect();
+        let current: Vec<Option<usize>> = rows.iter().map(|r| super::current_in_part(inl, r, &marks(70, 1), &[])).collect();
         let holding = note.row_of_line(70);
         assert_eq!(current.iter().filter(|c| c.is_some()).count(), 1);
         assert_eq!(current[holding], Some(2 * (70 - rows[holding].line) + 1));
         assert_eq!(super::current_in_part(inl, &rows[holding], &super::FindMarks { block: 3, ..marks(70, 0) }, &[]), None);
+    }
+
+    fn one_line(count: usize) -> String {
+        let chunk = |i: usize| format!("Wort {i} mit **fett {i}** und [Ziel {i}](https://beispiel.de/{i}) und $x_{i}^2$ sowie *kursiv* #tag{i} und noch etwas Text dazu, damit es lang wird. ");
+        format!("# Titel\n\n{}\n\nEnde\n", (0..count).map(chunk).collect::<String>())
+    }
+
+    #[test]
+    fn a_long_paragraph_on_one_source_line_is_drawn_in_parts_that_keep_text_links_and_order() {
+        let note = parse(&one_line(200));
+        let rows = note.rows();
+        let parts: Vec<usize> = (0..rows.len()).filter(|i| rows[*i].block == 1).collect();
+        assert!(parts.len() > 5);
+        let Some(super::Block::Paragraph(inl)) = note.blocks.get(1) else { panic!("no paragraph") };
+        let drawn: Vec<String> = parts.iter().map(|i| rows[*i].part.map(|(from, to)| super::drawn_text(&inl[from..to], &[])).unwrap_or_default()).collect();
+        assert_eq!(drawn.concat(), super::drawn_text(inl, &[]));
+        assert!(drawn.iter().all(|d| d.len() < 2 * super::PARA_BYTES));
+        assert!(parts.windows(2).all(|w| rows[w[0]].part.map(|p| p.1) == rows[w[1]].part.map(|p| p.0)));
+        assert!(rows.windows(2).all(|w| w[0].order < w[1].order));
+        assert!(parts.iter().all(|i| rows[*i].line == 2 && (2..rows[*i].end_line).contains(&2)));
+        assert!(parts.iter().all(|i| rows[*i].line_from == 0));
+        assert_eq!(note.row_of_line(2), parts[0]);
+        assert_eq!(note.links().len(), 200);
+        assert!(parts.iter().all(|i| rows[*i].links_before == rows[*i].part.map_or(0, |(from, _)| inl[..from].iter().filter(|x| matches!(x, super::Inline::Link(..))).count())));
+        assert!(parts.iter().all(|i| note.floors.contains_key(&rows[*i].block)));
+    }
+
+    #[test]
+    fn a_long_unformatted_paragraph_is_cut_after_spaces() {
+        let words: String = (0..4000).map(|i| format!("wort{i} ")).collect();
+        let note = parse(&format!("{words}\n"));
+        let parts: Vec<_> = note.rows().iter().filter_map(|r| r.part).collect();
+        assert!(parts.len() > 5);
+        let Some(super::Block::Paragraph(inl)) = note.blocks.first() else { panic!("no paragraph") };
+        let pieces: Vec<String> = inl.iter().map(|i| super::drawn_text(std::slice::from_ref(i), &[])).collect();
+        assert_eq!(pieces.concat().trim_end(), words.trim_end());
+        assert!(pieces.iter().all(|p| p.len() <= 2 * super::PARA_BYTES && (p.ends_with(' ') || std::ptr::eq(p, &pieces[pieces.len() - 1]))));
+        let blob = "ä".repeat(20_000);
+        let note = parse(&format!("{blob}\n"));
+        let Some(super::Block::Paragraph(inl)) = note.blocks.first() else { panic!("no paragraph") };
+        assert_eq!(super::drawn_text(inl, &[]).trim_end(), blob);
+    }
+
+    #[test]
+    fn the_current_find_match_in_a_line_shared_by_parts_is_marked_once() {
+        let chunk = |i: usize| format!("Wort {i} **fett** apfel und Apfel dazu viel Text, damit die Zeile lang wird, ");
+        let src = format!("{}\n", (0..120).map(chunk).collect::<String>());
+        let note = parse(&src);
+        let rows = note.rows();
+        assert!(rows.len() > 3);
+        let Some(super::Block::Paragraph(inl)) = note.blocks.first() else { panic!("no paragraph") };
+        for target in [0, 57, 119] {
+            let nth = 2 * target + 1;
+            let marks = super::FindMarks { query: "apfel".into(), exact: false, block: 0, nth, line: 0, line_nth: nth };
+            let current: Vec<Option<usize>> = rows.iter().map(|r| super::current_in_part(inl, r, &marks, &[])).collect();
+            let count = |r: &super::ReaderRow| crate::core::find::matches(&super::drawn_text(&inl[r.part.map_or(0, |p| p.0)..r.part.map_or(inl.len(), |p| p.1)], &[]), "apfel", false).len();
+            let holding: Vec<usize> = (0..rows.len()).filter(|i| current[*i].is_some_and(|c| c < count(&rows[*i]))).collect();
+            assert_eq!(holding.len(), 1, "match {nth}");
+            assert_eq!(note.row_of_match(0, nth, "apfel", false), holding[0]);
+        }
+    }
+
+    #[test]
+    fn what_inlines_draw_is_one_text() {
+        use super::Inline;
+        let style = super::Style::default();
+        let inlines = [Inline::Text("a ".into(), style), Inline::Tag("t".into()), Inline::Link("L".into(), style, "https://beispiel.de".into()), Inline::Link("N".into(), style, "Notiz".into()), Inline::FootnoteRef("x".into()), Inline::Math("x".into())];
+        assert_eq!(super::drawn_text(&inlines, &["x".into()]), "a #tL ↗N¹");
     }
 
     #[test]
