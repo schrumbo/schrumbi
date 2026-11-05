@@ -646,9 +646,7 @@ fn split_long_text(inlines: &mut Vec<Inline>) {
         let mut rest = text.as_str();
         while rest.len() > 2 * PARA_BYTES {
             let from = (PARA_BYTES..).find(|i| rest.is_char_boundary(*i)).unwrap_or(rest.len());
-            let reach = (from + 256).min(rest.len());
-            let end = (from..=reach).rev().find(|i| rest.is_char_boundary(*i)).unwrap_or(from);
-            let Some((i, space)) = rest[from..end].char_indices().find(|(_, c)| c.is_whitespace()) else { break };
+            let Some((i, space)) = rest[from..].char_indices().find(|(_, c)| c.is_whitespace()) else { break };
             let cut = from + i + space.len_utf8();
             out.push(Inline::Text(rest[..cut].to_string(), style));
             rest = &rest[cut..];
@@ -3470,6 +3468,20 @@ Ende
         let note = parse(&format!("{blob}\n"));
         let Some(super::Block::Paragraph(inl)) = note.blocks.first() else { panic!("no paragraph") };
         assert_eq!(super::drawn_text(inl, &[]).trim_end(), blob);
+    }
+
+    #[test]
+    fn a_long_word_at_the_cut_does_not_stop_the_cutting_of_the_line() {
+        let url = format!("beispiel.de/{}", "a".repeat(300));
+        let words = "wort ".repeat(400);
+        let text = format!("{words}{url} {}", "wort ".repeat(20_000));
+        assert!(text.len() > 100_000);
+        let note = parse(&format!("{text}\n"));
+        let Some(super::Block::Paragraph(inl)) = note.blocks.first() else { panic!("no paragraph") };
+        let pieces: Vec<String> = inl.iter().map(|i| super::drawn_text(std::slice::from_ref(i), &[])).collect();
+        assert_eq!(pieces.concat().trim_end(), text.trim_end());
+        assert!(pieces.len() > 20, "{} pieces", pieces.len());
+        assert!(pieces.iter().all(|p| p.len() <= 2 * super::PARA_BYTES + 300));
     }
 
     #[test]
