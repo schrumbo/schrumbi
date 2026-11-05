@@ -148,10 +148,7 @@ fn commands(cx: &App) -> Vec<Command> {
     add(&view, S::ToggleFullscreen.label(), "maximize", keys(S::ToggleFullscreen), Run::Action(Box::new(app::ToggleFullscreen)));
     if active.is_some() {
         add(&view, S::TogglePreview.label(), "book-open", keys(S::TogglePreview), Run::NoteAction(Box::new(app::TogglePreview)));
-        add(&view, tr("Live-Ansicht ein/aus"), "sparkles", None, Run::Call(Rc::new(|cx| {
-            crate::core::prefs::update(|p| p.note_editor = if p.note_editor == crate::core::prefs::NoteEditor::Live { crate::core::prefs::NoteEditor::Code } else { crate::core::prefs::NoteEditor::Live });
-            cx.refresh_windows();
-        })));
+        add(&view, if app::live_is_on() { tr("Live-Ansicht ausschalten") } else { tr("Live-Ansicht einschalten") }, "sparkles", keys(S::ToggleLive), Run::Action(Box::new(app::ToggleLive)));
         if crate::core::prefs::get().note_editor == crate::core::prefs::NoteEditor::Code {
             add(&view, S::SplitPreview.label(), "columns-2", keys(S::SplitPreview), Run::NoteAction(Box::new(app::SplitPreview)));
         }

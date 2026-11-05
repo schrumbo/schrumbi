@@ -5,7 +5,7 @@
   "Mittel": "Medium",
   "Groß": "Large",
   "Originalgröße": "Original size",
-  "Live: Text bleibt gezeichnet": "Live: text stays drawn",
+  "Live-Ansicht: Formatierung beim Schreiben sichtbar": "Live view: formatting shows while you write",
   "Code-Editor: Quelltext mit Zeilennummern": "Code editor: source with line numbers",
   "Notizen schreiben": "Write notes",
   "Unbekanntes Wort": "Unknown word",
@@ -1596,5 +1596,8 @@
   "„%@“ ließ sich nicht sichern und bleibt offen. Erneut versuchen steht in der Notiz.": "“%@” could not be saved and stays open. Try again is in the note.",
   "%@ Notizen ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.": "%@ notes could not be saved and stay open. Try again is in each note.",
   "Fett und Kursiv gehen nicht innerhalb einer Linkadresse oder Formel.": "Bold and italic don’t work inside a link address or formula.",
-  "Live-Ansicht ein/aus": "Turn Live view on or off"
+  "Live-Ansicht ausschalten": "Turn Live view off",
+  "Live-Ansicht einschalten": "Turn Live view on",
+  "Live-Ansicht ein-/ausschalten": "Turn Live view on or off",
+  "Live-Ansicht": "Live view"
 }
