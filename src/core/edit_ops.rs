@@ -170,6 +170,24 @@ fn emphasis_spans(line: &str, math: &[Range<usize>]) -> Vec<Span> {
     spans
 }
 
+/// The text with the markers of complete spans of `token` taken out, so wrapping it again never nests them.
+fn without_inner_marks(text: &str, token: &str) -> String {
+    let n = token.len();
+    let mut marks: Vec<Range<usize>> = emphasis_spans(text, &[]).into_iter().filter(|p| p.n == n && text.get(p.start..p.end).is_some_and(|t| t.starts_with(token) && t.ends_with(token))).flat_map(|p| [p.start..p.start + n, p.end - n..p.end]).collect();
+    marks.sort_by_key(|m| m.start);
+    let mut out = String::new();
+    let mut at = 0;
+    for m in marks {
+        if m.start < at {
+            continue;
+        }
+        out.push_str(&text[at..m.start]);
+        at = m.end;
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
 fn hugged(text: &str, token: &str) -> String {
     let core = text.trim();
     if core.is_empty() {
@@ -339,10 +357,11 @@ pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
                 .collect();
             let closed = |body: &str| {
                 let (lead, trail) = (body.chars().take_while(|c| *c == '*').count(), body.chars().rev().take_while(|c| *c == '*').count());
+                let core = body.trim_matches('*');
                 match token {
-                    "**" => lead >= 2 && trail >= 2 && body.len() >= 4,
-                    "*" => lead % 2 == 1 && trail % 2 == 1 && body.len() >= 2,
-                    _ => body.len() >= token.len() * 2 && body.starts_with(token) && body.ends_with(token),
+                    "**" => lead >= 2 && trail >= 2 && !core.is_empty() && !core.contains("**"),
+                    "*" => lead % 2 == 1 && trail % 2 == 1 && !core.is_empty() && !core.contains('*'),
+                    _ => body.len() >= token.len() * 2 && body.starts_with(token) && body.ends_with(token) && !body[token.len()..body.len() - token.len()].contains(token),
                 }
             };
             let content: Vec<bool> = inner.split('\n').zip(&lines).filter(|(_, (_, skip))| !skip).map(|(line, (marks, _))| closed(&line[*marks..])).collect();
@@ -358,6 +377,8 @@ pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
                         format!("{}{}", &line[..*marks], &body[token.len()..body.len() - token.len()])
                     } else if closed(body) {
                         line.to_string()
+                    } else if emphasis && !body.trim_matches('*').is_empty() {
+                        format!("{}{token}{}{token}", &line[..*marks], without_inner_marks(body, token))
                     } else {
                         format!("{}{token}{body}{token}", &line[..*marks])
                     }
@@ -1182,6 +1203,30 @@ world");
         assert_eq!(apply("**ab**", &wrap("**ab**", 2..4, "**")), "ab");
         assert_eq!(apply("**ab**", &wrap("**ab**", 0..6, "**")), "ab");
         assert_eq!(apply("a\n\n- b", &wrap("a\n\n- b", 0..6, "**")), "**a**\n\n- **b**");
+    }
+
+    #[test]
+    fn a_line_with_marked_parts_is_wrapped_whole_without_nesting_the_marks() {
+        let s = "**A** und **B**\n**C**";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "**")), "**A und B**\n**C**");
+        let s = "**A** und **B**\n**C** und **D**";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "**")), "**A und B**\n**C und D**");
+        let s = "*A* und *B*\nrest";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "*")), "*A und B*\n*rest*");
+        let s = "`a` und `b`\n`c`";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "`")), "``a` und `b``\n`c`");
+        let s = "****\nx";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "**")), "********\n**x**");
+        let s = "**A**\n**B**";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "**")), "A\nB");
+        let s = "***A***\n***B***";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "*")), "**A**\n**B**");
+        let s = "**alpha\nbeta**";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "**")), "****alpha**\n**beta****");
+        let s = "plain **x** text\nb";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "**")), "**plain x text**\n**b**");
+        let s = "- plain **x** text\n- b";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "**")), "- **plain x text**\n- **b**");
     }
 
     #[test]

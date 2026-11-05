@@ -282,6 +282,7 @@ pub struct NoteView {
     editor: Entity<EditorState>,
     parsed: Option<(u64, Rc<ParsedNote>)>,
     revision: u64,
+    external: u64,
     /// The buffer's version the editor shows, so a change made in another view is noticed.
     version: u64,
     syncing: bool,
@@ -302,7 +303,6 @@ impl NoteView {
         let block = cx.new(|cx| EditorState::new(window, cx).soft_wrap(true).line_number(false).folding(false).smart_indent(false).scroll_beyond_last_line(Some(0)));
         block.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(path.clone())));
         let lib = state::lib(cx);
-        let p = path.clone();
         let subs = vec![
             cx.subscribe_in(&editor, window, |this, e, ev: &InputEvent, window, cx| match ev {
                 InputEvent::Change if !this.syncing => {
@@ -353,12 +353,12 @@ impl NoteView {
                 _ => {}
             }),
             cx.observe_in(&lib, window, move |this, lib, window, cx| {
-                if lib.read(cx).active_document.as_ref() == Some(&p) && lib.update(cx, |l, _| std::mem::take(&mut l.toggle_mode)) {
+                if lib.read(cx).active_document.as_ref() == Some(&this.path) && lib.update(cx, |l, _| std::mem::take(&mut l.toggle_mode)) {
                     let writing = if this.editor_kind == prefs::NoteEditor::Live { Mode::Live } else { Mode::Source };
                     let next = if this.mode == Mode::Read { writing } else { Mode::Read };
                     this.set_mode(next, window, cx);
                 }
-                if lib.read(cx).active_document.as_ref() != Some(&p) && this.place_restored {
+                if lib.read(cx).active_document.as_ref() != Some(&this.path) && this.place_restored {
                     this.remember_place();
                 }
                 this.follow_buffer(window, cx);
@@ -392,15 +392,15 @@ impl NoteView {
                 _ => writing,
             }
         };
-        let (revision, version) = state::lib(cx).update(cx, |l, _| {
+        let (revision, version, external) = state::lib(cx).update(cx, |l, _| {
             let b = l.buffer(&path);
-            (b.revision, b.version())
+            (b.revision, b.version(), b.external)
         });
         let reader_list = ListState::new(0, ListAlignment::Top, px(1000.));
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -795,15 +795,33 @@ impl NoteView {
         self.parsed.as_ref().map_or(1, |(_, p)| p.row_of_line(line) + 1)
     }
 
+    /// Takes on the new path of the note when it was renamed or moved, in a tab or in its own window.
+    fn follow_move(&mut self, to: PathBuf, cx: &mut Context<Self>) {
+        let settled = dunce::canonicalize(&to).unwrap_or_else(|_| to.clone());
+        self.link_focus.note = Some(settled);
+        self.editor.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(to.clone())));
+        self.block.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(to.clone())));
+        self.path = to;
+        cx.notify();
+    }
+
     /// Shows the buffer's text in the editor when it changed in another view or from outside.
-    /// The editor's undo history ends there: an older step would write over the new text.
+    /// The editor's undo history ends only when the text came from outside: an older step would write over it.
     fn follow_buffer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((rev, version, text)) = state::read(cx, |l| l.buffers.get(&self.path).map(|b| (b.revision, b.version(), b.text.clone()))) else { return };
+        let Some((rev, version, external)) = state::read(cx, |l| l.buffers.get(&self.path).map(|b| (b.revision, b.version(), b.external))) else {
+            if let Some(to) = state::read(cx, |l| l.moved_path(&self.path)) {
+                self.follow_move(to, cx);
+                self.follow_buffer(window, cx);
+            }
+            return;
+        };
         if rev == self.revision && version == self.version {
             return;
         }
+        let Some(text) = state::read(cx, |l| l.buffers.get(&self.path).map(|b| b.text.clone())) else { return };
         self.revision = rev;
         self.version = version;
+        let outside = std::mem::replace(&mut self.external, external) != external;
         let reopen = self.live.take().map(|l| (l.first_line, self.block.read(cx).cursor()));
         if let Some((line, caret)) = reopen {
             self.parsed = None;
@@ -823,7 +841,12 @@ impl NoteView {
                 let (selected, scroll) = (s.selected_range(), s.scroll_offset());
                 let start = edit_ops::shift_offset(selected.start, &changed, inserted.len());
                 let end = edit_ops::shift_offset(selected.end, &changed, inserted.len());
-                s.set_value(text.clone(), window, cx);
+                if outside {
+                    s.set_value(text.clone(), window, cx);
+                } else {
+                    s.set_selected_range(changed.clone(), cx);
+                    s.replace(inserted.to_string(), window, cx);
+                }
                 let (start, end) = (start.min(text.len()), end.min(text.len()));
                 s.set_selected_range(start..end, cx);
                 s.set_scroll_offset(scroll, cx);
@@ -2188,8 +2211,7 @@ impl NoteView {
                 menu = menu.item(PopupMenuItem::new(tr("In Notiz ersetzen")).icon(menu_icon("replace")).on_click(move |_, window, cx| replacer.update(cx, |n, cx| n.open_find(true, window, cx))));
                 if embedded {
                     menu = menu.item(PopupMenuItem::new(tr("In eigenem Fenster öffnen")).icon(menu_icon("app-window")).on_click(move |_, _, cx| {
-                        super::note_window::open(&a, cx);
-                        act(cx, |l| l.close_document(&a));
+                        super::note_window::open_exclusive(&a, cx);
                     }));
                 }
                 menu = menu
@@ -3056,7 +3078,7 @@ impl Render for NoteView {
         let wheel = super::image_view::wheel_zoom(|factor, _, _, cx| scale_font(factor, cx));
         let (missing, snapshot, conflict) = lib.update(cx, |l, _| {
             let b = l.buffer(&self.path);
-            (b.missing, b.snapshot(), b.conflict.is_some())
+            (b.missing, b.snapshot(), b.conflict.is_some() && b.dirty)
         });
         let text = snapshot.text.clone();
         let request = take_find_request(&self.path, cx);

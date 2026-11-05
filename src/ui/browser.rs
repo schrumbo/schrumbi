@@ -510,7 +510,7 @@ impl FileBrowser {
         div().w_full().px(px(space::L)).child(content).into_any_element()
     }
 
-    fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key(&mut self, e: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let k = &e.keystroke;
         let command = k.modifiers.platform || k.modifiers.control;
         if command && !k.modifiers.alt {
@@ -539,11 +539,6 @@ impl FileBrowser {
                     } else {
                         self.pick_only(&to);
                     }
-                }
-            }
-            "f2" => {
-                if let Some(path) = self.selected.clone() {
-                    self.start_rename(path, window, cx);
                 }
             }
             "space" => {
@@ -829,7 +824,7 @@ impl FileBrowser {
                 if markdown::is_markdown(&p) {
                     let (n, e) = (p.clone(), p.clone());
                     menu = menu
-                        .item(PopupMenuItem::new(tr("Als Notiz öffnen")).on_click(move |_, _, cx| super::note_window::open(&n, cx)))
+                        .item(PopupMenuItem::new(tr("Als Notiz öffnen")).on_click(move |_, _, cx| super::note_window::open_exclusive(&n, cx)))
                         .item(PopupMenuItem::new(tr("Als PDF exportieren")).on_click(move |_, window, cx| super::pdf::export(&e, None, window, cx)));
                 }
                 if let Some(w) = f2.week.filter(|w| week_filter != Some(*w) && same_semester) {
@@ -850,7 +845,7 @@ impl FileBrowser {
                 let (rename, trash_path, e) = (p.clone(), p.clone(), entity.clone());
                 deadline_submenu(menu.separator(), &p, window, cx)
                     .separator()
-                    .item(PopupMenuItem::new(format!("{} (F2)", tr("Umbenennen…"))).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
+                    .item(PopupMenuItem::new(format!("{}{}", tr("Umbenennen…"), crate::core::shortcuts::ShortcutAction::RenameNote.hint())).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
                     .when_some(super::convention_rename::menu_item_or_hint(&p, cx), |m, item| m.item(item))
                     .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| state::trash(vec![trash_path.clone()], cx)))
             })
@@ -1179,7 +1174,10 @@ impl Render for FileBrowser {
                 unavailable("folder", tr("Noch keine Dokumente"), tr("Abgelegte Dateien erscheinen hier, nach Woche sortiert."), &t).into_any_element()
             }
         } else {
-            div().id("browser-list").flex_1().min_h_0().pt(px(space::S)).track_focus(&self.focus).on_key_down(cx.listener(Self::on_key)).child(list(self.list.clone(), cx.processor(|this, ix, _, cx| this.render_line(ix, cx))).size_full()).vertical_scrollbar(&self.list).into_any_element()
+            div().id("browser-list").flex_1().min_h_0().pt(px(space::S)).track_focus(&self.focus).on_key_down(cx.listener(Self::on_key)).on_action(cx.listener(|this, _: &super::app::RenameNote, window, cx| match this.selected.clone() {
+                Some(path) => this.start_rename(path, window, cx),
+                None => cx.propagate(),
+            })).child(list(self.list.clone(), cx.processor(|this, ix, _, cx| this.render_line(ix, cx))).size_full()).vertical_scrollbar(&self.list).into_any_element()
         };
         let count = self.picked.len();
         let e = me.clone();

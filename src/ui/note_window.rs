@@ -37,6 +37,17 @@ pub fn request_close(window: &mut Window, cx: &mut App) {
     });
 }
 
+/// Opens a note in its own window and closes its tab in the main window, so the file has one editor only.
+pub fn open_exclusive(path: &Path, cx: &mut App) {
+    open(path, cx);
+    let settled = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    act(cx, |l| {
+        if l.open_documents.contains(&settled) {
+            l.close_document(&settled);
+        }
+    });
+}
+
 /// Opens a note in its own window, or focuses the window already showing it.
 pub fn open(path: &Path, cx: &mut App) {
     let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());

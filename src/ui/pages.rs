@@ -372,6 +372,15 @@ impl Pages {
             self.doc_recent.insert(0, path.to_path_buf());
             self.doc_recent.truncate(KEPT_VIEWS);
         }
+        if !self.docs.contains_key(path) {
+            let followed = self.docs.iter().find(|(_, v)| (*v).clone().downcast::<super::documents::NoteView>().is_ok_and(|n| n.read(cx).path() == path)).map(|(k, _)| k.clone());
+            if let Some(old) = followed
+                && let Some(view) = self.docs.remove(&old)
+            {
+                self.docs.insert(path.to_path_buf(), view);
+                self.doc_recent.iter_mut().filter(|p| **p == old).for_each(|p| *p = path.to_path_buf());
+            }
+        }
         self.docs
             .entry(path.to_path_buf())
             .or_insert_with(|| {

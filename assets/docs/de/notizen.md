@@ -16,10 +16,10 @@ Notizen sind Markdown-Dateien in deinem Ordner. Obsidian liest sie genauso.
 | {key:up} {key:down} | Datei wählen, mit Vorschau |
 | {key:right} {key:left} | Ordner auf- und zuklappen |
 | {key:return} | In die Notiz springen |
-| {key:f2} | Umbenennen |
+| {key:renameNote} | Umbenennen |
 | {key:/} | Filtern |
 
-- {key:f2} benennt auch die offene Notiz um, ebenso ein Klick auf ihren Titel oben.
+- {key:renameNote} benennt auch die offene Notiz um, ebenso ein Klick auf ihren Titel oben.
 - Einfacher Klick öffnet eine Vorschau, Doppelklick behält den Tab.
 - Datei auf einen Ordner ziehen verschiebt sie.
 - Rechtsklick → {ui:Abgabe zuordnen} zählt die Datei für eine Abgabe. Die Pille oben in der Notiz zeigt, wozu sie gehört.

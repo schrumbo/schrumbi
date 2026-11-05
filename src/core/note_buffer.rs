@@ -39,6 +39,8 @@ pub struct NoteBuffer {
     known: Option<SystemTime>,
     /// Bumped whenever the text changes from outside the editor, so editors reload it.
     pub revision: u64,
+    /// Bumped when the text changed from outside, e.g. in another app: an editor's undo history ends there.
+    pub external: u64,
     /// The version on disk when it changed while there were unsaved edits here; saving waits for a decision.
     pub conflict: Option<String>,
     /// Saves are only remembered, because a sync is rewriting the workspace.
@@ -52,7 +54,7 @@ pub struct NoteBuffer {
 
 impl NoteBuffer {
     pub fn open(path: &Path) -> Self {
-        let mut b = Self { path: path.to_path_buf(), text: String::new(), dirty: false, missing: false, undecodable: false, last_saved: String::new(), known: None, revision: 0, conflict: None, held: false, save_wanted: false, touched: false, version: 0, snapshot: Mutex::new(None) };
+        let mut b = Self { path: path.to_path_buf(), text: String::new(), dirty: false, missing: false, undecodable: false, last_saved: String::new(), known: None, revision: 0, external: 0, conflict: None, held: false, save_wanted: false, touched: false, version: 0, snapshot: Mutex::new(None) };
         b.load();
         b
     }
@@ -86,6 +88,7 @@ impl NoteBuffer {
                     self.text = s.clone();
                     self.version += 1;
                     self.revision += 1;
+                    self.external += 1;
                 }
                 self.last_saved = s;
                 self.known = self.modified();
@@ -151,6 +154,7 @@ impl NoteBuffer {
             self.last_saved = disk;
             self.conflict = None;
             self.revision += 1;
+            self.external += 1;
             return true;
         }
         let changed = self.conflict.as_deref() != Some(disk.as_str());
@@ -380,6 +384,26 @@ x".into());
 d", 10);
         assert!(b.reload_if_changed());
         assert_ne!(b.version(), v3);
+    }
+
+    #[test]
+    fn only_changes_from_outside_end_the_editors_history() {
+        let path = note("external", "a");
+        let mut b = NoteBuffer::open(&path);
+        let start = b.external;
+        b.edited("b".into());
+        b.replace("c".into());
+        assert_eq!(b.external, start, "typing and deliberate steps keep the history");
+        b.save().unwrap();
+        outside(&path, "d", 5);
+        assert!(b.reload_if_changed());
+        assert_eq!(b.external, start + 1);
+        b.edited("e".into());
+        outside(&path, "f", 10);
+        assert!(b.reload_if_changed());
+        assert_eq!(b.external, start + 1, "a conflict changes nothing in the text");
+        assert!(b.take_disk().is_some());
+        assert_eq!(b.external, start + 2);
     }
 
     #[test]

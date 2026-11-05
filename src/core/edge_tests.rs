@@ -376,6 +376,27 @@ fn undo_and_redo_move_renamed_files() {
 }
 
 #[test]
+fn a_series_joins_only_its_own_rename_steps() {
+    let (root, mut lib) = workspace("undo-series-own", &config(1, 1));
+    for name in ["a.txt", "b.txt", "other.txt"] {
+        std::fs::write(root.join(name), "x").unwrap();
+    }
+    lib.rename_in_series(&root.join("a.txt"), "a2.txt").unwrap();
+    lib.rename(&root.join("other.txt"), "other2.txt");
+    lib.rename_in_series(&root.join("b.txt"), "b2.txt").unwrap();
+    lib.rename_in_series(&root.join("b2.txt"), "b2.txt").unwrap();
+    lib.finish_series(3);
+    lib.undo();
+    assert!(root.join("a.txt").exists() && root.join("b.txt").exists(), "the series came back at once");
+    assert!(root.join("other2.txt").exists(), "an unrelated step stays a step of its own");
+    assert!(lib.can_undo());
+    lib.undo();
+    assert!(root.join("other.txt").exists());
+    assert!(!lib.can_undo());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_series_of_renames_is_one_undo_step() {
     let (root, mut lib) = workspace("undo-series", &config(1, 1));
     for name in ["a.txt", "b.txt", "c.txt"] {

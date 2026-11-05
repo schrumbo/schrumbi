@@ -32,6 +32,7 @@ pub enum ShortcutAction {
     SplitPreview,
     ExportPdf,
     FindInNote,
+    RenameNote,
     ToggleInspector,
     Refresh,
     Sync,
@@ -88,7 +89,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 48] = [
+    pub const ALL: [ShortcutAction; 49] = [
         Self::GoToday,
         Self::GoGrid,
         Self::GoRecord,
@@ -115,6 +116,7 @@ impl ShortcutAction {
         Self::SplitPreview,
         Self::ExportPdf,
         Self::FindInNote,
+        Self::RenameNote,
         Self::ToggleInspector,
         Self::Refresh,
         Self::Sync,
@@ -168,6 +170,7 @@ impl ShortcutAction {
             Self::SplitPreview => "splitPreview",
             Self::ExportPdf => "exportPDF",
             Self::FindInNote => "findInNote",
+            Self::RenameNote => "renameNote",
             Self::ToggleInspector => "toggleInspector",
             Self::Refresh => "refresh",
             Self::Sync => "syncNow",
@@ -206,7 +209,7 @@ impl ShortcutAction {
             Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::GoModule1 | Self::GoModule2 | Self::GoModule3 | Self::GoBack => Group::Navigation,
             Self::ShowGraph | Self::ToggleFullscreen => Group::View,
             Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::OpenOtherWorkspace | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::Refresh => Group::General,
-            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote => Group::Documents,
+            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote => Group::Documents,
             _ => Group::Editor,
         }
     }
@@ -257,6 +260,7 @@ impl ShortcutAction {
             Self::SplitPreview => "Geteilte Ansicht",
             Self::ExportPdf => "Als PDF exportieren",
             Self::FindInNote => "In Notiz suchen",
+            Self::RenameNote => "Umbenennen…",
             Self::Bold => "Fett",
             Self::Italic => "Kursiv",
             Self::Link => "Link einfügen",
@@ -328,6 +332,7 @@ impl ShortcutAction {
             Self::SplitPreview => s("v", true, false, true, false),
             Self::ExportPdf => s("e", true, true, false, false),
             Self::FindInNote => s("f", true, false, false, false),
+            Self::RenameNote => s("f2", false, false, false, false),
             Self::Bold => s("b", true, false, false, false),
             Self::Italic => s("i", true, false, false, false),
             Self::Link => s("k", true, false, false, false),

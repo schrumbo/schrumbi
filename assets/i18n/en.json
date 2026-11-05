@@ -1575,5 +1575,9 @@
   "%@ – inaktiv": "%@ – inactive",
   "Nach Muster benennen… (%@ Dateien)": "Rename by pattern… (%@ files)",
   "%@ Dateien umbenannt": "%@ files renamed",
-  "– inaktiv": "– inactive"
+  "– inaktiv": "– inactive",
+  "Das Zeichen „%@“ geht in einem Namen nicht.": "The character “%@” cannot be used in a name.",
+  "Ein Name darf nicht mit einem Punkt enden.": "A name cannot end with a period.",
+  "Klicken zum Umbenennen": "Click to rename",
+  "Ausgeblendete Ordner: %@": "Hidden folders: %@"
 }

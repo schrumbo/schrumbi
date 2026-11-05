@@ -214,13 +214,13 @@ pub fn init(cx: &mut App) {
     rebuild_menus(cx);
     let lib = state::lib(cx);
     let mut modules: Vec<String> = Vec::new();
-    let mut note = (note_is_active(cx), find_is_available(cx));
+    let mut note = (note_is_active(cx), find_is_available(cx), rename_is_available(cx));
     cx.observe(&lib, move |lib, cx| {
         if let Some(path) = lib.update(cx, |l, _| l.raise_note_window.take()) {
             cx.defer(move |cx| super::note_window::open(&path, cx));
         }
         let now: Vec<String> = lib.read(cx).semester_modules().iter().map(|m| format!("{}{}", m.id, m.display_name())).collect();
-        let open = (note_is_active(cx), find_is_available(cx));
+        let open = (note_is_active(cx), find_is_available(cx), rename_is_available(cx));
         if now != modules || open != note {
             modules = now;
             note = open;
@@ -254,6 +254,11 @@ pub fn note_window_front(id: WindowId, front: bool, cx: &mut App) {
 /// Whether a separate note window or the pane of the main window that has the focus shows a note, which find and replace then act on.
 pub fn note_is_active(cx: &App) -> bool {
     cx.try_global::<NoteWindowFront>().is_some_and(|f| f.0.is_some()) || state::read(cx, |l| matches!(l.route(), Route::Doc(_)) && l.focused_document().is_some_and(crate::core::markdown::is_markdown))
+}
+
+/// Whether a note or file is shown that Rename acts on.
+pub fn rename_is_available(cx: &App) -> bool {
+    state::read(cx, |l| l.focused_document().is_some() && matches!(l.route(), Route::Doc(_)))
 }
 
 /// Asks the explorer to rename `path`, showing it first when it was hidden.
@@ -389,7 +394,6 @@ pub fn bind_keys(cx: &mut App) {
         kb(cmd("shift-7"), ShowShortcuts, None),
         kb(cmd("/"), ShowShortcuts, None),
         kb("f1".into(), ShowHelp, None),
-        kb("f2".into(), RenameNote, Some("MainWindow")),
         kb(cmd(","), OpenSettings, None),
         kb(cmd("x"), gpui_kit::component::input::Cut, Some("Root")),
         kb(cmd("v"), gpui_kit::component::input::Paste, Some("Root")),
@@ -447,6 +451,7 @@ pub fn bind_keys(cx: &mut App) {
             binding(ShortcutAction::SplitPreview, SplitPreview, None),
             binding(ShortcutAction::ExportPdf, ExportPdf, None),
             binding(ShortcutAction::FindInNote, super::find_bar::FindInNote, None),
+            binding(ShortcutAction::RenameNote, RenameNote, None),
             Some(kb(cmd("alt-f"), super::find_bar::ReplaceInNote, None)),
             #[cfg(not(target_os = "macos"))]
             Some(kb("ctrl-h".into(), super::find_bar::ReplaceInNote, None)),
@@ -469,7 +474,7 @@ pub fn bind_keys(cx: &mut App) {
 /// The menu bar: Schrumbi, Ablage, Bearbeiten, Darstellung, Gehe zu, Fenster.
 pub fn rebuild_menus(cx: &mut App) {
     let (note, find) = (note_is_active(cx), find_is_available(cx));
-    let renamable = state::read(cx, |l| l.focused_document().is_some() && matches!(l.route(), Route::Doc(_)));
+    let renamable = rename_is_available(cx);
     let modules: Vec<(String, String)> = state::read(cx, |l| l.semester_modules().iter().map(|m| (m.id.clone(), m.display_name())).collect());
     let recents: Vec<MenuItem> = prefs::get()
         .recent_workspaces
