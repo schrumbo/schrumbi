@@ -363,8 +363,8 @@ pub struct Library {
     tab_trails: HashMap<PathBuf, (Vec<PathBuf>, Vec<PathBuf>)>,
     /// A file whose name the explorer should turn into a field.
     pub rename_request: Option<PathBuf>,
-    /// The explorer should turn the name of the row it has selected into a field.
-    pub rename_selected: bool,
+    /// The file or folder row the explorer has selected, which Rename acts on when no note is shown.
+    pub explorer_selection: Option<PathBuf>,
     /// A folder the explorer should open and select.
     pub reveal_folder: Option<String>,
     pub focus_explorer: bool,
@@ -476,7 +476,7 @@ impl Library {
             graph_selection: None,
             tab_trails: HashMap::new(),
             rename_request: None,
-            rename_selected: false,
+            explorer_selection: None,
             reveal_folder: None,
             focus_explorer: false,
             focus_document: false,
@@ -2725,7 +2725,7 @@ impl Library {
     /// Gives a file the name typed. A note named after its heading keeps that heading; a convention name only has to say the same title.
     pub fn rename(&mut self, file: &Path, name: &str) {
         if let Err(e) = self.rename_checked(file, name) {
-            self.last_error = Some(e);
+            self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&e]));
         }
     }
 
@@ -2823,7 +2823,7 @@ impl Library {
     /// Renames a note named after its heading and brings the heading along; a convention name only has to say the same title.
     fn rename_titled(&mut self, file: &Path, name: &str, title: &str, convention: bool) {
         if let Err(e) = self.rename_titled_checked(file, name, title, convention) {
-            self.last_error = Some(e);
+            self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&e]));
         }
     }
 
@@ -2855,7 +2855,7 @@ impl Library {
 
     fn rename_file(&mut self, file: &Path, name: &str) {
         if let Err(e) = self.rename_recorded(file, name, true) {
-            self.last_error = Some(e);
+            self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&e]));
         }
     }
 
@@ -2884,7 +2884,7 @@ impl Library {
                 self.last_renamed = Some(target);
                 Ok(())
             }
-            Err(e) => Err(trf("Umbenennen fehlgeschlagen: %@", &[&explain(&e.into())])),
+            Err(e) => Err(explain(&e.into())),
         }
     }
 
@@ -2897,21 +2897,21 @@ impl Library {
     }
 
     /// Joins the rename steps of the latest series, at most `count`, into one and offers to take them all back at once.
-    /// Other steps in between stay as they are.
+    /// Only the unbroken run of series steps on top of the history joins; the order of every other step stays.
     pub fn finish_series(&mut self, count: usize) {
         let mut joined = Vec::new();
-        let mut rest = Vec::new();
-        for step in std::mem::take(&mut self.undo_steps).into_iter().rev() {
-            if step.series && joined.len() < count {
-                joined.push(step);
-            } else {
-                rest.push(step);
+        while joined.len() < count {
+            match self.undo_steps.pop() {
+                Some(step) if step.series => joined.push(step),
+                Some(step) => {
+                    self.undo_steps.push(step);
+                    break;
+                }
+                None => break,
             }
         }
-        rest.reverse();
         joined.reverse();
-        rest.iter_mut().for_each(|s| s.series = false);
-        self.undo_steps = rest;
+        self.undo_steps.iter_mut().for_each(|s| s.series = false);
         if joined.is_empty() {
             return;
         }
@@ -3011,19 +3011,25 @@ impl Library {
                 p.heading_titled.insert(new_key);
             });
         }
-        if self.note_windows.remove(&from) {
-            self.note_windows.insert(to.clone());
+        let under = |p: &Path| p.strip_prefix(&from).ok().map(|rest| if rest.as_os_str().is_empty() { to.clone() } else { to.join(rest) });
+        let windows: Vec<(PathBuf, PathBuf)> = self.note_windows.iter().filter_map(|p| under(p).map(|n| (p.clone(), n))).collect();
+        for (was, now) in windows {
+            self.note_windows.remove(&was);
+            self.note_windows.insert(now);
         }
         if let Route::Doc(p) = &mut self.route {
             swap(p);
         }
-        if let Some(mut buffer) = self.buffers.remove(&from) {
-            buffer.moved_to(&to);
-            self.buffers.insert(to.clone(), buffer);
-            self.moves.values_mut().filter(|v| **v == from).for_each(|v| v.clone_from(&to));
-            self.moves.insert(from.clone(), to.clone());
-            self.moves.remove(&to);
-            self.moves.retain(|k, v| k != v);
+        let buffered: Vec<(PathBuf, PathBuf)> = self.buffers.keys().filter_map(|p| under(p).map(|n| (p.clone(), n))).collect();
+        for (was, now) in buffered {
+            if let Some(mut buffer) = self.buffers.remove(&was) {
+                buffer.moved_to(&now);
+                self.buffers.insert(now.clone(), buffer);
+                self.moves.values_mut().filter(|v| **v == was).for_each(|v| v.clone_from(&now));
+                self.moves.insert(was, now.clone());
+                self.moves.remove(&now);
+                self.moves.retain(|k, v| k != v);
+            }
         }
         let mut relinked = false;
         let inside = format!("{old}/");

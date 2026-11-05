@@ -38,11 +38,11 @@ pub fn lang() -> Lang {
 
 /// A whole number with thousands separators of the UI language: `111.234` in German, `111,234` in English.
 pub fn grouped(n: usize) -> String {
-    group_digits(n, if lang() == Lang::De { '.' } else { ',' })
+    group_digits(&n.to_string(), if lang() == Lang::De { '.' } else { ',' })
 }
 
-fn group_digits(n: usize, separator: char) -> String {
-    let digits = n.to_string();
+/// The digits with `separator` between thousands.
+pub(crate) fn group_digits(digits: &str, separator: char) -> String {
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, c) in digits.chars().enumerate() {
         if i > 0 && (digits.len() - i) % 3 == 0 {
@@ -204,11 +204,11 @@ mod tests {
 
     #[test]
     fn groups_thousands() {
-        assert_eq!(group_digits(0, '.'), "0");
-        assert_eq!(group_digits(999, '.'), "999");
-        assert_eq!(group_digits(1000, '.'), "1.000");
-        assert_eq!(group_digits(111234, ','), "111,234");
-        assert_eq!(group_digits(1234567, '.'), "1.234.567");
+        assert_eq!(group_digits("0", '.'), "0");
+        assert_eq!(group_digits("999", '.'), "999");
+        assert_eq!(group_digits("1000", '.'), "1.000");
+        assert_eq!(group_digits("111234", ','), "111,234");
+        assert_eq!(group_digits("1234567", '.'), "1.234.567");
     }
 
     #[test]

@@ -30,6 +30,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         bind(S::ZoomIn, ZoomIn),
         bind(S::ZoomOut, ZoomOut),
         bind(S::ZoomReset, ZoomReset),
+        bind(S::ToggleWrap, ToggleWrap),
         bind(S::FindInNote, FindInNote),
         bind(S::SearchFiles, super::app::SearchFiles),
         Some(kb(super::app::cmd("alt-f"), ReplaceInNote, ctx)),

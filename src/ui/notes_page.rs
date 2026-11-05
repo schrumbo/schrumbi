@@ -192,6 +192,7 @@ pub struct NotesPage {
     renaming: Option<(PathBuf, Entity<InputState>, Subscription)>,
     /// A folder just made, shown before the next scan has seen it.
     pending_folder: Option<PathBuf>,
+    scroll_to_rename: bool,
     width: f32,
     /// A width drag is under way; it is saved when the drag ends.
     resizing: bool,
@@ -392,6 +393,7 @@ impl NotesPage {
             target_folder: None,
             renaming: None,
             pending_folder: None,
+            scroll_to_rename: false,
             width: crate::core::prefs::get().notes_column.unwrap_or(260.),
             resizing: false,
             cache: None,
@@ -679,7 +681,16 @@ impl NotesPage {
         self.query.update(cx, |q, cx| q.set_value("", window, cx));
         self.reveal(&path);
         self.renaming = Some((path, input, sub));
+        self.scroll_to_rename = true;
         cx.notify();
+    }
+
+    fn selection_path(&self) -> Option<PathBuf> {
+        match &self.selected {
+            Some(Row::File { path, .. }) => Some(path.clone()),
+            Some(Row::Folder { rel, .. }) => Some(Self::folder_path(rel)),
+            _ => None,
+        }
     }
 
     fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1069,13 +1080,13 @@ impl Render for NotesPage {
         if let Some(path) = state::lib(cx).update(cx, |l, _| l.rename_request.take()) {
             self.start_rename(path, window, cx);
         }
-        if state::lib(cx).update(cx, |l, _| std::mem::take(&mut l.rename_selected)) {
-            match self.selected.clone() {
-                Some(Row::File { path, .. }) => self.start_rename(path, window, cx),
-                Some(Row::Folder { rel, .. }) => self.start_rename(Self::folder_path(&rel), window, cx),
-                _ => {}
+        let selection = self.selection_path();
+        state::lib(cx).update(cx, |l, cx| {
+            if l.explorer_selection != selection {
+                l.explorer_selection = selection;
+                cx.notify();
             }
-        }
+        });
         let t = Theme::get(cx);
         let (tag, active, obsidian) = state::read(cx, |l| (l.notes_tag.clone(), l.active_document.clone(), l.is_vault));
         if self.view == View::Marks && !obsidian {
@@ -1094,6 +1105,16 @@ impl Render for NotesPage {
         }
         self.refresh(tag.clone(), cx);
         let rows = self.rows();
+        if let Some((path, ..)) = self.renaming.as_ref().filter(|_| std::mem::take(&mut self.scroll_to_rename)) {
+            let at = rows.iter().position(|r| match r {
+                Row::File { path: p, .. } => p == path,
+                Row::Folder { rel, .. } => Self::folder_path(rel) == *path,
+                _ => false,
+            });
+            if let Some(i) = at {
+                self.list_scroll.scroll_to_item(i, ScrollStrategy::Center);
+            }
+        }
         let open_tasks = self.cache.as_ref().map_or(0, |c| c.open_tasks);
         let view = self.view;
         let order = self.order;
@@ -1192,6 +1213,15 @@ impl Render for NotesPage {
             .flex_none()
             .flex()
             .on_key_down(cx.listener(Self::on_key))
+            .on_action(cx.listener(|this, _: &super::app::RenameNote, window, cx| {
+                if this.renaming.is_some() || super::app::typing_in_field(window) {
+                    return;
+                }
+                match this.selection_path() {
+                    Some(path) => this.start_rename(path, window, cx),
+                    None => cx.propagate(),
+                }
+            }))
             .on_action(|_: &super::app::TogglePreview, _, cx| act(cx, |l| l.toggle_mode = l.active_document.as_deref().is_some_and(markdown::is_markdown)))
             .on_drag_move(cx.listener(|s, e: &DragMoveEvent<ExplorerSplit>, _, cx| {
                 let width = f32::from(e.event.position.x - e.bounds.left()).round().clamp(180., 420.);

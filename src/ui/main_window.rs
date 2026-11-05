@@ -432,16 +432,18 @@ impl Render for MainWindow {
                     cx.propagate();
                 }
             })
+            .on_action(|_: &super::documents::ToggleWrap, _, cx| {
+                if !super::app::in_active_note(super::documents::ToggleWrap, cx) {
+                    cx.propagate();
+                }
+            })
             .on_action(|_: &super::app::RenameNote, window, cx| {
-                let stack = window.context_stack();
-                if stack.iter().any(|c| c.contains("Explorer")) {
-                    act(cx, |l| l.rename_selected = true);
+                if super::app::typing_in_field(window) {
                     return;
                 }
-                let searching = stack.iter().any(|c| c.contains("SearchField"));
-                match state::read(cx, |l| l.focused_document().map(std::path::Path::to_path_buf).filter(|_| matches!(l.route(), Route::Doc(_)))) {
-                    Some(path) if !searching => super::app::rename_file(path, cx),
-                    _ => cx.propagate(),
+                match state::read(cx, super::app::rename_target) {
+                    Some(path) => super::app::rename_file(path, cx),
+                    None => cx.propagate(),
                 }
             })
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| {

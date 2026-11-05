@@ -151,7 +151,10 @@ fn commands(cx: &App) -> Vec<Command> {
         if crate::core::prefs::get().note_editor == crate::core::prefs::NoteEditor::Code {
             add(&view, S::SplitPreview.label(), "columns-2", keys(S::SplitPreview), Run::NoteAction(Box::new(app::SplitPreview)));
         }
-        add(&view, tr("Zeilenumbruch ein-/ausschalten"), "text", None, Run::NoteAction(Box::new(super::documents::ToggleWrap)));
+        let prefs = crate::core::prefs::get();
+        if prefs.note_editor == crate::core::prefs::NoteEditor::Code && prefs.note_mode != crate::core::prefs::NoteMode::Read {
+            add(&view, S::ToggleWrap.label(), "text", keys(S::ToggleWrap), Run::NoteAction(Box::new(super::documents::ToggleWrap)));
+        }
         add(&view, S::ExportPdf.label(), "share", keys(S::ExportPdf), Run::NoteAction(Box::new(app::ExportPdf)));
         add(&edit, S::FindInNote.label(), "search", keys(S::FindInNote), Run::NoteAction(Box::new(super::find_bar::FindInNote)));
         add(&edit, tr("Zum Wörterbuch hinzufügen"), "plus", None, Run::NoteAction(Box::new(super::spell_card::AddWordAtCaret)));
@@ -207,8 +210,8 @@ fn commands(cx: &App) -> Vec<Command> {
     if let Some(doc) = focused.clone().filter(|p| super::convention_rename::available(p, cx)) {
         add(&file, tr("Nach Muster benennen…"), "wand-sparkles", None, Run::WindowCall(Rc::new(move |window, cx| super::convention_rename::open(doc.clone(), window, cx))));
     }
-    if let Some(doc) = focused {
-        add(&file, tr("Umbenennen…"), "pencil", keys(S::RenameNote), Run::Call(Rc::new(move |cx| app::rename_file(doc.clone(), cx))));
+    if let Some(target) = state::read(cx, app::rename_target) {
+        add(&file, tr("Umbenennen…"), "pencil", keys(S::RenameNote), Run::Call(Rc::new(move |cx| app::rename_file(target.clone(), cx))));
     }
     if in_document && state::read(cx, |l| l.split_document.is_some()) {
         add(&view, tr("Geteilte Ansicht schließen"), "columns-2", None, Run::Call(Rc::new(|cx| act(cx, |l| l.set_split(None)))));

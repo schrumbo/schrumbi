@@ -83,7 +83,9 @@ Die Wörter stehen in den Einstellungen unter {ui:Eigenes Wörterbuch}; das Kreu
 
 ## Große Notizen
 
-Ab etwa 200 KB zeigt der Quelltext keine Farben und bricht Zeilen nicht um, damit das Tippen schnell bleibt. Das steht unten als {ui:Große Notiz: ohne Umbruch und Farben}. Ein Klick darauf oder {ui:Zeilenumbruch ein-/ausschalten} in der {key:CommandPalette} schaltet den Umbruch für diese Notiz um.
+Ab etwa 200 KB zeigt der Quelltext keine Hervorhebung und bricht Zeilen nicht um, damit das Tippen schnell bleibt. Das steht unten als {ui:Große Notiz: ohne Umbruch und Hervorhebung}. Ein Klick darauf, {key:toggleWrap} oder {ui:Zeilenumbruch ein-/ausschalten} in der {key:CommandPalette} schaltet den Umbruch für diese Notiz um.
+
+Eine einzelne Zeile über etwa 250 KB öffnet Schrumbi im Quelltext statt in Live. Unten steht {ui:Diese Zeile ist zu lang für Live. Esc: zurück zu Live}; {key:escape} oder ein Klick darauf führt zurück.
 
 Ab etwa 80 KB prüft die Rechtschreibung nur den Text um die Schreibmarke. Das steht unten als {ui:Rechtschreibung nur um die Schreibmarke}.
 

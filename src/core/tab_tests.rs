@@ -326,6 +326,34 @@ fn a_rename_leaves_a_trail_for_views_that_still_show_the_old_path() {
 }
 
 #[test]
+fn renaming_a_folder_moves_the_buffers_windows_and_trails_of_the_notes_inside() {
+    let (root, _) = notes("rename-folder", &[]);
+    let dir = root.join("kurs");
+    std::fs::create_dir_all(dir.join("tief")).unwrap();
+    let (a, b) = (dir.join("a.md"), dir.join("tief").join("b.md"));
+    std::fs::write(&a, "x").unwrap();
+    std::fs::write(&b, "y").unwrap();
+    let mut lib = Library::new();
+    lib.buffer(&a);
+    lib.buffer(&b).edited("neu".into());
+    lib.note_windows.insert(b.clone());
+    lib.rename(&dir, "neu");
+    let moved = root.join("neu");
+    let (new_a, new_b) = (moved.join("a.md"), moved.join("tief").join("b.md"));
+    assert!(lib.last_error.is_none(), "{:?}", lib.last_error);
+    assert!(lib.buffers.contains_key(&new_a) && lib.buffers.contains_key(&new_b));
+    assert!(!lib.buffers.contains_key(&a) && !lib.buffers.contains_key(&b));
+    assert!(lib.note_windows.contains(&new_b) && !lib.note_windows.contains(&b));
+    assert_eq!(lib.moved_path(&b), Some(new_b.clone()));
+    assert_eq!(lib.moved_path(&a), Some(new_a));
+    let buffer = lib.buffer(&new_b);
+    assert!(buffer.dirty);
+    buffer.save().unwrap();
+    assert_eq!(std::fs::read_to_string(&new_b).unwrap(), "neu");
+    assert!(!dir.exists());
+}
+
+#[test]
 fn a_new_note_at_a_former_path_does_not_inherit_the_trail() {
     let (_, p) = notes("rename-trail-new", &["a.md"]);
     let mut lib = opened(&p);

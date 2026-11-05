@@ -58,6 +58,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Als PDF exportieren} | {key:exportPDF} |
 | {ui:In Notiz suchen} | {key:findInNote} |
 | {ui:Umbenennen…} | {key:renameNote} |
+| {ui:Zeilenumbruch ein-/ausschalten} | {key:toggleWrap} |
 
 ## Editor
 

@@ -117,6 +117,11 @@ pub mod radius {
     pub const FULL: f32 = 999.;
 }
 
+/// The ink opacity the small controls floating over a note light up with under the pointer.
+pub mod hover {
+    pub const FLOAT: f32 = 0.1;
+}
+
 /// The fill a control gets while the keyboard has the focus.
 pub mod ring {
     use gpui_kit::Hsla;

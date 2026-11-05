@@ -58,6 +58,7 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Als PDF exportieren} | {key:exportPDF} |
 | {ui:In Notiz suchen} | {key:findInNote} |
 | {ui:Umbenennen…} | {key:renameNote} |
+| {ui:Zeilenumbruch ein-/ausschalten} | {key:toggleWrap} |
 
 ## Editor
 

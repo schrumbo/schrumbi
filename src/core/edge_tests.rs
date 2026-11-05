@@ -376,7 +376,7 @@ fn undo_and_redo_move_renamed_files() {
 }
 
 #[test]
-fn a_series_joins_only_its_own_rename_steps() {
+fn a_series_joins_only_the_unbroken_run_of_its_steps_on_top() {
     let (root, mut lib) = workspace("undo-series-own", &config(1, 1));
     for name in ["a.txt", "b.txt", "other.txt"] {
         std::fs::write(root.join(name), "x").unwrap();
@@ -384,14 +384,15 @@ fn a_series_joins_only_its_own_rename_steps() {
     lib.rename_in_series(&root.join("a.txt"), "a2.txt").unwrap();
     lib.rename(&root.join("other.txt"), "other2.txt");
     lib.rename_in_series(&root.join("b.txt"), "b2.txt").unwrap();
-    lib.rename_in_series(&root.join("b2.txt"), "b2.txt").unwrap();
+    lib.rename_in_series(&root.join("b2.txt"), "b3.txt").unwrap();
     lib.finish_series(3);
     lib.undo();
-    assert!(root.join("a.txt").exists() && root.join("b.txt").exists(), "the series came back at once");
-    assert!(root.join("other2.txt").exists(), "an unrelated step stays a step of its own");
-    assert!(lib.can_undo());
+    assert!(root.join("b.txt").exists() && !root.join("b3.txt").exists(), "the run on top came back at once");
+    assert!(root.join("a2.txt").exists() && root.join("other2.txt").exists(), "steps below the break stay in their order");
     lib.undo();
-    assert!(root.join("other.txt").exists());
+    assert!(root.join("other.txt").exists() && root.join("a2.txt").exists(), "the unrelated step is next, not the older series step");
+    lib.undo();
+    assert!(root.join("a.txt").exists());
     assert!(!lib.can_undo());
     let _ = std::fs::remove_dir_all(root);
 }

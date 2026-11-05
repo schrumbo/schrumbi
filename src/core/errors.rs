@@ -4,16 +4,20 @@ use super::i18n::tr;
 
 /// Turns a file error into what happened and what to try, keeping the system's text for anything unexpected.
 pub fn explain(error: &anyhow::Error) -> String {
-    let io = error.downcast_ref::<std::io::Error>();
-    let busy = io.and_then(std::io::Error::raw_os_error).is_some_and(|code| if cfg!(windows) { matches!(code, 32 | 33) } else { matches!(code, 16 | 26) });
-    match io.map(std::io::Error::kind) {
-        _ if busy => tr("Die Datei wird gerade verwendet. Schließe sie in der anderen App und versuche es erneut."),
-        Some(ErrorKind::PermissionDenied) => tr("Keine Berechtigung. Prüfe die Zugriffsrechte des Ordners oder ob die Datei schreibgeschützt ist."),
-        Some(ErrorKind::NotFound) => tr("Die Datei wurde nicht gefunden. Sie wurde vielleicht verschoben oder gelöscht."),
-        Some(ErrorKind::StorageFull) => tr("Der Speicher ist voll. Gib Speicherplatz frei und versuche es erneut."),
-        Some(ErrorKind::AlreadyExists) => tr("Eine Datei mit diesem Namen existiert bereits. Wähle einen anderen Namen."),
-        Some(ErrorKind::ResourceBusy) => tr("Die Datei wird gerade verwendet. Schließe sie in der anderen App und versuche es erneut."),
-        _ => error.to_string(),
+    error.downcast_ref::<std::io::Error>().and_then(explain_io).unwrap_or_else(|| error.to_string())
+}
+
+/// What `explain` says for a file error it knows, in plain German with the next step; `None` for anything unexpected.
+pub fn explain_io(io: &std::io::Error) -> Option<String> {
+    let busy = io.raw_os_error().is_some_and(|code| if cfg!(windows) { matches!(code, 32 | 33) } else { matches!(code, 16 | 26) });
+    match io.kind() {
+        _ if busy => Some(tr("Die Datei wird gerade verwendet. Schließe sie in der anderen App und versuche es erneut.")),
+        ErrorKind::PermissionDenied => Some(tr("Keine Berechtigung. Prüfe die Zugriffsrechte des Ordners oder ob die Datei schreibgeschützt ist.")),
+        ErrorKind::NotFound => Some(tr("Die Datei wurde nicht gefunden. Sie wurde vielleicht verschoben oder gelöscht.")),
+        ErrorKind::StorageFull => Some(tr("Der Speicher ist voll. Gib Speicherplatz frei und versuche es erneut.")),
+        ErrorKind::AlreadyExists => Some(tr("Eine Datei mit diesem Namen existiert bereits. Wähle einen anderen Namen.")),
+        ErrorKind::ResourceBusy => Some(tr("Die Datei wird gerade verwendet. Schließe sie in der anderen App und versuche es erneut.")),
+        _ => None,
     }
 }
 

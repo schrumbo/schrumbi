@@ -55,6 +55,7 @@ pub enum ShortcutAction {
     ZoomIn,
     ZoomOut,
     ZoomReset,
+    ToggleWrap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,7 +90,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 49] = [
+    pub const ALL: [ShortcutAction; 50] = [
         Self::GoToday,
         Self::GoGrid,
         Self::GoRecord,
@@ -139,6 +140,7 @@ impl ShortcutAction {
         Self::ZoomIn,
         Self::ZoomOut,
         Self::ZoomReset,
+        Self::ToggleWrap,
     ];
 
     /// Storage key, matching the Swift app's raw values.
@@ -193,6 +195,7 @@ impl ShortcutAction {
             Self::ZoomIn => "zoomIn",
             Self::ZoomOut => "zoomOut",
             Self::ZoomReset => "zoomReset",
+            Self::ToggleWrap => "toggleWrap",
         }
     }
 
@@ -278,6 +281,7 @@ impl ShortcutAction {
             Self::ZoomIn => "Schrift größer",
             Self::ZoomOut => "Schrift kleiner",
             Self::ZoomReset => "Schriftgröße zurücksetzen",
+            Self::ToggleWrap => "Zeilenumbruch ein-/ausschalten",
         })
     }
 
@@ -350,6 +354,7 @@ impl ShortcutAction {
             Self::ZoomIn => s("+", true, false, false, false),
             Self::ZoomOut => s("-", true, false, false, false),
             Self::ZoomReset => s("0", true, false, false, false),
+            Self::ToggleWrap => s("z", true, false, true, false),
         })
     }
 
@@ -539,14 +544,13 @@ const fn fixed_on(platform: Platform, key: &'static str, command: bool, shift: b
     Fixed { key, command, shift, option, label, notes_only, platform }
 }
 
-const FIXED: [Fixed; 26] = [
+const FIXED: [Fixed; 25] = [
     fixed("k", true, false, false, "Befehl suchen…", false),
     fixed("p", true, false, false, "Befehl suchen…", false),
     fixed("p", true, true, false, "Befehl suchen…", false),
     fixed("/", true, false, false, "Tastenkürzel anzeigen", false),
     fixed("7", true, true, false, "Tastenkürzel anzeigen", false),
     fixed("f1", false, false, false, "Schrumbi-Anleitung", false),
-    fixed("f2", false, false, false, "Umbenennen", false),
     fixed(",", true, false, false, "Einstellungen", false),
     fixed("s", true, false, false, "Sichern", false),
     fixed("w", true, true, false, "Fenster schließen", false),
@@ -915,6 +919,16 @@ mod tests {
         let fixed = ShortcutAction::ZoomOut.fixed_conflicts();
         ShortcutAction::ZoomOut.reset();
         assert_eq!(fixed.len(), 1);
+    }
+
+    #[test]
+    fn f2_is_the_rename_actions_own_key_and_not_a_fixed_one() {
+        let f2 = s("f2", false, false, false, false);
+        assert_eq!(ShortcutAction::RenameNote.default_shortcut(), Some(f2.clone()));
+        ShortcutAction::ZoomOut.set(Some(f2));
+        let fixed = ShortcutAction::ZoomOut.fixed_conflicts();
+        ShortcutAction::ZoomOut.reset();
+        assert!(fixed.is_empty());
     }
 
     #[test]

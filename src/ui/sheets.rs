@@ -1,3 +1,4 @@
+use gpui_kit::base::actions::Cancel;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogEntrance;
@@ -22,6 +23,11 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     };
     if pending {
         super::drive::activate_window(window);
+        if close_popovers(window, cx) {
+            let lib = lib.clone();
+            window.on_next_frame(move |_, cx| lib.update(cx, |_, cx| cx.notify()));
+            return;
+        }
     }
     if lib.update(cx, |l, _| std::mem::take(&mut l.show_save_layout)) {
         let view = cx.new(|cx| super::quick::SaveLayout::new(window, cx));
@@ -43,7 +49,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     if let Some(r) = request {
         let form = cx.new(|cx| FilingForm::new(r.paths, r.assignment_id, true, window, cx));
         let handle = window.window_handle();
-        cx.subscribe(&form, move |_, _: &FilingEvent, cx| {
+        cx.subscribe(&form,move |_, _: &FilingEvent, cx| {
             let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));
             super::state::return_focus_to_page(cx);
         })
@@ -136,19 +142,35 @@ pub fn typing(window: &Window) -> bool {
     window.context_stack().iter().any(|c| c.contains("Input"))
 }
 
+/// Closes a menu or popover that has the keyboard, so a sheet opened by a shortcut does not stack on top of it.
+fn close_popovers(window: &mut Window, cx: &mut App) -> bool {
+    let open = window.context_stack().iter().any(|c| c.contains("PopupMenu"));
+    if open {
+        window.dispatch_action(Box::new(Cancel), cx);
+    }
+    open
+}
+
 /// Presents a sheet in a dialog that closes when the sheet emits `Dismissed`.
 fn show<V: Render + EventEmitter<Dismissed>>(view: Entity<V>, width: f32, window: &mut Window, cx: &mut App) {
     let handle = window.window_handle();
     cx.subscribe(&view, move |_, _: &Dismissed, cx| {
         let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));
-            super::state::return_focus_to_page(cx);
+        super::state::return_focus_to_page(cx);
     })
     .detach();
     window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(width)).p_0().on_ok(pass_enter).child(view.clone()));
 }
 
 /// Opens a sheet built on the spot, for pages with their own forms.
-pub fn show_sheet<V: Render + EventEmitter<Dismissed>>(width: f32, window: &mut Window, cx: &mut App, build: impl FnOnce(&mut Window, &mut Context<V>) -> V) {
+pub fn show_sheet<V: Render + EventEmitter<Dismissed>>(width: f32, window: &mut Window, cx: &mut App, build: impl FnOnce(&mut Window, &mut Context<V>) -> V + 'static) {
+    if close_popovers(window, cx) {
+        window.on_next_frame(move |window, cx| {
+            let view = cx.new(|cx| build(window, cx));
+            show(view, width, window, cx);
+        });
+        return;
+    }
     let view = cx.new(|cx| build(window, cx));
     show(view, width, window, cx);
 }
