@@ -289,6 +289,8 @@ pub struct Library {
     pub exporting_pdfs: HashSet<PathBuf>,
     /// Notes shown in their own window; their buffers outlive the tab.
     pub note_windows: HashSet<PathBuf>,
+    /// A note that is shown in its own window was asked for; that window comes to the front instead of a second editor.
+    pub raise_note_window: Option<PathBuf>,
     route: Route,
     closed_documents: Vec<(PathBuf, usize)>,
     /// The open document shown beside the current one.
@@ -454,6 +456,7 @@ impl Library {
             is_exporting: false,
             exporting_pdfs: HashSet::new(),
             note_windows: HashSet::new(),
+            raise_note_window: None,
             route: Route::Today,
             closed_documents: Vec::new(),
             split_document: None,
@@ -851,6 +854,9 @@ impl Library {
     /// Only an untouched preview that is not on screen in the other pane makes room for it.
     fn preview_in(&mut self, path: &Path, right: bool) {
         let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if self.raise_if_windowed(&path) {
+            return;
+        }
         let right = right && self.split_document.is_some() && matches!(self.route, Route::Doc(_));
         if self.open_documents.contains(&path) || !Self::opens_in_app(&path) {
             if right && self.open_documents.contains(&path) && self.active_document.as_ref() != Some(&path) {
@@ -3393,9 +3399,21 @@ impl Library {
         !path.is_dir() && IN_APP_TYPES.contains(&extension(&name_of(path)).to_lowercase().as_str())
     }
 
+    fn raise_if_windowed(&mut self, path: &Path) -> bool {
+        if !self.note_windows.contains(path) {
+            return false;
+        }
+        self.raise_note_window = Some(path.to_path_buf());
+        self.changed();
+        true
+    }
+
     /// Opens a file as a tab in the main window.
     pub fn open_document(&mut self, path: &Path) {
         let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if self.raise_if_windowed(&path) {
+            return;
+        }
         if self.split_document.as_ref() == Some(&path)
             && let Some(left) = self.active_document.clone()
         {
