@@ -170,10 +170,46 @@ fn emphasis_spans(line: &str, math: &[Range<usize>]) -> Vec<Span> {
     spans
 }
 
+fn target_ranges(line: &str) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    for (open, close) in [("](", ')'), ("[[", ']'), ("<http", '>')] {
+        let mut from = 0;
+        while let Some(i) = line[from..].find(open) {
+            let start = from + i + open.len();
+            let mut depth = 0usize;
+            let mut end = line.len();
+            for (j, c) in line[start..].char_indices() {
+                if c == '(' && close == ')' {
+                    depth += 1;
+                } else if c == close {
+                    if depth == 0 {
+                        end = start + j;
+                        break;
+                    }
+                    depth -= 1;
+                }
+            }
+            out.push(start..end);
+            from = end;
+        }
+    }
+    for scheme in ["http://", "https://"] {
+        let mut from = 0;
+        while let Some(i) = line[from..].find(scheme) {
+            let start = from + i;
+            let end = line[start..].find(|c: char| c.is_whitespace() || c == ')' || c == '>').map_or(line.len(), |e| start + e);
+            out.push(start..end);
+            from = end;
+        }
+    }
+    out
+}
+
 /// The text with the markers of complete spans of `token` taken out, so wrapping it again never nests them.
 fn without_inner_marks(text: &str, token: &str) -> String {
     let n = token.len();
-    let mut marks: Vec<Range<usize>> = emphasis_spans(text, &[]).into_iter().filter(|p| p.n == n && text.get(p.start..p.end).is_some_and(|t| t.starts_with(token) && t.ends_with(token))).flat_map(|p| [p.start..p.start + n, p.end - n..p.end]).collect();
+    let protected: Vec<Range<usize>> = math_ranges(text).into_iter().chain(target_ranges(text)).collect();
+    let mut marks: Vec<Range<usize>> = emphasis_spans(text, &protected).into_iter().filter(|p| p.n == n && text.get(p.start..p.end).is_some_and(|t| t.starts_with(token) && t.ends_with(token))).flat_map(|p| [p.start..p.start + n, p.end - n..p.end]).collect();
     marks.sort_by_key(|m| m.start);
     let mut out = String::new();
     let mut at = 0;
@@ -1227,6 +1263,20 @@ world");
         assert_eq!(apply(s, &wrap(s, 0..s.len(), "**")), "**plain x text**\n**b**");
         let s = "- plain **x** text\n- b";
         assert_eq!(apply(s, &wrap(s, 0..s.len(), "**")), "- **plain x text**\n- **b**");
+    }
+
+    #[test]
+    fn wrapping_lines_keeps_stars_in_formulas_links_and_code() {
+        let s = "Kraft $a*b*c$ wirkt\nrest";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "*")), "*Kraft $a*b*c$ wirkt*\n*rest*");
+        let s = "[x](a*b*c.md) *k*\nrest";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "*")), "*[x](a*b*c.md) k*\n*rest*");
+        let s = "https://a.de/*b*/c *k*\nrest";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "*")), "*https://a.de/*b*/c k*\n*rest*");
+        let s = "[[a*b*c]] *k*\nrest";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "*")), "*[[a*b*c]] k*\n*rest*");
+        let s = "`a*b*c` *k*\nrest";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "*")), "*`a*b*c` k*\n*rest*");
     }
 
     #[test]
