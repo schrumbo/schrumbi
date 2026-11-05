@@ -93,11 +93,14 @@ pub struct ParsedNote {
 /// How many list items or table rows one row of the reader holds, so a long list only builds what is on screen.
 const PART: usize = 8;
 
-/// One row of the reader: a top-level block, or a stretch of the items of a long list or the rows of a long table.
+/// How many lines of a long paragraph one row of the reader holds.
+const PARA_LINES: usize = 8;
+
+/// One row of the reader: a top-level block, or a stretch of the items of a long list, the rows of a long table or the lines of a long paragraph.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ReaderRow {
     pub block: usize,
-    /// The list items or table rows drawn, when the block is drawn in parts.
+    /// The list items, table rows or inlines drawn, when the block is drawn in parts.
     pub part: Option<(usize, usize)>,
     pub line: usize,
     pub end_line: usize,
@@ -492,6 +495,13 @@ fn reader_rows(src: &str, breaks: &Breaks, blocks: &[Block], sources: &[BlockSou
                     (from, from + part.len(), line, links, room)
                 })
                 .collect(),
+            Block::Paragraph(inl) => paragraph_parts(inl)
+                .into_iter()
+                .map(|(from, to, breaks_before)| {
+                    let links = inl[from..to].iter().filter(|i| matches!(i, Inline::Link(..))).count();
+                    (from, to, (source.line + breaks_before).min(source.end_line.saturating_sub(1)), links, 0)
+                })
+                .collect(),
             _ => Vec::new(),
         };
         if parts.is_empty() {
@@ -503,8 +513,13 @@ fn reader_rows(src: &str, breaks: &Breaks, blocks: &[Block], sources: &[BlockSou
         for (k, (from, to, line, links, room)) in parts.iter().copied().enumerate() {
             let end_line = parts.get(k + 1).map_or(source.end_line, |next| next.2).max(line);
             let mut hash = std::collections::hash_map::DefaultHasher::new();
-            src.get(line_start(line)..line_start(end_line)).unwrap_or_default().hash(&mut hash);
-            (from, to, source.line, matches!(b, Block::Table { .. }).then_some(source.hash)).hash(&mut hash);
+            match b {
+                Block::Paragraph(inl) => inline_hash(&inl[from..to], &mut hash),
+                _ => {
+                    src.get(line_start(line)..line_start(end_line)).unwrap_or_default().hash(&mut hash);
+                    (from, to, source.line, matches!(b, Block::Table { .. }).then_some(source.hash)).hash(&mut hash);
+                }
+            }
             if let Block::List { start, .. } = b {
                 start.hash(&mut hash);
             }
@@ -514,6 +529,60 @@ fn reader_rows(src: &str, breaks: &Breaks, blocks: &[Block], sources: &[BlockSou
         }
     }
     rows
+}
+
+/// Where a long paragraph breaks into rows: the inlines of each row and the line breaks before it.
+/// A paragraph with a picture, or too short, stays whole.
+fn paragraph_parts(inlines: &[Inline]) -> Vec<(usize, usize, usize)> {
+    let is_break = |i: &Inline| matches!(i, Inline::Text(t, st) if t == "
+" && !st.code);
+    if inlines.iter().filter(|i| is_break(i)).count() < 2 * PARA_LINES || inlines.iter().any(|i| matches!(i, Inline::Image(..))) {
+        return Vec::new();
+    }
+    let mut parts = Vec::new();
+    let (mut from, mut breaks, mut seen) = (0, 0, 0);
+    for (at, inline) in inlines.iter().enumerate() {
+        if !is_break(inline) {
+            continue;
+        }
+        seen += 1;
+        let neighbours_ok = at > from && inlines.get(at + 1).is_some_and(|next| !is_break(next));
+        if seen - breaks >= PARA_LINES && neighbours_ok && !is_break(&inlines[at - 1]) {
+            parts.push((from, at, breaks));
+            from = at + 1;
+            breaks = seen;
+        }
+    }
+    parts.push((from, inlines.len(), breaks));
+    parts
+}
+
+/// Feeds what is drawn for these inlines to `hash`, so a part of a paragraph is known again by its content.
+fn inline_hash(inlines: &[Inline], hash: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    let style = |st: &Style, hash: &mut dyn std::hash::Hasher| {
+        let bits = [st.bold, st.italic, st.strike, st.code, st.link, st.underline, st.small].iter().fold(0u32, |all, on| all << 1 | u32::from(*on));
+        let mut hash = hash;
+        (bits, st.mark.map(|m| m as u8), st.color).hash(&mut hash);
+    };
+    for inline in inlines {
+        match inline {
+            Inline::Text(text, st) => {
+                0u8.hash(hash);
+                text.hash(hash);
+                style(st, hash);
+            }
+            Inline::Link(text, st, url) => {
+                1u8.hash(hash);
+                (text, url).hash(hash);
+                style(st, hash);
+            }
+            Inline::Image(src, alt, target) => (2u8, src, alt, target).hash(hash),
+            Inline::Math(source) => (3u8, source).hash(hash),
+            Inline::FootnoteRef(id) => (4u8, id).hash(hash),
+            Inline::Tag(tag) => (5u8, tag).hash(hash),
+        }
+    }
 }
 
 /// More than the things drawn for these inlines count, so the parts of one block number theirs without meeting.
@@ -2776,6 +2845,7 @@ pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_to
     let element = match note.blocks.get(row.block) {
         Some(Block::List { start, items }) => list_items(start, items.get(from..to.min(items.len())).unwrap_or_default(), from, &cx).into_any_element(),
         Some(Block::Table { head, rows, aligns }) => table(head, rows, aligns, Some((from, to, note.sources.get(row.block).map_or((0, 0), |s| (s.hash, s.line)))), &cx),
+        Some(Block::Paragraph(inl)) => styled_text(inl.get(from..to.min(inl.len())).unwrap_or_default(), &cx, note_size(font::BODY)),
         _ => div().into_any_element(),
     };
     found_mark(element, found.filter(|f| f.block == row.block && (row.line..row.end_line).contains(&f.line)), t)
@@ -3093,6 +3163,38 @@ Ende
         let toggled = parse(&src.replacen("75. Punkt", "75. Punkt!", 1));
         let changed: Vec<usize> = rows.iter().zip(toggled.rows()).enumerate().filter(|(_, (a, b))| a.hash != b.hash).map(|(i, _)| i).collect();
         assert_eq!(changed, [list_row(75)]);
+    }
+
+    #[test]
+    fn a_long_paragraph_is_drawn_in_parts_that_keep_its_lines_links_and_order() {
+        let lines: Vec<String> = (0..120).map(|i| if i == 70 { format!("Zeile {i} [Ziel](https://beispiel.de)") } else { format!("Zeile {i} **fett**") }).collect();
+        let src = format!("# Titel\n\n{}\n\nEnde\n", lines.join("\n"));
+        let note = parse(&src);
+        let rows = note.rows();
+        let parts: Vec<usize> = (0..rows.len()).filter(|i| rows[*i].block == 1).collect();
+        assert_eq!(parts.len(), 120 / super::PARA_LINES);
+        assert!(parts.iter().all(|i| rows[*i].part.is_some()));
+        let Some(super::Block::Paragraph(inl)) = note.blocks.get(1) else { panic!("no paragraph") };
+        let drawn: Vec<String> = parts.iter().map(|i| rows[*i].part.map(|(from, to)| super::plain_text(&inl[from..to])).unwrap_or_default()).collect();
+        assert_eq!(drawn.join("\n"), super::plain_text(inl));
+        assert!(drawn.iter().all(|d| !d.is_empty() && !d.starts_with('\n') && !d.ends_with('\n')));
+        assert_eq!(rows[parts[0]].line, 2);
+        assert!(rows.windows(2).all(|w| w[0].order < w[1].order));
+        assert_eq!(note.row_of_line(72), note.row_of_link(0));
+        assert_eq!(note.links().len(), 1);
+        assert!(rows.iter().enumerate().all(|(i, r)| r.links_before == usize::from(i > note.row_of_link(0))));
+        assert_eq!((note.row_gap(parts[0]), note.row_gap(*parts.last().unwrap_or(&0))), (0., super::space::M));
+        let again = parse(&src.replacen("Zeile 90 ", "Zeile 90! ", 1));
+        let changed: Vec<usize> = rows.iter().zip(again.rows()).enumerate().filter(|(_, (a, b))| a.hash != b.hash).map(|(i, _)| i).collect();
+        assert_eq!(changed, [note.row_of_line(92)]);
+    }
+
+    #[test]
+    fn short_paragraphs_and_paragraphs_with_pictures_stay_one_row() {
+        let short: String = (0..2 * super::PARA_LINES - 1).map(|i| format!("Zeile {i}\n")).collect();
+        assert!(parse(&short).rows().iter().all(|r| r.part.is_none()));
+        let long: String = (0..100).map(|i| if i == 5 { "![Bild](bild.png)\n".to_string() } else { format!("Zeile {i}\n") }).collect();
+        assert!(parse(&long).rows().iter().all(|r| r.part.is_none()));
     }
 
     #[test]
