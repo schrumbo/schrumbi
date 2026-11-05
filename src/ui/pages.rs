@@ -402,14 +402,23 @@ impl Pages {
             .clone()
     }
 
-    /// The notes room: the workspace's files beside whatever note is shown.
-    /// Makes a note in the folder chosen in the explorer, like its own new-note button; false where there is no explorer to ask.
+    /// Makes a note in the folder chosen in the explorer, like its own new-note button, when the explorer is shown and was used after the open note.
+    /// False where there is nothing to ask: the caller then names the note in a sheet or beside the open note.
     pub fn new_note_in_explorer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(page) = self.notes_page.clone().filter(|_| state::read(cx, |l| matches!(l.route(), Route::Notes))) else { return false };
+        let Some(page) = self.notes_page.clone().filter(|_| Self::explorer_shown(self.width)) else { return false };
+        let newer = match state::read(cx, |l| l.route().clone()) {
+            Route::Notes => true,
+            Route::Doc(_) => page.read(cx).has_focus(window, cx),
+            _ => false,
+        };
+        if !newer {
+            return false;
+        }
         page.update(cx, |p, cx| p.new_note(window, cx));
         true
     }
 
+    /// The notes room: the workspace's files beside whatever note is shown.
     fn explorer_shown(width: f32) -> bool {
         !crate::core::prefs::get().notes_explorer_hidden && width >= 620.
     }

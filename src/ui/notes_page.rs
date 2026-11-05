@@ -463,6 +463,11 @@ impl NotesPage {
         window.focus(&self.focus, cx);
     }
 
+    /// Whether the keyboard is in the explorer, so it was used after the open note.
+    pub fn has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.focus.contains_focused(window, cx)
+    }
+
     /// The explorer's full width, its resize handle included.
     pub fn outer_width(&self) -> f32 {
         self.width + space::XS

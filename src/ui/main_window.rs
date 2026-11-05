@@ -533,7 +533,16 @@ impl Render for MainWindow {
         let page_motion = motion::timed(motion::FAST, cx);
         let toast_id = l.toast.as_ref().map_or(0, |toast| toast.id);
         let toast = l.toast.as_ref().map(|toast| toast_view(toast.message.clone(), toast.icon, toast.undo.is_some().then(|| toast.action_title.clone()), &t));
-        let notice_room = if matches!(l.route(), Route::Doc(_)) && [l.active_document.as_ref(), l.split_document.as_ref()].into_iter().flatten().any(|d| l.save_problems.contains(d) && l.buffers.get(d).is_some_and(|b| b.dirty)) { control::SAVE_NOTICE } else { 0. };
+        let notice_room = if matches!(l.route(), Route::Doc(_)) {
+            [l.active_document.as_ref(), l.split_document.as_ref()]
+                .into_iter()
+                .flatten()
+                .filter(|d| l.save_problems.contains(d) && l.buffers.get(*d).is_some_and(|b| b.dirty))
+                .map(|d| l.save_notice_height.get(d).copied().unwrap_or(control::SAVE_NOTICE))
+                .fold(0., f32::max)
+        } else {
+            0.
+        };
         let working = (!l.exporting_pdfs.is_empty() && l.toast.is_none()).then(|| toast_view(tr("PDF wird erstellt …"), "loader", None, &t));
         let error = l.last_error.clone();
         let broken = l.config_broken;

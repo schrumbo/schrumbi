@@ -313,6 +313,8 @@ pub struct Library {
     pub unsaved_shown: Vec<PathBuf>,
     /// Notes whose editor shows that saving failed; the toast keeps clear of the notice.
     pub save_problems: Vec<PathBuf>,
+    /// The height each save notice measured when drawn, so the toast stands above it.
+    pub save_notice_height: HashMap<PathBuf, f32>,
     pub open_documents: Vec<PathBuf>,
     pub active_document: Option<PathBuf>,
     pub search_query: String,
@@ -493,6 +495,7 @@ impl Library {
             toast_hovered: false,
             unsaved_shown: Vec::new(),
             save_problems: Vec::new(),
+            save_notice_height: HashMap::new(),
             open_documents: Vec::new(),
             active_document: None,
             search_query: String::new(),

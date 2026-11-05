@@ -1593,9 +1593,8 @@
   "Hier steht nur der Anfang dieser langen Zeile, %@ KB mehr. Lesen zeigt alles.": "Only the start of this long line is shown here, %@ KB more. Reading shows all of it.",
   "Lange Notiz: hier geht kein Zeilenumbruch. Lesen zeigt alles umgebrochen.": "Long note: line wrapping is not available here. Reading shows it all wrapped.",
   "Klicken öffnet die Zeile im Quelltext.": "Click to open the line in the source.",
-  "„%@“ ließ sich nicht sichern und bleibt offen.": "“%@” could not be saved and stays open.",
-  "%@ Notizen ließen sich nicht sichern und bleiben offen.": "%@ notes could not be saved and stay open.",
-  "Versuche…": "Trying…",
+  "„%@“ ließ sich nicht sichern und bleibt offen. Erneut versuchen steht in der Notiz.": "“%@” could not be saved and stays open. Try again is in the note.",
+  "%@ Notizen ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.": "%@ notes could not be saved and stay open. Try again is in each note.",
   "Fett und Kursiv gehen nicht innerhalb einer Linkadresse oder Formel.": "Bold and italic don’t work inside a link address or formula.",
   "Live-Ansicht ein/aus": "Turn Live view on or off"
 }

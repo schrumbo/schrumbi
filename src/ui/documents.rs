@@ -321,6 +321,7 @@ pub struct NoteView {
     save_flash: Option<Task<()>>,
     folder_wait: Option<Task<()>>,
     retry_focus: FocusHandle,
+    retry_held: bool,
     /// Shown inside the main window with tabs, or in its own window.
     pub embedded: bool,
     focus: FocusHandle,
@@ -448,7 +449,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -512,6 +513,16 @@ impl NoteView {
         let text = self.current_text(cx);
         self.sync_find(&text, true, true, window, cx);
         cx.notify();
+    }
+
+    fn focus_writing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode == Mode::Live && self.live.is_some() {
+            self.block.update(cx, |b, cx| b.focus(window, cx));
+        } else if matches!(self.mode, Mode::Source | Mode::Split) {
+            self.editor.update(cx, |s, cx| s.focus(window, cx));
+        } else {
+            window.focus(&self.focus, cx);
+        }
     }
 
     fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -873,7 +884,7 @@ impl NoteView {
         let notice = self.wrap_notice.as_ref().map(|(on, _)| if *on { tr("Zeilenumbruch an") } else { tr("Zeilenumbruch aus") });
         if self.long_line && self.mode == Mode::Source {
             if let Some(notice) = notice {
-                return Some(div().id("wrap-notice").min_w_0().truncate().px(px(space::XS)).child(notice).into_any_element());
+                return Some(div().id("wrap-notice").min_w_0().min_h(px(control::S)).flex().items_center().truncate().px(px(space::XS)).child(notice).into_any_element());
             }
             let me = cx.entity();
             let caption = div().id("long-line").min_w_0().min_h(px(control::S)).flex().items_center().truncate().rounded(px(radius::SMALL)).px(px(space::XS)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::FLOAT), radius::SMALL).tooltip(tip(tr("Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück zu Live.")));
@@ -893,7 +904,7 @@ impl NoteView {
         let caption = div().id("plain-note").min_w_0().truncate().rounded(px(radius::SMALL)).px(px(space::XS));
         if !self.editor_plain {
             if let Some(notice) = notice {
-                return Some(div().id("wrap-notice").min_w_0().truncate().px(px(space::XS)).child(notice).into_any_element());
+                return Some(div().id("wrap-notice").min_w_0().min_h(px(control::S)).flex().items_center().truncate().px(px(space::XS)).child(notice).into_any_element());
             }
             return spelling.then(|| caption.tooltip(tip(tr("Die Rechtschreibung prüft in langen Notizen nur den Text um die Schreibmarke."))).child(tr("Rechtschreibung nur um die Schreibmarke")).into_any_element());
         }
@@ -2222,12 +2233,23 @@ impl NoteView {
     fn save_notice(&self, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> impl IntoElement + use<> {
         let me = cx.entity();
         let pending = self.save_pending.is_some();
-        let retry = Button::new("save-retry").small().primary().label(if pending { tr("Versuche…") } else { tr("Erneut versuchen") }).track_focus(&self.retry_focus).loading(pending).disabled(pending).on_click(move |_, _, cx| me.update(cx, |n, cx| n.retry_save(cx)));
+        let retry = Button::new("save-retry").small().primary().label(tr("Erneut versuchen")).track_focus(&self.retry_focus).loading(pending).disabled(pending).on_click(move |_, _, cx| me.update(cx, |n, cx| n.retry_save(cx)));
         let dirty = state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.dirty));
         let open = self.save_problem.is_some() && dirty;
         let detail = self.save_problem.clone();
         let lit = super::motion::follow("note-save-flash", if self.save_flash.is_some() { 1. } else { 0. }, super::motion::timed(super::motion::MEDIUM, cx), window, cx);
-        super::motion::reveal("note-save-problem", open, div().p(px(space::S)).child(notice("triangle-alert", t.orange, tr("Diese Notiz ließ sich nicht sichern."), detail, retry, t).bg(t.orange.opacity(tint::SAVE_NOTICE + tint::SAVE_FLASH * lit))))
+        let path = self.path.clone();
+        let measure = canvas(
+            move |bounds, _, cx| {
+                let height = f32::from(bounds.size.height);
+                if state::read(cx, |l| l.save_notice_height.get(&path).is_none_or(|known| (known - height).abs() > 0.5)) {
+                    let path = path.clone();
+                    cx.defer(move |cx| act(cx, |l| drop(l.save_notice_height.insert(path, height))));
+                }
+            },
+            |_, _, _, _| {},
+        );
+        super::motion::reveal("note-save-problem", open, div().relative().p(px(space::S)).child(notice("triangle-alert", t.orange, tr("Diese Notiz ließ sich nicht sichern."), detail, retry, t).bg(t.orange.opacity(tint::SAVE_NOTICE + tint::SAVE_FLASH * lit))).child(measure.absolute().top_0().left_0().size_full()))
     }
 
     fn conflict_notice(&self, open: bool, t: &Theme) -> impl IntoElement + use<> {
@@ -2348,7 +2370,7 @@ impl NoteView {
         let (s, r) = self.with_text(cx);
         let edit = edit_ops::wrap(&s, r.clone(), token);
         let unchanged = edit.range == r && s.get(r.clone()) == Some(edit.text.as_str());
-        if unchanged && edit_ops::emphasis_refused(&s, &r) && !HINTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        if !HINTED.load(std::sync::atomic::Ordering::Relaxed) && unchanged && edit_ops::emphasis_refused(&s, &r) && !HINTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
             act(cx, |l| l.notify(tr("Fett und Kursiv gehen nicht innerhalb einer Linkadresse oder Formel."), "info", None, None));
         }
         self.apply(edit, window, cx)
@@ -3360,6 +3382,11 @@ impl Render for NoteView {
         if std::mem::take(&mut self.needs_focus) {
             self.activate(window, cx);
         }
+        if self.save_problem.is_some() {
+            self.retry_held = self.retry_focus.is_focused(window);
+        } else if std::mem::take(&mut self.retry_held) && (self.retry_focus.is_focused(window) || window.focused(cx).is_none()) {
+            self.focus_writing(window, cx);
+        }
         let settings = prefs::get();
         if !settings.spell_check && self.spell.marks.is_some() {
             self.clear_spelling(cx);
@@ -3671,8 +3698,8 @@ fn save_buffer(path: &Path, cx: &mut App) -> bool {
 
 fn unsaved_message(names: &[String]) -> String {
     match names {
-        [one] => trf("„%@“ ließ sich nicht sichern und bleibt offen.", &[one]),
-        _ => trf("%@ Notizen ließen sich nicht sichern und bleiben offen.", &[&names.len().to_string()]),
+        [one] => trf("„%@“ ließ sich nicht sichern und bleibt offen. Erneut versuchen steht in der Notiz.", &[one]),
+        _ => trf("%@ Notizen ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.", &[&crate::core::i18n::grouped(names.len())]),
     }
 }
 
@@ -4228,7 +4255,7 @@ mod window_tests {
 
     #[test]
     fn the_toast_for_notes_that_stay_open_names_one_and_counts_several() {
-        assert_eq!(unsaved_message(&["Analysis".to_string()]), "„Analysis“ ließ sich nicht sichern und bleibt offen.");
-        assert_eq!(unsaved_message(&["A".to_string(), "B".to_string(), "C".to_string()]), "3 Notizen ließen sich nicht sichern und bleiben offen.");
+        assert_eq!(unsaved_message(&["Analysis".to_string()]), "„Analysis“ ließ sich nicht sichern und bleibt offen. Erneut versuchen steht in der Notiz.");
+        assert_eq!(unsaved_message(&["A".to_string(), "B".to_string(), "C".to_string()]), "3 Notizen ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.");
     }
 }
