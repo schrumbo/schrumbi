@@ -1317,6 +1317,28 @@ fn undo_waits_for_a_running_trash_and_then_takes_it_back() {
 }
 
 #[test]
+fn a_scan_reads_only_changed_notes_again_and_keeps_links_tags_and_backlinks_right() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    use crate::core::vault::index;
+    let root = dunce::canonicalize(folder("scan-incremental")).unwrap();
+    let (a, b) = (root.join("A.md"), root.join("B.md"));
+    std::fs::write(&a, "# A\n[[B]] #alt\n").unwrap();
+    std::fs::write(&b, "# B\nnichts\n").unwrap();
+    index::rebuild(&root, &[]);
+    let first = index::current();
+    assert_eq!(first.backlinks.get(&b).map(Vec::len), Some(1));
+    assert!(first.tags.contains_key("alt"));
+    std::fs::write(&a, "# A\n[[B]] [[Neu]] #neu\n").unwrap();
+    index::rebuild(&root, &[]);
+    let second = index::current();
+    assert!(std::sync::Arc::ptr_eq(&first.notes[&b], &second.notes[&b]), "an untouched note is not parsed again");
+    assert!(!std::sync::Arc::ptr_eq(&first.notes[&a], &second.notes[&a]));
+    assert_eq!(second.backlinks.get(&b).map(Vec::len), Some(1));
+    assert!(second.missing.contains_key("Neu"));
+    assert!(second.tags.contains_key("neu") && !second.tags.contains_key("alt"));
+}
+
+#[test]
 fn trashed_notes_stay_out_of_the_tree_until_a_later_scan() {
     let _guard = VAULT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     use crate::core::vault::index;

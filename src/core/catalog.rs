@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 
 use chrono::{DateTime, Local, NaiveDate};
 use regex::Regex;
@@ -94,7 +94,11 @@ impl FileKind {
     }
 }
 
-/// Builds the catalog from indexed files; run off the main thread.
+type Headings = HashMap<PathBuf, (DateTime<Local>, Option<String>)>;
+
+static HEADINGS: LazyLock<Mutex<HashMap<PathBuf, Headings>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Builds the catalog from indexed files; run off the main thread. Headings are read again only for files changed since the last build.
 pub fn build(files: &[IndexedFile], root: &Path, config: &StudyConfig) -> Vec<CatalogFile> {
     let mut modules: Vec<&Module> = config.modules.iter().collect();
     modules.sort_by_key(|m| std::cmp::Reverse(m.folder.len()));
@@ -112,7 +116,9 @@ pub fn build(files: &[IndexedFile], root: &Path, config: &StudyConfig) -> Vec<Ca
         }
         false
     };
-    files
+    let known = HEADINGS.lock().map(|mut all| all.remove(root)).ok().flatten().unwrap_or_default();
+    let mut kept: Headings = HashMap::with_capacity(known.len());
+    let catalog = files
         .iter()
         .filter_map(|f| {
             let rel = super::text::slash_path(f.path.strip_prefix(root).ok()?);
@@ -132,7 +138,12 @@ pub fn build(files: &[IndexedFile], root: &Path, config: &StudyConfig) -> Vec<Ca
             }
             let place: Vec<String> = components[..components.len() - 1].iter().map(|s| s.to_string()).collect();
             let base = module.map_or_else(|| root.to_path_buf(), |m| root.join(&m.folder));
-            let title = note_heading(&f.path).or_else(|| module.and_then(|m| namings.get(m.id.as_str())?.parse(&f.name)).map(|p| p.title.replace('-', " ")));
+            let heading = match known.get(&f.path).filter(|(modified, _)| *modified == f.modified) {
+                Some((_, heading)) => heading.clone(),
+                None => note_heading(&f.path),
+            };
+            kept.insert(f.path.clone(), (f.modified, heading.clone()));
+            let title = heading.or_else(|| module.and_then(|m| namings.get(m.id.as_str())?.parse(&f.name)).map(|p| p.title.replace('-', " ")));
             let haystack = fold(&[module.map_or("", |m| m.code.as_str())].into_iter().chain(place.iter().map(String::as_str)).chain([f.name.as_str(), title.as_deref().unwrap_or("")]).collect::<Vec<_>>().join(" "));
             Some(CatalogFile {
                 file: f.clone(),
@@ -147,7 +158,11 @@ pub fn build(files: &[IndexedFile], root: &Path, config: &StudyConfig) -> Vec<Ca
                 title,
             })
         })
-        .collect()
+        .collect();
+    if let Ok(mut all) = HEADINGS.lock() {
+        all.insert(root.to_path_buf(), kept);
+    }
+    catalog
 }
 
 /// First Markdown heading, read from the start of the file.
@@ -303,6 +318,29 @@ mod tests {
         assert_eq!(q.module_id.as_deref(), Some("p1"));
         assert_eq!(q.week, Some(3));
         assert_eq!(q.terms, ["radar"]);
+    }
+
+    #[test]
+    fn headings_are_read_again_only_for_changed_files() {
+        let dir = std::env::temp_dir().join(format!("schrumbi-headings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.md"), dir.join("b.md"));
+        std::fs::write(&a, "# Alt\n").unwrap();
+        std::fs::write(&b, "# Bleibt\n").unwrap();
+        let then = Local::now();
+        let files = |at: DateTime<Local>| {
+            vec![
+                IndexedFile { path: a.clone(), name: "a.md".into(), modified: at },
+                IndexedFile { path: b.clone(), name: "b.md".into(), modified: then },
+            ]
+        };
+        let titles = |c: Vec<CatalogFile>| c.into_iter().map(|f| f.title).collect::<Vec<_>>();
+        let config = StudyConfig::default();
+        assert_eq!(titles(build(&files(then), &dir, &config)), [Some("Alt".to_string()), Some("Bleibt".to_string())]);
+        std::fs::write(&a, "# Neu\n").unwrap();
+        std::fs::write(&b, "# Ignoriert\n").unwrap();
+        let later = then + chrono::Duration::seconds(5);
+        assert_eq!(titles(build(&files(later), &dir, &config)), [Some("Neu".to_string()), Some("Bleibt".to_string())]);
     }
 
     #[test]

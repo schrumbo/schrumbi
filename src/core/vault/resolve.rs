@@ -8,6 +8,9 @@ use crate::core::markdown;
 
 /// Case and Unicode form never decide whether a link resolves.
 fn key(s: &str) -> String {
+    if s.is_ascii() {
+        return s.to_ascii_lowercase();
+    }
     s.nfc().collect::<String>().to_lowercase()
 }
 
@@ -127,6 +130,12 @@ mod tests {
         let root = PathBuf::from("/v");
         let files = ["A.md", "Ordner/A.md", "Ordner/Tief/C.md", "Ordner/Bild.png", "Übung.md", "x/Lang.md", "y/z/Lang.md"].map(|f| root.join(f));
         Resolver::new(&root, files, [("Spitzname".to_string(), root.join("Ordner/Tief/C.md"))])
+    }
+
+    #[test]
+    fn keys_ignore_case_and_normalization() {
+        assert_eq!(key("Messung 19.MD"), "messung 19.md");
+        assert_eq!(key("U\u{308}bung"), key("Übung"));
     }
 
     fn get(r: &Resolver, link: &str, from: Option<&str>) -> Option<String> {

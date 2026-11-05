@@ -33,6 +33,9 @@ pub fn strip_diacritics(s: &str) -> String {
 
 /// Lowercased, umlauts transliterated, diacritics removed, so "Übung" matches "uebung".
 pub fn fold(s: &str) -> String {
+    if s.is_ascii() {
+        return s.to_ascii_lowercase();
+    }
     let lower = s.to_lowercase().replace('ä', "ae").replace('ö', "oe").replace('ü', "ue").replace('ß', "ss");
     strip_diacritics(&lower)
 }
@@ -111,6 +114,14 @@ mod tests {
                     y.next();
                 }
             }
+        }
+    }
+
+    #[test]
+    fn folds_ascii_like_the_general_path() {
+        let slow = |s: &str| strip_diacritics(&s.to_lowercase().replace('ä', "ae").replace('ö', "oe").replace('ü', "ue").replace('ß', "ss"));
+        for s in ["", "Messung 19997", "Übung","A-b_C.md", "ABC xyz 123 \t\n"] {
+            assert_eq!(fold(s), slow(s), "{s:?}");
         }
     }
 

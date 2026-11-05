@@ -319,7 +319,7 @@ pub fn all_cards() -> Arc<Vec<Card>> {
 }
 
 fn written_cards(vault: &VaultIndex) -> Vec<(Arc<RawCard>, Arc<PathBuf>, Arc<String>)> {
-    let mut notes: Vec<(&PathBuf, &index::NoteFacts)> = vault.notes.iter().filter(|(p, f)| !f.cards.is_empty() && !vault.is_template(p) && markdown::is_markdown(p)).collect();
+    let mut notes: Vec<(&PathBuf, &std::sync::Arc<index::NoteFacts>)> = vault.notes.iter().filter(|(p, f)| !f.cards.is_empty() && !vault.is_template(p) && markdown::is_markdown(p)).collect();
     notes.sort_by(|a, b| a.0.cmp(b.0));
     let mut seen = HashSet::new();
     let mut cards = Vec::new();
