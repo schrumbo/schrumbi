@@ -177,6 +177,11 @@ fn editor_language(len: usize) -> &'static str {
     if len <= RICH_EDITOR_UNTIL { "markdown" } else { "text" }
 }
 
+/// Whether a note of this length is parsed away from the interface in this mode, so the last parse keeps showing meanwhile.
+fn parses_in_background(mode: Mode, len: usize) -> bool {
+    matches!(mode, Mode::Read | Mode::Split) && len >= PARSE_IN_BACKGROUND_FROM
+}
+
 /// The lines of a long note around the caret that are checked for spelling; a short note is checked whole.
 fn spell_window(text: &str, caret: usize) -> std::ops::Range<usize> {
     if text.len() <= 2 * SPELL_WINDOW {
@@ -184,7 +189,20 @@ fn spell_window(text: &str, caret: usize) -> std::ops::Range<usize> {
     }
     let boundary = |at: usize| (0..=at.min(text.len())).rev().find(|i| text.is_char_boundary(*i)).unwrap_or(0);
     let (from, to) = (boundary(caret.saturating_sub(SPELL_WINDOW)), boundary(caret + SPELL_WINDOW));
-    let from = text[..from].rfind('\n').map_or(0, |i| i + 1);
+    let mut from = text[..from].rfind('\n').map_or(0, |i| i + 1);
+    let last_fence = text[..from]
+        .split_inclusive('\n')
+        .scan(0, |at, line| {
+            let start = *at;
+            *at += line.len();
+            Some((start, line))
+        })
+        .filter(|(_, line)| line.trim_start().starts_with("```"))
+        .map(|(start, _)| start)
+        .collect::<Vec<_>>();
+    if last_fence.len() % 2 == 1 {
+        from = last_fence[last_fence.len() - 1];
+    }
     let to = text[to..].find('\n').map_or(text.len(), |i| to + i);
     from..to
 }
@@ -279,7 +297,7 @@ impl NoteView {
         let text = state::lib(cx).update(cx, |l, _| l.buffer(&path).text.clone());
         let editor = cx.new(|cx| EditorState::new(window, cx).language(editor_language(text.len())).soft_wrap(text.len() <= RICH_EDITOR_UNTIL).line_number(true).default_value(text.clone()));
         editor.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(path.clone())));
-        let block = cx.new(|cx| EditorState::new(window, cx).soft_wrap(true).line_number(false).folding(false).smart_indent(false).scroll_beyond_last_line(Some(0)).placeholder(tr("Schreibe oder tippe / für Befehle")));
+        let block = cx.new(|cx| EditorState::new(window, cx).soft_wrap(true).line_number(false).folding(false).smart_indent(false).scroll_beyond_last_line(Some(0)));
         block.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(path.clone())));
         let lib = state::lib(cx);
         let p = path.clone();
@@ -358,7 +376,9 @@ impl NoteView {
                         s.set_scroll_offset(scroll, cx);
                     });
                     this.syncing = false;
-                    this.parsed = None;
+                    if !parses_in_background(this.mode, text.len()) {
+                        this.parsed = None;
+                    }
                 }
                 cx.notify();
             }),
@@ -705,6 +725,8 @@ impl NoteView {
         }
         if self.mode == Mode::Live && state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.text.trim().is_empty())) {
             self.open_line(0, None, window, cx);
+        } else if self.mode == Mode::Live && self.live.is_some() {
+            self.block.update(cx, |b, cx| b.focus(window, cx));
         } else if !matches!(self.mode, Mode::Source | Mode::Split) {
             window.focus(&self.focus, cx);
         } else {
@@ -945,7 +967,10 @@ impl NoteView {
 
     /// What the reader draws for the text: a parse made now for a short note, for a long one the last parse while a new one is made away from the interface, `None` before there is any.
     fn parsed_for_reader(&mut self, text: &Arc<str>, cx: &mut Context<Self>) -> Option<Rc<ParsedNote>> {
-        if self.mode == Mode::Live || text.len() < PARSE_IN_BACKGROUND_FROM || !self.mode_parses_apart() {
+        if !parses_in_background(self.mode, text.len()) {
+            self.parse_job = None;
+            self.parse_notice = None;
+            self.parse_slow = false;
             return Some(self.parse_now(text));
         }
         if self.is_parsed(text) {
@@ -980,10 +1005,6 @@ impl NoteView {
             self.parse_job = Some(job);
         }
         self.parsed.as_ref().map(|(_, p)| p.clone())
-    }
-
-    fn mode_parses_apart(&self) -> bool {
-        matches!(self.mode, Mode::Read | Mode::Split)
     }
 
     /// Closes what is being written; the note is drawn fresh from what is in it now.
@@ -1384,7 +1405,6 @@ impl NoteView {
                 .when(!cell, |e| e.w(width + px(LIVE_GUTTER)))
                 .when(cell, |e| e.w_full())
                 .h(height + px(LIVE_INSET * 2. + 4.))
-                .mt(px(-LIVE_INSET))
                 .ml(px(left - LIVE_GUTTER)),
         );
         if self.live.is_some_and(|l| l.selecting) && self.block.read(cx).selected_range().is_empty() {
@@ -1396,10 +1416,11 @@ impl NoteView {
         let caret = self.block.read(cx).cursor();
         let toolbar = (!selection.is_empty() && !self.block.read(cx).completion_menu_state().open).then(|| self.format_bar(&t, cx));
         let preview = self.live_preview_of(&value, caret, single, &t);
+        let hint = (value.is_empty() && !cell).then(|| div().absolute().top_0().left(px(left)).font_family(Theme::font_family()).text_size(px(size)).line_height(line).text_color(t.tertiary).child(tr("Schreibe oder tippe / für Befehle")));
         div()
             .key_context("LiveBlock")
             .relative()
-            .child(div().relative().h(height).child(self.note_editor_wrapper(field.into_any_element(), cx)).children(toolbar))
+            .child(div().relative().h(height).child(div().absolute().top(px(-LIVE_INSET)).left_0().right_0().child(self.note_editor_wrapper(field.into_any_element(), cx))).children(hint).children(toolbar))
             .children(preview)
             .into_any_element()
     }
@@ -1806,13 +1827,13 @@ impl NoteView {
     }
 
     /// The words of the note; a long one is counted away from the interface once typing pauses, and until then the last count stands.
-    fn words_of(&mut self, snapshot: &Arc<Snapshot>, cx: &mut Context<Self>) -> usize {
+    fn words_of(&mut self, snapshot: &Arc<Snapshot>, cx: &mut Context<Self>) -> Option<usize> {
         if snapshot.text.len() < PARSE_IN_BACKGROUND_FROM {
-            return snapshot.words();
+            return Some(snapshot.words());
         }
         let key = (snapshot.text.as_ptr() as usize, snapshot.text.len());
         if self.words.1 == Some(key) {
-            return self.words.0;
+            return Some(self.words.0);
         }
         if self.words_task.as_ref().is_none_or(|(known, _)| *known != key) {
             let snapshot = snapshot.clone();
@@ -1830,7 +1851,7 @@ impl NoteView {
                 }),
             ));
         }
-        self.words.0
+        self.words.1.map(|_| self.words.0)
     }
 
     fn focus_lost(&mut self, cx: &mut Context<Self>) {
@@ -2313,6 +2334,7 @@ impl NoteView {
                 me.update(cx, |n, cx| n.open_line(line, None, window, cx));
             }
         };
+        let room = if live_mode { self.reader_list.bounds_for_item(items - 2).map_or(px(0.), |b| self.reader_list.viewport_bounds().bottom() - b.bottom()) } else { px(0.) };
         let drop_me = me.clone();
         let gutter_me = me.clone();
         let row = list(self.reader_list.clone(), move |i, window, cx| {
@@ -2323,7 +2345,7 @@ impl NoteView {
             }
             if i + 1 == items {
                 let last_line = source_lines.len().saturating_sub(1);
-                let footer = div().id("note-end").min_h(px(160.)).pb(px(space::XXL)).children(markdown_view::render_footnotes(&parsed, Some(footnote_list.clone()), &t)).when(live_mode, |d| d.cursor_text().on_mouse_up(MouseButton::Left, opener(last_line)));
+                let footer = div().id("note-end").min_h(px(160.).max(room)).pb(px(space::XXL)).children(markdown_view::render_footnotes(&parsed, Some(footnote_list.clone()), &t)).when(live_mode, |d| d.cursor_text().on_mouse_up(MouseButton::Left, opener(last_line)));
                 return content(footer.into_any_element());
             }
             if !live_mode {
@@ -3044,7 +3066,7 @@ impl Render for NoteView {
             }
         }
         let undecodable = state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.undecodable));
-        let words = if matches!(self.mode, Mode::Source | Mode::Split) { self.words_of(&snapshot, cx) } else { 0 };
+        let words = if matches!(self.mode, Mode::Source | Mode::Split) { self.words_of(&snapshot, cx) } else { None };
         let content: AnyElement = if undecodable {
             unavailable("file-warning", tr("Kodierung wird nicht unterstützt"), tr("Die Datei ist nicht in UTF-8 gespeichert. Sie bleibt unverändert, öffne sie in einer anderen App."), &t).into_any_element()
         } else if missing {
@@ -3291,8 +3313,12 @@ pub fn close_all_tabs(cx: &mut App) {
     resolve_unsaved(all, cx, |cx| act(cx, |l| l.close_all_documents()));
 }
 
-fn word_count(words: usize, t: &Theme) -> Div {
-    div().flex_none().flex().justify_end().px(px(space::M)).py(px(space::XS)).border_t_1().border_color(t.separator).text_size(px(font::CAPTION)).text_color(t.secondary).child(if words == 1 { tr("1 Wort") } else { trf("%lld Wörter", &[&words]) })
+fn word_count(words: Option<usize>, t: &Theme) -> Div {
+    div().flex_none().flex().justify_end().px(px(space::M)).py(px(space::XS)).border_t_1().border_color(t.separator).text_size(px(font::CAPTION)).text_color(t.secondary).child(match words {
+        Some(1) => tr("1 Wort"),
+        Some(n) => trf("%lld Wörter", &[&n]),
+        None => String::new(),
+    })
 }
 
 /// A tab being moved along the tab bar or into the split view.
@@ -3688,4 +3714,42 @@ fn writing_menu(field: Editor) -> Editor {
             .separator()
             .menu(tr("Karte aus Auswahl…"), Box::new(CardFromSelection))
     })
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::{Mode, PARSE_IN_BACKGROUND_FROM, parses_in_background, spell_window};
+
+    fn prose() -> String {
+        (0..3000).map(|i| format!("Zeile {i} mit etwas Text darin\n")).collect()
+    }
+
+    #[test]
+    fn a_spell_window_never_starts_inside_a_fenced_block() {
+        let code: String = (0..4000).map(|i| format!("let wert_{i} = {i};\n")).collect();
+        let prose = prose();
+        let text = format!("{prose}```rust\n{code}```\n{prose}");
+        let window = spell_window(&text, prose.len() + code.len() / 2);
+        assert!(window.start <= prose.len(), "window starts at {} inside the block", window.start);
+        assert!(text[window.start..].starts_with("```rust"));
+    }
+
+    #[test]
+    fn a_spell_window_after_a_closed_block_keeps_its_own_start() {
+        let prose = prose();
+        let head = "```\ncode\n```\n";
+        let text = format!("{head}{prose}{prose}");
+        let window = spell_window(&text, text.len() - 10);
+        assert!(window.start > head.len());
+        assert!(text[window.start..].starts_with("Zeile"));
+    }
+
+    #[test]
+    fn only_long_notes_in_the_reader_modes_parse_in_the_background() {
+        assert!(parses_in_background(Mode::Read, PARSE_IN_BACKGROUND_FROM));
+        assert!(parses_in_background(Mode::Split, PARSE_IN_BACKGROUND_FROM + 1));
+        assert!(!parses_in_background(Mode::Read, PARSE_IN_BACKGROUND_FROM - 1));
+        assert!(!parses_in_background(Mode::Live, PARSE_IN_BACKGROUND_FROM * 10));
+        assert!(!parses_in_background(Mode::Source, PARSE_IN_BACKGROUND_FROM * 10));
+    }
 }

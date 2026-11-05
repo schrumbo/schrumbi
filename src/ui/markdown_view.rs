@@ -495,7 +495,7 @@ fn reader_rows(src: &str, breaks: &Breaks, blocks: &[Block], sources: &[BlockSou
                     (from, from + part.len(), line, links, room)
                 })
                 .collect(),
-            Block::Paragraph(inl) => paragraph_parts(inl)
+            Block::Paragraph(inl) => paragraph_parts(inl, source.end_line.saturating_sub(source.line))
                 .into_iter()
                 .map(|(from, to, breaks_before)| {
                     let links = inl[from..to].iter().filter(|i| matches!(i, Inline::Link(..))).count();
@@ -532,11 +532,11 @@ fn reader_rows(src: &str, breaks: &Breaks, blocks: &[Block], sources: &[BlockSou
 }
 
 /// Where a long paragraph breaks into rows: the inlines of each row and the line breaks before it.
-/// A paragraph with a picture, or too short, stays whole.
-fn paragraph_parts(inlines: &[Inline]) -> Vec<(usize, usize, usize)> {
-    let is_break = |i: &Inline| matches!(i, Inline::Text(t, st) if t == "
-" && !st.code);
-    if inlines.iter().filter(|i| is_break(i)).count() < 2 * PARA_LINES || inlines.iter().any(|i| matches!(i, Inline::Image(..))) {
+/// A paragraph with a picture, too short, or whose line breaks are not its source lines, stays whole.
+fn paragraph_parts(inlines: &[Inline], source_lines: usize) -> Vec<(usize, usize, usize)> {
+    let is_break = |i: &Inline| matches!(i, Inline::Text(t, st) if t == "\n" && !st.code);
+    let breaks = inlines.iter().filter(|i| is_break(i)).count();
+    if breaks < 2 * PARA_LINES || breaks + 1 != source_lines || inlines.iter().any(|i| matches!(i, Inline::Image(..))) {
         return Vec::new();
     }
     let mut parts = Vec::new();
@@ -2841,7 +2841,11 @@ fn found_mark(element: AnyElement, found: Option<&Found>, t: &Theme) -> AnyEleme
 pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_toggle: Option<OnToggle>, found: Option<&Found>, focus: Option<&LinkFocus>, t: &Theme) -> AnyElement {
     let Some((from, to)) = row.part else { return render_live(note, row.block, base, on_toggle, found, focus, LiveDraw::default(), t) };
     let (order, links_seen) = (Cell::new(row.order), Cell::new(row.links_before));
-    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: row.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: FindDraw::new(focus, |_| None) };
+    let paragraph = match note.blocks.get(row.block) {
+        Some(Block::Paragraph(inl)) => Some(inl.get(from..to.min(inl.len())).unwrap_or_default()),
+        _ => None,
+    };
+    let cx = Ctx { t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: row.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: FindDraw::new(focus, |m| paragraph.and_then(|inl| current_in_part(inl, row, m, &note.footnote_order))) };
     let element = match note.blocks.get(row.block) {
         Some(Block::List { start, items }) => list_items(start, items.get(from..to.min(items.len())).unwrap_or_default(), from, &cx).into_any_element(),
         Some(Block::Table { head, rows, aligns }) => table(head, rows, aligns, Some((from, to, note.sources.get(row.block).map_or((0, 0), |s| (s.hash, s.line)))), &cx),
@@ -2849,6 +2853,33 @@ pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_to
         _ => div().into_any_element(),
     };
     found_mark(element, found.filter(|f| f.block == row.block && (row.line..row.end_line).contains(&f.line)), t)
+}
+
+/// Which match of a paragraph part is the current one, counted in what the part draws, when the current match lies on one of its lines.
+fn current_in_part(inlines: &[Inline], row: &ReaderRow, m: &FindMarks, footnote_order: &[String]) -> Option<usize> {
+    if m.block != row.block || !(row.line..row.end_line).contains(&m.line) {
+        return None;
+    }
+    let mut text = String::new();
+    for i in inlines {
+        match i {
+            Inline::Tag(tag) => {
+                text.push('#');
+                text.push_str(tag);
+            }
+            Inline::Text(s, _) => text.push_str(s),
+            Inline::Link(s, _, url) => {
+                text.push_str(s);
+                if is_external(url) {
+                    text.push_str(" ↗");
+                }
+            }
+            Inline::FootnoteRef(id) => text.push_str(&superscript(&(footnote_order.iter().position(|f| f == id).map_or(0, |p| p + 1)).to_string())),
+            Inline::Image(..) | Inline::Math(_) => {}
+        }
+    }
+    let line_at = text.split_inclusive('\n').take(m.line - row.line).map(str::len).sum::<usize>();
+    Some(crate::core::find::matches(&text[..line_at], &m.query, m.exact).len() + m.line_nth)
 }
 
 /// Brings an item into view with the row before it for context, and leaves the list alone when the item already shows.
@@ -3195,6 +3226,30 @@ Ende
         assert!(parse(&short).rows().iter().all(|r| r.part.is_none()));
         let long: String = (0..100).map(|i| if i == 5 { "![Bild](bild.png)\n".to_string() } else { format!("Zeile {i}\n") }).collect();
         assert!(parse(&long).rows().iter().all(|r| r.part.is_none()));
+    }
+
+    #[test]
+    fn a_paragraph_whose_breaks_are_not_its_source_lines_stays_one_row() {
+        let lines = |extra: &str| -> String { (0..60).map(|i| if i == 10 { format!("Zeile {i} {extra}\n") } else { format!("Zeile {i}\n") }).collect() };
+        assert!(parse(&lines("")).rows().iter().all(|r| r.part.is_some()));
+        assert!(parse(&lines("`a\nb`")).rows().iter().all(|r| r.part.is_none()));
+        assert!(parse(&lines("$$\nx\n$$")).rows().iter().all(|r| r.part.is_none()));
+        assert!(parse(&lines("<br>")).rows().iter().all(|r| r.part.is_none()));
+    }
+
+    #[test]
+    fn the_current_find_match_is_marked_in_the_part_that_holds_it() {
+        let lines: Vec<String> = (0..120).map(|i| format!("Zeile {i} apfel und Apfel")).collect();
+        let src = format!("{}\n", lines.join("\n"));
+        let note = parse(&src);
+        let rows = note.rows();
+        let Some(super::Block::Paragraph(inl)) = note.blocks.first() else { panic!("no paragraph") };
+        let marks = |line: usize, line_nth: usize| super::FindMarks { query: "apfel".into(), exact: false, block: 0, nth: 2 * line + line_nth, line, line_nth };
+        let current: Vec<Option<usize>> = rows.iter().map(|r| super::current_in_part(&inl[r.part.map_or(0, |p| p.0)..r.part.map_or(inl.len(), |p| p.1)], r, &marks(70, 1), &[])).collect();
+        let holding = note.row_of_line(70);
+        assert_eq!(current.iter().filter(|c| c.is_some()).count(), 1);
+        assert_eq!(current[holding], Some(2 * (70 - rows[holding].line) + 1));
+        assert_eq!(super::current_in_part(inl, &rows[holding], &super::FindMarks { block: 3, ..marks(70, 0) }, &[]), None);
     }
 
     #[test]
