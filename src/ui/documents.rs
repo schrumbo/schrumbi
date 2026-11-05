@@ -55,8 +55,8 @@ const PARSE_IN_BACKGROUND_FROM: usize = 100_000;
 const REPARSE_DELAY: Duration = Duration::from_millis(150);
 const NOTICE_AFTER: Duration = Duration::from_millis(300);
 const RICH_EDITOR_UNTIL: usize = 200_000;
-const WRAP_UNTIL: usize = 100_000;
-const WRAP_MAX: usize = 120_000;
+const WRAP_UNTIL: usize = 20_000;
+const WRAP_MAX: usize = 35_000;
 const SPELL_WINDOW: usize = 40_000;
 
 /// Whether a note of this length can be wrapped at all.
@@ -199,6 +199,11 @@ fn parses_in_background(mode: Mode, len: usize) -> bool {
     matches!(mode, Mode::Read | Mode::Split) && len >= PARSE_IN_BACKGROUND_FROM
 }
 
+/// Whether the first parse of a note is made away from the interface; Live keeps later ones at hand because its blocks follow every edit.
+fn first_parse_in_background(mode: Mode, len: usize, first: bool) -> bool {
+    first && mode == Mode::Live && len >= PARSE_IN_BACKGROUND_FROM
+}
+
 /// How many rows the source editor is about as tall as; a line is one row when it does not wrap, which is `per_row` infinite.
 fn estimated_rows(text: &str, per_row: f32) -> f32 {
     text.lines().map(|l| (l.chars().count() as f32 / per_row).ceil().max(1.)).sum()
@@ -252,6 +257,8 @@ pub struct NoteView {
     reparse: Option<Task<()>>,
     /// Edits wait for this to end before the reader parses the note again.
     parse_hold: bool,
+    /// Nothing of this note was drawn yet; a long note in Live is then parsed away from the interface once.
+    first_parse: bool,
     /// The parse running away from the interface; the next starts when it ends.
     parse_job: Option<Task<()>>,
     /// The parse has taken long enough to say so.
@@ -294,6 +301,9 @@ pub struct NoteView {
     took_over: bool,
     /// What is being written in the live view, in a field of its own.
     block: Entity<EditorState>,
+    /// The caret and length of the open field when the view last looked, and whether the caret still has to be brought into view.
+    caret_seen: (usize, usize),
+    follow_caret: bool,
     live: Option<LiveBlock>,
     /// Whole-note states to go back to across blocks; the field only knows its own block.
     history: Vec<(String, usize)>,
@@ -391,8 +401,14 @@ impl NoteView {
                 }
                 _ => {}
             }),
-            cx.observe(&block, |this, _, cx| {
+            cx.observe(&block, |this, block, cx| {
                 if this.live.as_ref().is_some_and(|l| l.cell.is_some()) {
+                    cx.notify();
+                }
+                let seen = (block.read(cx).cursor(), block.read(cx).text().len());
+                if this.live.is_some() && seen != this.caret_seen {
+                    this.caret_seen = seen;
+                    this.follow_caret = true;
                     cx.notify();
                 }
             }),
@@ -448,7 +464,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), caret_seen: (0, 0), follow_caret: false, live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, first_parse: true, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -1081,6 +1097,8 @@ impl NoteView {
             b.focus(window, cx);
         });
         self.syncing = false;
+        self.caret_seen = (self.block.read(cx).cursor(), self.block.read(cx).text().len());
+        self.follow_caret = false;
     }
 
     fn after_open(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -1142,6 +1160,7 @@ impl NoteView {
 
     /// Keeps a parse of `text` and tells the list which of its rows changed.
     fn adopt_parsed(&mut self, text: &Arc<str>, p: Rc<ParsedNote>) {
+        self.first_parse = false;
         let (hashes, mut spans): (Vec<u64>, Vec<usize>) = if self.mode == Mode::Live {
             self.segments = Rc::new(live_text::segments(text, &p.shapes()));
             self.definitions = Rc::new(text.split('\n').filter(|l| l.starts_with('[') && l.contains("]:")).collect::<Vec<_>>().join("\n"));
@@ -1159,7 +1178,7 @@ impl NoteView {
 
     /// What the reader draws for the text: a parse made now for a short note, for a long one the last parse while a new one is made away from the interface, `None` before there is any.
     fn parsed_for_reader(&mut self, text: &Arc<str>, cx: &mut Context<Self>) -> Option<Rc<ParsedNote>> {
-        if !parses_in_background(self.mode, text.len()) {
+        if !parses_in_background(self.mode, text.len()) && !first_parse_in_background(self.mode, text.len(), self.first_parse) {
             self.parse_job = None;
             self.parse_notice = None;
             self.parse_slow = false;
@@ -1245,6 +1264,7 @@ impl NoteView {
             let line_start = value[..caret.min(value.len())].rfind('\n').map_or(0, |i| i + 1);
             self.last_snapshot = None;
             self.open_line(first_line + caret_line, Some(caret - line_start), window, cx);
+            self.follow_caret = true;
         }
         cx.notify();
     }
@@ -1316,7 +1336,7 @@ impl NoteView {
         let width = self.field_width(&value, window);
         let Ok(shaped) = window.text_system().shape_text(line.to_string().into(), px(size), &[run], Some(width), None) else { return true };
         let Some(wrapped) = shaped.first() else { return true };
-        let height = px(size * 1.5);
+        let height = px((size * 1.5).round());
         let row = |at: usize| wrapped.position_for_index(at, height).map_or(0., |p| f32::from(p.y));
         if down { row(range.start - line_start) >= row(line.len()) } else { row(range.start - line_start) < 1. }
     }
@@ -1572,6 +1592,24 @@ impl NoteView {
         self.schedule_autosave(cx);
     }
 
+    /// Scrolls the note so the caret of the open field stands at least one line away from the top and the bottom edge.
+    fn keep_caret_in_view(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some((caret, line)) = self.block.read(cx).cursor_layout() else { return };
+        let view = self.reader_list.viewport_bounds();
+        if view.size.height <= line * 3. {
+            return;
+        }
+        let below = caret.bottom() + line - view.bottom();
+        let above = view.top() + line - caret.top();
+        if below > px(0.) {
+            self.reader_list.scroll_by(below);
+            cx.notify();
+        } else if above > px(0.) {
+            self.reader_list.scroll_by(-above);
+            cx.notify();
+        }
+    }
+
     /// The field of the line being written, as tall as its text, with the text exactly where it was drawn.
     fn live_field(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let value = self.block.read(cx).value().to_string();
@@ -1583,7 +1621,7 @@ impl NoteView {
         let style = window.text_style();
         let run = TextRun { len: value.len(), font: style.font(), color: style.color, background_color: None, underline: None, strikethrough: None };
         let rows: usize = if cell { 1 } else { window.text_system().shape_text(value.clone().into(), px(size), &[run.clone()], Some(width), None).map_or(1, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum()) };
-        let line = px(size * 1.5);
+        let line = px((size * 1.5).round());
         let height = line * (rows.max(1) as f32);
         let hidden: gpui_kit::base::input::EditorScrollbarRenderer = Rc::new(|_, _, _| div().into_any_element());
         self.block.update(cx, |s, _| s.set_scrollbar_renderer(cell.then_some(hidden)));
@@ -1601,6 +1639,10 @@ impl NoteView {
                 .h(height + px(LIVE_INSET * 2. + 4.))
                 .when(!cell, |e| e.ml(px(left - LIVE_GUTTER))),
         );
+        if std::mem::take(&mut self.follow_caret) {
+            let me = cx.entity();
+            window.on_next_frame(move |window, cx| me.update(cx, |n, cx| n.keep_caret_in_view(window, cx)));
+        }
         if self.live.is_some_and(|l| l.selecting) && self.block.read(cx).selected_range().is_empty() {
             let me = cx.entity();
             window.on_next_frame(move |window, cx| me.update(cx, |n, cx| n.settle_selection(window, cx)));
@@ -4150,7 +4192,7 @@ fn writing_menu(field: Editor) -> Editor {
 
 #[cfg(test)]
 mod window_tests {
-    use super::{Mode, PARSE_IN_BACKGROUND_FROM, WRAP_MAX, WRAP_UNTIL, parses_in_background, save_reason, spell_window, unsaved_message, wraps_lines};
+    use super::{Mode, PARSE_IN_BACKGROUND_FROM, WRAP_MAX, WRAP_UNTIL, first_parse_in_background, parses_in_background, save_reason, spell_window, unsaved_message, wraps_lines};
 
     fn prose() -> String {
         (0..3000).map(|i| format!("Zeile {i} mit etwas Text darin\n")).collect()
@@ -4213,6 +4255,10 @@ mod window_tests {
         assert!(parses_in_background(Mode::Split, PARSE_IN_BACKGROUND_FROM + 1));
         assert!(!parses_in_background(Mode::Read, PARSE_IN_BACKGROUND_FROM - 1));
         assert!(!parses_in_background(Mode::Live, PARSE_IN_BACKGROUND_FROM * 10));
+        assert!(first_parse_in_background(Mode::Live, PARSE_IN_BACKGROUND_FROM, true));
+        assert!(!first_parse_in_background(Mode::Live, PARSE_IN_BACKGROUND_FROM, false));
+        assert!(!first_parse_in_background(Mode::Live, PARSE_IN_BACKGROUND_FROM - 1, true));
+        assert!(!first_parse_in_background(Mode::Source, PARSE_IN_BACKGROUND_FROM, true));
         assert!(!parses_in_background(Mode::Source, PARSE_IN_BACKGROUND_FROM * 10));
     }
 

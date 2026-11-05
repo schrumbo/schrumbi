@@ -1726,6 +1726,10 @@ struct Table {
     /// Names what `measure` holds, so the widths are found without reading it.
     key: Option<u64>,
     with_head: bool,
+    /// The row number of the first row drawn.
+    first: usize,
+    /// The item of the note this table is drawn for.
+    block: usize,
     /// Whether the top and the bottom edge of the table are drawn here.
     ends: (bool, bool),
     /// The sideways scroll shared with the table's other parts.
@@ -1822,8 +1826,18 @@ impl RenderOnce for Table {
         };
         let border = self.border;
         let (with_head, (top, bottom)) = (self.with_head, self.ends);
+        let (first, block) = (self.first, self.block);
         let mut rows = self.cells.into_iter().enumerate().map(|(r, row)| {
-            div().flex().when(r > 0 || !top, |d| d.border_t_1().border_color(border)).children(row.into_iter().enumerate().map(|(c, element)| column(c, element)).collect::<Vec<_>>())
+            div().flex().when(r > 0 || !top, |d| d.border_t_1().border_color(border)).on_children_prepainted(move |cells, _, _| {
+                let height = cells.iter().map(|b| f32::from(b.size.height)).fold(0., f32::max);
+                ROW_HEIGHTS.with(|known| {
+                    let mut known = known.borrow_mut();
+                    if known.len() > 4096 {
+                        known.clear();
+                    }
+                    known.insert((block, first + r), height);
+                });
+            }).children(row.into_iter().enumerate().map(|(c, element)| column(c, element)).collect::<Vec<_>>())
         });
         let head = if with_head { rows.next().map(|d| d.bg(self.head_bg)) } else { None };
         let outline = TABLE_RULE * 2.;
@@ -2337,7 +2351,10 @@ fn table(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>], aligns: &[pulldown_cma
         };
         let open = cx.open_cell.as_ref().filter(|(r, c, _)| *r == row && *c == i).and_then(|(_, _, field)| field.borrow_mut().take());
         let drawn = match open {
-            Some(field) => d.child(field),
+            Some(field) => {
+                let kept = ROW_HEIGHTS.with(|known| known.borrow().get(&(cx.block, row)).copied());
+                d.when_some(kept, |d, height| d.min_h(px(height))).child(field)
+            }
             None => {
                 let body = styled_text(inl, cx, size);
                 d.when_some(click, |d, click| {
@@ -2389,10 +2406,11 @@ fn table(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>], aligns: &[pulldown_cma
         None => measure(),
     };
     let scroll = part.map(|(.., source)| table_scroll(source));
-    Table { id: ElementId::from(("md-table", order)), columns, cells, measure, key, with_head, ends: (with_head, to >= rows.len()), scroll, size, border: t.separator, head_bg: t.secondary_bg }.into_any_element()
+    Table { id: ElementId::from(("md-table", order)), columns, cells, measure, key, with_head, first: if with_head { 0 } else { from + 1 }, block: cx.block, ends: (with_head, to >= rows.len()), scroll, size, border: t.separator, head_bg: t.secondary_bg }.into_any_element()
 }
 
 thread_local! {
+    static ROW_HEIGHTS: RefCell<HashMap<(usize, usize), f32>> = RefCell::new(HashMap::new());
     static TABLE_SCROLLS: RefCell<HashMap<(u64, usize), ScrollHandle>> = RefCell::new(HashMap::new());
     static TABLE_TEXTS: RefCell<HashMap<u64, Rc<Vec<Vec<CellText>>>>> = RefCell::new(HashMap::new());
 }
