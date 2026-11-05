@@ -1616,7 +1616,7 @@ impl NoteView {
         let room_above = if self.live.is_some_and(|l| l.cell.is_some_and(|c| c.row >= 1)) { 0. } else { self.blank_room_above() };
         let below = bar && room_above < control::M + space::XS;
         let deficit = if below && preview.is_none() && !cell { (control::M + 2. * space::XS - self.blank_room_below()).max(0.) } else { 0. };
-        let toolbar = bar.then(|| self.format_bar(&t, height, below, cx));
+        let toolbar = bar.then(|| self.format_bar(&t, height, below, cell, cx));
         let hint = value.is_empty().then(|| div().absolute().top(px(if cell { LIVE_INSET } else { 0. })).left(px(if cell { LIVE_GUTTER } else { left })).when(cell, |d| d.right_0().overflow_hidden().whitespace_nowrap()).font_family(Theme::font_family()).text_size(px(size)).line_height(line).text_color(t.secondary).child(if cell { tr("Text") } else { tr("Schreibe oder tippe / für Befehle") }));
         let wrapper = self.note_editor_wrapper(field.into_any_element(), cx);
         let editor = if cell { wrapper } else { div().absolute().top(px(-LIVE_INSET)).left_0().right_0().child(wrapper).into_any_element() };
@@ -1671,7 +1671,7 @@ impl NoteView {
     }
 
     /// Floats over a selection with the formats it can get.
-    fn format_bar(&self, t: &Theme, height: Pixels, below: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn format_bar(&self, t: &Theme, height: Pixels, below: bool, cell: bool, cx: &mut Context<Self>) -> AnyElement {
         let lit = t.ink.opacity(hover::FLOAT);
         let button = |id: &'static str, name: &'static str, help: String, token: &'static str, cx: &mut Context<Self>| {
             div()
@@ -1710,7 +1710,7 @@ impl NoteView {
             div()
                 .absolute()
                 .when(!below, |d| d.top(px(-(control::M + space::XS))))
-                .when(below, |d| d.top(height + px(space::XS)))
+                .when(below, |d| d.top(height + px(space::XS + if cell { LIVE_INSET + space::XS } else { 0. })))
                 .left_0()
                 .flex()
                 .items_center()
