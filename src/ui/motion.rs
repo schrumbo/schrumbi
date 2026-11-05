@@ -21,6 +21,12 @@ pub const NOTICE: Duration = Duration::from_secs(8);
 /// How long a section found by search stays lit.
 pub const FLASH: Duration = Duration::from_millis(1400);
 
+/// How long a failed save waits before it tries once more.
+pub const SAVE_RETRY_WAIT: Duration = Duration::from_millis(400);
+
+/// How long the wrap switch confirms itself in the word count bar.
+pub const WRAP_NOTICE_FOR: Duration = Duration::from_millis(1600);
+
 /// How long list rows keep sliding to new positions after a change; covers the rescan that follows it.
 const FLIP_ARMED: Duration = Duration::from_millis(500);
 

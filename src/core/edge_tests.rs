@@ -1359,6 +1359,18 @@ fn new_workspaces_start_without_a_naming_convention_and_keep_that_after_a_reload
 }
 
 #[test]
+fn a_folder_renamed_onto_an_existing_name_reports_the_name_it_got() {
+    let (root, mut lib) = workspace("folder-rename-taken", &config(1, 1));
+    std::fs::create_dir_all(root.join("alt")).unwrap();
+    std::fs::create_dir_all(root.join("neu")).unwrap();
+    lib.last_renamed = None;
+    lib.rename(&root.join("alt"), "neu");
+    assert_eq!(lib.last_renamed, Some(root.join("neu-2")));
+    assert!(root.join("neu-2").is_dir() && root.join("neu").is_dir() && !root.join("alt").exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn configs_from_before_the_switch_keep_their_convention() {
     let (root, lib) = workspace("naming-legacy", &config(1, 1));
     assert!(lib.config.as_ref().unwrap().naming_convention());

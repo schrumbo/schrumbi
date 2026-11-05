@@ -2509,7 +2509,7 @@ impl ParsedNote {
                 let many = source.end_line > source.line + 1;
                 let shape = match block {
                     Block::Table { .. } => Shape::Table,
-                    Block::Paragraph(inl) if inl.iter().any(|i| matches!(i, Inline::Math(_))) && many && source.end_line - source.line <= LIVE_WHOLE_LINES => Shape::Whole,
+                    Block::Paragraph(inl) if many && (source.end_line - source.line <= LIVE_WHOLE_LINES && inl.iter().any(|i| matches!(i, Inline::Math(_))) || inl.iter().any(|i| matches!(i, Inline::Math(m) if m.contains('\n')))) => Shape::Whole,
                     Block::Paragraph(_) | Block::Rule | Block::Nothing => Shape::Lines,
                     Block::Heading(..) if !many => Shape::Lines,
                     Block::Quote(inner) if inner.iter().all(|b| matches!(b, Block::Paragraph(_) | Block::Nothing)) => Shape::Lines,
@@ -3448,6 +3448,8 @@ Ende
         let paragraph = |lines: usize| (0..lines).map(|i| format!("Zeile {i} mit $x_{i}$")).collect::<Vec<_>>().join("\n");
         assert_eq!(parse(&paragraph(3)).shapes()[0].2, Shape::Whole);
         assert_eq!(parse(&paragraph(2 * super::LIVE_WHOLE_LINES)).shapes()[0].2, Shape::Lines);
+        let spanning = format!("{}\nund $a +\n b$ zum Schluss", (0..2 * super::LIVE_WHOLE_LINES).map(|i| format!("Zeile {i}")).collect::<Vec<_>>().join("\n"));
+        assert_eq!(parse(&spanning).shapes()[0].2, Shape::Whole);
     }
 
     fn one_line(count: usize) -> String {
