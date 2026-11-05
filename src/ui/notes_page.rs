@@ -523,7 +523,7 @@ impl NotesPage {
     }
 
     fn visible_tasks(vault: &index::VaultIndex, filter: &str) -> Vec<Row> {
-        let mut notes: Vec<(&PathBuf, &index::NoteFacts)> = vault
+        let mut notes: Vec<(&PathBuf, &std::sync::Arc<index::NoteFacts>)> = vault
             .notes
             .iter()
             .filter(|(p, facts)| {

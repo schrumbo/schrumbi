@@ -48,7 +48,7 @@ pub struct VaultIndex {
     pub root: PathBuf,
     pub config: VaultConfig,
     pub resolver: Resolver,
-    pub notes: HashMap<PathBuf, NoteFacts>,
+    pub notes: HashMap<PathBuf, Arc<NoteFacts>>,
     pub files: Vec<PathBuf>,
     /// Every folder, also the empty ones; hidden and excluded folders stay out.
     pub folders: Vec<PathBuf>,
@@ -66,7 +66,7 @@ pub struct VaultIndex {
 }
 
 static CURRENT: LazyLock<RwLock<Arc<VaultIndex>>> = LazyLock::new(Default::default);
-static CACHE: LazyLock<Mutex<HashMap<PathBuf, NoteFacts>>> = LazyLock::new(Default::default);
+static CACHE: LazyLock<Mutex<HashMap<PathBuf, Arc<NoteFacts>>>> = LazyLock::new(Default::default);
 
 /// The index of the open vault; empty before the first scan.
 pub fn current() -> Arc<VaultIndex> {
@@ -128,10 +128,19 @@ fn unchanged(facts: &NoteFacts, modified: f64, size: u64) -> bool {
 }
 
 fn stamp_of(path: &Path) -> (f64, u64) {
-    std::fs::metadata(path).ok().map_or((0., 0), |m| (m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0., |d| d.as_secs_f64()), m.len()))
+    std::fs::metadata(path).ok().map_or((0., 0), |m| stamp_from(&m))
+}
+
+fn stamp_from(m: &std::fs::Metadata) -> (f64, u64) {
+    (m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0., |d| d.as_secs_f64()), m.len())
 }
 
 fn list_files(root: &Path, exclude: &[String]) -> Vec<PathBuf> {
+    list_stamped(root, exclude).into_iter().map(|(p, _, _)| p).collect()
+}
+
+/// Every file with its modification time and length, taken from the directory listing itself.
+fn list_stamped(root: &Path, exclude: &[String]) -> Vec<(PathBuf, f64, u64)> {
     WalkDir::new(root)
         .min_depth(1)
         .into_iter()
@@ -141,7 +150,11 @@ fn list_files(root: &Path, exclude: &[String]) -> Vec<PathBuf> {
         })
         .filter_map(Result::ok)
         .filter(|e| !e.file_type().is_dir())
-        .map(|e| e.into_path())
+        .map(|e| {
+            let stamp = if e.path_is_symlink() { None } else { e.metadata().ok().map(|m| stamp_from(&m)) };
+            let (modified, size) = stamp.unwrap_or_else(|| stamp_of(e.path()));
+            (e.into_path(), modified, size)
+        })
         .collect()
 }
 
@@ -166,23 +179,30 @@ fn is_canvas(path: &Path) -> bool {
 pub fn rebuild(root: &Path, exclude: &[String]) {
     let scan = SCANS.fetch_add(1, Ordering::SeqCst) + 1;
     let root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    let files = list_files(&root, exclude);
+    let stamped = list_stamped(&root, exclude);
     let known = std::mem::take(&mut *CACHE.lock().unwrap());
-    let notes: HashMap<PathBuf, NoteFacts> = files
-        .par_iter()
-        .filter(|p| markdown::is_markdown(p) || is_canvas(p))
-        .filter_map(|p| {
-            let (modified, size) = stamp_of(p);
-            if let Some(old) = known.get(p).filter(|o| unchanged(o, modified, size)) {
-                return Some((p.clone(), old.clone()));
+    let mut notes: HashMap<PathBuf, Arc<NoteFacts>> = HashMap::with_capacity(known.len());
+    let mut stale: Vec<(&PathBuf, f64)> = Vec::new();
+    for (p, modified, size) in stamped.iter().filter(|(p, _, _)| markdown::is_markdown(p) || is_canvas(p)) {
+        match known.get(p).filter(|o| unchanged(o, *modified, *size)) {
+            Some(old) => {
+                notes.insert(p.clone(), old.clone());
             }
+            None => stale.push((p, *modified)),
+        }
+    }
+    let read: Vec<(PathBuf, Arc<NoteFacts>)> = stale
+        .par_iter()
+        .filter_map(|(p, modified)| {
             let bytes = std::fs::read(p).ok()?;
             let text = String::from_utf8_lossy(&bytes);
-            let mut facts = if is_canvas(p) { super::canvas::facts_of(&text, modified) } else { facts_of(&text, modified) };
+            let mut facts = if is_canvas(p) { super::canvas::facts_of(&text, *modified) } else { facts_of(&text, *modified) };
             facts.size = bytes.len() as u64;
-            Some((p.clone(), facts))
+            Some(((*p).clone(), Arc::new(facts)))
         })
         .collect();
+    notes.extend(read);
+    let files: Vec<PathBuf> = stamped.into_iter().map(|(p, _, _)| p).collect();
     let folders = list_folders(&root, exclude);
     let mut index = assemble(root, files, notes);
     index.folders = folders;
@@ -199,7 +219,7 @@ fn publish(mut index: VaultIndex) {
     *current = Arc::new(index);
 }
 
-fn assemble(root: PathBuf, files: Vec<PathBuf>, notes: HashMap<PathBuf, NoteFacts>) -> VaultIndex {
+fn assemble(root: PathBuf, files: Vec<PathBuf>, notes: HashMap<PathBuf, Arc<NoteFacts>>) -> VaultIndex {
     let aliases: Vec<(String, PathBuf)> = notes.iter().flat_map(|(p, f)| f.aliases.iter().map(move |a| (a.clone(), p.clone()))).collect();
     let resolver = Resolver::new(&root, files.iter().cloned(), aliases);
     let mut backlinks: HashMap<PathBuf, Vec<Mention>> = HashMap::new();
@@ -325,7 +345,7 @@ impl VaultIndex {
 #[cfg(test)]
 pub fn rebuild_for_test(root: &Path, facts: impl Fn(&str) -> NoteFacts) -> VaultIndex {
     let files = list_files(root, &[]);
-    let notes = files.iter().filter(|p| markdown::is_markdown(p)).map(|p| (p.clone(), facts(&std::fs::read_to_string(p).unwrap_or_default()))).collect();
+    let notes = files.iter().filter(|p| markdown::is_markdown(p)).map(|p| (p.clone(), Arc::new(facts(&std::fs::read_to_string(p).unwrap_or_default())))).collect();
     assemble(root.to_path_buf(), files, notes)
 }
 
@@ -482,7 +502,7 @@ mod tests {
     }
 
     fn built(root: PathBuf, files: Vec<PathBuf>) -> VaultIndex {
-        let notes = files.iter().filter(|p| markdown::is_markdown(p)).map(|p| (p.clone(), facts_of(&std::fs::read_to_string(p).unwrap_or_default(), 0.))).collect();
+        let notes = files.iter().filter(|p| markdown::is_markdown(p)).map(|p| (p.clone(), Arc::new(facts_of(&std::fs::read_to_string(p).unwrap_or_default(), 0.)))).collect();
         assemble(root, files, notes)
     }
 
