@@ -646,9 +646,7 @@ fn split_long_text(inlines: &mut Vec<Inline>) {
         let mut rest = text.as_str();
         while rest.len() > 2 * PARA_BYTES {
             let from = (PARA_BYTES..).find(|i| rest.is_char_boundary(*i)).unwrap_or(rest.len());
-            let reach = (from + 256).min(rest.len());
-            let end = (from..=reach).rev().find(|i| rest.is_char_boundary(*i)).unwrap_or(from);
-            let Some((i, space)) = rest[from..end].char_indices().find(|(_, c)| c.is_whitespace()) else { break };
+            let Some((i, space)) = rest[from..].char_indices().find(|(_, c)| c.is_whitespace()) else { break };
             let cut = from + i + space.len_utf8();
             out.push(Inline::Text(rest[..cut].to_string(), style));
             rest = &rest[cut..];
@@ -1489,6 +1487,9 @@ fn text_click_of(cx: &Ctx) -> Option<super::selectable::TextClick> {
     Some(Rc::new(move |text, at, window, app| click(block, cell, text, at, window, app)))
 }
 
+/// What follows the text of a link that leaves the app, drawn in the regular face whatever the emphasis.
+const EXTERNAL_MARK: &str = " ↗";
+
 /// Appends what an inline draws as text: tags with their `#`, external links with `↗`, footnote references as raised numbers; pictures and formulas draw no text.
 fn push_drawn(text: &mut String, inline: &Inline, footnote_order: &[String]) {
     match inline {
@@ -1500,7 +1501,7 @@ fn push_drawn(text: &mut String, inline: &Inline, footnote_order: &[String]) {
         Inline::Link(s, _, url) => {
             text.push_str(s);
             if is_external(url) {
-                text.push_str(" ↗");
+                text.push_str(EXTERNAL_MARK);
             }
         }
         Inline::FootnoteRef(id) => text.push_str(&superscript(&footnote_order.iter().position(|f| f == id).map_or(0, |p| p + 1).to_string())),
@@ -1590,8 +1591,15 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                 if focused {
                     h.background_color = Some(t.accent.opacity(0.28));
                 }
+                let marker = matches!(i, Inline::Link(_, _, url) if is_external(url)).then(|| text.len() - EXTERNAL_MARK.len()..text.len());
                 if h != HighlightStyle::default() {
-                    highlights.push((start..text.len(), h));
+                    match marker {
+                        Some(mark) => {
+                            highlights.push((start..mark.start, h));
+                            highlights.push((mark, HighlightStyle { font_weight: Some(FontWeight::NORMAL), font_style: Some(FontStyle::Normal), ..h }));
+                        }
+                        None => highlights.push((start..text.len(), h)),
+                    }
                 }
             }
             Inline::FootnoteRef(_) => {
@@ -3470,6 +3478,20 @@ Ende
         let note = parse(&format!("{blob}\n"));
         let Some(super::Block::Paragraph(inl)) = note.blocks.first() else { panic!("no paragraph") };
         assert_eq!(super::drawn_text(inl, &[]).trim_end(), blob);
+    }
+
+    #[test]
+    fn a_long_word_at_the_cut_does_not_stop_the_cutting_of_the_line() {
+        let url = format!("beispiel.de/{}", "a".repeat(300));
+        let words = "wort ".repeat(400);
+        let text = format!("{words}{url} {}", "wort ".repeat(20_000));
+        assert!(text.len() > 100_000);
+        let note = parse(&format!("{text}\n"));
+        let Some(super::Block::Paragraph(inl)) = note.blocks.first() else { panic!("no paragraph") };
+        let pieces: Vec<String> = inl.iter().map(|i| super::drawn_text(std::slice::from_ref(i), &[])).collect();
+        assert_eq!(pieces.concat().trim_end(), text.trim_end());
+        assert!(pieces.len() > 20, "{} pieces", pieces.len());
+        assert!(pieces.iter().all(|p| p.len() <= 2 * super::PARA_BYTES + 300));
     }
 
     #[test]

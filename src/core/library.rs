@@ -2989,29 +2989,36 @@ impl Library {
         let (old, new) = (self.relative_path(from), self.relative_path(to));
         let settled = |p: &Path| p.parent().and_then(|d| dunce::canonicalize(d).ok()).zip(p.file_name()).map_or_else(|| p.to_path_buf(), |(d, n)| d.join(n));
         let (from, to) = (settled(from), settled(to));
+        let under = |p: &Path| p.strip_prefix(&from).ok().map(|rest| if rest.as_os_str().is_empty() { to.clone() } else { to.join(rest) });
         let swap = |p: &mut PathBuf| {
-            if *p == from {
-                *p = to.clone();
+            if let Some(now) = under(p) {
+                *p = now;
             }
         };
         self.open_documents.iter_mut().for_each(swap);
         self.closed_documents.iter_mut().for_each(|(p, _)| swap(p));
-        if self.preview_document.as_ref() == Some(&from) {
-            self.preview_document = None;
+        self.preview_document.iter_mut().for_each(swap);
+        let trails: Vec<PathBuf> = self.tab_trails.keys().filter(|p| under(p).is_some()).cloned().collect();
+        for was in trails {
+            if let Some(trail) = self.tab_trails.remove(&was) {
+                self.tab_trails.insert(under(&was).unwrap_or(was), trail);
+            }
         }
-        if let Some(trail) = self.tab_trails.remove(&from) {
-            self.tab_trails.insert(to.clone(), trail);
+        for trail in self.tab_trails.values_mut() {
+            trail.0.iter_mut().chain(trail.1.iter_mut()).for_each(swap);
         }
         self.active_document.iter_mut().for_each(swap);
         self.split_document.iter_mut().for_each(swap);
-        let (old_key, new_key) = (from.to_string_lossy().to_string(), to.to_string_lossy().to_string());
-        if super::prefs::get().heading_titled.contains(&old_key) {
-            super::prefs::update(|p| {
-                p.heading_titled.remove(&old_key);
-                p.heading_titled.insert(new_key);
+        let rekey = |key: &String| under(Path::new(key)).map(|n| n.to_string_lossy().to_string());
+        let titled: Vec<(String, String)> = prefs::with(|p| p.heading_titled.iter().filter_map(|k| rekey(k).map(|n| (k.clone(), n))).collect());
+        if !titled.is_empty() {
+            prefs::update(|p| {
+                for (was, now) in titled {
+                    p.heading_titled.remove(&was);
+                    p.heading_titled.insert(now);
+                }
             });
         }
-        let under = |p: &Path| p.strip_prefix(&from).ok().map(|rest| if rest.as_os_str().is_empty() { to.clone() } else { to.join(rest) });
         let windows: Vec<(PathBuf, PathBuf)> = self.note_windows.iter().filter_map(|p| under(p).map(|n| (p.clone(), n))).collect();
         for (was, now) in windows {
             self.note_windows.remove(&was);
@@ -3046,11 +3053,23 @@ impl Library {
         if relinked {
             self.save_state();
         }
-        let (key, moved) = (from.to_string_lossy().to_string(), to.to_string_lossy().to_string());
-        if prefs::get().pdf_positions.contains_key(&key) {
+        let wrapped: Vec<(String, String)> = prefs::with(|p| p.note_wraps.keys().filter_map(|k| rekey(k).map(|n| (k.clone(), n))).collect());
+        if !wrapped.is_empty() {
             prefs::update(|p| {
-                if let Some(position) = p.pdf_positions.remove(&key) {
-                    p.pdf_positions.insert(moved, position);
+                for (was, now) in wrapped {
+                    if let Some(wrap) = p.note_wraps.remove(&was) {
+                        p.note_wraps.insert(now, wrap);
+                    }
+                }
+            });
+        }
+        let positioned: Vec<(String, String)> = prefs::with(|p| p.pdf_positions.keys().filter_map(|k| rekey(k).map(|n| (k.clone(), n))).collect());
+        if !positioned.is_empty() {
+            prefs::update(|p| {
+                for (was, now) in positioned {
+                    if let Some(position) = p.pdf_positions.remove(&was) {
+                        p.pdf_positions.insert(now, position);
+                    }
                 }
             });
         }
@@ -3637,6 +3656,11 @@ impl Library {
         })
     }
 
+    /// The key of the buffer that holds the note once shown at `path`; a note that moved keeps its buffer under the new path.
+    pub fn buffer_key(&self, path: &Path) -> PathBuf {
+        if self.buffers.contains_key(path) { path.to_path_buf() } else { self.moved_path(path).unwrap_or_else(|| path.to_path_buf()) }
+    }
+
     /// Removes a document tab; the caller saves or asks about unsaved changes first.
     pub fn close_document(&mut self, path: &Path) {
         self.follow_heading(path);
@@ -3668,6 +3692,9 @@ impl Library {
                 Some(j) => Some(self.open_documents[j].clone()),
                 None => self.split_document.take(),
             };
+        }
+        if self.active_document.is_none() {
+            self.toggle_mode = false;
         }
         self.save_documents();
         if was_shown {
@@ -3720,7 +3747,7 @@ impl Library {
         self.closed_documents.extend(self.open_documents.iter().enumerate().rev().filter(|(_, d)| *d != path).map(|(i, d)| (d.clone(), i)));
         self.split_document = None;
         let windows = self.note_windows.clone();
-        self.buffers.retain(|p, _| p == path || windows.contains(p));
+        self.buffers.retain(|p, b| p == path || b.dirty || windows.contains(p));
         self.open_documents.retain(|p| p == path);
         self.save_documents();
         self.open_document(path);
@@ -3730,9 +3757,10 @@ impl Library {
         self.closed_documents.extend(self.open_documents.iter().cloned().enumerate().rev().map(|(i, d)| (d, i)));
         self.split_document = None;
         let windows = self.note_windows.clone();
-        self.buffers.retain(|p, _| windows.contains(p));
+        self.buffers.retain(|p, b| b.dirty || windows.contains(p));
         self.open_documents.clear();
         self.active_document = None;
+        self.toggle_mode = false;
         self.save_documents();
         if matches!(self.route, Route::Doc(_)) {
             self.go_back();

@@ -214,13 +214,13 @@ pub fn init(cx: &mut App) {
     rebuild_menus(cx);
     let lib = state::lib(cx);
     let mut modules: Vec<String> = Vec::new();
-    let mut note = (note_is_active(cx), find_is_available(cx), rename_is_available(cx));
+    let mut note = (note_is_active(cx), find_is_available(cx), rename_is_available(cx), wrap_is_available(note_is_active(cx)));
     cx.observe(&lib, move |lib, cx| {
         if let Some(path) = lib.update(cx, |l, _| l.raise_note_window.take()) {
             cx.defer(move |cx| super::note_window::open(&path, cx));
         }
         let now: Vec<String> = lib.read(cx).semester_modules().iter().map(|m| format!("{}{}", m.id, m.display_name())).collect();
-        let open = (note_is_active(cx), find_is_available(cx), rename_is_available(cx));
+        let open = (note_is_active(cx), find_is_available(cx), rename_is_available(cx), wrap_is_available(note_is_active(cx)));
         if now != modules || open != note {
             modules = now;
             note = open;
@@ -256,10 +256,15 @@ pub fn note_is_active(cx: &App) -> bool {
     cx.try_global::<NoteWindowFront>().is_some_and(|f| f.0.is_some()) || state::read(cx, |l| matches!(l.route(), Route::Doc(_)) && l.focused_document().is_some_and(crate::core::markdown::is_markdown))
 }
 
-/// Whether a text field other than a note's own editor has the focus, where a key like F2 belongs to the field.
+/// Whether the line wrapping of a note can be switched: its source editor is in use, not Live and not the reader.
+pub fn wrap_is_available(note: bool) -> bool {
+    note && prefs::with(|p| p.note_editor == prefs::NoteEditor::Code && p.note_mode != prefs::NoteMode::Read)
+}
+
+/// Whether a text field other than a note's own editor has the focus, where a key like F2 belongs to the field. A cell of a table being written counts as a field.
 pub fn typing_in_field(window: &Window) -> bool {
     let stack = window.context_stack();
-    stack.iter().any(|c| c.contains("Input")) && !stack.iter().any(|c| c.contains("NoteEditor") || c.contains("LiveBlock"))
+    stack.iter().any(|c| c.contains("Input")) && (stack.iter().any(|c| c.contains("LiveCell")) || !stack.iter().any(|c| c.contains("NoteEditor") || c.contains("LiveBlock")))
 }
 
 /// What Rename acts on: the shown note or file, else the row the explorer has selected.
@@ -276,9 +281,8 @@ pub fn rename_is_available(cx: &App) -> bool {
     state::read(cx, |l| rename_target(l).is_some())
 }
 
-/// Asks the explorer to rename `path`, showing it first when it was hidden.
+/// Asks the explorer to rename `path`; a hidden or narrow explorer stays hidden and a small sheet asks instead.
 pub fn rename_file(path: PathBuf, cx: &mut App) {
-    prefs::update(|p| p.notes_explorer_hidden = false);
     act(cx, |l| {
         l.rename_request = Some(path);
         l.quiet_open = true;
@@ -571,7 +575,7 @@ pub fn rebuild_menus(cx: &mut App) {
         Menu::new(tr("Darstellung")).items([
             MenuItem::action(tr("Lesen / Bearbeiten"), TogglePreview),
             MenuItem::action(tr("Geteilte Ansicht"), SplitPreview),
-            MenuItem::action(tr("Zeilenumbruch ein-/ausschalten"), super::documents::ToggleWrap).disabled(!note),
+            MenuItem::action(tr("Zeilenumbruch ein-/ausschalten"), super::documents::ToggleWrap).disabled(!wrap_is_available(note)),
             MenuItem::action(tr("Notiz als PDF exportieren"), ExportPdf),
             MenuItem::separator(),
             MenuItem::action(tr("Seitenleiste ein-/ausblenden"), super::main_window::ToggleSidebar),

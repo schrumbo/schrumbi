@@ -49,7 +49,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     if let Some(r) = request {
         let form = cx.new(|cx| FilingForm::new(r.paths, r.assignment_id, true, window, cx));
         let handle = window.window_handle();
-        cx.subscribe(&form,move |_, _: &FilingEvent, cx| {
+        cx.subscribe(&form, move |_, _: &FilingEvent, cx| {
             let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));
             super::state::return_focus_to_page(cx);
         })
@@ -143,7 +143,7 @@ pub fn typing(window: &Window) -> bool {
 }
 
 /// Closes a menu or popover that has the keyboard, so a sheet opened by a shortcut does not stack on top of it.
-fn close_popovers(window: &mut Window, cx: &mut App) -> bool {
+pub fn close_popovers(window: &mut Window, cx: &mut App) -> bool {
     let open = window.context_stack().iter().any(|c| c.contains("PopupMenu"));
     if open {
         window.dispatch_action(Box::new(Cancel), cx);

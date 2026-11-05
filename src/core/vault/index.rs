@@ -358,18 +358,36 @@ pub fn rewrite_links(text: &str, source: &Path, old: &Path, new: &Path, before: 
 
 /// The index as it is after a file moved, so several moves in a row see each other.
 pub fn moved(old: &Path, new: &Path) -> Arc<VaultIndex> {
-    let index = current();
-    let mut files = index.files.clone();
-    files.retain(|f| f != old);
-    files.push(new.to_path_buf());
-    let mut notes = index.notes.clone();
-    if let Some(facts) = notes.remove(old) {
-        notes.insert(new.to_path_buf(), facts);
-    }
-    let mut next = assemble(index.root.clone(), files, notes);
-    next.folders = index.folders.clone();
+    let next = moved_in(&current(), old, new, new.is_dir());
     publish(next);
     current()
+}
+
+/// `index` after `old` moved to `new`; a folder takes every file and folder below it along.
+fn moved_in(index: &VaultIndex, old: &Path, new: &Path, folder: bool) -> VaultIndex {
+    let follow = |p: &Path| p.strip_prefix(old).ok().map(|rest| if rest.as_os_str().is_empty() { new.to_path_buf() } else { new.join(rest) });
+    let mut files = index.files.clone();
+    let mut notes = index.notes.clone();
+    let mut folders = index.folders.clone();
+    if folder {
+        files.iter_mut().for_each(|f| *f = follow(f).unwrap_or_else(|| f.clone()));
+        folders.iter_mut().for_each(|f| *f = follow(f).unwrap_or_else(|| f.clone()));
+        let below: Vec<PathBuf> = notes.keys().filter(|p| follow(p).is_some()).cloned().collect();
+        for was in below {
+            if let (Some(facts), Some(now)) = (notes.remove(&was), follow(&was)) {
+                notes.insert(now, facts);
+            }
+        }
+    } else {
+        files.retain(|f| f != old);
+        files.push(new.to_path_buf());
+        if let Some(facts) = notes.remove(old) {
+            notes.insert(new.to_path_buf(), facts);
+        }
+    }
+    let mut next = assemble(index.root.clone(), files, notes);
+    next.folders = folders;
+    next
 }
 
 /// Files on their way to the trash, kept out of the tree until a scan that started after they were gone.
@@ -466,6 +484,24 @@ mod tests {
     fn built(root: PathBuf, files: Vec<PathBuf>) -> VaultIndex {
         let notes = files.iter().filter(|p| markdown::is_markdown(p)).map(|p| (p.clone(), facts_of(&std::fs::read_to_string(p).unwrap_or_default(), 0.))).collect();
         assemble(root, files, notes)
+    }
+
+    #[test]
+    fn a_moved_folder_takes_its_files_notes_and_folders_along() {
+        let root = vault("moved-folder", &[("kurs/A.md", "x\n"), ("kurs/tief/B.md", "y\n"), ("C.md", "z\n")]);
+        let mut files = vec![root.join("kurs/A.md"), root.join("kurs/tief/B.md"), root.join("C.md")];
+        files.sort();
+        let mut before = built(root.clone(), files);
+        before.folders = vec![root.join("kurs"), root.join("kurs/tief")];
+        let (old, new) = (root.join("kurs"), root.join("neu"));
+        let after = moved_in(&before, &old, &new, true);
+        assert!(after.files.contains(&new.join("A.md")) && after.files.contains(&new.join("tief/B.md")) && after.files.contains(&root.join("C.md")));
+        assert!(!after.files.iter().any(|f| f.starts_with(&old)), "nothing stays below the old name");
+        assert!(!after.files.contains(&new), "the folder itself is no file");
+        assert!(after.notes.contains_key(&new.join("A.md")) && !after.notes.contains_key(&old.join("A.md")));
+        assert_eq!(after.folders, vec![new.clone(), new.join("tief")]);
+        let single = moved_in(&before, &root.join("C.md"), &root.join("D.md"), false);
+        assert!(single.files.contains(&root.join("D.md")) && !single.files.contains(&root.join("C.md")));
     }
 
     #[test]

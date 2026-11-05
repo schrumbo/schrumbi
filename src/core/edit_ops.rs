@@ -344,6 +344,17 @@ fn toggle_emphasis(s: &str, sel: &Range<usize>, token: &str, math: &[Range<usize
     Some(Edit { range: start..end, text, select })
 }
 
+/// Whether `pos` lies inside the address of a link or a bare URL on its line; the edges of a bare URL are outside.
+fn in_target(s: &str, pos: usize) -> bool {
+    let ls = line_start(s, pos);
+    let Some(line) = s.get(ls..line_end(s, pos)) else { return false };
+    let at = pos - ls;
+    target_ranges(line).into_iter().any(|r| {
+        let hugging = line.get(..r.start).is_some_and(|before| before.ends_with("](") || before.ends_with("[["));
+        if hugging { r.start.saturating_sub(1) <= at && at <= r.end } else { r.start < at && at < r.end }
+    })
+}
+
 fn on_fence(s: &str, sel: &Range<usize>) -> bool {
     let end = line_end(s, sel.start);
     sel.end <= end && s[line_start(s, sel.start)..end].trim() == "$$"
@@ -355,7 +366,7 @@ pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
     let emphasis = token == "**" || token == "*";
     let math = if emphasis { math_ranges(s) } else { Vec::new() };
     if emphasis {
-        if in_math(&math, sel.start) || in_math(&math, sel.end) || on_fence(s, &sel) {
+        if in_math(&math, sel.start) || in_math(&math, sel.end) || in_target(s, sel.start) || in_target(s, sel.end) || on_fence(s, &sel) {
             return Edit { range: sel.clone(), text: inner.to_string(), select: sel };
         }
         if let Some(edit) = toggle_emphasis(s, &sel, token, &math) {
@@ -1277,6 +1288,26 @@ world");
         assert_eq!(apply(s, &wrap(s, 0..s.len(), "*")), "*[[a*b*c]] k*\n*rest*");
         let s = "`a*b*c` *k*\nrest";
         assert_eq!(apply(s, &wrap(s, 0..s.len(), "*")), "*`a*b*c` k*\n*rest*");
+    }
+
+    #[test]
+    fn wrapping_never_starts_or_ends_inside_a_link_or_url() {
+        for token in ["*", "**"] {
+            let s = "[x](a*b*c.md) k\nrest";
+            let from = s.find("a*b").unwrap();
+            for start in [from, from + 1, from + 2, s.find("](").unwrap() + 1] {
+                assert_eq!(apply(s, &wrap(s, start..s.len(), token)), s, "{token} from {start}");
+            }
+            assert_eq!(apply(s, &wrap(s, 0..from + 2, token)), s, "{token} ends inside");
+            let s = "https://a.de/a*b*c k\nrest";
+            assert_eq!(apply(s, &wrap(s, 10..s.len(), token)), s);
+            assert_eq!(apply(s, &wrap(s, 14..14, token)), s);
+            assert_eq!(apply(s, &wrap(s, 0..s.len(), "*")), "*https://a.de/a*b*c k*\n*rest*");
+        }
+        let s = "ein https://a.de/b ende";
+        assert_eq!(apply(s, &wrap(s, 4..18, "**")), "ein **https://a.de/b** ende", "a whole URL can be made bold");
+        let s = "[x](a.md) k\nrest";
+        assert_eq!(apply(s, &wrap(s, 0..s.len(), "**")), "**[x](a.md) k**\n**rest**");
     }
 
     #[test]

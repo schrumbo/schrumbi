@@ -54,6 +54,10 @@ const FIND_IN_BACKGROUND_FROM: usize = 200_000;
 const PARSE_IN_BACKGROUND_FROM: usize = 100_000;
 const REPARSE_DELAY: Duration = Duration::from_millis(150);
 const NOTICE_AFTER: Duration = Duration::from_millis(300);
+const SAVE_RETRY_WAIT: Duration = Duration::from_millis(400);
+const WRAP_NOTICE_FOR: Duration = Duration::from_millis(1600);
+const SAVE_NOTICE_TINT: f32 = 0.08;
+const SAVE_FLASH_TINT: f32 = 0.16;
 const RICH_EDITOR_UNTIL: usize = 200_000;
 const SPELL_WINDOW: usize = 40_000;
 
@@ -105,7 +109,7 @@ struct LiveCell {
 }
 
 /// The room the handles beside a block take.
-const GUTTER_WIDTH: f32 = 48.;
+const GUTTER_WIDTH: f32 = 54.;
 /// The room a fold chevron takes left of a heading or list, between its text and the handles.
 const FOLD_ROOM: f32 = iconsize::L;
 /// What the live view keeps free left of the text, so every handle stays inside the pane.
@@ -274,6 +278,7 @@ pub struct NoteView {
     editor_plain: bool,
     editor_wrap: bool,
     wrap_override: Option<bool>,
+    wrap_notice: Option<(bool, Task<()>)>,
     /// Which editor the settings asked for when this view last looked.
     editor_kind: prefs::NoteEditor,
     reader_width: Pixels,
@@ -309,6 +314,8 @@ pub struct NoteView {
     syncing: bool,
     autosave: Option<Task<()>>,
     save_problem: Option<String>,
+    save_pending: Option<Task<()>>,
+    save_flash: Option<Task<()>>,
     /// Shown inside the main window with tabs, or in its own window.
     pub embedded: bool,
     focus: FocusHandle,
@@ -320,7 +327,9 @@ pub struct NoteView {
 impl NoteView {
     pub fn new(path: PathBuf, embedded: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let text = state::lib(cx).update(cx, |l, _| l.buffer(&path).text.clone());
-        let editor = cx.new(|cx| EditorState::new(window, cx).language(editor_language(text.len())).soft_wrap(text.len() <= RICH_EDITOR_UNTIL).line_number(true).default_value(text.clone()));
+        let wrap_override = prefs::with(|p| p.note_wraps.get(path.to_string_lossy().as_ref()).copied());
+        let wrap = wraps_lines(text.len(), wrap_override);
+        let editor = cx.new(|cx| EditorState::new(window, cx).language(editor_language(text.len())).soft_wrap(wrap).line_number(true).default_value(text.clone()));
         editor.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(path.clone())));
         let block = cx.new(|cx| EditorState::new(window, cx).soft_wrap(true).line_number(false).folding(false).smart_indent(false).scroll_beyond_last_line(Some(0)));
         block.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(path.clone())));
@@ -386,6 +395,10 @@ impl NoteView {
                 if lib.read(cx).active_document.as_ref() != Some(&this.path) && this.place_restored {
                     this.remember_place();
                 }
+                if this.save_problem.is_some() && lib.read(cx).buffers.get(&this.path).is_some_and(|b| !b.dirty) {
+                    this.save_problem = None;
+                    this.save_flash = None;
+                }
                 this.follow_buffer(window, cx);
                 cx.notify();
             }),
@@ -425,7 +438,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: text.len() <= RICH_EDITOR_UNTIL, wrap_override: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -761,6 +774,7 @@ impl NoteView {
         };
         if prefs::get().note_mode != remembered {
             prefs::update(|p| p.note_mode = remembered);
+            super::app::rebuild_menus(cx);
         }
         if mode == Mode::Read {
             self.finish_block(cx);
@@ -814,17 +828,44 @@ impl NoteView {
             return;
         }
         let wrap = !self.editor_wrap;
+        let len = state::read(cx, |l| l.buffers.get(&self.path).map_or(0, |b| b.text.len()));
         self.editor_wrap = wrap;
-        self.wrap_override = Some(wrap);
+        self.wrap_override = Some(wrap).filter(|w| *w != wraps_lines(len, None));
+        let (key, chosen) = (self.path.to_string_lossy().to_string(), self.wrap_override);
+        prefs::update(|p| match chosen {
+            Some(w) => {
+                p.note_wraps.insert(key, w);
+                while p.note_wraps.len() > NOTE_PLACES {
+                    let Some(first) = p.note_wraps.keys().next().cloned() else { break };
+                    p.note_wraps.remove(&first);
+                }
+            }
+            None => {
+                p.note_wraps.remove(&key);
+            }
+        });
         self.editor.update(cx, |s, cx| s.set_soft_wrap(wrap, window, cx));
+        self.wrap_notice = Some((
+            wrap,
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(WRAP_NOTICE_FOR).await;
+                let _ = this.update(cx, |n, cx| {
+                    n.wrap_notice = None;
+                    cx.notify();
+                });
+            }),
+        ));
         cx.notify();
     }
 
     /// The quiet line in the word count bar that says what a long note gives up, and turns wrapping on or off when the editor is plain.
     fn plain_caption(&self, len: usize, t: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if let Some((on, _)) = &self.wrap_notice {
+            return Some(div().id("wrap-notice").min_w_0().truncate().px(px(space::XS)).child(if *on { tr("Zeilenumbruch an") } else { tr("Zeilenumbruch aus") }).into_any_element());
+        }
         if self.long_line && self.mode == Mode::Source {
             let me = cx.entity();
-            let caption = div().id("long-line").min_w_0().truncate().rounded(px(radius::SMALL)).px(px(space::XS)).cursor_pointer().key_nav().soft(t.ink.opacity(0.06), radius::SMALL).tooltip(tip(tr("Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück in die Live-Ansicht.")));
+            let caption = div().id("long-line").min_w_0().min_h(px(control::S)).flex().items_center().truncate().rounded(px(radius::SMALL)).px(px(space::XS)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::FLOAT), radius::SMALL).tooltip(tip(tr("Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück in die Live-Ansicht.")));
             return Some(
                 caption
                     .on_click(move |_, window, cx| {
@@ -833,7 +874,7 @@ impl NoteView {
                             n.set_mode(Mode::Live, window, cx);
                         })
                     })
-                    .child(tr("Diese Zeile ist zu lang für Live. Esc: zurück zu Live"))
+                    .child(tr("Diese Zeile ist zu lang für Live. Esc kehrt zurück."))
                     .into_any_element(),
             );
         }
@@ -1572,7 +1613,7 @@ impl NoteView {
         let wrapper = self.note_editor_wrapper(field.into_any_element(), cx);
         let editor = if cell { wrapper } else { div().absolute().top(px(-LIVE_INSET)).left_0().right_0().child(wrapper).into_any_element() };
         div()
-            .key_context("LiveBlock")
+            .key_context(if cell { "LiveCell" } else { "LiveBlock" })
             .relative()
             .when(cell, |d| d.mx(px(-LIVE_GUTTER)))
             .pb(px(deficit))
@@ -1770,7 +1811,7 @@ impl NoteView {
     fn gutter(me: &Entity<Self>, i: usize, line: usize, count: usize, is_table: bool, label: String, group: SharedString, extra: Option<AnyElement>, t: &Theme) -> Div {
         let (add_me, menu_me) = (me.clone(), me.clone());
         let lit = t.ink.opacity(hover::FLOAT);
-        let handle = |id: (&'static str, usize), name: &'static str| div().id(id).size(px(iconsize::L)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().soft(lit, radius::SMALL).child(icon(name, iconsize::S, t.tertiary));
+        let handle = |id: (&'static str, usize), name: &'static str| div().id(id).size(px(control::S)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().key_nav().soft(lit, radius::SMALL).child(icon(name, iconsize::S, t.tertiary));
         div()
             .flex()
             .justify_end()
@@ -2072,12 +2113,41 @@ impl NoteView {
         }
     }
 
-    fn save_notice(&self, cx: &mut Context<Self>, t: &Theme) -> impl IntoElement + use<> {
+    /// Tries to save again after a short wait that shows the button busy, and lights the notice when it still fails.
+    fn retry_save(&mut self, cx: &mut Context<Self>) {
+        if self.save_pending.is_some() {
+            return;
+        }
+        self.save_flash = None;
+        self.save_pending = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SAVE_RETRY_WAIT).await;
+            let _ = this.update(cx, |n, cx| {
+                n.save_pending = None;
+                n.save(cx);
+                if n.save_problem.is_some() {
+                    n.save_flash = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(super::motion::FLASH).await;
+                        let _ = this.update(cx, |n, cx| {
+                            n.save_flash = None;
+                            cx.notify();
+                        });
+                    }));
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn save_notice(&self, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> impl IntoElement + use<> {
         let me = cx.entity();
-        let retry = Button::new("save-retry").small().primary().label(tr("Erneut versuchen")).on_click(move |_, _, cx| me.update(cx, |n, cx| n.save(cx)));
-        let open = self.save_problem.is_some();
+        let pending = self.save_pending.is_some();
+        let retry = Button::new("save-retry").small().primary().label(tr("Erneut versuchen")).loading(pending).disabled(pending).on_click(move |_, _, cx| me.update(cx, |n, cx| n.retry_save(cx)));
+        let dirty = state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.dirty));
+        let open = self.save_problem.is_some() && dirty;
         let detail = self.save_problem.clone();
-        super::motion::reveal("note-save-problem", open, div().p(px(space::S)).child(notice("triangle-alert", t.orange, tr("Diese Notiz ließ sich nicht sichern."), detail, retry, t)))
+        let lit = super::motion::follow("note-save-flash", if self.save_flash.is_some() { 1. } else { 0. }, super::motion::timed(super::motion::MEDIUM, cx), window, cx);
+        super::motion::reveal("note-save-problem", open, div().p(px(space::S)).child(notice("triangle-alert", t.orange, tr("Diese Notiz ließ sich nicht sichern."), detail, retry, t).bg(t.orange.opacity(SAVE_NOTICE_TINT + SAVE_FLASH_TINT * lit))))
     }
 
     fn conflict_notice(&self, open: bool, t: &Theme) -> impl IntoElement + use<> {
@@ -2642,7 +2712,7 @@ impl NoteView {
                 let right = lead - if fold { FOLD_ROOM } else { 0. };
                 let gutter = Self::gutter(&gutter_me, i, line, count, is_table, label, group.clone(), extra, &t).absolute().left(px(right - width)).w(px(width));
                 match middle {
-                    Some(middle) => gutter.top(px(middle - iconsize::L / 2.)),
+                    Some(middle) => gutter.top(px(middle - control::S / 2.)),
                     None => gutter.top_0().bottom_0(),
                 }
                 .into_any_element()
@@ -3343,8 +3413,8 @@ impl Render for NoteView {
             .child(top)
             .children(self.find.bar.clone().filter(|_| self.find.open))
             .child(self.conflict_notice(conflict, &t))
-            .child(self.save_notice(cx, &t))
-            .child(div().flex_1().min_h_0().child(content));
+            .child(div().flex_1().min_h_0().child(content))
+            .child(self.save_notice(window, cx, &t));
         let view = view.child(wheel);
         if self.embedded {
             view.into_any_element()
@@ -3453,7 +3523,7 @@ pub fn compare_note(path: PathBuf, cx: &mut App) {
 
 fn save_reason(path: &Path, error: &std::io::Error) -> String {
     if path.parent().is_some_and(|d| !d.exists()) {
-        return tr("Der Ordner dieser Notiz gibt es nicht mehr. Dein Text bleibt offen und wird gesichert, sobald der Ordner wieder da ist.");
+        return tr("Den Ordner dieser Notiz gibt es nicht mehr. Dein Text bleibt offen und wird gesichert, sobald der Ordner wieder da ist.");
     }
     crate::core::errors::explain_io(error).unwrap_or_else(|| error.to_string())
 }
@@ -3491,7 +3561,11 @@ fn save_buffer(path: &Path, cx: &mut App) -> bool {
 
 /// Saves the given notes, then runs `done`. A failed save keeps everything open.
 pub fn resolve_unsaved(paths: Vec<PathBuf>, cx: &mut App, done: impl FnOnce(&mut App) + 'static) {
-    let dirty: Vec<PathBuf> = state::read(cx, |l| paths.into_iter().filter(|p| l.buffers.get(p).is_some_and(|b| b.dirty)).collect());
+    let dirty: Vec<PathBuf> = state::read(cx, |l| {
+        let mut keys: Vec<PathBuf> = paths.iter().map(|p| l.buffer_key(p)).filter(|k| l.buffers.get(k).is_some_and(|b| b.dirty)).collect();
+        keys.dedup();
+        keys
+    });
     if dirty.iter().all(|p| save_buffer(p, cx)) {
         done(cx);
     }

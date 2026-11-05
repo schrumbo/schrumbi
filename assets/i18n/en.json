@@ -1581,7 +1581,7 @@
   "Ein Name darf nicht mit einem Punkt enden.": "A name cannot end with a period.",
   "Klicken zum Umbenennen": "Click to rename",
   "Ausgeblendete Ordner: %@": "Hidden folders: %@",
-  "Der Ordner dieser Notiz gibt es nicht mehr. Dein Text bleibt offen und wird gesichert, sobald der Ordner wieder da ist.": "This note’s folder no longer exists. Your text stays open and is saved as soon as the folder is back.",
+  "Den Ordner dieser Notiz gibt es nicht mehr. Dein Text bleibt offen und wird gesichert, sobald der Ordner wieder da ist.": "This note’s folder no longer exists. Your text stays open and is saved as soon as the folder is back.",
   "Diese Notiz ließ sich nicht sichern.": "This note could not be saved.",
   "Große Notiz: ohne Hervorhebung": "Large note: no highlighting",
   "Große Notiz: ohne Umbruch und Hervorhebung": "Large note: no wrapping or highlighting",
@@ -1590,5 +1590,7 @@
   "Lange Notizen zeigen keine Hervorhebung, und die Rechtschreibung prüft nur den Text um die Schreibmarke. Klicken schaltet den Zeilenumbruch aus.": "Long notes show no highlighting, and spelling checks only the text around the caret. Click to turn line wrapping off.",
   "Lange Notizen zeigen keinen Zeilenumbruch und keine Hervorhebung, und die Rechtschreibung prüft nur den Text um die Schreibmarke. Klicken schaltet den Zeilenumbruch ein.": "Long notes show no line wrapping and no highlighting, and spelling checks only the text around the caret. Click to turn line wrapping on.",
   "Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück in die Live-Ansicht.": "A line this long stays fast in the source. Click to go back to Live.",
-  "Diese Zeile ist zu lang für Live. Esc: zurück zu Live": "This line is too long for Live. Esc: back to Live"
+  "Diese Zeile ist zu lang für Live. Esc kehrt zurück.": "This line is too long for Live. Esc goes back.",
+  "Zeilenumbruch an": "Line wrapping on",
+  "Zeilenumbruch aus": "Line wrapping off"
 }

@@ -364,3 +364,84 @@ fn a_new_note_at_a_former_path_does_not_inherit_the_trail() {
     lib.buffer(&p[0]);
     assert_eq!(lib.moved_path(&p[0]), None);
 }
+
+fn folder_with_notes(name: &str) -> (PathBuf, PathBuf, [PathBuf; 4]) {
+    let (root, _) = notes(name, &["c.md"]);
+    let dir = root.join("kurs");
+    std::fs::create_dir_all(dir.join("tief")).unwrap();
+    let files = [root.join("c.md"), dir.join("a.md"), dir.join("tief").join("b.md"), dir.join("tief").join("d.md")];
+    for f in &files[1..] {
+        std::fs::write(f, "x").unwrap();
+    }
+    (root, dir, files)
+}
+
+#[test]
+fn renaming_a_folder_carries_every_tab_and_remembered_position_inside() {
+    use super::prefs::{self, PdfPosition};
+    let (root, dir, [c, a, b, d]) = folder_with_notes("rename-folder-tabs");
+    let mut lib = opened(&[c.clone(), d.clone(), b.clone(), a.clone()]);
+    lib.close_document(&d);
+    lib.split_document = Some(b.clone());
+    let key = |p: &PathBuf| p.to_string_lossy().to_string();
+    prefs::update(|p| {
+        p.heading_titled.insert(key(&a));
+        p.note_wraps.insert(key(&a), false);
+        p.pdf_positions.insert(key(&b), PdfPosition { page: 3, fraction: 0.5, scale: None, fit_page: false, used: 1 });
+    });
+    let moved = |p: &PathBuf| p.strip_prefix(&dir).map_or(p.clone(), |r| root.join("neu").join(r));
+    let (open, active, split) = (lib.open_documents.clone(), lib.active_document.clone().unwrap(), lib.split_document.clone().unwrap());
+    lib.rename(&dir, "neu");
+    assert!(lib.last_error.is_none(), "{:?}", lib.last_error);
+    assert_eq!(lib.open_documents, open.iter().map(moved).collect::<Vec<_>>());
+    assert_eq!(lib.active_document, Some(moved(&active)));
+    assert_eq!(lib.split_document, Some(moved(&split)));
+    assert_eq!(*lib.route(), Route::Doc(moved(&active)));
+    let (new_a, new_b) = (moved(&a), moved(&b));
+    prefs::with(|p| {
+        assert!(p.heading_titled.contains(&key(&new_a)) && !p.heading_titled.contains(&key(&a)));
+        assert_eq!(p.pdf_positions.get(&key(&new_b)).map(|x| x.page), Some(3));
+        assert!(!p.pdf_positions.contains_key(&key(&b)));
+        assert_eq!(p.note_wraps.get(&key(&new_a)), Some(&false));
+        assert!(!p.note_wraps.contains_key(&key(&a)));
+    });
+    assert!(lib.can_reopen_document());
+    lib.reopen_document();
+    assert_eq!(lib.active_document, Some(moved(&d)), "a closed tab comes back at its new place");
+    let target = lib.active_document.clone().unwrap();
+    lib.rename(&target, "e.md");
+    assert!(moved(&d).with_file_name("e.md").exists() && lib.last_error.is_none(), "{:?}", lib.last_error);
+    assert_eq!(lib.active_document, Some(moved(&d).with_file_name("e.md")), "renaming the shown note after its folder changed targets the new path");
+}
+
+#[test]
+fn a_preview_trail_follows_a_renamed_folder() {
+    let (root, dir, [c, a, b, _]) = folder_with_notes("rename-folder-trail");
+    let mut lib = opened(&[c.clone()]);
+    lib.open_preview(&a);
+    lib.follow_path(&b, None);
+    assert_eq!(lib.preview_document, Some(b.clone()));
+    lib.rename(&dir, "neu");
+    let (new_a, new_b) = (root.join("neu").join("a.md"), root.join("neu").join("tief").join("b.md"));
+    assert_eq!(lib.preview_document, Some(new_b));
+    lib.go_back();
+    assert_eq!(lib.open_documents, vec![c, new_a.clone()], "Back leads to the preview's earlier note at its new path");
+    assert_eq!(*lib.route(), Route::Doc(new_a));
+}
+
+#[test]
+fn closing_all_tabs_never_drops_a_dirty_buffer() {
+    let (_, dir, [c, a, ..]) = folder_with_notes("close-all-dirty");
+    let mut lib = opened(&[c.clone(), a.clone()]);
+    lib.buffer(&a).edited("neu".into());
+    lib.rename(&dir, "neu");
+    let new_a = dir.with_file_name("neu").join("a.md");
+    assert_eq!(lib.buffer_key(&a), new_a, "a view still on the old path finds the buffer where it went");
+    assert_eq!(lib.buffer_key(&c), c);
+    lib.toggle_mode = true;
+    lib.close_other_documents(&c);
+    assert!(lib.buffers.get(&new_a).is_some_and(|b| b.dirty), "closing the others keeps a buffer that was not saved");
+    lib.close_all_documents();
+    assert!(lib.buffers.get(&new_a).is_some_and(|b| b.dirty), "closing all keeps a buffer that was not saved");
+    assert!(!lib.toggle_mode, "a pending switch between reading and writing does not wait for the next note");
+}
