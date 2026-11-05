@@ -59,11 +59,13 @@ const WRAP_NOTICE_FOR: Duration = Duration::from_millis(1600);
 const SAVE_NOTICE_TINT: f32 = 0.08;
 const SAVE_FLASH_TINT: f32 = 0.16;
 const RICH_EDITOR_UNTIL: usize = 200_000;
+const WRAP_UNTIL: usize = 100_000;
+const WRAP_MAX: usize = 120_000;
 const SPELL_WINDOW: usize = 40_000;
 
-/// Whether the source editor wraps lines: the user's choice for this note, else only while the note is short.
+/// Whether the source editor wraps lines: the user's choice for this note while wrapping it takes under a frame, else only while the note is short.
 fn wraps_lines(len: usize, chosen: Option<bool>) -> bool {
-    chosen.unwrap_or(len <= RICH_EDITOR_UNTIL)
+    chosen.map_or(len <= WRAP_UNTIL, |wrap| wrap && len <= WRAP_MAX)
 }
 
 /// The longest line Live opens for writing; a longer one opens in the source view, where it stays fast.
@@ -829,6 +831,10 @@ impl NoteView {
         }
         let wrap = !self.editor_wrap;
         let len = state::read(cx, |l| l.buffers.get(&self.path).map_or(0, |b| b.text.len()));
+        if wrap && !wraps_lines(len, Some(true)) {
+            act(cx, |l| l.notify(tr("Diese Notiz ist zu lang zum Umbrechen, der Editor bleibt so schnell."), "text", None, None));
+            return;
+        }
         self.editor_wrap = wrap;
         self.wrap_override = Some(wrap).filter(|w| *w != wraps_lines(len, None));
         let (key, chosen) = (self.path.to_string_lossy().to_string(), self.wrap_override);
@@ -1582,6 +1588,8 @@ impl NoteView {
         let rows: usize = if cell { 1 } else { window.text_system().shape_text(value.clone().into(), px(size), &[run], Some(width), None).map_or(1, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum()) };
         let line = px(size * 1.5);
         let height = line * (rows.max(1) as f32);
+        let hidden: gpui_kit::base::input::EditorScrollbarRenderer = Rc::new(|_, _, _| div().into_any_element());
+        self.block.update(cx, |s, _| s.set_scrollbar_renderer(cell.then_some(hidden)));
         let left = if single { self.drawn_text_left(&value, depth) - self.hang_width(&value, size, window) } else { 0. };
         let heading = single && value.starts_with('#') && size != note_size(font::BODY);
         let field = writing_menu(
@@ -2641,7 +2649,7 @@ impl NoteView {
                 SegmentKind::Line { depth } => {
                     let written = source_lines.get(line).map_or("", |s| s.as_str());
                     let continues = source_lines.get(line + 1).is_some_and(|next| live_text::continues_paragraph(written, next));
-                    let shown = live_text::drawn_line(written, continues);
+                    let (shown, left) = live_text::drawn_part(live_text::drawn_line(written, continues));
                     let fragment = {
                         let mut known = fragments.borrow_mut();
                         if known.len() > 20_000 {
@@ -2660,7 +2668,8 @@ impl NoteView {
                         let draw = markdown_view::LiveDraw { item: Some(i - 1), line, footnotes: Some(parsed.footnote_order()), open_cell: None, count: fragment.line_blocks() };
                         let drawn = markdown_view::render_live(&fragment, 0, base.as_deref(), Some(offset_toggle), None, Some(&focus), draw, &t);
                         let is_list = live_text::prefix_len(written) > 0 && !written.trim_start().starts_with('#') && !written.trim_start().starts_with('>');
-                        (div().pl(px(lead)).when(is_list, |d| d.pb(px(space::XS))).child(drawn).into_any_element(), lead, fragment.first_line_middle(0), fragment.has_margin_control(0), None)
+                        let cut_note = (left > 0).then(|| caption(trf("Hier steht nur der Anfang dieser langen Zeile, %@ KB mehr. Lesen zeigt alles.", &[&crate::core::i18n::grouped(left.div_ceil(1024))]), &t));
+                        (div().pl(px(lead)).when(is_list, |d| d.pb(px(space::XS))).child(drawn).children(cut_note).into_any_element(), lead, fragment.first_line_middle(0), fragment.has_margin_control(0), None)
                     }
                 }
                 SegmentKind::Whole { block } => {
@@ -3994,7 +4003,7 @@ fn writing_menu(field: Editor) -> Editor {
 
 #[cfg(test)]
 mod window_tests {
-    use super::{Mode, PARSE_IN_BACKGROUND_FROM, RICH_EDITOR_UNTIL, parses_in_background, save_failure, spell_window, wraps_lines};
+    use super::{Mode, PARSE_IN_BACKGROUND_FROM, RICH_EDITOR_UNTIL, WRAP_MAX, WRAP_UNTIL, parses_in_background, save_failure, spell_window, wraps_lines};
 
     fn prose() -> String {
         (0..3000).map(|i| format!("Zeile {i} mit etwas Text darin\n")).collect()
@@ -4003,8 +4012,9 @@ mod window_tests {
     #[test]
     fn a_chosen_wrap_beats_the_size_of_the_note() {
         assert!(wraps_lines(10, None));
-        assert!(!wraps_lines(RICH_EDITOR_UNTIL + 1, None));
-        assert!(wraps_lines(RICH_EDITOR_UNTIL + 1, Some(true)));
+        assert!(!wraps_lines(WRAP_UNTIL + 1, None));
+        assert!(wraps_lines(WRAP_UNTIL + 1, Some(true)));
+        assert!(!wraps_lines(WRAP_MAX + 1, Some(true)));
         assert!(!wraps_lines(10, Some(false)));
     }
 

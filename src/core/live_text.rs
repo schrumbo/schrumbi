@@ -84,6 +84,24 @@ pub fn segments(text: &str, blocks: &[(usize, usize, Shape)]) -> Vec<Segment> {
     out
 }
 
+/// How many bytes a line may have for the live view to draw it whole.
+pub const DRAW_MAX: usize = 32_768;
+
+/// How many bytes of a longer line the live view draws.
+const DRAW_PART: usize = 4096;
+
+/// What of a line the live view draws, and how many bytes it leaves out: a line too long to lay out in one frame shows its start up to the next space.
+pub fn drawn_part(line: &str) -> (&str, usize) {
+    if line.len() <= DRAW_MAX {
+        return (line, 0);
+    }
+    let from = (DRAW_PART..).find(|i| line.is_char_boundary(*i)).unwrap_or(line.len());
+    let reach = (from + 256).min(line.len());
+    let end = (from..=reach).rev().find(|i| line.is_char_boundary(*i)).unwrap_or(from);
+    let cut = line[from..end].char_indices().find(|(_, c)| c.is_whitespace()).map_or(from, |(i, c)| from + i + c.len_utf8());
+    (&line[..cut], line.len() - cut)
+}
+
 /// How deep a line stands while it is written, when Tab may just have moved it.
 pub fn depth_while_writing(line: &str, drawn: usize) -> usize {
     let wide = columns(line);
@@ -457,6 +475,19 @@ mod tests {
         assert_eq!(kinds[10], (12, SegmentKind::Table { block: 4 }));
         assert_eq!(kinds[12], (16, SegmentKind::Raw));
         assert_eq!(kinds.last().unwrap().1, SegmentKind::Blank);
+    }
+
+    #[test]
+    fn a_line_too_long_to_lay_out_shows_its_start_up_to_a_space() {
+        let short = "Wort ".repeat(100);
+        assert_eq!(drawn_part(&short), (short.as_str(), 0));
+        let long = "Wörter ".repeat(20_000);
+        let (shown, left) = drawn_part(&long);
+        assert!(shown.len() >= DRAW_PART && shown.len() < DRAW_PART + 300 && shown.ends_with(' '));
+        assert_eq!(shown.len() + left, long.len());
+        let solid = "ä".repeat(DRAW_MAX);
+        let (shown, left) = drawn_part(&solid);
+        assert!(!shown.is_empty() && shown.len() + left == solid.len());
     }
 
     #[test]
