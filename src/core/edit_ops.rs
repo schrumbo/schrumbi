@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 
 use pulldown_cmark::{Event, Parser};
 use regex::Regex;
+use unicode_normalization::char::is_combining_mark;
 
 /// One undoable edit: replace `range` with `text`, then select `select` (offsets in the new text).
 #[derive(Debug, Clone, PartialEq)]
@@ -201,6 +202,10 @@ fn widened(sel: &Range<usize>, spans: &[Span]) -> Range<usize> {
     }
 }
 
+fn word_char(c: char) -> bool {
+    c.is_alphanumeric() || is_combining_mark(c)
+}
+
 fn toggle_emphasis(s: &str, sel: &Range<usize>, token: &str, math: &[Range<usize>]) -> Option<Edit> {
     if s.get(sel.clone())?.contains('\n') {
         return None;
@@ -250,15 +255,15 @@ fn toggle_emphasis(s: &str, sel: &Range<usize>, token: &str, math: &[Range<usize
         let before = s[..a].chars().rev().take_while(|c| *c == '*').count();
         let after = s[a..].chars().take_while(|c| *c == '*').count();
         let run = before + after;
-        if !used && run >= 2 * n && (run == 2 * n || (before > 0 && after > 0)) {
+        if !used && before > 0 && after > 0 && run >= 2 * n {
             let behind = before.min(n).max((2 * n).saturating_sub(after)).min(before);
             let start = a - behind;
             return Some(Edit { range: start..a + 2 * n - behind, text: String::new(), select: start..start });
         }
         let (prev, next) = (s[..a].chars().next_back(), s[a..].chars().next());
-        if prev.is_some_and(char::is_alphanumeric) && next.is_some_and(char::is_alphanumeric) {
-            let from = s[..a].char_indices().rev().take_while(|(_, c)| c.is_alphanumeric()).last().map_or(a, |(i, _)| i);
-            let to = a + s[a..].char_indices().find(|(_, c)| !c.is_alphanumeric()).map_or(s.len() - a, |(i, _)| i);
+        if prev.is_some_and(word_char) && next.is_some_and(word_char) {
+            let from = s[..a].char_indices().rev().take_while(|(_, c)| word_char(*c)).last().map_or(a, |(i, _)| i);
+            let to = a + s[a..].char_indices().find(|(_, c)| !word_char(*c)).map_or(s.len() - a, |(i, _)| i);
             return Some(Edit { range: from..to, text: format!("{token}{}{token}", &s[from..to]), select: a + n..a + n });
         }
         return None;
@@ -321,14 +326,41 @@ pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
         }
         if inner.contains('\n') {
             let mut at = sel.start;
-            let text = inner
+            let lines: Vec<(usize, bool)> = inner
                 .split('\n')
                 .map(|line| {
                     let range = at..at + line.len();
                     at = range.end + 1;
                     let display = line.trim() == "$$" || math.iter().any(|r| r.start <= range.start && range.end <= r.end && s[r.clone()].starts_with("$$"));
                     let marks = super::live_text::prefix_len(line);
-                    if display || line[marks..].trim().is_empty() { line.to_string() } else { format!("{}{token}{}{token}", &line[..marks], &line[marks..]) }
+                    let skip = display || line[marks..].trim().is_empty();
+                    (marks, skip)
+                })
+                .collect();
+            let closed = |body: &str| {
+                let (lead, trail) = (body.chars().take_while(|c| *c == '*').count(), body.chars().rev().take_while(|c| *c == '*').count());
+                match token {
+                    "**" => lead >= 2 && trail >= 2 && body.len() >= 4,
+                    "*" => lead % 2 == 1 && trail % 2 == 1 && body.len() >= 2,
+                    _ => body.len() >= token.len() * 2 && body.starts_with(token) && body.ends_with(token),
+                }
+            };
+            let content: Vec<bool> = inner.split('\n').zip(&lines).filter(|(_, (_, skip))| !skip).map(|(line, (marks, _))| closed(&line[*marks..])).collect();
+            let unwrap_all = !content.is_empty() && content.iter().all(|c| *c);
+            let text = inner
+                .split('\n')
+                .zip(&lines)
+                .map(|(line, (marks, skip))| {
+                    let body = &line[*marks..];
+                    if *skip {
+                        line.to_string()
+                    } else if unwrap_all {
+                        format!("{}{}", &line[..*marks], &body[token.len()..body.len() - token.len()])
+                    } else if closed(body) {
+                        line.to_string()
+                    } else {
+                        format!("{}{token}{body}{token}", &line[..*marks])
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -834,10 +866,33 @@ mod tests {
         assert_eq!(toggled("Ende**|**", "**"), "Ende|");
         assert_eq!(toggled("Ende*|***", "**"), "Ende|");
         assert_eq!(toggled("Ende***|*", "**"), "Ende|");
-        assert_eq!(toggled("Ende|****", "**"), "Ende|");
+        assert_eq!(toggled("Ende|****", "**"), "Ende**|******");
         assert_eq!(toggled("Ende**|**", "*"), "Ende*|*");
         assert_eq!(toggled("Ende*|***", "*"), "Ende|**");
         assert_eq!(toggled("Ende*|*", "*"), "Ende|");
+    }
+
+    #[test]
+    fn stars_on_one_side_only_are_not_an_empty_pair() {
+        assert_eq!(toggled("Text **|", "*"), "Text ***|*");
+        assert_eq!(toggled("2|**3", "*"), "2*|***3");
+        assert_eq!(toggled("|****", "**"), "**|******");
+        assert_eq!(toggled("****|", "**"), "******|**");
+    }
+
+    #[test]
+    fn a_selection_of_wrapped_lines_unwraps_them_and_never_doubles() {
+        assert_eq!(toggled("‹**a**\n**b**›", "**"), "‹a\nb›");
+        assert_eq!(toggled("‹- **a**\n\n**b**›", "**"), "‹- a\n\nb›");
+        assert_eq!(toggled("‹*a*\n*b*›", "*"), "‹a\nb›");
+        assert_eq!(toggled("‹**a**\nb›", "**"), "‹**a**\n**b**›");
+        assert_eq!(toggled("‹**a**\n**b**›", "*"), "‹***a***\n***b***›");
+    }
+
+    #[test]
+    fn a_word_with_combining_marks_is_wrapped_whole() {
+        assert_eq!(toggled("Gro\u{308}|\u{df}e x", "**"), "**Gro\u{308}|\u{df}e** x");
+        assert_eq!(toggled("Gro|\u{308}\u{df}e x", "**"), "**Gro|\u{308}\u{df}e** x");
     }
 
     #[test]

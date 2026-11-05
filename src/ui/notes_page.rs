@@ -658,9 +658,10 @@ impl NotesPage {
     pub fn start_rename(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let name = shown_name(&path);
         let input = cx.new(|cx| InputState::new(window, cx).default_value(name.clone()));
+        let selected = if path.is_dir() || markdown::is_markdown(&path) { name.len() } else { crate::core::naming::stem(&name).len() };
         input.update(cx, |s, cx| {
             s.focus(window, cx);
-            s.set_selected_range(0..name.len(), cx);
+            s.set_selected_range(0..selected, cx);
         });
         let target = path.clone();
         let sub = cx.subscribe_in(&input, window, move |this, field, e: &InputEvent, window, cx| match e {

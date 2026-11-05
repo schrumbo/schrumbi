@@ -110,9 +110,13 @@ struct ConventionRename {
     verdict: Verdict,
     focused: bool,
     rest: Vec<PathBuf>,
+    index: usize,
     total: usize,
+    renamed: usize,
+    error: Option<String>,
     busy: bool,
     _sub: Subscription,
+    _release: Subscription,
 }
 
 impl EventEmitter<Dismissed> for ConventionRename {}
@@ -129,12 +133,16 @@ impl ConventionRename {
     fn new(path: PathBuf, plan: ConventionPlan, suggested: String, rest: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (stem, ext) = split(&suggested);
         let input = cx.new(|cx| InputState::new(window, cx).default_value(stem));
-        let sub = cx.subscribe(&input, |this: &mut Self, _, _: &InputEvent, cx| {
+        let sub = cx.subscribe(&input, |this: &mut Self, _, e: &InputEvent, cx| {
             this.verdict = this.judge(cx);
+            if matches!(e, InputEvent::Change) {
+                this.error = None;
+            }
             cx.notify();
         });
+        let release = cx.on_release(|this: &mut Self, cx| this.finish(cx));
         let total = rest.len() + 1;
-        let mut sheet = Self { path, plan, suggested, ext, input, verdict: Verdict::Empty, focused: false, rest, total, busy: false, _sub: sub };
+        let mut sheet = Self { path, plan, suggested, ext, input, verdict: Verdict::Empty, focused: false, rest, index: 1, total, renamed: 0, error: None, busy: false, _sub: sub, _release: release };
         sheet.verdict = sheet.judge(cx);
         sheet
     }
@@ -172,9 +180,25 @@ impl ConventionRename {
             return;
         }
         let (path, name) = (self.path.clone(), self.name(cx));
-        act(cx, |l| l.rename_keeping_heading(&path, &name));
-        state::reindex(cx);
-        self.next(window, cx);
+        match act(cx, |l| l.rename_in_series(&path, &name)) {
+            Ok(()) => {
+                self.renamed += 1;
+                state::reindex(cx);
+                self.error = None;
+                self.next(window, cx);
+            }
+            Err(e) => {
+                self.error = Some(e);
+                cx.notify();
+            }
+        }
+    }
+
+    fn finish(&mut self, cx: &mut App) {
+        let renamed = std::mem::take(&mut self.renamed);
+        if renamed > 0 {
+            act(cx, |l| l.finish_series(renamed));
+        }
     }
 
     fn skip(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -186,7 +210,10 @@ impl ConventionRename {
     fn next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         while !self.rest.is_empty() {
             let path = self.rest.remove(0);
-            let Some(plan) = state::read(cx, |l| (l.convention_offer(&path) == ConventionOffer::Ready).then(|| l.convention_plan(&path)).flatten()) else { continue };
+            let Some(plan) = state::read(cx, |l| (l.convention_offer(&path) == ConventionOffer::Ready).then(|| l.convention_plan(&path)).flatten()) else {
+                self.total -= 1;
+                continue;
+            };
             self.busy = true;
             cx.notify();
             let (reader, file) = (plan.clone(), path.clone());
@@ -198,12 +225,14 @@ impl ConventionRename {
             .detach();
             return;
         }
+        self.finish(cx);
         cx.emit(Dismissed);
     }
 
     fn show(&mut self, path: PathBuf, plan: ConventionPlan, suggested: String, window: &mut Window, cx: &mut Context<Self>) {
         let (stem, ext) = split(&suggested);
         (self.path, self.plan, self.suggested, self.ext, self.busy) = (path, plan, suggested, ext, false);
+        self.index += 1;
         self.input.update(cx, |s, cx| {
             s.set_value(stem.clone(), window, cx);
             s.focus(window, cx);
@@ -240,6 +269,7 @@ impl Render for ConventionRename {
         let context = trf("Muster von %@ · für %@", &[&self.plan.module, &self.plan.deadline]);
         let note = |name: &str, tint: Hsla, label: String| div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(tint).child(icon(name, iconsize::XS, tint)).child(div().min_w_0().child(label));
         let status = match verdict {
+            _ if self.error.is_some() => note("triangle-alert", t.red, self.error.clone().unwrap_or_default()),
             Verdict::Fits => note("circle-check", t.green_text, tr("Passt zum Namensmuster")),
             Verdict::Off => note("info", t.secondary, tr("Weicht vom Namensmuster ab")),
             Verdict::Same => note("info", t.secondary, tr("Die Datei heißt schon so")),
@@ -254,7 +284,7 @@ impl Render for ConventionRename {
             .flex()
             .flex_col()
             .on_action(cx.listener(|s, _: &Confirm, window, cx| if super::sheets::typing(window) { s.confirm(window, cx) } else { cx.propagate() }))
-            .child(div().px(px(space::XL)).pt(px(space::L)).flex().flex_col().gap(px(space::XXS)).child(div().flex().items_baseline().gap(px(space::S)).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(tr("Nach Muster benennen"))).when(self.total > 1, |d| d.child(caption(trf("%lld von %lld", &[&(self.total - self.rest.len()), &self.total]), &t)))).child(caption(context, &t).truncate()))
+            .child(div().px(px(space::XL)).pt(px(space::L)).flex().flex_col().gap(px(space::XXS)).child(div().flex().items_baseline().gap(px(space::S)).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::SEMIBOLD).child(tr("Nach Muster benennen"))).when(self.total > 1, |d| d.child(caption(trf("%lld von %lld", &[&self.index, &self.total]), &t)))).child(caption(context, &t).truncate()))
             .child(
                 div()
                     .px(px(space::XL))
@@ -276,9 +306,12 @@ impl Render for ConventionRename {
                     .border_color(t.separator)
                     .when(edited, |d| d.child(Button::new("convention-restore").ghost().icon(super::widgets::menu_icon("rotate-ccw")).label(tr("Zurück zum Vorschlag")).on_click(cx.listener(|s, _, window, cx| s.restore(window, cx)))))
                     .child(div().flex_1())
-                    .child(Button::new("convention-cancel").label(tr("Abbrechen")).on_click(cx.listener(|_, _, _, cx| cx.emit(Dismissed))))
+                    .child(Button::new("convention-cancel").label(tr("Abbrechen")).on_click(cx.listener(|s, _, _, cx| {
+                        s.finish(cx);
+                        cx.emit(Dismissed);
+                    })))
                     .when(!self.rest.is_empty(), |d| d.child(Button::new("convention-skip").label(tr("Überspringen")).disabled(self.busy).on_click(cx.listener(|s, _, window, cx| s.skip(window, cx)))))
-                    .child(Button::new("convention-rename").primary().label(if self.rest.is_empty() { tr("Umbenennen") } else { tr("Umbenennen & weiter") }).disabled(!ready || self.busy).on_click(cx.listener(|s, _, window, cx| s.confirm(window, cx)))),
+                    .child(Button::new("convention-rename").primary().label(if self.rest.is_empty() { tr("Umbenennen") } else { tr("Umbenennen & weiter") }).loading(self.busy).disabled(!ready || self.busy).on_click(cx.listener(|s, _, window, cx| s.confirm(window, cx)))),
             )
     }
 }

@@ -187,7 +187,7 @@ impl Render for FindBar {
             .items_center()
             .gap(px(space::XS))
             .when(self.can_replace, |d| {
-                d.child(Button::new("find-replace-toggle").ghost().xsmall().icon(menu_icon(if self.replacing { "chevron-down" } else { "chevron-right" })).tooltip(tr("Ersetzen ein-/ausblenden")).on_click(move |_, _, cx| {
+                d.child(Button::new("find-replace-toggle").ghost().size(px(control::S)).icon(menu_icon(if self.replacing { "chevron-down" } else { "chevron-right" })).tooltip(tr("Ersetzen ein-/ausblenden")).on_click(move |_, _, cx| {
                     toggle.update(cx, |b, cx| {
                         b.replacing = !b.replacing;
                         cx.notify();
@@ -195,7 +195,7 @@ impl Render for FindBar {
                 }))
             })
             .child(div().w(px(260.)).flex_none().child(Input::new(&self.query).small().prefix(icon("search", iconsize::XS, t.secondary))))
-            .child(Button::new("find-exact").ghost().xsmall().label(CASE_LABEL).selected(self.exact).tooltip(tr("Groß-/Kleinschreibung beachten")).on_click(move |_, _, cx| {
+            .child(Button::new("find-exact").ghost().xsmall().h(px(control::S)).label(CASE_LABEL).selected(self.exact).tooltip(tr("Groß-/Kleinschreibung beachten")).on_click(move |_, _, cx| {
                 exact.update(cx, |b, cx| {
                     b.exact = !b.exact;
                     cx.emit(FindEvent::Query);
@@ -203,10 +203,10 @@ impl Render for FindBar {
                 })
             }))
             .child(div().min_w(px(76.)).flex_none().font_features(tabular()).text_size(px(font::CAPTION)).text_color(t.secondary).child(summary))
-            .child(Button::new("find-prev").ghost().xsmall().icon(menu_icon("chevron-up")).disabled(!has).tooltip(format!("{} ({})", tr("Vorheriger Treffer"), step_hint(false))).on_click(move |_, _, cx| prev.update(cx, |_, cx| cx.emit(FindEvent::Step(false)))))
-            .child(Button::new("find-next").ghost().xsmall().icon(menu_icon("chevron-down")).disabled(!has).tooltip(format!("{} ({})", tr("Nächster Treffer"), step_hint(true))).on_click(move |_, _, cx| next.update(cx, |_, cx| cx.emit(FindEvent::Step(true)))))
+            .child(Button::new("find-prev").ghost().size(px(control::S)).icon(menu_icon("chevron-up")).disabled(!has).tooltip(format!("{} ({})", tr("Vorheriger Treffer"), step_hint(false))).on_click(move |_, _, cx| prev.update(cx, |_, cx| cx.emit(FindEvent::Step(false)))))
+            .child(Button::new("find-next").ghost().size(px(control::S)).icon(menu_icon("chevron-down")).disabled(!has).tooltip(format!("{} ({})", tr("Nächster Treffer"), step_hint(true))).on_click(move |_, _, cx| next.update(cx, |_, cx| cx.emit(FindEvent::Step(true)))))
             .child(div().flex_1())
-            .child(Button::new("find-close").ghost().small().icon(menu_icon("x")).tooltip(format!("{} (Esc)", tr("Schließen"))).on_click(move |_, _, cx| close.update(cx, |_, cx| cx.emit(FindEvent::Close))));
+            .child(Button::new("find-close").ghost().size(px(control::S)).icon(menu_icon("x")).tooltip(format!("{} (Esc)", tr("Schließen"))).on_click(move |_, _, cx| close.update(cx, |_, cx| cx.emit(FindEvent::Close))));
         div()
             .id("find-bar")
             .key_context("FindBar")
@@ -229,8 +229,8 @@ impl Render for FindBar {
                         .gap(px(space::XS))
                         .child(div().w(px(control::S)).flex_none())
                         .child(div().w(px(260.)).flex_none().child(Input::new(&self.replacement).small().prefix(icon("replace", iconsize::XS, t.secondary))))
-                        .child(Button::new("find-replace-one").ghost().small().label(tr("Ersetzen")).disabled(!has).on_click(move |_, _, cx| replace_one.update(cx, |_, cx| cx.emit(FindEvent::Replace))))
-                        .child(Button::new("find-replace-all").ghost().small().label(tr("Alle ersetzen")).disabled(!has).on_click(move |_, _, cx| replace_all.update(cx, |_, cx| cx.emit(FindEvent::ReplaceAll)))),
+                        .child(Button::new("find-replace-one").ghost().small().h(px(control::S)).label(tr("Ersetzen")).disabled(!has).on_click(move |_, _, cx| replace_one.update(cx, |_, cx| cx.emit(FindEvent::Replace))))
+                        .child(Button::new("find-replace-all").ghost().small().h(px(control::S)).label(tr("Alle ersetzen")).disabled(!has).on_click(move |_, _, cx| replace_all.update(cx, |_, cx| cx.emit(FindEvent::ReplaceAll)))),
                 )
             })
     }
