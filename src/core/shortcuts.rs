@@ -55,6 +55,7 @@ pub enum ShortcutAction {
     ZoomIn,
     ZoomOut,
     ZoomReset,
+    ToggleWrap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,7 +90,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 49] = [
+    pub const ALL: [ShortcutAction; 50] = [
         Self::GoToday,
         Self::GoGrid,
         Self::GoRecord,
@@ -139,6 +140,7 @@ impl ShortcutAction {
         Self::ZoomIn,
         Self::ZoomOut,
         Self::ZoomReset,
+        Self::ToggleWrap,
     ];
 
     /// Storage key, matching the Swift app's raw values.
@@ -193,6 +195,7 @@ impl ShortcutAction {
             Self::ZoomIn => "zoomIn",
             Self::ZoomOut => "zoomOut",
             Self::ZoomReset => "zoomReset",
+            Self::ToggleWrap => "toggleWrap",
         }
     }
 
@@ -278,6 +281,7 @@ impl ShortcutAction {
             Self::ZoomIn => "Schrift größer",
             Self::ZoomOut => "Schrift kleiner",
             Self::ZoomReset => "Schriftgröße zurücksetzen",
+            Self::ToggleWrap => "Zeilenumbruch ein-/ausschalten",
         })
     }
 
@@ -350,6 +354,7 @@ impl ShortcutAction {
             Self::ZoomIn => s("+", true, false, false, false),
             Self::ZoomOut => s("-", true, false, false, false),
             Self::ZoomReset => s("0", true, false, false, false),
+            Self::ToggleWrap => s("z", true, false, true, false),
         })
     }
 

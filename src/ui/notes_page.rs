@@ -192,6 +192,7 @@ pub struct NotesPage {
     renaming: Option<(PathBuf, Entity<InputState>, Subscription)>,
     /// A folder just made, shown before the next scan has seen it.
     pending_folder: Option<PathBuf>,
+    scroll_to_rename: bool,
     width: f32,
     /// A width drag is under way; it is saved when the drag ends.
     resizing: bool,
@@ -392,6 +393,7 @@ impl NotesPage {
             target_folder: None,
             renaming: None,
             pending_folder: None,
+            scroll_to_rename: false,
             width: crate::core::prefs::get().notes_column.unwrap_or(260.),
             resizing: false,
             cache: None,
@@ -679,6 +681,7 @@ impl NotesPage {
         self.query.update(cx, |q, cx| q.set_value("", window, cx));
         self.reveal(&path);
         self.renaming = Some((path, input, sub));
+        self.scroll_to_rename = true;
         cx.notify();
     }
 
@@ -1102,6 +1105,16 @@ impl Render for NotesPage {
         }
         self.refresh(tag.clone(), cx);
         let rows = self.rows();
+        if let Some((path, ..)) = self.renaming.as_ref().filter(|_| std::mem::take(&mut self.scroll_to_rename)) {
+            let at = rows.iter().position(|r| match r {
+                Row::File { path: p, .. } => p == path,
+                Row::Folder { rel, .. } => Self::folder_path(rel) == *path,
+                _ => false,
+            });
+            if let Some(i) = at {
+                self.list_scroll.scroll_to_item(i, ScrollStrategy::Center);
+            }
+        }
         let open_tasks = self.cache.as_ref().map_or(0, |c| c.open_tasks);
         let view = self.view;
         let order = self.order;

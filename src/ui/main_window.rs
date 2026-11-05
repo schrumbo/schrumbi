@@ -432,6 +432,11 @@ impl Render for MainWindow {
                     cx.propagate();
                 }
             })
+            .on_action(|_: &super::documents::ToggleWrap, _, cx| {
+                if !super::app::in_active_note(super::documents::ToggleWrap, cx) {
+                    cx.propagate();
+                }
+            })
             .on_action(|_: &super::app::RenameNote, window, cx| {
                 if super::app::typing_in_field(window) {
                     return;

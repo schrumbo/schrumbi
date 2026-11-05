@@ -571,6 +571,7 @@ pub fn rebuild_menus(cx: &mut App) {
         Menu::new(tr("Darstellung")).items([
             MenuItem::action(tr("Lesen / Bearbeiten"), TogglePreview),
             MenuItem::action(tr("Geteilte Ansicht"), SplitPreview),
+            MenuItem::action(tr("Zeilenumbruch ein-/ausschalten"), super::documents::ToggleWrap).disabled(!note),
             MenuItem::action(tr("Notiz als PDF exportieren"), ExportPdf),
             MenuItem::separator(),
             MenuItem::action(tr("Seitenleiste ein-/ausblenden"), super::main_window::ToggleSidebar),
