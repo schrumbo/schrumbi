@@ -309,6 +309,10 @@ pub struct Library {
     back_routes: Vec<Route>,
     forward_routes: Vec<Route>,
     pub toast_hovered: bool,
+    /// Notes that could not be saved while closing; their editors show the problem the next time they are drawn.
+    pub unsaved_shown: Vec<PathBuf>,
+    /// Notes whose editor shows that saving failed; the toast keeps clear of the notice.
+    pub save_problems: Vec<PathBuf>,
     pub open_documents: Vec<PathBuf>,
     pub active_document: Option<PathBuf>,
     pub search_query: String,
@@ -487,6 +491,8 @@ impl Library {
             back_routes: Vec::new(),
             forward_routes: Vec::new(),
             toast_hovered: false,
+            unsaved_shown: Vec::new(),
+            save_problems: Vec::new(),
             open_documents: Vec::new(),
             active_document: None,
             search_query: String::new(),

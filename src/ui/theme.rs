@@ -64,6 +64,8 @@ pub mod control {
     pub const CLASH: f32 = 240.;
     /// A small icon button, like the reset button at the end of a shortcut row.
     pub const ICON_BUTTON: f32 = M;
+    /// The height of the save notice at the bottom of a note; toasts stand above it.
+    pub const SAVE_NOTICE: f32 = 64.;
 }
 
 /// Widths of the document tab row.

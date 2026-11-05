@@ -24,6 +24,9 @@ pub const FLASH: Duration = Duration::from_millis(1400);
 /// How long a failed save waits before it tries once more.
 pub const SAVE_RETRY_WAIT: Duration = Duration::from_millis(400);
 
+/// How often a note whose folder is gone looks for the folder again.
+pub const FOLDER_RETRY: Duration = Duration::from_secs(3);
+
 /// How long the wrap switch confirms itself in the word count bar.
 pub const WRAP_NOTICE_FOR: Duration = Duration::from_millis(1600);
 

@@ -360,6 +360,12 @@ fn on_fence(s: &str, sel: &Range<usize>) -> bool {
     sel.end <= end && s[line_start(s, sel.start)..end].trim() == "$$"
 }
 
+/// Whether bold and italic are refused at this selection: it touches a formula or the address of a link.
+pub fn emphasis_refused(s: &str, sel: &Range<usize>) -> bool {
+    let math = math_ranges(s);
+    in_math(&math, sel.start) || in_math(&math, sel.end) || in_target(s, sel.start) || in_target(s, sel.end)
+}
+
 /// `**sel**`, `*sel*` or `` `sel` ``; with no selection the caret lands between the tokens.
 pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
     let inner = &s[sel.clone()];
@@ -1288,6 +1294,15 @@ world");
         assert_eq!(apply(s, &wrap(s, 0..s.len(), "*")), "*[[a*b*c]] k*\n*rest*");
         let s = "`a*b*c` *k*\nrest";
         assert_eq!(apply(s, &wrap(s, 0..s.len(), "*")), "*`a*b*c` k*\n*rest*");
+    }
+
+    #[test]
+    fn emphasis_is_refused_only_inside_a_link_address_or_formula() {
+        let s = "[x](a*b*c.md) und $a+b$ und Text";
+        assert!(emphasis_refused(s, &(s.find("a*b").unwrap()..s.find("a*b").unwrap() + 1)));
+        assert!(emphasis_refused(s, &(s.find("a+b").unwrap()..s.find("a+b").unwrap() + 1)));
+        assert!(!emphasis_refused(s, &(s.find("Text").unwrap()..s.len())));
+        assert!(!emphasis_refused("äöü Wort", &(0..0)));
     }
 
     #[test]
