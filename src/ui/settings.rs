@@ -2175,6 +2175,13 @@ impl Settings {
         self.key_buttons.entry(a.id()).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
     }
 
+    fn close_notice(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.notice = None;
+        let back = self.last_changed.and_then(|a| self.key_buttons.get(a.id())).unwrap_or(&self.focus).clone();
+        window.focus(&back, cx);
+        cx.notify();
+    }
+
     /// Offers to take the change back unless the shortcuts are as they were; the latest offer replaces the earlier one.
     fn offer_undo(&mut self, before: Customized, text: String, cx: &mut Context<Self>) {
         if ShortcutAction::snapshot() == before {
@@ -2246,12 +2253,7 @@ impl Settings {
                     }
                     cx.notify();
                 }))))
-                .child(Button::new("sc-notice-close").ghost().small().icon(menu_icon("x")).tooltip(format!("{} ({})", tr("Schließen"), escape)).on_click(cx.listener(|s, _, window, cx| {
-                    s.notice = None;
-                    let back = s.last_changed.and_then(|a| s.key_buttons.get(a.id())).unwrap_or(&s.focus).clone();
-                    window.focus(&back, cx);
-                    cx.notify();
-                })))
+                .child(Button::new("sc-notice-close").ghost().small().icon(menu_icon("x")).tooltip(format!("{} ({})", tr("Schließen"), escape)).on_click(cx.listener(|s, _, window, cx| s.close_notice(window, cx))))
                 .into_any_element(),
             None => {
                 let idle = trf("Klick auf ein Kürzel und drück die neuen Tasten. %@ bricht ab, %@ entfernt das Kürzel.", &[&escape, &delete]);
@@ -2298,8 +2300,7 @@ impl Settings {
                 let reason: Option<String> = reason_chip.as_ref().map(|chip| if self.rejected_is_reserved() { trf("%@ – andere Tasten drücken", &[chip]) } else { chip.clone() });
                 let note = |text: String| div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.orange_text).child(text).into_any_element();
                 let quiet = |text: String| {
-                    let suffix = trf("%@ – inaktiv", &[&""]);
-                    div().min_w_0().flex().px(px(space::XS)).rounded(px(radius::SMALL)).bg(t.ink.opacity(0.04)).border_1().border_color(t.ink.opacity(0.08)).text_size(px(font::CAPTION)).text_color(t.secondary).child(div().min_w_0().truncate().child(text)).child(div().flex_none().whitespace_nowrap().child(suffix)).into_any_element()
+                    div().min_w_0().flex().px(px(space::XS)).rounded(px(radius::SMALL)).bg(t.ink.opacity(0.04)).border_1().border_color(t.ink.opacity(0.08)).text_size(px(font::CAPTION)).text_color(t.secondary).child(div().min_w_0().truncate().child(text)).child(div().flex_none().whitespace_nowrap().ml(px(space::XS)).child(tr("– inaktiv"))).into_any_element()
                 };
                 let dimmed = blocked.is_some() && reason.is_none() && !recording;
                 let name = a.named(&modules);
@@ -2510,8 +2511,8 @@ impl Render for Settings {
                         s.filter.update(cx, |f, cx| f.set_value("", window, cx));
                     } else if window.context_stack().iter().any(|c| c.contains("Input")) {
                         window.focus(&s.focus, cx);
-                    } else if s.tab == Tab::Shortcuts && s.notice.take().is_some() {
-                        cx.notify();
+                    } else if s.tab == Tab::Shortcuts && s.notice.is_some() {
+                        s.close_notice(window, cx);
                     } else {
                         window.remove_window();
                     }

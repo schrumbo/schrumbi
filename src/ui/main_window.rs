@@ -248,7 +248,19 @@ impl MainWindow {
         let separator = || div().flex_none().text_color(t.tertiary).child("/");
         if plan.folders {
             if skipped > 0 {
-                row = row.child(div().id("crumb-hidden").flex_none().text_color(t.tertiary).tooltip(tip(folders[..skipped].join("/"))).child("…")).child(separator());
+                let hidden: Vec<String> = folders[..skipped].to_vec();
+                let all = folders.clone();
+                let more = Button::new("crumb-hidden").ghost().xsmall().label("…").tooltip(hidden.join("/")).dropdown_menu(move |mut menu, _, _| {
+                    for (i, name) in hidden.iter().enumerate() {
+                        let rel = all[..=i].join("/");
+                        menu = menu.item(PopupMenuItem::new(crate::core::text::end_ellipsis(name, 40)).icon(menu_icon("folder")).on_click(move |_, _, cx| {
+                            crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
+                            act(cx, |l| l.reveal_folder = Some(rel.clone()));
+                        }));
+                    }
+                    menu
+                });
+                row = row.child(div().flex_none().text_color(t.tertiary).child(more)).child(separator());
             }
             for (i, name) in folders.iter().enumerate().skip(skipped) {
                 row = row.child(folder(i, name, folders[..=i].join("/"))).child(separator());
@@ -320,7 +332,7 @@ impl MainWindow {
             .child(Button::new("go-forward").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-right")).disabled(!lib.can_go_forward()).tooltip(tr("Vorwärts")).on_click(|_, _, cx| act(cx, |l| l.go_forward())))
             
             .child(match lib.route() {
-                Route::Doc(path) => Self::crumbs(lib, path, total - toolbar_padding - crumb::TOOLBAR_BUTTONS * control::M - search_width - crumb::TOOLBAR_GAPS * space::S, window, t),
+                Route::Doc(shown) => Self::crumbs(lib, lib.focused_document().unwrap_or(shown), total - toolbar_padding - crumb::TOOLBAR_BUTTONS * control::M - search_width - crumb::TOOLBAR_GAPS * space::S, window, t),
                 _ => div().flex_1().min_w(px(80.)).truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)),
             })
             .child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().bg(t.ink.opacity(0.06)).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("plus")).tooltip(tr("Neu")).dropdown_menu(move |menu, _, _| {
@@ -565,7 +577,7 @@ impl Render for MainWindow {
         root = super::perf::frame_end(root);
         if super::chrome::CUSTOM {
             let bar = super::chrome::main_bar(cx);
-            return div().key_context("MainWindow").size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().relative().child(root)).into_any_element();
+            return div().size_full().flex().flex_col().child(bar).child(div().flex_1().min_h_0().relative().child(root)).into_any_element();
         }
         root.into_any_element()
     }

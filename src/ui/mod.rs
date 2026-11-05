@@ -36,6 +36,7 @@ pub mod editor;
 pub mod find_bar;
 pub mod settings;
 pub mod convention_rename;
+pub mod rename_sheet;
 pub mod fields;
 pub mod time_field;
 pub mod grid;

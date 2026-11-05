@@ -2827,8 +2827,14 @@ impl Library {
     }
 
     fn rename_file(&mut self, file: &Path, name: &str) {
+        if let Err(e) = self.rename_recorded(file, name, true) {
+            self.last_error = Some(e);
+        }
+    }
+
+    fn rename_recorded(&mut self, file: &Path, name: &str, announce: bool) -> Result<(), String> {
         if name == name_of(file) {
-            return;
+            return Ok(());
         }
         let target = rename_target(file, name);
         match move_path(file, &target) {
@@ -2843,11 +2849,35 @@ impl Library {
                     1 => tr("Umbenannt, 1 Link angepasst"),
                     n => trf("Umbenannt, %@ Links angepasst", &[&n.to_string()]),
                 };
-                self.commit(message, "pencil", changes);
+                if announce {
+                    self.commit(message, "pencil", changes);
+                } else {
+                    self.record(message, changes);
+                }
                 self.last_renamed = Some(target);
+                Ok(())
             }
-            Err(e) => self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&explain(&e.into())])),
+            Err(e) => Err(trf("Umbenennen fehlgeschlagen: %@", &[&explain(&e.into())])),
         }
+    }
+
+    /// Renames one file of a series by a name picked by hand, without toast and without error alert; the error comes back instead. `finish_series` announces the series.
+    pub fn rename_in_series(&mut self, file: &Path, name: &str) -> Result<(), String> {
+        self.rename_recorded(file, name, false)
+    }
+
+    /// Joins the last `count` steps into one and offers to take them all back at once.
+    pub fn finish_series(&mut self, count: usize) {
+        let count = count.min(self.undo_steps.len());
+        if count == 0 {
+            return;
+        }
+        let steps: Vec<Step> = self.undo_steps.split_off(self.undo_steps.len() - count);
+        let message = if count == 1 { steps[0].label.clone() } else { trf("%@ Dateien umbenannt", &[&count.to_string()]) };
+        let changes = steps.into_iter().flat_map(|s| s.changes).collect();
+        self.undo_steps.push(Step { label: message.clone(), changes });
+        let undo = self.undo_latest();
+        self.notify(message, "pencil", None, Some(undo));
     }
 
     /// Modules keep following their folder when it, or a folder above it, gets a new name.
@@ -3884,7 +3914,11 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
 fn move_path(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::rename(from, to).or_else(|_| {
         copy_path(from, to)?;
-        if from.is_dir() { std::fs::remove_dir_all(from) } else { std::fs::remove_file(from) }
+        let removed = if from.is_dir() { std::fs::remove_dir_all(from) } else { std::fs::remove_file(from) };
+        if removed.is_err() {
+            let _ = if to.is_dir() { std::fs::remove_dir_all(to) } else { std::fs::remove_file(to) };
+        }
+        removed
     })
 }
 

@@ -420,14 +420,18 @@ impl Pages {
             self.doc_needs_focus = !quiet;
         }
         self.doc_needs_focus |= asked;
-        let right_focus = beside_asked && !quiet && beside.is_some();
+        let mut right_focus = beside_asked && !quiet && beside.is_some();
         if right_focus {
             self.doc_needs_focus = false;
         }
         if self.doc_needs_focus && !window.has_active_dialog(cx) {
             self.doc_needs_focus = false;
-            let target = view.clone();
-            window.on_next_frame(move |window, cx| activate_doc(target, window, cx));
+            if beside.is_some() && !quiet && state::read(cx, |l| l.beside_active) {
+                right_focus = true;
+            } else {
+                let target = view.clone();
+                window.on_next_frame(move |window, cx| activate_doc(target, window, cx));
+            }
         }
         let canvas = |v: &AnyView| v.clone().downcast::<super::canvas_view::CanvasView>().is_ok();
         let left_canvas = canvas(&view);
@@ -613,14 +617,14 @@ impl Render for Pages {
         let width = self.width;
         let route = lib.read(cx).route().clone();
         if !Self::explorer_shown(width) && lib.read(cx).rename_request.is_some() {
-            lib.update(cx, |l, _| {
-                l.rename_request = None;
-                l.focus_document = true;
-            });
+            if let Some(path) = lib.update(cx, |l, _| l.rename_request.take()) {
+                window.defer(cx, move |window, cx| super::rename_sheet::open(path, window, cx));
+            }
         }
         let on_inbox = route == Route::Inbox;
         let focus_back = state::take_page_focus_request(cx);
-        self.doc_needs_focus |= focus_back;
+        let renaming = lib.read(cx).rename_request.is_some() || window.context_stack().iter().any(|c| c.contains("Explorer"));
+        self.doc_needs_focus |= focus_back && !renaming;
         if on_inbox && (!self.inbox_shown || focus_back) && !window.has_active_dialog(cx) {
             let inbox = self.inbox.clone();
             window.on_next_frame(move |window, cx| inbox.update(cx, |i, cx| i.activate(window, cx)));

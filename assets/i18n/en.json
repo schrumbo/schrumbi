@@ -1573,5 +1573,7 @@
   "Textbearbeitung": "text editing",
   "%@ – andere Tasten drücken": "%@ – press other keys",
   "%@ – inaktiv": "%@ – inactive",
-  "Nach Muster benennen… (%@ Dateien)": "Rename by pattern… (%@ files)"
+  "Nach Muster benennen… (%@ Dateien)": "Rename by pattern… (%@ files)",
+  "%@ Dateien umbenannt": "%@ files renamed",
+  "– inaktiv": "– inactive"
 }

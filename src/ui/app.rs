@@ -466,6 +466,7 @@ pub fn bind_keys(cx: &mut App) {
 /// The menu bar: Schrumbi, Ablage, Bearbeiten, Darstellung, Gehe zu, Fenster.
 pub fn rebuild_menus(cx: &mut App) {
     let (note, find) = (note_is_active(cx), find_is_available(cx));
+    let renamable = state::read(cx, |l| l.focused_document().is_some() && matches!(l.route(), Route::Doc(_)));
     let modules: Vec<(String, String)> = state::read(cx, |l| l.semester_modules().iter().map(|m| (m.id.clone(), m.display_name())).collect());
     let recents: Vec<MenuItem> = prefs::get()
         .recent_workspaces
@@ -517,6 +518,7 @@ pub fn rebuild_menus(cx: &mut App) {
             MenuItem::action(tr("Neuer Eintrag…"), NewEntry),
             MenuItem::action(tr("Neue Notiz, Datei oder Ordner…"), NewFile),
             MenuItem::action(tr("Datei schnell öffnen…"), QuickOpen),
+            MenuItem::action(tr("Umbenennen…"), RenameNote).disabled(!renamable),
             MenuItem::separator(),
             MenuItem::action(tr("Kalender importieren (.ics)…"), ImportCalendar),
             MenuItem::action(tr("Kalender exportieren (.ics)…"), ExportCalendar),

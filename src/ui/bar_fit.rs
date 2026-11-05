@@ -94,11 +94,15 @@ fn measurer(cell: Rc<Cell<f32>>) -> impl IntoElement {
 
 /// How wide `text` is drawn in the interface font.
 pub fn text_width(text: &str, size: f32, weight: FontWeight, window: &Window) -> f32 {
+    shaped_width(text, size, weight, FontStyle::Normal, window)
+}
+
+fn shaped_width(text: &str, size: f32, weight: FontWeight, style: FontStyle, window: &Window) -> f32 {
     if text.is_empty() {
         return 0.;
     }
     let text: String = text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
-    let font = Font { weight, ..gpui_kit::font(Theme::font_family()) };
+    let font = Font { weight, style, ..gpui_kit::font(Theme::font_family()) };
     let run = TextRun { len: text.len(), font, color: Hsla::default(), background_color: None, underline: None, strikethrough: None };
     f32::from(window.text_system().shape_line(text.into(), px(size), &[run], None).width).ceil()
 }
@@ -106,7 +110,7 @@ pub fn text_width(text: &str, size: f32, weight: FontWeight, window: &Window) ->
 /// How wide a tab with this title is when nothing squeezes it.
 pub fn tab_natural(title: &str, window: &Window) -> f32 {
     let text = TAB_TEXT.with(|c| c.borrow().get(title).copied()).unwrap_or_else(|| {
-        let width = text_width(title, font::CALLOUT, FontWeight::NORMAL, window);
+        let width = text_width(title, font::CALLOUT, FontWeight::NORMAL, window).max(shaped_width(title, font::CALLOUT, FontWeight::NORMAL, FontStyle::Italic, window));
         TAB_TEXT.with(|c| {
             let mut c = c.borrow_mut();
             if c.len() > 4096 {

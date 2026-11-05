@@ -867,7 +867,12 @@ mod tests {
         for os in [Os::Mac, Os::Windows, Os::Linux] {
             for action in ShortcutAction::ALL {
                 let Some(keys) = action.default_on(os) else { continue };
-                assert!(action.reserved_on(&keys, os).is_none(), "{} {}", action.label(), keys.display());
+                let reserved = keys.reserved_on(os);
+                let text_editing = trf("Reserviert: %@", &[&tr("Textbearbeitung")]);
+                let own_name = trf("Reserviert: %@", &[&action.label()]);
+                let editor_override = action.group() == Group::Editor && reserved.as_deref() == Some(text_editing.as_str());
+                let same_command = reserved.as_deref() == Some(own_name.as_str());
+                assert!(reserved.is_none() || editor_override || same_command, "{} {} {:?}", action.label(), keys.display(), reserved);
                 if action.group() != Group::Editor {
                     assert!(!keys.edits_text(os), "{} {}", action.label(), keys.display());
                 }

@@ -376,6 +376,29 @@ fn undo_and_redo_move_renamed_files() {
 }
 
 #[test]
+fn a_series_of_renames_is_one_undo_step() {
+    let (root, mut lib) = workspace("undo-series", &config(1, 1));
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        std::fs::write(root.join(name), "x").unwrap();
+    }
+    for (from, to) in [("a.txt", "a2.txt"), ("b.txt", "b2.txt"), ("c.txt", "c2.txt")] {
+        lib.rename_in_series(&root.join(from), to).unwrap();
+        assert!(lib.toast.is_none(), "a series is announced once");
+    }
+    assert!(lib.rename_in_series(&root.join("missing.txt"), "m2.txt").is_err());
+    lib.finish_series(3);
+    assert_eq!(lib.toast.as_ref().map(|t| t.message.clone()), Some(super::i18n::trf("%@ Dateien umbenannt", &[&"3"])));
+    lib.undo();
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        assert!(root.join(name).exists(), "{name}");
+    }
+    assert!(!lib.can_undo());
+    lib.redo();
+    assert!(root.join("a2.txt").exists() && root.join("c2.txt").exists() && !root.join("a.txt").exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn quick_config_edits_become_one_undo_step() {
     let (root, mut lib) = workspace("undo-config", &config(1, 1));
     let original = lib.config.clone().unwrap();
