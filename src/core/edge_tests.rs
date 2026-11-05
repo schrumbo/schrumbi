@@ -620,6 +620,27 @@ fn deciding_about_another_apps_version_can_be_undone_and_redone() {
 }
 
 #[test]
+fn keeping_mine_works_when_the_other_app_removed_the_file() {
+    let root = folder("note-mine-gone");
+    std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();
+    let note = root.join("n.md");
+    std::fs::write(&note, "alt").unwrap();
+    let mut lib = open(&root);
+    let key = dunce::canonicalize(&note).unwrap();
+    lib.buffer(&key).edited("meins".into());
+    std::fs::write(&key, "fremd").unwrap();
+    let _ = lib.buffer(&key).save();
+    assert_eq!(lib.buffer(&key).conflict.as_deref(), Some("fremd"));
+    std::fs::remove_file(&key).unwrap();
+    lib.keep_note_mine(&key);
+    assert!(lib.last_error.is_none());
+    assert!(lib.buffer(&key).conflict.is_none());
+    assert_eq!(std::fs::read_to_string(&key).unwrap(), "meins");
+    let copy = root.join(format!("n ({}).md", crate::core::i18n::tr("andere Version")));
+    assert_eq!(std::fs::read_to_string(&copy).unwrap(), "fremd");
+}
+
+#[test]
 fn a_config_from_a_newer_version_is_not_overwritten_after_a_pull() {
     let root = folder("newer");
     std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();

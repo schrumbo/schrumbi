@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use chrono::{Datelike, Local, NaiveDate};
 use regex::Regex;
 
@@ -183,6 +185,12 @@ pub fn extension(name: &str) -> &str {
     }
 }
 
+/// Whether a file is the copy kept beside a note when two versions met, "(andere Version)" or "(Konflikt …)", in either language.
+pub fn is_conflict_copy(path: &Path) -> bool {
+    static COPY: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| Regex::new(r"\s\((?:andere Version|other version|Konflikt|Conflict)(?: \d{4}-\d{2}-\d{2})?\)(?:-\d+)?$").unwrap());
+    path.file_name().is_some_and(|name| COPY.is_match(stem(&name.to_string_lossy())))
+}
+
 fn tokenize(pattern: &str) -> Vec<Token> {
     let mut out = Vec::new();
     let mut rest = pattern;
@@ -267,6 +275,16 @@ mod tests {
         let m = Module { code: "P1".into(), naming: pattern.into(), ..Default::default() };
         let s = Semester { start: "2026-10-12".into(), end: "2027-02-01".into(), ..Default::default() };
         Naming::with_author(&m, Some(&s), "Muster-M", "", CoauthorStyle::Initial)
+    }
+
+    #[test]
+    fn conflict_copies_are_recognised_by_their_name() {
+        for yes in ["n (andere Version).md", "n (other version).md", "n (andere Version)-2.md", "Mathe Notiz (Konflikt 2026-11-05).md", "n (Conflict 2026-11-05)-3.md", "n (Konflikt 2026-11-05)"] {
+            assert!(is_conflict_copy(Path::new(yes)), "{yes}");
+        }
+        for no in ["n.md", "Konflikt.md", "Analyse (andere Version) Teil 2.md", "n (Konflikt).md.bak.md", "(andere Version).md"] {
+            assert!(!is_conflict_copy(Path::new(no)), "{no}");
+        }
     }
 
     #[test]

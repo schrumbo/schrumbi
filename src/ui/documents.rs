@@ -911,7 +911,7 @@ impl NoteView {
                 return Some(div().id("wrap-notice").min_w_0().min_h(px(control::S)).flex().items_center().truncate().px(px(space::XS)).child(notice).into_any_element());
             }
             let me = cx.entity();
-            let caption = div().id("long-line").min_w_0().min_h(px(control::S)).flex().items_center().truncate().rounded(px(radius::SMALL)).px(px(space::XS)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::FLOAT), radius::SMALL).tooltip(tip(tr("Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück zu Live.")));
+            let caption = div().id("long-line").min_w_0().min_h(px(control::S)).flex().items_center().truncate().rounded(px(radius::SMALL)).px(px(space::XS)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::FLOAT), radius::SMALL).tooltip(tip(tr("Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück zur Live-Ansicht.")));
             return Some(
                 caption
                     .on_click(move |_, window, cx| {
@@ -920,7 +920,7 @@ impl NoteView {
                             n.set_mode(Mode::Live, window, cx);
                         })
                     })
-                    .child(notice.unwrap_or_else(|| tr("Diese Zeile ist zu lang für Live. Esc: zurück zu Live")))
+                    .child(notice.unwrap_or_else(|| tr("Diese Zeile ist zu lang für die Live-Ansicht. Esc: zurück zur Live-Ansicht")))
                     .into_any_element(),
             );
         }
@@ -2281,8 +2281,9 @@ impl NoteView {
                 n.save(cx);
                 if n.save_problem.is_some() {
                     n.flash_problem(cx);
-                    let name = n.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                    act(cx, |l| l.notify(trf("„%@“ ließ sich wieder nicht sichern.", &[&name]), "triangle-alert", None, None));
+                    let name = crate::core::text::end_ellipsis(&n.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(), TOAST_NAME);
+                    let path = n.path.clone();
+                    act(cx, |l| l.notify(trf("„%@“ ließ sich noch nicht sichern.", &[&name]), "triangle-alert", Some(tr("Erneut versuchen")), Some(retry_unsaved(vec![path]))));
                 }
                 cx.notify();
             });
@@ -2611,7 +2612,7 @@ impl NoteView {
                 }
                 let source_view = source_me.clone();
                 let is_source = current_mode == Mode::Source;
-                menu = menu.when(live_editor, |menu| menu.item(PopupMenuItem::new(tr("Quelltext")).icon(menu_icon("code")).checked(is_source).on_click(move |_, window, cx| source_view.update(cx, |n, cx| n.set_mode(if is_source { Mode::Live } else { Mode::Source }, window, cx)))));
+                menu = menu.when(live_editor, |menu| menu.item(PopupMenuItem::new(format!("{}{}", tr("Quelltext"), ShortcutAction::ToggleLive.hint())).icon(menu_icon("code")).checked(is_source).on_click(move |_, window, cx| source_view.update(cx, |n, cx| n.set_mode(if is_source { Mode::Live } else { Mode::Source }, window, cx)))));
                 let full = prefs::get().reader_full_width;
                 menu = menu.item(PopupMenuItem::new(tr("Text in voller Breite")).checked(full).on_click(move |_, _, cx| set_reader_full_width(!full, cx)));
                 let g = d.clone();
@@ -2735,6 +2736,12 @@ impl NoteView {
             }));
         }
         let live_mode = self.mode == Mode::Live;
+        let scope = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (cx.entity_id(), &self.path).hash(&mut hasher);
+            hasher.finish()
+        };
         let live_item = self.live.as_ref().filter(|l| l.cell.is_none()).map(|l| l.index);
         let covered = self.live.as_ref().filter(|l| l.selecting).map(|l| (l.first_line, l.line_count));
         let live_cell = self.live.as_ref().and_then(|l| l.cell.map(|c| (l.index, c.row, c.column)));
@@ -2875,7 +2882,7 @@ impl NoteView {
                             let inner = toggle.clone();
                             Rc::new(move |_, cx: &mut App| inner(line, cx))
                         };
-                        let draw = markdown_view::LiveDraw { item: Some(i - 1), line, footnotes: Some(parsed.footnote_order()), open_cell: None, count: fragment.line_blocks() };
+                        let draw = markdown_view::LiveDraw { item: Some(i - 1), line, footnotes: Some(parsed.footnote_order()), open_cell: None, count: fragment.line_blocks(), scope: 0 };
                         let drawn = markdown_view::render_live(&fragment, 0, base.as_deref(), Some(offset_toggle), None, Some(&focus), draw, &t);
                         let is_list = live_text::prefix_len(written) > 0 && !written.trim_start().starts_with('#') && !written.trim_start().starts_with('>');
                         (div().pl(px(lead)).when(is_list, |d| d.pb(px(space::XS))).child(drawn).children(cut_note(left)).into_any_element(), lead, fragment.first_line_middle(0), fragment.has_margin_control(0), None)
@@ -2914,7 +2921,7 @@ impl NoteView {
                         let field = me.update(cx, |n, cx| n.live_field(window, cx));
                         (row, column, std::cell::RefCell::new(Some(field)))
                     });
-                    let drawn = markdown_view::render_live(&parsed, block, base.as_deref(), Some(toggle.clone()), None, Some(&focus), markdown_view::LiveDraw { item: Some(i - 1), open_cell, ..Default::default() }, &t);
+                    let drawn = markdown_view::render_live(&parsed, block, base.as_deref(), Some(toggle.clone()), None, Some(&focus), markdown_view::LiveDraw { item: Some(i - 1), open_cell, scope, ..Default::default() }, &t);
                     (div().pb(px(space::XS)).child(drawn).into_any_element(), 0., parsed.first_line_middle(block), false, None)
                 }
             };
@@ -3775,15 +3782,54 @@ fn save_buffer(path: &Path, cx: &mut App) -> bool {
     }
 }
 
-fn unsaved_message(names: &[String]) -> String {
+const TOAST_NAME: usize = 24;
+
+/// What the toast says about notes that stay open; `visible` points to the note's own notice, otherwise the toast offers trying again.
+fn unsaved_message(names: &[String], visible: bool) -> String {
     match names {
-        [one] => trf("„%@“ ließ sich nicht sichern und bleibt offen. Erneut versuchen steht in der Notiz.", &[one]),
+        [one] if visible => trf("„%@“ ließ sich nicht sichern und bleibt offen. Erneut versuchen steht oben in der Notiz.", &[one]),
+        [one] => trf("„%@“ ließ sich nicht sichern und bleibt offen.", &[one]),
         [_, _] | [_, _, _] => {
             let quoted: Vec<String> = names.iter().map(|n| format!("„{n}“")).collect();
-            trf("%@ ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.", &[&quoted.join(", ")])
+            trf("%@ ließen sich nicht sichern und bleiben offen.", &[&quoted.join(", ")])
         }
-        _ => trf("%@ Notizen ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.", &[&crate::core::i18n::grouped(names.len())]),
+        _ => trf("%@ Notizen ließen sich nicht sichern und bleiben offen.", &[&crate::core::i18n::grouped(names.len())]),
     }
+}
+
+fn announce_unsaved(l: &mut library::Library, failed: Vec<PathBuf>) {
+    let names: Vec<String> = failed.iter().map(|p| crate::core::text::end_ellipsis(&l.note_title(p), TOAST_NAME)).collect();
+    let visible = failed.len() == 1
+        && matches!(l.route(), library::Route::Doc(_))
+        && [l.active_document.as_deref(), l.split_document.as_deref()].into_iter().flatten().any(|d| l.buffer_key(d) == failed[0]);
+    let message = unsaved_message(&names, visible);
+    if visible {
+        l.notify(message, "triangle-alert", None, None);
+    } else {
+        l.notify(message, "triangle-alert", Some(tr("Erneut versuchen")), Some(retry_unsaved(failed)));
+    }
+}
+
+/// Saves the notes again, whether or not their tabs are shown; the ones that still fail are announced again.
+fn retry_unsaved(paths: Vec<PathBuf>) -> library::Undo {
+    Box::new(move |l| {
+        let failed: Vec<PathBuf> = paths
+            .into_iter()
+            .filter(|p| {
+                let saved = l.buffers.get_mut(p).is_none_or(|b| b.release(false).and_then(|_| b.save()).is_ok());
+                if saved {
+                    l.save_problems.retain(|s| s != p);
+                    if !l.unsaved_shown.contains(p) {
+                        l.unsaved_shown.push(p.clone());
+                    }
+                }
+                !saved
+            })
+            .collect();
+        if !failed.is_empty() {
+            announce_unsaved(l, failed);
+        }
+    })
 }
 
 /// Saves the given notes and returns the ones that could not be saved. They stay open: their editors show why and one toast names them.
@@ -3800,10 +3846,9 @@ fn save_unsaved(paths: &[PathBuf], cx: &mut App) -> Vec<PathBuf> {
     let failed: Vec<PathBuf> = dirty.into_iter().filter(|p| !save_buffer(p, cx)).collect();
     if !failed.is_empty() {
         act(cx, |l| {
-            let names: Vec<String> = failed.iter().map(|p| l.note_title(p)).collect();
             let fresh: Vec<PathBuf> = failed.iter().filter(|p| !l.unsaved_shown.contains(p)).cloned().collect();
             l.unsaved_shown.extend(fresh);
-            l.notify(unsaved_message(&names), "triangle-alert", None, None);
+            announce_unsaved(l, failed.clone());
         });
     }
     failed
@@ -4046,7 +4091,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
             } else {
                 icon("x", iconsize::XS, t.secondary).into_any_element()
             })
-            .tooltip(tip(if is_dirty { tr("Ungesicherte Änderungen – Tab schließen") } else { tr("Tab schließen") }))
+            .tooltip(tip(format!("{}{}", if is_dirty { tr("Ungesicherte Änderungen – Tab schließen") } else { tr("Tab schließen") }, ShortcutAction::CloseTab.hint())))
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 close_tab(&close, cx);
@@ -4342,10 +4387,34 @@ mod window_tests {
 
     #[test]
     fn the_toast_for_notes_that_stay_open_names_one_and_counts_several() {
-        assert_eq!(unsaved_message(&["Analysis".to_string()]), "„Analysis“ ließ sich nicht sichern und bleibt offen. Erneut versuchen steht in der Notiz.");
+        assert_eq!(unsaved_message(&["Analysis".to_string()], true), "„Analysis“ ließ sich nicht sichern und bleibt offen. Erneut versuchen steht oben in der Notiz.");
+        assert_eq!(unsaved_message(&["Analysis".to_string()], false), "„Analysis“ ließ sich nicht sichern und bleibt offen.");
         let names: Vec<String> = ["A", "B", "C", "D"].iter().map(|n| n.to_string()).collect();
-        assert_eq!(unsaved_message(&names), "4 Notizen ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.");
-        assert_eq!(unsaved_message(&names[..2]), "„A“, „B“ ließen sich nicht sichern und bleiben offen. Erneut versuchen steht in jeder Notiz.");
-        assert!(unsaved_message(&names[..3]).starts_with("„A“, „B“, „C“ ließen"));
+        assert_eq!(unsaved_message(&names, false), "4 Notizen ließen sich nicht sichern und bleiben offen.");
+        assert_eq!(unsaved_message(&names[..2], false), "„A“, „B“ ließen sich nicht sichern und bleiben offen.");
+        assert!(unsaved_message(&names[..3], false).starts_with("„A“, „B“, „C“ ließen"));
+    }
+
+    #[test]
+    fn the_toast_action_saves_a_note_whose_tab_is_not_shown() {
+        use crate::core::library::Library;
+        let dir = std::env::temp_dir().join(format!("schrumbi-toast-retry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let note = dir.join("n.md");
+        std::fs::write(&note, "alt").unwrap();
+        let mut lib = Library::default();
+        lib.buffer(&note).edited("neu".into());
+        lib.save_problems.push(note.clone());
+        super::retry_unsaved(vec![note.clone()])(&mut lib);
+        assert_eq!(std::fs::read_to_string(&note).unwrap(), "neu");
+        assert!(lib.save_problems.is_empty() && lib.unsaved_shown.contains(&note));
+        assert!(lib.toast.is_none());
+        std::fs::remove_file(&note).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        lib.buffer(&note).edited("weg".into());
+        super::retry_unsaved(vec![note.clone()])(&mut lib);
+        let toast = lib.toast.as_ref().expect("a note that still fails is announced again");
+        assert!(toast.undo.is_some() && toast.message.contains("bleibt offen"), "{}", toast.message);
     }
 }

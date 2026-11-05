@@ -1983,7 +1983,7 @@ impl Settings {
             None => div().into_any_element(),
         };
         let editor_kind = prefs::get().note_editor;
-        let editor_label = |k: prefs::NoteEditor| if k == prefs::NoteEditor::Live { tr("Live-Ansicht: Formatierung beim Schreiben sichtbar") } else { tr("Code-Editor: Quelltext mit Zeilennummern") };
+        let editor_label = |k: prefs::NoteEditor| if k == prefs::NoteEditor::Live { tr("Live-Ansicht: Formatierung beim Schreiben sichtbar") } else { tr("Quelltext: Text mit Zeilennummern") };
         let editor_row = row(
             tr("Notizen schreiben"),
             picker("n-editor", editor_label(editor_kind), move |mut menu| {

@@ -135,6 +135,29 @@ fn stamp_from(m: &std::fs::Metadata) -> (f64, u64) {
     (m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0., |d| d.as_secs_f64()), m.len())
 }
 
+type Hits<'a> = Vec<(&'a PathBuf, &'a Arc<NoteFacts>)>;
+
+/// Splits cached notes by a fresh look at the file, since directory listings can lag behind a write; changed ones come back with their new time.
+fn recheck(hits: Hits) -> (Hits, Vec<(&PathBuf, f64)>) {
+    let seen: Vec<_> = hits
+        .into_par_iter()
+        .map(|(p, old)| {
+            let (modified, size) = stamp_of(p);
+            (p, old, modified, unchanged(old, modified, size))
+        })
+        .collect();
+    let mut kept = Vec::with_capacity(seen.len());
+    let mut changed = Vec::new();
+    for (p, old, modified, same) in seen {
+        if same {
+            kept.push((p, old));
+        } else {
+            changed.push((p, modified));
+        }
+    }
+    (kept, changed)
+}
+
 fn list_files(root: &Path, exclude: &[String]) -> Vec<PathBuf> {
     list_stamped(root, exclude).into_iter().map(|(p, _, _)| p).collect()
 }
@@ -183,14 +206,16 @@ pub fn rebuild(root: &Path, exclude: &[String]) {
     let known = std::mem::take(&mut *CACHE.lock().unwrap());
     let mut notes: HashMap<PathBuf, Arc<NoteFacts>> = HashMap::with_capacity(known.len());
     let mut stale: Vec<(&PathBuf, f64)> = Vec::new();
+    let mut hits: Vec<(&PathBuf, &Arc<NoteFacts>)> = Vec::new();
     for (p, modified, size) in stamped.iter().filter(|(p, _, _)| markdown::is_markdown(p) || is_canvas(p)) {
         match known.get(p).filter(|o| unchanged(o, *modified, *size)) {
-            Some(old) => {
-                notes.insert(p.clone(), old.clone());
-            }
+            Some(old) => hits.push((p, old)),
             None => stale.push((p, *modified)),
         }
     }
+    let (kept, changed) = if cfg!(windows) { recheck(hits) } else { (hits, Vec::new()) };
+    notes.extend(kept.into_iter().map(|(p, old)| (p.clone(), old.clone())));
+    stale.extend(changed);
     let read: Vec<(PathBuf, Arc<NoteFacts>)> = stale
         .par_iter()
         .filter_map(|(p, modified)| {
@@ -220,7 +245,7 @@ fn publish(mut index: VaultIndex) {
 }
 
 fn assemble(root: PathBuf, files: Vec<PathBuf>, notes: HashMap<PathBuf, Arc<NoteFacts>>) -> VaultIndex {
-    let aliases: Vec<(String, PathBuf)> = notes.iter().flat_map(|(p, f)| f.aliases.iter().map(move |a| (a.clone(), p.clone()))).collect();
+    let aliases: Vec<(String, PathBuf)> = notes.iter().filter(|(p, _)| !crate::core::naming::is_conflict_copy(p)).flat_map(|(p, f)| f.aliases.iter().map(move |a| (a.clone(), p.clone()))).collect();
     let resolver = Resolver::new(&root, files.iter().cloned(), aliases);
     let mut backlinks: HashMap<PathBuf, Vec<Mention>> = HashMap::new();
     let mut missing: BTreeMap<String, Vec<Mention>> = BTreeMap::new();
@@ -530,6 +555,31 @@ mod tests {
         assert!(unchanged(&read, 100., 5));
         assert!(!unchanged(&read, 100., 22), "coarse file clocks keep the time, the length still tells");
         assert!(!unchanged(&read, 101., 5));
+    }
+
+    #[test]
+    fn a_cached_note_that_changed_since_the_listing_is_read_again() {
+        let root = vault("recheck", &[("A.md", "eins\n"), ("B.md", "zwei\n")]);
+        let (a, b) = (root.join("A.md"), root.join("B.md"));
+        let (am, asize) = stamp_of(&a);
+        let (bm, bsize) = stamp_of(&b);
+        let facts_a = Arc::new(NoteFacts { modified: am, size: asize, ..Default::default() });
+        let facts_b = Arc::new(NoteFacts { modified: bm, size: bsize, ..Default::default() });
+        std::fs::write(&a, "eins und mehr\n").unwrap();
+        let (kept, changed) = recheck(vec![(&a, &facts_a), (&b, &facts_b)]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].0, &b);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].0, &a);
+        assert_eq!(changed[0].1, stamp_of(&a).0);
+    }
+
+    #[test]
+    fn a_conflict_copy_does_not_take_over_the_aliases_of_its_note() {
+        let root = vault("copy-alias", &[("A (andere Version).md", "---\naliases: [Bee]\n---\n"), ("A.md", "---\naliases: [Bee]\n---\n"), ("C.md", "[[Bee]]\n")]);
+        let i = built(root.clone(), list_files(&root, &[]));
+        assert_eq!(i.backlinks[&root.join("A.md")].len(), 1);
+        assert!(!i.backlinks.contains_key(&root.join("A (andere Version).md")));
     }
 
     #[test]

@@ -56,9 +56,9 @@ Bearbeiten geht in der Standard-App: ⋯ → {ui:Mit Standard-App öffnen}. Sich
 | Modus | Kürzel |
 |---|---|
 | {ui:Lesen} / {ui:Bearbeiten} | {key:togglePreview} |
-| {ui:Geteilte Ansicht}, nur im Code-Editor | {key:splitPreview} |
+| {ui:Geteilte Ansicht}, nur im Quelltext | {key:splitPreview} |
 
-Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} oder {ui:Code-Editor: Quelltext mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} im Menü {ui:Darstellung} oder die {key:CommandPalette} wechselt sofort.
+Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} oder {ui:Quelltext: Text mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} im Menü {ui:Darstellung} oder die {key:CommandPalette} wechselt sofort.
 
 ## In der Notiz suchen
 
@@ -85,9 +85,9 @@ Die Wörter stehen in den Einstellungen unter {ui:Eigenes Wörterbuch}; das Kreu
 
 Ab etwa 20 KB bricht der Quelltext Zeilen nicht um. {key:toggleWrap} oder {ui:Zeilenumbruch ein-/ausschalten} in der {key:CommandPalette} schaltet den Umbruch für diese Notiz um, bis etwa 35 KB; Schrumbi merkt sich das. Darüber erklärt Schrumbi, warum es nicht geht. Ab etwa 200 KB zeigt der Quelltext auch keine Hervorhebung, damit das Tippen schnell bleibt. Das steht unten als {ui:Lange Notiz: ohne Zeilenumbruch und Hervorhebung}.
 
-Eine einzelne Zeile über etwa 250 KB öffnet Schrumbi im Quelltext statt in Live. Unten steht {ui:Diese Zeile ist zu lang für Live. Esc: zurück zu Live}; {key:escape} oder ein Klick darauf führt zurück.
+Eine einzelne Zeile über etwa 250 KB öffnet Schrumbi im Quelltext statt in der Live-Ansicht. Unten steht {ui:Diese Zeile ist zu lang für die Live-Ansicht. Esc: zurück zur Live-Ansicht}; {key:escape} oder ein Klick darauf führt zurück.
 
-Live zeigt eine Zeile über etwa 32 KB nur mit ihrem Anfang; {ui:Lesen} zeigt sie ganz, und ein Klick auf den Hinweis darunter öffnet die Zeile im Quelltext.
+Die Live-Ansicht zeigt eine Zeile über etwa 32 KB nur mit ihrem Anfang; {ui:Lesen} zeigt sie ganz, und ein Klick auf den Hinweis darunter öffnet die Zeile im Quelltext.
 
 Ab etwa 80 KB prüft die Rechtschreibung nur den Text um die Schreibmarke. Das steht unten als {ui:Rechtschreibung nur um die Schreibmarke}.
 

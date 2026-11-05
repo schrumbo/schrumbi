@@ -1331,20 +1331,32 @@ impl Library {
         let (stem, ext) = (super::naming::stem(&name), extension(&name));
         let suffix = if ext.is_empty() { String::new() } else { format!(".{ext}") };
         let copy = unique_path(&path.with_file_name(format!("{stem} ({}){suffix}", tr("andere Version"))));
-        if let Err(e) = std::fs::copy(path, &copy) {
-            self.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]));
-            return;
-        }
+        let copied = match std::fs::copy(path, &copy) {
+            Ok(_) => true,
+            Err(_) if !path.exists() => std::fs::write(&copy, &theirs).is_ok(),
+            Err(e) => {
+                self.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]));
+                return;
+            }
+        };
         let Some(buffer) = self.buffers.get_mut(path) else { return };
         buffer.keep_mine();
         if let Err(e) = buffer.save() {
-            let _ = std::fs::remove_file(&copy);
+            if copied {
+                let _ = std::fs::remove_file(&copy);
+            }
             self.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]));
             return;
         }
         self.refresh();
-        let kept = trf("Andere Version gesichert als „%@“", &[&name_of(&copy)]);
-        self.commit(kept, "check", vec![Change::Note { path: path.to_path_buf(), text: theirs }, Change::Trash(copy)]);
+        let mut undo = vec![Change::Note { path: path.to_path_buf(), text: theirs }];
+        let kept = if copied {
+            undo.push(Change::Trash(copy.clone()));
+            trf("Andere Version gesichert als „%@“", &[&name_of(&copy)])
+        } else {
+            tr("Meine behalten")
+        };
+        self.commit(kept, "check", undo);
     }
 
     /// Shows the version another app wrote; the text here stays in the undo history.

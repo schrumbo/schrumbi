@@ -539,7 +539,7 @@ impl NotesPage {
                 }
                 let Ok(rel) = p.strip_prefix(&vault.root) else { return false };
                 let rel = rel.to_string_lossy().replace('\\', "/");
-                !vault.config.is_ignored(&rel) && !vault.is_template(p)
+                !vault.config.is_ignored(&rel) && !vault.is_template(p) && !crate::core::naming::is_conflict_copy(p)
             })
             .collect();
         notes.sort_by(|a, b| b.1.modified.total_cmp(&a.1.modified).then_with(|| a.0.cmp(b.0)));
@@ -1181,7 +1181,12 @@ impl Render for NotesPage {
                 *shown = Some(i);
                 self.list_scroll.scroll_to_item(i, ScrollStrategy::Center);
                 if let Some(input) = refocus {
-                    window.on_next_frame(move |window, cx| input.update(cx, |s, cx| s.focus(window, cx)));
+                    window.on_next_frame(move |window, cx| {
+                        let own = input.read(cx).focus_handle(cx);
+                        if window.focused(cx).is_none_or(|f| f == own) {
+                            input.update(cx, |s, cx| s.focus(window, cx));
+                        }
+                    });
                 }
             }
         }
@@ -1317,6 +1322,19 @@ mod tests {
     fn vault(files: &[&str]) -> VaultIndex {
         let root = PathBuf::from("/vault");
         VaultIndex { files: files.iter().map(|f| root.join(f)).collect(), root, ..Default::default() }
+    }
+
+    #[test]
+    fn conflict_copies_add_no_open_tasks() {
+        use crate::core::vault::index::NoteFacts;
+        let mut index = vault(&[]);
+        for name in ["A.md", "A (andere Version).md", "A (Konflikt 2026-11-05).md"] {
+            let facts = NoteFacts { tasks: vec![(1, "Lernen".into())], ..Default::default() };
+            index.notes.insert(index.root.join(name), std::sync::Arc::new(facts));
+        }
+        let rows = super::NotesPage::visible_tasks(&index, "");
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(&rows[0], Row::Task { note, .. } if note == "A"));
     }
 
     #[test]
