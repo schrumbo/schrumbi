@@ -3932,9 +3932,10 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
 fn move_path(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::rename(from, to).or_else(|_| {
         copy_path(from, to)?;
-        let removed = if from.is_dir() { std::fs::remove_dir_all(from) } else { std::fs::remove_file(from) };
-        if removed.is_err() {
-            let _ = if to.is_dir() { std::fs::remove_dir_all(to) } else { std::fs::remove_file(to) };
+        let was_dir = from.is_dir();
+        let removed = if was_dir { std::fs::remove_dir_all(from) } else { std::fs::remove_file(from) };
+        if removed.is_err() && !was_dir && from.is_file() && !same_file(from, to) {
+            let _ = std::fs::remove_file(to);
         }
         removed
     })
