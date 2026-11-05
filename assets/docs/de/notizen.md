@@ -81,6 +81,12 @@ Unbekannte Wörter sind unterstrichen. Zeige auf eins, dann {ui:Zum Wörterbuch 
 
 Die Wörter stehen in den Einstellungen unter {ui:Eigenes Wörterbuch}; das Kreuz nimmt eins wieder heraus. Alle offenen Notizen übernehmen das sofort.
 
+## Große Notizen
+
+Ab etwa 200 KB zeigt der Quelltext keine Farben und bricht Zeilen nicht um, damit das Tippen schnell bleibt. Das steht unten als {ui:Große Notiz: ohne Umbruch und Farben}. Ein Klick darauf oder {ui:Zeilenumbruch ein-/ausschalten} in der {key:CommandPalette} schaltet den Umbruch für diese Notiz um.
+
+Ab etwa 80 KB prüft die Rechtschreibung nur den Text um die Schreibmarke. Das steht unten als {ui:Rechtschreibung nur um die Schreibmarke}.
+
 ## Sichern
 
 Schrumbi sichert nach 2 Sekunden Tipp-Pause, einstellbar unter {ui:Notizen} → {ui:Sichern}. {key:Save} sichert sofort, Schließen sichert immer.

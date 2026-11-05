@@ -151,6 +151,7 @@ fn commands(cx: &App) -> Vec<Command> {
         if crate::core::prefs::get().note_editor == crate::core::prefs::NoteEditor::Code {
             add(&view, S::SplitPreview.label(), "columns-2", keys(S::SplitPreview), Run::NoteAction(Box::new(app::SplitPreview)));
         }
+        add(&view, tr("Zeilenumbruch ein-/ausschalten"), "text", None, Run::NoteAction(Box::new(super::documents::ToggleWrap)));
         add(&view, S::ExportPdf.label(), "share", keys(S::ExportPdf), Run::NoteAction(Box::new(app::ExportPdf)));
         add(&edit, S::FindInNote.label(), "search", keys(S::FindInNote), Run::NoteAction(Box::new(super::find_bar::FindInNote)));
         add(&edit, tr("Zum Wörterbuch hinzufügen"), "plus", None, Run::NoteAction(Box::new(super::spell_card::AddWordAtCaret)));

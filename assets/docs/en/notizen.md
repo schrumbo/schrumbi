@@ -81,6 +81,12 @@ Unknown words are underlined. Point at one, then {ui:Zum Wörterbuch hinzufügen
 
 The words are listed in the settings under {ui:Eigenes Wörterbuch}; the cross removes one. All open notes pick it up at once.
 
+## Large notes
+
+From about 200 KB the source shows no colours and does not wrap lines, so typing stays fast. The bar below says {ui:Große Notiz: ohne Umbruch und Farben}. Click it, or use {ui:Zeilenumbruch ein-/ausschalten} in the {key:CommandPalette}, to turn wrapping on or off for this note.
+
+From about 80 KB spelling checks only the text around the caret. The bar below says {ui:Rechtschreibung nur um die Schreibmarke}.
+
 ## Saving
 
 Schrumbi saves after a 2 second typing pause, adjustable under {ui:Notizen} → {ui:Sichern}. {key:Save} saves at once, closing always saves.

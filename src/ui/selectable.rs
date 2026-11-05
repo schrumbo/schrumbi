@@ -1,5 +1,7 @@
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui_kit::base::{TextSelection, TextSelectionHandle, TextSelectionRegistration, TextSelectionRun};
 use gpui_kit::*;
@@ -22,6 +24,7 @@ pub struct SelectableStyled {
     /// Link targets for the preview card, with the folder they are relative to.
     hovers: Vec<(Range<usize>, String)>,
     hover_base: Option<std::path::PathBuf>,
+    floor: Option<Arc<AtomicU64>>,
 }
 
 /// Something drawn inside a sentence, at a byte position of the text.
@@ -40,6 +43,8 @@ struct Placed {
     range: Range<usize>,
     element: AnyElement,
     size: Size<Pixels>,
+    shown: bool,
+    letters: usize,
 }
 
 /// Called with the drawn text and the byte a plain click landed on.
@@ -70,7 +75,7 @@ pub type LinkAction = Rc<dyn Fn(&mut App)>;
 /// Wraps `text` and its highlights; `order` is its place in reading order.
 pub fn selectable(id: impl Into<ElementId>, text: String, highlights: Vec<(Range<usize>, HighlightStyle)>, order: u64, color: Hsla) -> SelectableStyled {
     let text = SharedString::from(text);
-    SelectableStyled { id: id.into(), styled: StyledText::new(text.clone()).with_highlights(highlights.clone()), highlights, slots: Vec::new(), placed: Vec::new(), pills: Vec::new(), pill_color: transparent_black(), on_click: None, text, order, color, links: Vec::new(), hovers: Vec::new(), hover_base: None }
+    SelectableStyled { id: id.into(), styled: StyledText::new(text.clone()).with_highlights(highlights.clone()), highlights, slots: Vec::new(), placed: Vec::new(), pills: Vec::new(), pill_color: transparent_black(), on_click: None, text, order, color, links: Vec::new(), hovers: Vec::new(), hover_base: None, floor: None }
 }
 
 impl SelectableStyled {
@@ -87,6 +92,12 @@ impl SelectableStyled {
         self
     }
 
+    /// Shares the line height of the parts of one paragraph, so the parts keep one rhythm: the tallest formula any of them held, at this text size.
+    pub fn line_floor(mut self, floor: Option<Arc<AtomicU64>>) -> Self {
+        self.floor = floor;
+        self
+    }
+
     /// Draws pictures and formulas inside the sentence.
     pub fn inline(mut self, slots: Vec<InlineSlot>) -> Self {
         self.slots = slots;
@@ -96,21 +107,29 @@ impl SelectableStyled {
     /// Asks each slot for its size, keeps room for it in the text and moves all ranges behind it.
     /// Returns the line height the tallest picture needs.
     fn make_room(&mut self, window: &mut Window, cx: &mut App) -> Option<Pixels> {
-        if self.slots.is_empty() {
-            return None;
-        }
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line = style.line_height_in_pixels(window.rem_size());
+        let kept = self.floor.as_ref().map_or(0., |floor| {
+            let packed = floor.load(Ordering::Relaxed);
+            if f32::from_bits((packed >> 32) as u32) == f32::from(line) { f32::from_bits(packed as u32) } else { 0. }
+        });
+        if self.slots.is_empty() {
+            return (kept > f32::from(line)).then(|| px(kept));
+        }
         let system = window.text_system();
         let letter = system.advance(system.resolve_font(&style.font()), font_size, ROOM).map_or(px(4.), |a| a.width).max(px(1.));
         let source = self.text.to_string();
         let mut text = String::with_capacity(source.len());
         let mut copied = 0;
         let mut moves: Vec<(usize, usize)> = Vec::new();
+        let mut shifted = 0;
+        let mut known = px(0.);
         let mut rooms: Vec<(Range<usize>, Option<AnyElement>, Size<Pixels>)> = Vec::new();
         let mut tallest = px(0.);
-        for slot in std::mem::take(&mut self.slots) {
+        let mut slots = std::mem::take(&mut self.slots);
+        slots.sort_by_key(|slot| slot.at);
+        for slot in slots {
             let (element, size) = match slot.kind {
                 InlineKind::Math(formula, scale) => match super::embeds::inline_math(&formula, scale, cx) {
                     Some((image, w, h)) => (Some(img(image).w(px(w)).h(px(h)).into_any_element()), size(px(w), px(h))),
@@ -123,13 +142,18 @@ impl SelectableStyled {
             let count = ((size.width / letter).ceil() as usize).max(2);
             let start = text.len();
             text.extend(std::iter::repeat_n(ROOM, count));
-            moves.push((slot.at, text.len() - start));
+            shifted += text.len() - start;
+            moves.push((slot.at, shifted));
+            if element.is_some() {
+                known = known.max(size.height);
+            }
             rooms.push((start..text.len(), element, size));
             tallest = tallest.max(size.height);
         }
         text.push_str(&source[copied..]);
-        let moved = |i: usize| i + moves.iter().filter(|(at, _)| *at <= i).map(|(_, by)| by).sum::<usize>();
-        let shift_end = |i: usize| i + moves.iter().filter(|(at, _)| *at < i).map(|(_, by)| by).sum::<usize>();
+        let before = |count: usize| if count == 0 { 0 } else { moves[count - 1].1 };
+        let moved = |i: usize| i + before(moves.partition_point(|(at, _)| *at <= i));
+        let shift_end = |i: usize| i + before(moves.partition_point(|(at, _)| *at < i));
         let mut highlights: Vec<(Range<usize>, HighlightStyle)> = std::mem::take(&mut self.highlights).into_iter().map(|(r, h)| (moved(r.start)..shift_end(r.end), h)).collect();
         for (room, ..) in &rooms {
             highlights.push((room.clone(), HighlightStyle { fade_out: Some(1.), ..Default::default() }));
@@ -147,8 +171,15 @@ impl SelectableStyled {
         }
         self.text = SharedString::from(text);
         self.styled = StyledText::new(self.text.clone()).with_highlights(highlights);
-        self.placed = rooms.into_iter().filter_map(|(range, element, size)| element.map(|element| Placed { range, element, size })).collect();
-        Some(line.max(tallest + px(4.)))
+        let letters = ROOM.len_utf8();
+        self.placed = rooms.into_iter().filter_map(|(range, element, size)| element.map(|element| Placed { letters: range.len() / letters, range, element, size, shown: false })).collect();
+        let mut height = line.max(tallest + px(super::theme::space::XS));
+        if let Some(floor) = &self.floor {
+            height = height.max(px(kept));
+            let shared = line.max(known + px(super::theme::space::XS)).max(px(kept));
+            floor.store((u64::from(f32::from(line).to_bits()) << 32) | u64::from(f32::from(shared).to_bits()), Ordering::Relaxed);
+        }
+        Some(height)
     }
 
     /// Makes byte ranges of the text clickable; a click that selected text does not count.
@@ -215,11 +246,28 @@ impl Element for SelectableStyled {
     fn prepaint(&mut self, global_id: Option<&GlobalElementId>, inspector_id: Option<&InspectorElementId>, bounds: Bounds<Pixels>, handle: &mut TextSelectionHandle, window: &mut Window, cx: &mut App) -> Hitbox {
         self.styled.prepaint(global_id, inspector_id, bounds, &mut (), window, cx);
         let text_layout = self.styled.layout().clone();
-        for placed in &mut self.placed {
-            if let (Some(start), Some(end)) = (text_layout.position_for_index(placed.range.start), text_layout.position_for_index(placed.range.end)) {
+        let line = text_layout.line_height();
+        let mask = window.content_mask().bounds;
+        let (first, last) = if self.placed.len() > 16 {
+            let first = self.placed.partition_point(|p| text_layout.position_for_index(p.range.start).is_some_and(|at| at.y + line.max(p.size.height) < mask.top()));
+            let last = self.placed.partition_point(|p| text_layout.position_for_index(p.range.start).is_none_or(|at| at.y <= mask.bottom()));
+            (first, last.max(first))
+        } else {
+            (0, self.placed.len())
+        };
+        for placed in &mut self.placed[first..last] {
+            if let (Some(mut start), Some(end)) = (text_layout.position_for_index(placed.range.start), text_layout.position_for_index(placed.range.end)) {
+                if end.y != start.y
+                    && let Some(second) = text_layout.position_for_index(placed.range.start + ROOM.len_utf8()).filter(|second| second.y == end.y)
+                {
+                    let letter = (end.x - second.x) / placed.letters.saturating_sub(1).max(1) as f32;
+                    start = point((second.x - letter).max(bounds.left()), end.y);
+                }
                 let room = if end.y == start.y { end.x - start.x } else { placed.size.width };
-                let origin = point(start.x + (room - placed.size.width) / 2., start.y + (text_layout.line_height() - placed.size.height) / 2.);
+                let x = (start.x + (room - placed.size.width) / 2.).min(bounds.right() - placed.size.width).max(bounds.left());
+                let origin = point(x, start.y + (line - placed.size.height) / 2.);
                 placed.element.prepaint_as_root(origin, placed.size.map(Into::into), window, cx);
+                placed.shown = true;
             }
         }
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
@@ -249,7 +297,7 @@ impl Element for SelectableStyled {
             }
         }
         self.styled.paint(global_id, inspector_id, bounds, &mut (), &mut (), window, cx);
-        for placed in &mut self.placed {
+        for placed in self.placed.iter_mut().filter(|p| p.shown) {
             placed.element.paint(window, cx);
         }
         if !self.links.is_empty() {

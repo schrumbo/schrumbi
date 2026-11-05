@@ -1575,5 +1575,16 @@
   "%@ – inaktiv": "%@ – inactive",
   "Nach Muster benennen… (%@ Dateien)": "Rename by pattern… (%@ files)",
   "%@ Dateien umbenannt": "%@ files renamed",
-  "– inaktiv": "– inactive"
+  "– inaktiv": "– inactive",
+  "Große Notiz: ohne Farben": "Large note: no colours",
+  "Große Notiz: ohne Umbruch und Farben": "Large note: no wrapping or colours",
+  "Lange Notizen zeigen keine Farben, damit das Tippen schnell bleibt. Klicken schaltet den Zeilenumbruch aus.": "Long notes show no colours so typing stays fast. Click to turn line wrapping off.",
+  "Lange Notizen zeigen keinen Zeilenumbruch und keine Farben, damit das Tippen schnell bleibt. Klicken schaltet den Zeilenumbruch ein.": "Long notes show no line wrapping and no colours so typing stays fast. Click to turn line wrapping on.",
+  "Lange Notizen zeigen keine Farben, und die Rechtschreibung prüft nur den Text um die Schreibmarke. Klicken schaltet den Zeilenumbruch aus.": "Long notes show no colours, and spelling checks only the text around the caret. Click to turn line wrapping off.",
+  "Lange Notizen zeigen keinen Zeilenumbruch und keine Farben, und die Rechtschreibung prüft nur den Text um die Schreibmarke. Klicken schaltet den Zeilenumbruch ein.": "Long notes show no line wrapping and no colours, and spelling checks only the text around the caret. Click to turn line wrapping on.",
+  "Die Rechtschreibung prüft in langen Notizen nur den Text um die Schreibmarke.": "In long notes spelling checks only the text around the caret.",
+  "Rechtschreibung nur um die Schreibmarke": "Spelling near the caret only",
+  "Zeilenumbruch ein-/ausschalten": "Turn line wrapping on or off",
+  "Eine so lange Zeile bleibt im Quelltext schnell. Esc geht zurück in die Live-Ansicht.": "A line this long stays fast in the source. Esc goes back to Live.",
+  "Diese Zeile ist zu lang für Live": "This line is too long for Live"
 }
