@@ -122,6 +122,12 @@ pub mod hover {
     pub const FLOAT: f32 = 0.1;
 }
 
+/// The orange tints of the notice about a note that did not save.
+pub mod tint {
+    pub const SAVE_NOTICE: f32 = 0.08;
+    pub const SAVE_FLASH: f32 = 0.16;
+}
+
 /// The fill a control gets while the keyboard has the focus.
 pub mod ring {
     use gpui_kit::Hsla;

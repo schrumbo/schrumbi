@@ -22,7 +22,7 @@ use super::state::{self, act};
 use super::motion::Soft;
 use super::bar_fit::{self, BarFit, Room};
 use crate::core::vault::index;
-use super::theme::{Theme, control, font, hover, note_size, note_scale, radius, space, iconsize, tab};
+use super::theme::{Theme, control, font, hover, note_size, note_scale, radius, space, iconsize, tab, tint};
 use super::widgets::*;
 use crate::core::live_text::{self, LiveStyle, Segment, SegmentKind};
 use crate::core::edit_ops::{self, Edit};
@@ -54,10 +54,6 @@ const FIND_IN_BACKGROUND_FROM: usize = 200_000;
 const PARSE_IN_BACKGROUND_FROM: usize = 100_000;
 const REPARSE_DELAY: Duration = Duration::from_millis(150);
 const NOTICE_AFTER: Duration = Duration::from_millis(300);
-const SAVE_RETRY_WAIT: Duration = Duration::from_millis(400);
-const WRAP_NOTICE_FOR: Duration = Duration::from_millis(1600);
-const SAVE_NOTICE_TINT: f32 = 0.08;
-const SAVE_FLASH_TINT: f32 = 0.16;
 const RICH_EDITOR_UNTIL: usize = 200_000;
 const WRAP_UNTIL: usize = 100_000;
 const WRAP_MAX: usize = 120_000;
@@ -840,11 +836,7 @@ impl NoteView {
         let (key, chosen) = (self.path.to_string_lossy().to_string(), self.wrap_override);
         prefs::update(|p| match chosen {
             Some(w) => {
-                p.note_wraps.insert(key, w);
-                while p.note_wraps.len() > NOTE_PLACES {
-                    let Some(first) = p.note_wraps.keys().next().cloned() else { break };
-                    p.note_wraps.remove(&first);
-                }
+                prefs::remember_capped(&mut p.note_wraps, key, w, NOTE_PLACES);
             }
             None => {
                 p.note_wraps.remove(&key);
@@ -854,7 +846,7 @@ impl NoteView {
         self.wrap_notice = Some((
             wrap,
             cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(WRAP_NOTICE_FOR).await;
+                cx.background_executor().timer(super::motion::WRAP_NOTICE_FOR).await;
                 let _ = this.update(cx, |n, cx| {
                     n.wrap_notice = None;
                     cx.notify();
@@ -866,12 +858,10 @@ impl NoteView {
 
     /// The quiet line in the word count bar that says what a long note gives up, and turns wrapping on or off when the editor is plain.
     fn plain_caption(&self, len: usize, t: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if let Some((on, _)) = &self.wrap_notice {
-            return Some(div().id("wrap-notice").min_w_0().truncate().px(px(space::XS)).child(if *on { tr("Zeilenumbruch an") } else { tr("Zeilenumbruch aus") }).into_any_element());
-        }
+        let notice = self.wrap_notice.as_ref().map(|(on, _)| if *on { tr("Zeilenumbruch an") } else { tr("Zeilenumbruch aus") });
         if self.long_line && self.mode == Mode::Source {
             let me = cx.entity();
-            let caption = div().id("long-line").min_w_0().min_h(px(control::S)).flex().items_center().truncate().rounded(px(radius::SMALL)).px(px(space::XS)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::FLOAT), radius::SMALL).tooltip(tip(tr("Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück in die Live-Ansicht.")));
+            let caption = div().id("long-line").min_w_0().min_h(px(control::S)).flex().items_center().truncate().rounded(px(radius::SMALL)).px(px(space::XS)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::FLOAT), radius::SMALL).tooltip(tip(tr("Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück zu Live.")));
             return Some(
                 caption
                     .on_click(move |_, window, cx| {
@@ -880,7 +870,7 @@ impl NoteView {
                             n.set_mode(Mode::Live, window, cx);
                         })
                     })
-                    .child(tr("Diese Zeile ist zu lang für Live. Esc kehrt zurück."))
+                    .child(notice.unwrap_or_else(|| tr("Diese Zeile ist zu lang für Live. Esc: zurück zu Live")))
                     .into_any_element(),
             );
         }
@@ -888,6 +878,9 @@ impl NoteView {
         let me = cx.entity();
         let caption = div().id("plain-note").min_w_0().truncate().rounded(px(radius::SMALL)).px(px(space::XS));
         if !self.editor_plain {
+            if let Some(notice) = notice {
+                return Some(div().id("wrap-notice").min_w_0().truncate().px(px(space::XS)).child(notice).into_any_element());
+            }
             return spelling.then(|| caption.tooltip(tip(tr("Die Rechtschreibung prüft in langen Notizen nur den Text um die Schreibmarke."))).child(tr("Rechtschreibung nur um die Schreibmarke")).into_any_element());
         }
         let (label, help) = match (self.editor_wrap, spelling) {
@@ -903,7 +896,7 @@ impl NoteView {
                 .soft(t.ink.opacity(0.06), radius::SMALL)
                 .tooltip(tip(help))
                 .on_click(move |_, window, cx| me.update(cx, |n, cx| n.toggle_wrap(window, cx)))
-                .child(label)
+                .child(notice.unwrap_or(label))
                 .into_any_element(),
         )
     }
@@ -2098,11 +2091,7 @@ impl NoteView {
         let known = prefs::get().note_places.get(&key).copied().unwrap_or(0.);
         if self.place_restored && (known - offset).abs() > 0.001 {
             prefs::update(|p| {
-                p.note_places.insert(key, offset);
-                while p.note_places.len() > NOTE_PLACES {
-                    let Some(first) = p.note_places.keys().next().cloned() else { break };
-                    p.note_places.remove(&first);
-                }
+                prefs::remember_capped(&mut p.note_places, key, offset, NOTE_PLACES);
             });
         }
     }
@@ -2128,7 +2117,7 @@ impl NoteView {
         }
         self.save_flash = None;
         self.save_pending = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(SAVE_RETRY_WAIT).await;
+            cx.background_executor().timer(super::motion::SAVE_RETRY_WAIT).await;
             let _ = this.update(cx, |n, cx| {
                 n.save_pending = None;
                 n.save(cx);
@@ -2155,7 +2144,7 @@ impl NoteView {
         let open = self.save_problem.is_some() && dirty;
         let detail = self.save_problem.clone();
         let lit = super::motion::follow("note-save-flash", if self.save_flash.is_some() { 1. } else { 0. }, super::motion::timed(super::motion::MEDIUM, cx), window, cx);
-        super::motion::reveal("note-save-problem", open, div().p(px(space::S)).child(notice("triangle-alert", t.orange, tr("Diese Notiz ließ sich nicht sichern."), detail, retry, t).bg(t.orange.opacity(SAVE_NOTICE_TINT + SAVE_FLASH_TINT * lit))))
+        super::motion::reveal("note-save-problem", open, div().p(px(space::S)).child(notice("triangle-alert", t.orange, tr("Diese Notiz ließ sich nicht sichern."), detail, retry, t).bg(t.orange.opacity(tint::SAVE_NOTICE + tint::SAVE_FLASH * lit))))
     }
 
     fn conflict_notice(&self, open: bool, t: &Theme) -> impl IntoElement + use<> {

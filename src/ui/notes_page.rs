@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -268,7 +269,8 @@ impl Tree {
 
     /// Drops the folders gone from disk: a moved folder leaves its old place before the next scan.
     fn drop_gone_folders(&mut self, root: &Path) {
-        let gone: Vec<String> = self.folders.values().flatten().filter(|f| !root.join(f).is_dir()).cloned().collect();
+        let mut listings = HashMap::new();
+        let gone: Vec<String> = self.folders.values().flatten().filter(|f| !spelled_dir(root, f, &mut listings)).cloned().collect();
         for f in gone {
             self.remove_folder(&f);
         }
@@ -281,16 +283,44 @@ impl Tree {
             files.retain(|p| p != path);
         }
         let mut dir = folder_of(&rel);
-        while vault.root.is_dir() && !dir.is_empty() && !vault.root.join(dir).is_dir() {
+        let mut listings = HashMap::new();
+        while vault.root.is_dir() && !dir.is_empty() && !spelled_dir(&vault.root, dir, &mut listings) {
             self.remove_folder(dir);
             dir = folder_of(dir);
         }
-        if !path.is_dir()
+        if !spelled_dir(&vault.root, &rel, &mut listings)
             && let Some(folders) = self.folders.get_mut(folder_of(&rel))
         {
             folders.remove(&rel);
         }
     }
+}
+
+/// Moves the opened folders, the target and a selected folder from `old` to `new`, with everything below.
+fn follow_folder(open: &mut BTreeSet<String>, target: &mut Option<String>, selected: &mut Option<Row>, old: &str, new: &str) {
+    let below = format!("{old}/");
+    let follow = |r: &str| if r == old { Some(new.to_string()) } else { r.strip_prefix(&below).map(|rest| format!("{new}/{rest}")) };
+    *open = open.iter().map(|r| follow(r).unwrap_or_else(|| r.clone())).collect();
+    *target = target.as_ref().map(|r| follow(r).unwrap_or_else(|| r.clone()));
+    if let Some(Row::Folder { rel, name, .. }) = selected
+        && let Some(now) = follow(rel)
+    {
+        *name = now.rsplit('/').next().unwrap_or(&now).to_string();
+        *rel = now;
+    }
+}
+
+/// Whether `rel` is a folder under exactly this spelling; a case-insensitive disk also answers for the spelling a folder had before a case-only rename.
+fn spelled_dir(root: &Path, rel: &str, listings: &mut HashMap<PathBuf, Option<Vec<OsString>>>) -> bool {
+    let mut dir = root.to_path_buf();
+    for part in rel.split('/').filter(|p| !p.is_empty()) {
+        let names = listings.entry(dir.clone()).or_insert_with(|| std::fs::read_dir(&dir).ok().map(|d| d.flatten().map(|e| e.file_name()).collect()));
+        if names.as_ref().is_some_and(|n| !n.iter().any(|n| n.as_os_str() == OsStr::new(part))) {
+            return false;
+        }
+        dir.push(part);
+    }
+    dir.is_dir()
 }
 
 /// A moved folder enters the vault's file list until the next scan.
@@ -714,16 +744,7 @@ impl NotesPage {
         let root = index::current().root.clone();
         let rel = |p: &Path| p.strip_prefix(&root).ok().map(|r| r.to_string_lossy().replace('\\', "/"));
         let (Some(old), Some(new)) = (rel(old), rel(new)) else { return };
-        let below = format!("{old}/");
-        let follow = |r: &str| if r == old { Some(new.clone()) } else { r.strip_prefix(&below).map(|rest| format!("{new}/{rest}")) };
-        self.open_folders = self.open_folders.iter().map(|r| follow(r).unwrap_or_else(|| r.clone())).collect();
-        self.target_folder = self.target_folder.as_ref().map(|r| follow(r).unwrap_or_else(|| r.clone()));
-        if let Some(Row::Folder { rel, name, .. }) = &mut self.selected
-            && let Some(now) = follow(rel)
-        {
-            *name = now.rsplit('/').next().unwrap_or(&now).to_string();
-            *rel = now;
-        }
+        follow_folder(&mut self.open_folders, &mut self.target_folder, &mut self.selected, &old, &new);
         self.cache = None;
     }
 
@@ -740,9 +761,13 @@ impl NotesPage {
             } else {
                 text.to_string()
             };
-            act(cx, |l| l.rename(path, &name));
-            if is_folder && !path.exists() {
-                self.folder_renamed(path, &path.with_file_name(&name));
+            let renamed = act(cx, |l| {
+                l.last_renamed = None;
+                l.rename(path, &name);
+                l.last_renamed.take()
+            });
+            if is_folder && let Some(new) = renamed {
+                self.folder_renamed(path, &new);
             }
             state::reindex(cx);
         }
@@ -1265,8 +1290,9 @@ impl Render for NotesPage {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_tree, changed_files, unlisted_rename};
+    use super::{Row, build_tree, changed_files, follow_folder, unlisted_rename};
     use crate::core::vault::index::{Hidden, VaultIndex};
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
 
     fn vault(files: &[&str]) -> VaultIndex {
@@ -1320,6 +1346,41 @@ mod tests {
             assert!(!t.files.contains_key("A/Woche 1.2"));
             assert!(!t.files.get("B").is_some_and(|f| f.iter().any(|p| p.ends_with("Woche 1.2"))));
         }
+    }
+
+    #[test]
+    fn the_page_follows_a_folder_to_the_name_it_really_got() {
+        let mut open: BTreeSet<String> = ["alt", "alt/Woche", "x"].iter().map(|s| s.to_string()).collect();
+        let mut target = Some("alt/Woche".to_string());
+        let mut selected = Some(Row::Folder { rel: "alt".into(), name: "alt".into(), depth: 0, open: true });
+        follow_folder(&mut open, &mut target, &mut selected, "alt", "neu-2");
+        assert_eq!(open, ["neu-2", "neu-2/Woche", "x"].iter().map(|s| s.to_string()).collect::<BTreeSet<_>>());
+        assert_eq!(target.as_deref(), Some("neu-2/Woche"));
+        assert!(matches!(&selected, Some(Row::Folder { rel, name, .. }) if rel == "neu-2" && name == "neu-2"));
+    }
+
+    #[test]
+    fn a_case_only_folder_rename_leaves_no_row_of_the_old_spelling() {
+        let root = std::env::temp_dir().join(format!("schrumbi-case-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Kurs/Sub")).unwrap();
+        std::fs::write(root.join("Kurs/Sub/n.md"), "").unwrap();
+        let at = |f: &str| root.join(f);
+        let before = VaultIndex { root: root.clone(), files: vec![at("Kurs/Sub/n.md")], ..Default::default() };
+        let mut tree = build_tree(&before, &Hidden::default());
+        std::fs::rename(at("Kurs"), at("kurs")).unwrap();
+        let after = VaultIndex { root: root.clone(), files: vec![at("kurs/Sub/n.md")], ..Default::default() };
+        let (gone, came) = changed_files(&before.files, &after.files).unwrap();
+        for p in &gone {
+            tree.remove(&after, p);
+        }
+        for p in &came {
+            tree.add(&after, p);
+        }
+        let fresh = build_tree(&after, &Hidden::default());
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(tree, fresh);
+        assert_eq!(tree.folders.get("").map(|s| s.iter().cloned().collect::<Vec<_>>()), Some(vec!["kurs".to_string()]));
     }
 
     #[test]

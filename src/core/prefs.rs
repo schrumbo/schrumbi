@@ -373,6 +373,15 @@ pub fn forget_workspace(path: &std::path::Path) {
     });
 }
 
+/// Stores `value` under `key` in a per-note map and drops other keys, in key order, past `cap`; the entry just stored stays.
+pub fn remember_capped<V>(map: &mut BTreeMap<String, V>, key: String, value: V, cap: usize) {
+    map.insert(key.clone(), value);
+    while map.len() > cap {
+        let Some(other) = map.keys().find(|k| **k != key).cloned() else { break };
+        map.remove(&other);
+    }
+}
+
 /// Recently used co-authors, most recent first.
 pub fn remember_coauthors(names: &[String]) {
     if names.is_empty() {
@@ -384,4 +393,27 @@ pub fn remember_coauthors(names: &[String]) {
         merged.truncate(12);
         p.recent_coauthors = merged;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remember_capped;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn the_entry_just_stored_is_never_the_one_dropped() {
+        let mut map: BTreeMap<String, u8> = BTreeMap::new();
+        for k in ["b", "c", "d"] {
+            remember_capped(&mut map, k.to_string(), 1, 3);
+        }
+        remember_capped(&mut map, "a".to_string(), 2, 3);
+        assert_eq!(map.len(), 3);
+        assert_eq!(map.get("a"), Some(&2));
+        assert!(!map.contains_key("b"));
+        remember_capped(&mut map, "a".to_string(), 3, 3);
+        assert_eq!(map.get("a"), Some(&3));
+        remember_capped(&mut map, "e".to_string(), 4, 0);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("e"), Some(&4));
+    }
 }

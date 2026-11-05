@@ -85,7 +85,7 @@ Die Wörter stehen in den Einstellungen unter {ui:Eigenes Wörterbuch}; das Kreu
 
 Ab etwa 100 KB bricht der Quelltext Zeilen nicht um, ab etwa 200 KB zeigt er auch keine Hervorhebung, damit das Tippen schnell bleibt. Das steht unten als {ui:Große Notiz: ohne Umbruch und Hervorhebung}. Ein Klick darauf, {key:toggleWrap} oder {ui:Zeilenumbruch ein-/ausschalten} in der {key:CommandPalette} schaltet den Umbruch für diese Notiz um, bis etwa 120 KB; Schrumbi merkt sich das.
 
-Eine einzelne Zeile über etwa 250 KB öffnet Schrumbi im Quelltext statt in Live. Unten steht {ui:Diese Zeile ist zu lang für Live. Esc kehrt zurück.}; {key:escape} oder ein Klick darauf führt zurück.
+Eine einzelne Zeile über etwa 250 KB öffnet Schrumbi im Quelltext statt in Live. Unten steht {ui:Diese Zeile ist zu lang für Live. Esc: zurück zu Live}; {key:escape} oder ein Klick darauf führt zurück.
 
 Live zeigt eine Zeile über etwa 32 KB nur mit ihrem Anfang; {ui:Lesen} zeigt sie ganz.
 
