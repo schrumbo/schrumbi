@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::component::WindowExt;
@@ -28,6 +29,7 @@ use crate::core::edit_ops::{self, Edit};
 use crate::core::i18n::{tr, trf};
 use crate::core::library;
 use crate::core::markdown;
+use crate::core::note_buffer::{NoteBuffer, SaveStart, Snapshot};
 use crate::core::naming::extension;
 use crate::core::prefs::{self, NoteSaveMode};
 use crate::core::search_index;
@@ -49,6 +51,8 @@ fn editor_viewport(s: &EditorState) -> Option<Bounds<Pixels>> {
 }
 
 const FIND_IN_BACKGROUND_FROM: usize = 200_000;
+const SAVE_IN_BACKGROUND_FROM: usize = 200_000;
+const SPLIT_HOLD: Duration = Duration::from_millis(300);
 const FIND_MARKS_AROUND: usize = 1000;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -183,6 +187,7 @@ pub struct NoteView {
     reveal_line: Option<usize>,
     item_hashes: Vec<u64>,
     split_sync: (f32, f32),
+    split_hold: Option<std::time::Instant>,
     reparse: Option<Task<()>>,
     /// What the live view draws, one entry per list item between start and end.
     segments: Rc<Vec<Segment>>,
@@ -191,7 +196,7 @@ pub struct NoteView {
     definitions: Rc<String>,
     /// Lines already parsed for drawing.
     fragments: Rc<std::cell::RefCell<std::collections::HashMap<String, Rc<ParsedNote>>>>,
-    parsed_text: Option<String>,
+    parsed_text: Option<Arc<str>>,
     marks: Option<TextDecorationCollection>,
     /// A source line to bring back to the top after switching views.
     keep_line: Option<usize>,
@@ -357,7 +362,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, item_hashes: Vec::new(), split_sync: (0., 0.), reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -372,6 +377,9 @@ impl NoteView {
         let block = markdown_view::block_at(text, range.start);
         let line = text.get(..range.start).unwrap_or_default().matches('\n').count();
         self.reveal_line = Some(line);
+        if self.mode == Mode::Split {
+            self.split_hold = Some(std::time::Instant::now());
+        }
         let still = cx.reduce_motion();
         self.found = Some(markdown_view::Found { block, line, token, still });
         if still {
@@ -464,7 +472,7 @@ impl NoteView {
         let mode = std::mem::discriminant(&self.mode);
         let reveal = reveal || self.find.mode.is_some_and(|seen| seen != mode);
         self.find.mode = Some(mode);
-        let signature = (crate::core::find::fingerprint(text), query, exact);
+        let signature = (self.fingerprint_of(text, cx), query, exact);
         if self.find.signature.as_ref() == Some(&signature) {
             self.find.pending = None;
             self.find.task = None;
@@ -498,7 +506,8 @@ impl NoteView {
         if let Some(bar) = self.find.bar.clone() {
             bar.update(cx, |b, cx| b.searching(cx));
         }
-        let (owned, query, exact) = (text.to_string(), signature.1.clone(), signature.2);
+        let owned: Arc<str> = self.shared_snapshot(text, cx).map_or_else(|| Arc::from(text), |s| s.text.clone());
+        let (query, exact) = (signature.1.clone(), signature.2);
         self.find.task = Some(cx.spawn(async move |this, cx| {
             let (found, owned) = cx
                 .background_spawn(async move {
@@ -603,6 +612,9 @@ impl NoteView {
         if self.mode != Mode::Source {
             self.reveal_line = Some(text.get(..at.start).unwrap_or_default().matches('\n').count());
         }
+        if self.mode == Mode::Split {
+            self.split_hold = Some(std::time::Instant::now());
+        }
         cx.notify();
     }
 
@@ -618,7 +630,7 @@ impl NoteView {
             let Some(at) = self.find.matches.get(self.find.current).cloned() else { return };
             (crate::core::find::replace_all(&text, std::slice::from_ref(&at), &replacement), at.start + replacement.len())
         };
-        if new == text {
+        if *new == *text {
             return;
         }
         self.change_text(&text, new.clone(), window, cx);
@@ -734,8 +746,16 @@ impl NoteView {
     }
 
     /// The text of the note right now.
-    fn current_text(&self, cx: &App) -> String {
-        state::read(cx, |l| l.buffers.get(&self.path).map(|b| b.text.clone()).unwrap_or_default())
+    fn current_text(&self, cx: &App) -> Arc<str> {
+        state::read(cx, |l| l.buffers.get(&self.path).map_or_else(|| Arc::from(""), |b| b.snapshot().text.clone()))
+    }
+
+    fn shared_snapshot(&self, text: &str, cx: &App) -> Option<Arc<Snapshot>> {
+        state::read(cx, |l| l.buffers.get(&self.path).map(NoteBuffer::snapshot).filter(|s| std::ptr::eq(s.text.as_ptr(), text.as_ptr()) && s.text.len() == text.len()))
+    }
+
+    fn fingerprint_of(&self, text: &str, cx: &App) -> u64 {
+        self.shared_snapshot(text, cx).map_or_else(|| crate::core::find::fingerprint(text), |s| s.fingerprint())
     }
 
     fn put_text(&self, text: String, cx: &mut Context<Self>) {
@@ -867,7 +887,7 @@ impl NoteView {
         let per_item = if spans.is_empty() { 0 } else { *spans.select_nth_unstable(middle).1 };
         self.adopt_items(hashes, per_item.max(1) as f32 * note_size(font::BODY) * 1.5);
         self.parsed = Some((self.revision, p.clone()));
-        self.parsed_text = Some(text.to_string());
+        self.parsed_text = Some(Arc::from(text));
         p
     }
 
@@ -897,7 +917,7 @@ impl NoteView {
         }
         let full = lines.join("\n");
         if self.last_snapshot.is_none_or(|t| t.elapsed() > Duration::from_millis(800)) {
-            self.history.push((before, first_line + caret_line));
+            self.history.push((before.to_string(), first_line + caret_line));
             if self.history.len() > 500 {
                 self.history.remove(0);
             }
@@ -927,9 +947,9 @@ impl NoteView {
         let here = self.live.as_ref().map_or(line, |l| l.first_line);
         let current = self.current_text(cx);
         if back {
-            self.future.push((current, here));
+            self.future.push((current.to_string(), here));
         } else {
-            self.history.push((current, here));
+            self.history.push((current.to_string(), here));
         }
         self.live = None;
         self.put_text(text, cx);
@@ -1090,7 +1110,7 @@ impl NoteView {
         let text = self.current_text(cx);
         let count = text.split('\n').count();
         let end = text.len();
-        self.open_selecting(0, count, text, 0..end, 0, window, cx);
+        self.open_selecting(0, count, text.to_string(), 0..end, 0, window, cx);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1201,7 +1221,7 @@ impl NoteView {
             let added = format!("|{}", "  |".repeat(columns));
             let mut all: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
             all.insert(new_line.min(all.len()), added);
-            self.history.push((text.clone(), cell.line));
+            self.history.push((text.to_string(), cell.line));
             self.future.clear();
             self.live = None;
             self.put_text(all.join("\n"), cx);
@@ -1236,7 +1256,7 @@ impl NoteView {
         let joined = format!("{}{}", lines[upper], lines[lower]);
         lines[upper] = joined;
         lines.remove(lower);
-        self.history.push((text, first_line));
+        self.history.push((text.to_string(), first_line));
         self.future.clear();
         self.live = None;
         self.put_text(lines.join("\n"), cx);
@@ -1386,7 +1406,7 @@ impl NoteView {
         let start = first.min(lines.len());
         let end = (first + count).min(lines.len());
         lines.splice(start..end, new);
-        self.history.push((before, first));
+        self.history.push((before.to_string(), first));
         self.future.clear();
         self.last_snapshot = None;
         self.put_text(lines.join("\n"), cx);
@@ -1419,7 +1439,7 @@ impl NoteView {
         let moved: Vec<String> = lines.drain(first.min(end)..end).collect();
         let at = if target > first { target - moved.len() } else { target }.min(lines.len());
         lines.splice(at..at, moved);
-        self.history.push((before, first));
+        self.history.push((before.to_string(), first));
         self.future.clear();
         self.last_snapshot = None;
         self.put_text(lines.join("\n"), cx);
@@ -1653,6 +1673,12 @@ impl NoteView {
         };
         let reader_y = -f32::from(self.reader_list.scroll_px_offset_for_scrollbar().y);
         let reader_max = f32::from(self.reader_list.max_offset_for_scrollbar().y);
+        if let Some(since) = self.split_hold {
+            let settled = (editor_y - self.split_sync.0).abs() <= 1. && (reader_y - self.split_sync.1).abs() <= 1.;
+            self.split_hold = if !settled { Some(std::time::Instant::now()) } else if since.elapsed() >= SPLIT_HOLD { None } else { Some(since) };
+            self.split_sync = (editor_y, reader_y);
+            return;
+        }
         let (last_editor, last_reader) = self.split_sync;
         let (editor_moved, reader_moved) = ((editor_y - last_editor).abs() > 1., (reader_y - last_reader).abs() > 1.);
         if line <= 0. || reader_max <= 0. || !(editor_moved || reader_moved) {
@@ -1709,13 +1735,50 @@ impl NoteView {
     pub fn save(&mut self, cx: &mut Context<Self>) {
         let path = self.path.clone();
         let result = state::lib(cx).update(cx, |l, cx| {
-            let r = l.buffers.get_mut(&path).map_or(Ok(()), |b| b.save());
+            let r = l.buffers.get_mut(&path).map_or(Ok(SaveStart::Done), |b| if b.text.len() > SAVE_IN_BACKGROUND_FROM || b.saving() { b.save_in_background() } else { b.save().map(|()| SaveStart::Done) });
             cx.notify();
             r
         });
-        if let Err(e) = result {
-            act(cx, |l| l.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e])));
+        match result {
+            Ok(SaveStart::Started) => self.follow_save(cx),
+            Ok(_) => {}
+            Err(e) => act(cx, |l| l.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]))),
         }
+    }
+
+    fn follow_save(&mut self, cx: &mut Context<Self>) {
+        let path = self.path.clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(20)).await;
+                let step = this.update(cx, |n, cx| {
+                    let done = state::lib(cx).update(cx, |l, cx| {
+                        let b = l.buffers.get_mut(&path)?;
+                        let result = b.poll_save()?;
+                        let again = b.take_save_again() && b.dirty;
+                        cx.notify();
+                        Some((result, again))
+                    });
+                    match done {
+                        None => state::read(cx, |l| l.buffers.get(&path).is_some_and(NoteBuffer::saving)),
+                        Some((Err(e), _)) => {
+                            act(cx, |l| l.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e])));
+                            false
+                        }
+                        Some((Ok(()), again)) => {
+                            if again {
+                                n.save(cx);
+                            }
+                            false
+                        }
+                    }
+                });
+                if !step.unwrap_or(false) {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     fn conflict_notice(&self, open: bool, t: &Theme) -> impl IntoElement + use<> {
@@ -2587,7 +2650,7 @@ impl NoteView {
                 if r.is_empty() {
                     let (full, line) = match n.live {
                         Some(live) => (n.current_text(cx), live.first_line + s[..r.start].matches('\n').count()),
-                        None => (s.clone(), s[..r.start].matches('\n').count()),
+                        None => (Arc::from(s.as_str()), s[..r.start].matches('\n').count()),
                     };
                     if let Some(mark) = edit_ops::closing_mark(&full, line).filter(|_| s[r.start..].split('\n').next().is_some_and(|rest| rest.trim().is_empty())) {
                         let inside = r.start + 1;
@@ -2831,10 +2894,11 @@ impl Render for NoteView {
         let t = Theme::get(cx);
         let lib = state::lib(cx);
         let wheel = super::image_view::wheel_zoom(|factor, _, _, cx| scale_font(factor, cx));
-        let (missing, text, conflict) = lib.update(cx, |l, _| {
+        let (missing, snapshot, conflict) = lib.update(cx, |l, _| {
             let b = l.buffer(&self.path);
-            (b.missing, b.text.clone(), b.conflict.is_some())
+            (b.missing, b.snapshot(), b.conflict.is_some())
         });
+        let text = snapshot.text.clone();
         let request = take_find_request(&self.path, cx);
         if let Some((term, nth)) = request {
             self.reveal(&term, nth, &text, window, cx);
@@ -2869,6 +2933,9 @@ impl Render for NoteView {
         let header = self.header(exporting, room, &t, window, cx);
         if self.mode == Mode::Split && !missing {
             self.sync_split(&text, cx);
+            if self.split_hold.is_some() {
+                window.request_animation_frame();
+            }
         }
         let undecodable = state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.undecodable));
         let content: AnyElement = if undecodable {
@@ -2879,8 +2946,8 @@ impl Render for NoteView {
         } else {
             match self.mode {
                 Mode::Read | Mode::Live => self.reader(&text, &t, window, cx),
-                Mode::Split => div().size_full().flex().child(div().flex_1().min_w_0().h_full().flex().flex_col().border_r_1().border_color(t.separator).child(div().flex_1().min_h_0().child(self.editor_view(cx))).child(word_count(&text, &t))).child(div().flex_1().min_w_0().h_full().child(self.reader(&text, &t, window, cx))).into_any_element(),
-                Mode::Source => div().size_full().flex().flex_col().child(div().flex_1().min_h_0().child(self.editor_view(cx))).child(word_count(&text, &t)).into_any_element(),
+                Mode::Split => div().size_full().flex().child(div().flex_1().min_w_0().h_full().flex().flex_col().border_r_1().border_color(t.separator).child(div().flex_1().min_h_0().child(self.editor_view(cx))).child(word_count(snapshot.words(), &t))).child(div().flex_1().min_w_0().h_full().child(self.reader(&text, &t, window, cx))).into_any_element(),
+                Mode::Source => div().size_full().flex().flex_col().child(div().flex_1().min_h_0().child(self.editor_view(cx))).child(word_count(snapshot.words(), &t)).into_any_element(),
             }
         };
         let top = if self.embedded {
@@ -3117,8 +3184,7 @@ pub fn close_all_tabs(cx: &mut App) {
     resolve_unsaved(all, cx, |cx| act(cx, |l| l.close_all_documents()));
 }
 
-fn word_count(text: &str, t: &Theme) -> Div {
-    let words = text.split_whitespace().count();
+fn word_count(words: usize, t: &Theme) -> Div {
     div().flex_none().flex().justify_end().px(px(space::M)).py(px(space::XS)).border_t_1().border_color(t.separator).text_size(px(font::CAPTION)).text_color(t.secondary).child(if words == 1 { tr("1 Wort") } else { trf("%lld Wörter", &[&words]) })
 }
 

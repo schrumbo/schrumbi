@@ -40,9 +40,211 @@ fn wrapped_in(s: &str, sel: &Range<usize>, token: &str) -> bool {
     before % 2 == 1 && after % 2 == 1
 }
 
+struct Span {
+    start: usize,
+    end: usize,
+    n: usize,
+}
+
+struct Run {
+    pos: usize,
+    len: usize,
+    ch: char,
+    open: bool,
+    close: bool,
+    left: usize,
+    right: usize,
+}
+
+impl Run {
+    fn remaining(&self) -> usize {
+        self.len - self.left - self.right
+    }
+}
+
+fn is_punct(c: char) -> bool {
+    !c.is_alphanumeric() && !c.is_whitespace()
+}
+
+fn opaque_ranges(line: &str) -> Vec<Range<usize>> {
+    let bytes = line.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => {
+                let next = line[i + 1..].chars().next().map_or(0, char::len_utf8);
+                out.push(i..i + 1 + next);
+                i += 1 + next;
+            }
+            b'`' => {
+                let len = bytes[i..].iter().take_while(|b| **b == b'`').count();
+                let mut j = i + len;
+                let mut closed = None;
+                while j < bytes.len() {
+                    if bytes[j] == b'`' {
+                        let run = bytes[j..].iter().take_while(|b| **b == b'`').count();
+                        if run == len {
+                            closed = Some(j + run);
+                            break;
+                        }
+                        j += run;
+                    } else {
+                        j += 1;
+                    }
+                }
+                match closed {
+                    Some(end) => {
+                        out.push(i..end);
+                        i = end;
+                    }
+                    None => i += len,
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
+fn emphasis_spans(line: &str) -> Vec<Span> {
+    let opaque = opaque_ranges(line);
+    let mut runs: Vec<Run> = Vec::new();
+    let mut chars = line.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if (c != '*' && c != '_') || opaque.iter().any(|r| r.contains(&i)) {
+            continue;
+        }
+        let mut len = 1;
+        while let Some(&(_, d)) = chars.peek() {
+            if d != c {
+                break;
+            }
+            len += 1;
+            chars.next();
+        }
+        let prev = line[..i].chars().next_back();
+        let next = line[i + len..].chars().next();
+        let left = next.is_some_and(|n| !n.is_whitespace() && (!is_punct(n) || prev.is_none_or(|p| p.is_whitespace() || is_punct(p))));
+        let right = prev.is_some_and(|p| !p.is_whitespace() && (!is_punct(p) || next.is_none_or(|n| n.is_whitespace() || is_punct(n))));
+        let (open, close) = if c == '*' {
+            (left, right)
+        } else {
+            (left && (!right || prev.is_some_and(is_punct)), right && (!left || next.is_some_and(is_punct)))
+        };
+        runs.push(Run { pos: i, len, ch: c, open, close, left: 0, right: 0 });
+    }
+    let mut spans = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+    for i in 0..runs.len() {
+        if runs[i].close {
+            while runs[i].remaining() > 0 {
+                let Some(at) = stack.iter().rposition(|&j| runs[j].ch == runs[i].ch && runs[j].remaining() > 0) else { break };
+                let j = stack[at];
+                let n = runs[i].remaining().min(runs[j].remaining()).min(2);
+                let opener = runs[j].pos + runs[j].len - runs[j].right - n;
+                let closer = runs[i].pos + runs[i].left;
+                spans.push(Span { start: opener, end: closer + n, n });
+                runs[j].right += n;
+                runs[i].left += n;
+                stack.truncate(at + 1);
+                if runs[j].remaining() == 0 {
+                    stack.pop();
+                }
+            }
+        }
+        if runs[i].open && runs[i].remaining() > 0 {
+            stack.push(i);
+        }
+    }
+    spans
+}
+
+fn hugged(text: &str, token: &str) -> String {
+    let core = text.trim();
+    if core.is_empty() {
+        return text.to_string();
+    }
+    let lead = &text[..text.len() - text.trim_start().len()];
+    let trail = &text[text.trim_end().len()..];
+    format!("{lead}{token}{core}{token}{trail}")
+}
+
+fn toggle_emphasis(s: &str, sel: &Range<usize>, token: &str) -> Option<Edit> {
+    let inner = s.get(sel.clone())?;
+    if inner.contains('\n') {
+        return None;
+    }
+    let n = token.len();
+    let ls = line_start(s, sel.start);
+    let line = &s[ls..line_end(s, sel.start)];
+    let all: Vec<Span> = emphasis_spans(line).into_iter().map(|p| Span { start: p.start + ls, end: p.end + ls, n: p.n }).collect();
+    let spans: Vec<&Span> = all.iter().filter(|p| p.n == n).collect();
+    let (a, b) = (sel.start, sel.end);
+    let unwrap = |p: &Span, select: Range<usize>| Edit { range: p.start..p.end, text: s[p.start + n..p.end - n].to_string(), select };
+    let markers = |r: Range<usize>| s.get(r).is_some_and(|t| t.chars().all(|c| c == '*' || c == '_'));
+    if let Some(p) = spans.iter().find(|p| a != b && p.start >= a && p.end <= b && markers(a..p.start) && markers(p.end..b)) {
+        return Some(unwrap(p, a..b - 2 * n));
+    }
+    if let Some(p) = spans.iter().filter(|p| p.start + n <= a && b <= p.end - n).min_by_key(|p| p.end - p.start) {
+        let (cs, ce) = (p.start + n, p.end - n);
+        if a == b {
+            return Some(unwrap(p, a - n..a - n));
+        }
+        if a == cs && b == ce {
+            return Some(unwrap(p, p.start..p.start + (ce - cs)));
+        }
+        let before = hugged(&s[cs..a], token);
+        let after = hugged(&s[b..ce], token);
+        let text = format!("{before}{inner}{after}");
+        let select = p.start + before.len()..p.start + before.len() + inner.len();
+        return Some(Edit { range: p.start..p.end, text, select });
+    }
+    if a == b {
+        let used = all.iter().any(|p| [p.start..p.start + p.n, p.end - p.n..p.end].iter().any(|m| m.start < a + n && a.saturating_sub(n) < m.end));
+        let before = s[..a].chars().rev().take_while(|c| *c == '*').count();
+        let after = s[a..].chars().take_while(|c| *c == '*').count();
+        if !used && before == n && after == n {
+            return Some(Edit { range: a - n..a + n, text: String::new(), select: a - n..a - n });
+        }
+        return None;
+    }
+    let touching: Vec<&&Span> = spans.iter().filter(|p| p.start <= b && p.end >= a).collect();
+    if touching.is_empty() {
+        return None;
+    }
+    let start = touching.iter().map(|p| p.start).min().unwrap_or(a).min(a);
+    let end = touching.iter().map(|p| p.end).max().unwrap_or(b).max(b);
+    let mut marks: Vec<Range<usize>> = touching.iter().flat_map(|p| [p.start..p.start + n, p.end - n..p.end]).collect();
+    marks.sort_by_key(|m| m.start);
+    let mut core = String::new();
+    let mut at = start;
+    for m in marks {
+        core.push_str(s.get(at..m.start)?);
+        at = m.end;
+    }
+    core.push_str(s.get(at..end)?);
+    let text = hugged(&core, token);
+    let lead = text.len() - text.trim_start().len();
+    let trail = text.len() - text.trim_end().len();
+    let select = start + lead..start + text.len() - trail;
+    Some(Edit { range: start..end, text, select })
+}
+
 /// `**sel**`, `*sel*` or `` `sel` ``; with no selection the caret lands between the tokens.
 pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
     let inner = &s[sel.clone()];
+    if token == "**" || token == "*" {
+        if let Some(edit) = toggle_emphasis(s, &sel, token) {
+            return edit;
+        }
+        if !inner.contains('\n') {
+            let text = format!("{token}{inner}{token}");
+            let start = sel.start + token.len();
+            let select = if sel.is_empty() { start..start } else { sel.start..sel.start + text.len() };
+            return Edit { range: sel, text, select };
+        }
+    }
     if wrapped_in(s, &sel, token) {
         let range = sel.start - token.len()..sel.end + token.len();
         let start = range.start;
@@ -506,6 +708,91 @@ mod tests {
 
     fn applied(s: &str, e: &Edit) -> String {
         format!("{}{}{}", &s[..e.range.start], e.text, &s[e.range.end..])
+    }
+
+    fn toggled(marked: &str, token: &str) -> String {
+        let (text, sel) = match (marked.find('‹'), marked.find('›')) {
+            (Some(a), Some(b)) => {
+                let text = marked.replace(['‹', '›'], "");
+                (text, a..b - '‹'.len_utf8())
+            }
+            _ => {
+                let a = marked.find('|').unwrap();
+                (marked.replace('|', ""), a..a)
+            }
+        };
+        let e = wrap(&text, sel, token);
+        let out = applied(&text, &e);
+        let (a, b) = (e.select.start, e.select.end);
+        if a == b { format!("{}|{}", &out[..a], &out[a..]) } else { format!("{}‹{}›{}", &out[..a], &out[a..b], &out[b..]) }
+    }
+
+    #[test]
+    fn caret_inside_a_span_removes_its_markers() {
+        assert_eq!(toggled("**ein läng|erer**", "**"), "ein läng|erer");
+        assert_eq!(toggled("a **b|** c", "**"), "a b| c");
+        assert_eq!(toggled("a **|b** c", "**"), "a |b c");
+        assert_eq!(toggled("*kurz|* x", "*"), "kurz| x");
+        assert_eq!(toggled("a _kurz|_ x", "*"), "a kurz| x");
+        assert_eq!(toggled("a __fett|__ x", "**"), "a fett| x");
+        assert_eq!(toggled("Übung **Größe|** €", "**"), "Übung Größe| €");
+    }
+
+    #[test]
+    fn triple_markers_separate_bold_from_italic() {
+        assert_eq!(toggled("***x|***", "**"), "*x|*");
+        assert_eq!(toggled("***x|***", "*"), "**x|**");
+        assert_eq!(toggled("**a *b|* c**", "*"), "**a b| c**");
+        assert_eq!(toggled("**a *b|* c**", "**"), "a *b|* c");
+        assert_eq!(toggled("*a **b|** c*", "**"), "*a b| c*");
+    }
+
+    #[test]
+    fn adjacent_spans_are_not_merged() {
+        assert_eq!(toggled("**a**|**b**", "**"), "**a****|****b**");
+        assert_eq!(toggled("*a*|*b*", "*"), "*a**|**b*");
+        assert_eq!(toggled("**a**|b", "**"), "**a****|**b");
+    }
+
+    #[test]
+    fn empty_markers_toggle_off_again() {
+        assert_eq!(toggled("a |b", "**"), "a **|**b");
+        assert_eq!(toggled("a **|**b", "**"), "a |b");
+        assert_eq!(toggled("a *|*b", "*"), "a |b");
+    }
+
+    #[test]
+    fn selection_of_a_span_unwraps() {
+        assert_eq!(toggled("x **‹ab›** y", "**"), "x ‹ab› y");
+        assert_eq!(toggled("x ‹**ab**› y", "**"), "x ‹ab› y");
+        assert_eq!(toggled("x ‹*ab*› y", "*"), "x ‹ab› y");
+        assert_eq!(toggled("x ‹***ab***› y", "**"), "x ‹*ab*› y");
+    }
+
+    #[test]
+    fn selection_inside_a_span_splits_it_cleanly() {
+        assert_eq!(toggled("**ein ‹längerer› fetter Satz hier**", "**"), "**ein** ‹längerer› **fetter Satz hier**");
+        assert_eq!(toggled("**‹ein› längerer**", "**"), "‹ein› **längerer**");
+        assert_eq!(toggled("**ein ‹längerer›**", "**"), "**ein** ‹längerer›");
+        assert_eq!(toggled("**ein‹ längerer ›fetter**", "**"), "**ein**‹ längerer ›**fetter**");
+        assert_eq!(toggled("*ein ‹längerer› fetter*", "*"), "*ein* ‹längerer› *fetter*");
+    }
+
+    #[test]
+    fn selection_across_a_boundary_makes_one_span() {
+        assert_eq!(toggled("**a‹b** c›d", "**"), "‹**ab c**›d");
+        assert_eq!(toggled("x ‹c **a›b** y", "**"), "x ‹**c ab**› y");
+        assert_eq!(toggled("‹a **b** c›", "**"), "‹**a b c**›");
+        assert_eq!(toggled("**a**‹ b›", "**"), "‹**a b**›");
+        assert_eq!(toggled("‹a **b**› **c** d", "**"), "‹**a b**› **c** d");
+        assert!(!toggled("x ‹c **a›b** y **z** w", "**").contains("****"));
+    }
+
+    #[test]
+    fn plain_wrapping_keeps_working() {
+        assert_eq!(toggled("a ‹word› b", "**"), "a ‹**word**› b");
+        assert_eq!(toggled("a ‹**x**› b", "*"), "a ‹***x***› b");
+        assert_eq!(toggled("a \\*b|\\* c", "*"), "a \\*b*|*\\* c");
     }
 
     #[test]
