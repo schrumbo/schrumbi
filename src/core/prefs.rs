@@ -184,6 +184,8 @@ pub struct Prefs {
     pub heading_titled: BTreeSet<String>,
     /// What was folded in each note's reading view.
     pub note_folds: HashMap<String, Vec<String>>,
+    /// Notes whose line wrapping in the source editor differs from the default for their size, by path.
+    pub note_wraps: BTreeMap<String, bool>,
     /// Width of the deadlines column on module pages.
     pub module_column: Option<f32>,
     pub shortcuts: BTreeMap<String, Shortcut>,
@@ -264,6 +266,7 @@ impl Default for Prefs {
             reader_full_width: true,
             note_editor: NoteEditor::default(),
             note_folds: HashMap::new(),
+            note_wraps: BTreeMap::new(),
             shortcuts: BTreeMap::new(),
             disabled_shortcuts: BTreeSet::new(),
             git: BTreeMap::new(),

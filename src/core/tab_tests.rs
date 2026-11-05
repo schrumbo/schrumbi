@@ -386,6 +386,7 @@ fn renaming_a_folder_carries_every_tab_and_remembered_position_inside() {
     let key = |p: &PathBuf| p.to_string_lossy().to_string();
     prefs::update(|p| {
         p.heading_titled.insert(key(&a));
+        p.note_wraps.insert(key(&a), false);
         p.pdf_positions.insert(key(&b), PdfPosition { page: 3, fraction: 0.5, scale: None, fit_page: false, used: 1 });
     });
     let moved = |p: &PathBuf| p.strip_prefix(&dir).map_or(p.clone(), |r| root.join("neu").join(r));
@@ -401,6 +402,8 @@ fn renaming_a_folder_carries_every_tab_and_remembered_position_inside() {
         assert!(p.heading_titled.contains(&key(&new_a)) && !p.heading_titled.contains(&key(&a)));
         assert_eq!(p.pdf_positions.get(&key(&new_b)).map(|x| x.page), Some(3));
         assert!(!p.pdf_positions.contains_key(&key(&b)));
+        assert_eq!(p.note_wraps.get(&key(&new_a)), Some(&false));
+        assert!(!p.note_wraps.contains_key(&key(&a)));
     });
     assert!(lib.can_reopen_document());
     lib.reopen_document();

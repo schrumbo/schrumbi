@@ -49,7 +49,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     if let Some(r) = request {
         let form = cx.new(|cx| FilingForm::new(r.paths, r.assignment_id, true, window, cx));
         let handle = window.window_handle();
-        cx.subscribe(&form,move |_, _: &FilingEvent, cx| {
+        cx.subscribe(&form, move |_, _: &FilingEvent, cx| {
             let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));
             super::state::return_focus_to_page(cx);
         })

@@ -151,8 +151,7 @@ fn commands(cx: &App) -> Vec<Command> {
         if crate::core::prefs::get().note_editor == crate::core::prefs::NoteEditor::Code {
             add(&view, S::SplitPreview.label(), "columns-2", keys(S::SplitPreview), Run::NoteAction(Box::new(app::SplitPreview)));
         }
-        let prefs = crate::core::prefs::get();
-        if prefs.note_editor == crate::core::prefs::NoteEditor::Code && prefs.note_mode != crate::core::prefs::NoteMode::Read {
+        if app::wrap_is_available(true) {
             add(&view, S::ToggleWrap.label(), "text", keys(S::ToggleWrap), Run::NoteAction(Box::new(super::documents::ToggleWrap)));
         }
         add(&view, S::ExportPdf.label(), "share", keys(S::ExportPdf), Run::NoteAction(Box::new(app::ExportPdf)));

@@ -3053,6 +3053,16 @@ impl Library {
         if relinked {
             self.save_state();
         }
+        let wrapped: Vec<(String, String)> = prefs::with(|p| p.note_wraps.keys().filter_map(|k| rekey(k).map(|n| (k.clone(), n))).collect());
+        if !wrapped.is_empty() {
+            prefs::update(|p| {
+                for (was, now) in wrapped {
+                    if let Some(wrap) = p.note_wraps.remove(&was) {
+                        p.note_wraps.insert(now, wrap);
+                    }
+                }
+            });
+        }
         let positioned: Vec<(String, String)> = prefs::with(|p| p.pdf_positions.keys().filter_map(|k| rekey(k).map(|n| (k.clone(), n))).collect());
         if !positioned.is_empty() {
             prefs::update(|p| {
