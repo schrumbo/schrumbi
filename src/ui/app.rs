@@ -37,6 +37,7 @@ actions!(
         CloseWindow,
         TogglePreview,
         SplitPreview,
+        ToggleLive,
         ExportPdf,
         ToggleInspector,
         Refresh,
@@ -124,6 +125,11 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &CommandPalette, cx| act(cx, |l| if l.root.is_some() { l.show_palette = true }));
     cx.on_action(|_: &ShowShortcuts, cx| act(cx, |l| if l.root.is_some() { l.show_shortcuts = true }));
     cx.on_action(|_: &ShowHelp, cx| cx.defer(|cx| super::help::open(None, cx)));
+    cx.on_action(|_: &ToggleLive, cx| {
+        if note_is_active(cx) {
+            toggle_live(cx);
+        }
+    });
     cx.on_action(|_: &NewEntry, cx| act(cx, |l| if l.root.is_some() { l.show_quick_add = true }));
     cx.on_action(|_: &NewFile, cx| {
         act(cx, |l| {
@@ -190,10 +196,10 @@ pub fn init(cx: &mut App) {
     });
     cx.on_action(|_: &CloseTab, cx| {
         let shown = state::read(cx, |l| if let Route::Doc(p) = l.route() { Some(p.clone()) } else { None });
-        let main = super::main_window::is_active(cx);
-        match shown.filter(|_| main) {
-            Some(path) => super::documents::close_tab(&path, cx),
-            None => close_active_window(cx),
+        match (shown, super::main_window::is_active(cx)) {
+            (Some(path), true) => super::documents::close_tab(&path, cx),
+            (_, true) => {}
+            (_, false) => close_active_window(cx),
         }
     });
     cx.on_action(|_: &CloseWindow, cx| close_active_window(cx));
@@ -254,6 +260,18 @@ pub fn note_window_front(id: WindowId, front: bool, cx: &mut App) {
 /// Whether a separate note window or the pane of the main window that has the focus shows a note, which find and replace then act on.
 pub fn note_is_active(cx: &App) -> bool {
     cx.try_global::<NoteWindowFront>().is_some_and(|f| f.0.is_some()) || state::read(cx, |l| matches!(l.route(), Route::Doc(_)) && l.focused_document().is_some_and(crate::core::markdown::is_markdown))
+}
+
+/// Whether notes are written in the Live view.
+pub fn live_is_on() -> bool {
+    prefs::with(|p| p.note_editor == prefs::NoteEditor::Live)
+}
+
+/// Switches between the Live view and the code editor for notes; the menu follows.
+pub fn toggle_live(cx: &mut App) {
+    prefs::update(|p| p.note_editor = if p.note_editor == prefs::NoteEditor::Live { prefs::NoteEditor::Code } else { prefs::NoteEditor::Live });
+    rebuild_menus(cx);
+    cx.refresh_windows();
 }
 
 /// Whether the line wrapping of a note can be switched: its source editor is in use, not Live and not the reader. A note too long to wrap says so when asked.
@@ -468,6 +486,7 @@ pub fn bind_keys(cx: &mut App) {
             binding(ShortcutAction::PreviousTab, PreviousTab, None),
             binding(ShortcutAction::TogglePreview, TogglePreview, None),
             binding(ShortcutAction::SplitPreview, SplitPreview, None),
+            binding(ShortcutAction::ToggleLive, ToggleLive, None),
             binding(ShortcutAction::ExportPdf, ExportPdf, None),
             binding(ShortcutAction::FindInNote, super::find_bar::FindInNote, None),
             binding(ShortcutAction::RenameNote, RenameNote, None),
@@ -575,6 +594,7 @@ pub fn rebuild_menus(cx: &mut App) {
         Menu::new(tr("Darstellung")).items([
             MenuItem::action(tr("Lesen / Bearbeiten"), TogglePreview),
             MenuItem::action(tr("Geteilte Ansicht"), SplitPreview),
+            MenuItem::action(tr("Live-Ansicht"), ToggleLive).checked(live_is_on()).disabled(!note),
             MenuItem::action(tr("Zeilenumbruch ein-/ausschalten"), super::documents::ToggleWrap).disabled(!wrap_is_available(cx)),
             MenuItem::action(tr("Notiz als PDF exportieren"), ExportPdf),
             MenuItem::separator(),

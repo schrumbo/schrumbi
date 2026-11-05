@@ -194,7 +194,7 @@ pub struct NotesPage {
     renaming: Option<(PathBuf, Entity<InputState>, Subscription)>,
     /// A folder just made, shown before the next scan has seen it.
     pending_folder: Option<PathBuf>,
-    scroll_to_rename: bool,
+    rename_scroll: Option<(std::time::Instant, Option<usize>)>,
     width: f32,
     /// A width drag is under way; it is saved when the drag ends.
     resizing: bool,
@@ -208,6 +208,8 @@ pub struct NotesPage {
     searching: Option<Task<()>>,
     _subs: Vec<Subscription>,
 }
+
+const RENAME_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
 
 fn unlisted_rename(path: &Path, folder: &str, listed: Option<&Vec<PathBuf>>, root: &Path) -> bool {
     path.exists() && !listed.is_some_and(|f| f.iter().any(|p| p == path)) && path.parent().and_then(|d| d.strip_prefix(root).ok()).is_some_and(|d| d.to_string_lossy().replace('\\', "/") == folder)
@@ -432,7 +434,7 @@ impl NotesPage {
             target_folder: None,
             renaming: None,
             pending_folder: None,
-            scroll_to_rename: false,
+            rename_scroll: None,
             width: crate::core::prefs::get().notes_column.unwrap_or(260.),
             resizing: false,
             cache: None,
@@ -461,6 +463,11 @@ impl NotesPage {
         self.select_folder(Some(folder.clone()));
         self.target_folder = Some(folder);
         window.focus(&self.focus, cx);
+    }
+
+    /// Whether the keyboard is in the explorer, so it was used after the open note.
+    pub fn has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.focus.contains_focused(window, cx)
     }
 
     /// The explorer's full width, its resize handle included.
@@ -720,7 +727,7 @@ impl NotesPage {
         self.query.update(cx, |q, cx| q.set_value("", window, cx));
         self.reveal(&path);
         self.renaming = Some((path, input, sub));
-        self.scroll_to_rename = true;
+        self.rename_scroll = Some((std::time::Instant::now(), None));
         cx.notify();
     }
 
@@ -1160,14 +1167,22 @@ impl Render for NotesPage {
         }
         self.refresh(tag.clone(), cx);
         let rows = self.rows();
-        if let Some((path, ..)) = self.renaming.as_ref().filter(|_| std::mem::take(&mut self.scroll_to_rename)) {
+        if self.rename_scroll.is_some_and(|(since, _)| since.elapsed() > RENAME_SETTLE) {
+            self.rename_scroll = None;
+        }
+        if let (Some((path, input, _)), Some((_, shown))) = (self.renaming.as_ref(), self.rename_scroll.as_mut()) {
             let at = rows.iter().position(|r| match r {
                 Row::File { path: p, .. } => p == path,
                 Row::Folder { rel, .. } => Self::folder_path(rel) == *path,
                 _ => false,
             });
-            if let Some(i) = at {
+            if let Some(i) = at.filter(|i| *shown != Some(*i)) {
+                let refocus = shown.is_some().then(|| input.clone());
+                *shown = Some(i);
                 self.list_scroll.scroll_to_item(i, ScrollStrategy::Center);
+                if let Some(input) = refocus {
+                    window.on_next_frame(move |window, cx| input.update(cx, |s, cx| s.focus(window, cx)));
+                }
             }
         }
         let open_tasks = self.cache.as_ref().map_or(0, |c| c.open_tasks);

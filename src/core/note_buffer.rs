@@ -213,7 +213,12 @@ impl NoteBuffer {
             self.dirty = false;
             return Ok(());
         }
-        if let Some(disk) = self.read_disk()
+        let disk = match std::fs::read(&self.path) {
+            Ok(b) => Some(String::from_utf8_lossy(&b).into_owned()),
+            Err(e) if self.path.exists() => return Err(e),
+            Err(_) => None,
+        };
+        if let Some(disk) = disk
             && disk != self.last_saved
             && disk != self.text
         {
@@ -584,6 +589,38 @@ d", 10);
         std::fs::write(&path, "a").unwrap();
         assert!(b.reload_if_changed());
         assert!(!b.missing);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_that_cannot_be_read_is_not_written_over() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let path = note("locked", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.edited("mine".into());
+        let lock = std::fs::File::options().read(true).share_mode(0).open(&path).unwrap();
+        assert!(b.save().is_err());
+        assert!(b.dirty);
+        drop(lock);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_cannot_be_read_is_not_written_over() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = note("locked", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.edited("mine".into());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o200)).unwrap();
+        let readable = std::fs::read(&path).is_ok();
+        let saved = b.save();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        if !readable {
+            assert!(saved.is_err());
+            assert!(b.dirty);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "a");
+        }
     }
 
     #[test]

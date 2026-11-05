@@ -58,7 +58,7 @@ Edit in the default app: ⋯ → {ui:Mit Standard-App öffnen}. When it saves, S
 | {ui:Lesen} / {ui:Bearbeiten} | {key:togglePreview} |
 | {ui:Geteilte Ansicht}, code editor only | {key:splitPreview} |
 
-You choose the editor in {key:OpenSettings} → {ui:Notizen}: {ui:Live: Text bleibt gezeichnet} or {ui:Code-Editor: Quelltext mit Zeilennummern}. {ui:Live-Ansicht ein/aus} in the {key:CommandPalette} switches at once.
+You choose the editor in {key:OpenSettings} → {ui:Notizen}: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} or {ui:Code-Editor: Quelltext mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} in the {ui:Darstellung} menu or the {key:CommandPalette} switches at once.
 
 ## Find in a Note
 

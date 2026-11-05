@@ -1983,13 +1983,14 @@ impl Settings {
             None => div().into_any_element(),
         };
         let editor_kind = prefs::get().note_editor;
-        let editor_label = |k: prefs::NoteEditor| if k == prefs::NoteEditor::Live { tr("Live: Text bleibt gezeichnet") } else { tr("Code-Editor: Quelltext mit Zeilennummern") };
+        let editor_label = |k: prefs::NoteEditor| if k == prefs::NoteEditor::Live { tr("Live-Ansicht: Formatierung beim Schreiben sichtbar") } else { tr("Code-Editor: Quelltext mit Zeilennummern") };
         let editor_row = row(
             tr("Notizen schreiben"),
             picker("n-editor", editor_label(editor_kind), move |mut menu| {
                 for k in [prefs::NoteEditor::Code, prefs::NoteEditor::Live] {
                     menu = menu.item(PopupMenuItem::new(editor_label(k)).checked(k == editor_kind).on_click(move |_, _, cx| {
                         prefs::update(|p| p.note_editor = k);
+                        super::app::rebuild_menus(cx);
                         cx.refresh_windows();
                     }));
                 }

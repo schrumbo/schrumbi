@@ -58,7 +58,7 @@ Bearbeiten geht in der Standard-App: ⋯ → {ui:Mit Standard-App öffnen}. Sich
 | {ui:Lesen} / {ui:Bearbeiten} | {key:togglePreview} |
 | {ui:Geteilte Ansicht}, nur im Code-Editor | {key:splitPreview} |
 
-Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live: Text bleibt gezeichnet} oder {ui:Code-Editor: Quelltext mit Zeilennummern}. {ui:Live-Ansicht ein/aus} in der {key:CommandPalette} wechselt sofort.
+Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} oder {ui:Code-Editor: Quelltext mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} im Menü {ui:Darstellung} oder die {key:CommandPalette} wechselt sofort.
 
 ## In der Notiz suchen
 

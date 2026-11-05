@@ -601,7 +601,10 @@ fn deciding_about_another_apps_version_can_be_undone_and_redone() {
     assert_eq!(lib.buffer(&key).conflict.as_deref(), Some("fremd"));
     lib.keep_note_mine(&key);
     assert_eq!(std::fs::read_to_string(&key).unwrap(), "meins");
+    let copy = root.join(format!("n ({}).md", crate::core::i18n::tr("andere Version")));
+    assert_eq!(std::fs::read_to_string(&copy).unwrap(), "fremd");
     lib.undo();
+    assert!(!copy.exists());
     assert_eq!(std::fs::read_to_string(&key).unwrap(), "fremd");
     assert_eq!(lib.buffer(&key).text, "fremd");
     lib.redo();

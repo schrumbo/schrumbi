@@ -93,7 +93,7 @@ fn commands(cx: &App) -> Vec<Command> {
         if let Some(path) = l.active_document.clone().filter(|p| l.buffers.get(p).is_some_and(|b| b.conflict.is_some())) {
             let group = tr("Notiz außerhalb geändert");
             let (compare, reload, keep) = (path.clone(), path.clone(), path);
-            add(&group, tr("Vergleichen"), "file-text", None, Run::Call(Rc::new(move |cx| super::documents::compare_note(compare.clone(), cx))));
+            add(&group, tr("Vergleichen"), "file-text", None, Run::Call(Rc::new(move |cx| super::documents::compare_note(compare.clone(), None, cx))));
             add(&group, tr("Neu laden"), "refresh-cw", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.load_note_disk(&reload)))));
             add(&group, tr("Meine behalten"), "check", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.keep_note_mine(&keep)))));
         }
@@ -148,10 +148,7 @@ fn commands(cx: &App) -> Vec<Command> {
     add(&view, S::ToggleFullscreen.label(), "maximize", keys(S::ToggleFullscreen), Run::Action(Box::new(app::ToggleFullscreen)));
     if active.is_some() {
         add(&view, S::TogglePreview.label(), "book-open", keys(S::TogglePreview), Run::NoteAction(Box::new(app::TogglePreview)));
-        add(&view, tr("Live-Ansicht ein/aus"), "sparkles", None, Run::Call(Rc::new(|cx| {
-            crate::core::prefs::update(|p| p.note_editor = if p.note_editor == crate::core::prefs::NoteEditor::Live { crate::core::prefs::NoteEditor::Code } else { crate::core::prefs::NoteEditor::Live });
-            cx.refresh_windows();
-        })));
+        add(&view, if app::live_is_on() { tr("Live-Ansicht ausschalten") } else { tr("Live-Ansicht einschalten") }, "sparkles", keys(S::ToggleLive), Run::Action(Box::new(app::ToggleLive)));
         if crate::core::prefs::get().note_editor == crate::core::prefs::NoteEditor::Code {
             add(&view, S::SplitPreview.label(), "columns-2", keys(S::SplitPreview), Run::NoteAction(Box::new(app::SplitPreview)));
         }

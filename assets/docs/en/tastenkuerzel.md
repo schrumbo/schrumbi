@@ -55,6 +55,7 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Vorheriger Tab} | {key:previousTab} |
 | {ui:Lesen / Bearbeiten wechseln} | {key:togglePreview} |
 | {ui:Geteilte Ansicht} | {key:splitPreview} |
+| {ui:Live-Ansicht ein-/ausschalten} | {key:toggleLive} |
 | {ui:Als PDF exportieren} | {key:exportPDF} |
 | {ui:In Notiz suchen} | {key:findInNote} |
 | {ui:Umbenennen…} | {key:renameNote} |

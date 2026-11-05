@@ -55,6 +55,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Vorheriger Tab} | {key:previousTab} |
 | {ui:Lesen / Bearbeiten wechseln} | {key:togglePreview} |
 | {ui:Geteilte Ansicht} | {key:splitPreview} |
+| {ui:Live-Ansicht ein-/ausschalten} | {key:toggleLive} |
 | {ui:Als PDF exportieren} | {key:exportPDF} |
 | {ui:In Notiz suchen} | {key:findInNote} |
 | {ui:Umbenennen…} | {key:renameNote} |

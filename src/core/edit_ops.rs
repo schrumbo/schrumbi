@@ -362,8 +362,11 @@ fn on_fence(s: &str, sel: &Range<usize>) -> bool {
 
 /// Whether bold and italic are refused at this selection: it touches a formula or the address of a link.
 pub fn emphasis_refused(s: &str, sel: &Range<usize>) -> bool {
-    let math = math_ranges(s);
-    in_math(&math, sel.start) || in_math(&math, sel.end) || in_target(s, sel.start) || in_target(s, sel.end)
+    refused_in(s, sel, &math_ranges(s))
+}
+
+fn refused_in(s: &str, sel: &Range<usize>, math: &[Range<usize>]) -> bool {
+    in_math(math, sel.start) || in_math(math, sel.end) || in_target(s, sel.start) || in_target(s, sel.end)
 }
 
 /// `**sel**`, `*sel*` or `` `sel` ``; with no selection the caret lands between the tokens.
@@ -372,7 +375,7 @@ pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
     let emphasis = token == "**" || token == "*";
     let math = if emphasis { math_ranges(s) } else { Vec::new() };
     if emphasis {
-        if in_math(&math, sel.start) || in_math(&math, sel.end) || in_target(s, sel.start) || in_target(s, sel.end) || on_fence(s, &sel) {
+        if refused_in(s, &sel, &math) || on_fence(s, &sel) {
             return Edit { range: sel.clone(), text: inner.to_string(), select: sel };
         }
         if let Some(edit) = toggle_emphasis(s, &sel, token, &math) {
