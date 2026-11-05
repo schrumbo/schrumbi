@@ -259,3 +259,23 @@ fn the_focused_document_follows_the_active_pane() {
     lib.beside_active = true;
     assert_eq!(lib.focused_document(), Some(p[1].as_path()));
 }
+
+#[test]
+fn a_note_in_its_own_window_is_raised_and_never_opened_as_a_second_editor() {
+    let (_, p) = notes("own-window", &["a.md", "b.md"]);
+    let mut lib = opened(&p);
+    lib.note_windows.insert(p[0].clone());
+    lib.close_document(&p[0]);
+    assert_eq!(lib.open_documents, vec![p[1].clone()]);
+    lib.open_preview(&p[0]);
+    assert_eq!(lib.raise_note_window.take(), Some(p[0].clone()));
+    lib.open_document(&p[0]);
+    assert_eq!(lib.raise_note_window.take(), Some(p[0].clone()));
+    lib.open_file(&p[0]);
+    assert_eq!(lib.raise_note_window.take(), Some(p[0].clone()));
+    assert_eq!(lib.open_documents, vec![p[1].clone()]);
+    lib.note_windows.remove(&p[0]);
+    lib.open_document(&p[0]);
+    assert!(lib.raise_note_window.is_none());
+    assert!(lib.open_documents.contains(&p[0]));
+}

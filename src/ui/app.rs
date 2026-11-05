@@ -216,6 +216,9 @@ pub fn init(cx: &mut App) {
     let mut modules: Vec<String> = Vec::new();
     let mut note = (note_is_active(cx), find_is_available(cx));
     cx.observe(&lib, move |lib, cx| {
+        if let Some(path) = lib.update(cx, |l, _| l.raise_note_window.take()) {
+            cx.defer(move |cx| super::note_window::open(&path, cx));
+        }
         let now: Vec<String> = lib.read(cx).semester_modules().iter().map(|m| format!("{}{}", m.id, m.display_name())).collect();
         let open = (note_is_active(cx), find_is_available(cx));
         if now != modules || open != note {

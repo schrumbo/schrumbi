@@ -158,6 +158,21 @@ impl NoteBuffer {
         changed
     }
 
+    /// Counts every change of the text; an editor that last saw another count shows an older text.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// The text of an editor that last saw `version`. Refused when the note changed since, e.g. in another view:
+    /// that text would write over the newer one, so the editor has to show the current text first.
+    pub fn edited_on(&mut self, version: u64, text: String) -> bool {
+        if version != self.version {
+            return false;
+        }
+        self.edited(text);
+        true
+    }
+
     /// The editor's text after an edit.
     pub fn edited(&mut self, text: String) {
         self.dirty = text != self.last_saved;
@@ -322,6 +337,63 @@ mod tests {
         assert_eq!(b.conflict.as_deref(), Some("theirs"));
         assert!(b.dirty);
         assert_eq!(b.text, "mine");
+    }
+
+    #[test]
+    fn a_second_editor_with_an_older_text_cannot_write_over_the_newer() {
+        let path = note("stale", "a");
+        let mut b = NoteBuffer::open(&path);
+        let (first, second) = (b.version(), b.version());
+        assert!(b.edited_on(first, "a MAIN".into()));
+        let first = b.version();
+        assert!(!b.edited_on(second, "a OWN".into()));
+        assert_eq!(b.text, "a MAIN");
+        assert!(b.edited_on(first, "a MAIN again".into()));
+        assert_eq!(b.text, "a MAIN again");
+        assert!(b.dirty);
+    }
+
+    #[test]
+    fn every_change_of_the_text_moves_the_version() {
+        let path = note("version", "a");
+        let mut b = NoteBuffer::open(&path);
+        let v0 = b.version();
+        b.edited("b".into());
+        let v1 = b.version();
+        assert_ne!(v0, v1);
+        b.edited("b".into());
+        assert_eq!(b.version(), v1);
+        b.replace("c".into());
+        assert_ne!(b.version(), v1);
+        let v2 = b.version();
+        b.save().unwrap();
+        assert_eq!(b.version(), v2);
+        outside(&path, "d", 5);
+        assert!(b.reload_if_changed());
+        assert_ne!(b.version(), v2);
+        let v3 = b.version();
+        b.edited("d
+
+x".into());
+        outside(&path, "y
+
+d", 10);
+        assert!(b.reload_if_changed());
+        assert_ne!(b.version(), v3);
+    }
+
+    #[test]
+    fn text_that_differs_from_the_disk_is_dirty_until_saved() {
+        let path = note("dot", "a");
+        let mut b = NoteBuffer::open(&path);
+        outside(&path, "new", 5);
+        assert!(b.reload_if_changed());
+        assert!(!b.dirty);
+        b.edited("a".into());
+        assert!(b.dirty);
+        b.save().unwrap();
+        assert!(!b.dirty);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a");
     }
 
     #[test]
