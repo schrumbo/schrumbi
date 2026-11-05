@@ -444,18 +444,6 @@ pub fn general(v: f64, locale: Locale) -> String {
     s.replace('.', &locale.decimal().to_string())
 }
 
-fn group(digits: &str, sep: char) -> String {
-    let n = digits.len();
-    let mut out = String::with_capacity(n + n / 3);
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (n - i) % 3 == 0 {
-            out.push(sep);
-        }
-        out.push(c);
-    }
-    out
-}
-
 fn number(sec: &Section, v: f64, locale: Locale) -> String {
     let toks = &sec.toks;
     if sec.general {
@@ -558,7 +546,7 @@ fn number(sec: &Section, v: f64, locale: Locale) -> String {
     };
     let int_s = int_s.trim_start_matches('0');
     let int_s = if int_s.len() < min_int { format!("{}{}", "0".repeat(min_int - int_s.len()), int_s) } else { int_s.to_string() };
-    let int_s = if grouped { group(&int_s, locale.group()) } else { int_s };
+    let int_s = if grouped { crate::core::i18n::group_digits(&int_s, locale.group()) } else { int_s };
     let mut dec_s = dec_s;
     while dec_s.len() > min_dec && dec_s.ends_with('0') {
         dec_s.pop();

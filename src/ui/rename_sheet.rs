@@ -14,6 +14,17 @@ use crate::core::i18n::{tr, trf};
 
 const FORBIDDEN: &str = "\\/:*?\"<>|";
 
+/// What is wrong with a name that has forbidden characters or ends in a period, in the words every rename sheet uses.
+pub fn forbidden_message(stem: &str) -> Option<String> {
+    if let Some(bad) = stem.chars().find(|c| FORBIDDEN.contains(*c)) {
+        Some(trf("Das Zeichen „%@“ geht in einem Namen nicht.", &[&bad.to_string()]))
+    } else if stem.ends_with('.') {
+        Some(tr("Ein Name darf nicht mit einem Punkt enden."))
+    } else {
+        None
+    }
+}
+
 /// Asks for a new name in a small sheet, for when the explorer has no room to rename in its row.
 pub fn open(path: PathBuf, window: &mut Window, cx: &mut App) {
     super::sheets::show_sheet(420., window, cx, move |window, cx| RenameSheet::new(path, window, cx));
@@ -59,10 +70,8 @@ impl RenameSheet {
         let target = self.path.with_file_name(&name);
         let error = if stem.is_empty() {
             Some(tr("Gib einen Namen ein."))
-        } else if let Some(bad) = stem.chars().find(|c| FORBIDDEN.contains(*c)) {
-            Some(trf("Das Zeichen „%@“ geht in einem Namen nicht.", &[&bad.to_string()]))
-        } else if stem.ends_with('.') {
-            Some(tr("Ein Name darf nicht mit einem Punkt enden."))
+        } else if let Some(problem) = forbidden_message(&stem) {
+            Some(problem)
         } else if target.exists() && !crate::core::library::same_file(&self.path, &target) {
             Some(tr("Diesen Namen gibt es hier schon. Wähle einen anderen."))
         } else {
@@ -98,7 +107,7 @@ impl Render for RenameSheet {
         }
         let t = Theme::get(cx);
         let field = Input::new(&self.input).when(!self.ext.is_empty(), |i| i.suffix(div().text_color(t.secondary).child(format!(".{}", self.ext))));
-        let status = div().h(px(space::L)).flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red).children(self.error.clone().map(|e| div().flex().items_center().gap(px(space::XS)).min_w_0().child(icon("triangle-alert", iconsize::XS, t.red)).child(div().min_w_0().truncate().child(e))));
+        let status = div().min_h(px(space::L)).flex().items_start().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red).children(self.error.clone().map(|e| div().flex().items_start().gap(px(space::XS)).min_w_0().child(div().pt(px(space::XXS)).child(icon("triangle-alert", iconsize::XS, t.red))).child(div().min_w_0().line_clamp(2).child(e))));
         div()
             .w_full()
             .flex()
@@ -118,5 +127,18 @@ impl Render for RenameSheet {
                     .child(Button::new("rename-cancel").label(tr("Abbrechen")).on_click(cx.listener(|_, _, _, cx| cx.emit(Dismissed))))
                     .child(Button::new("rename-confirm").primary().label(tr("Umbenennen")).on_click(cx.listener(|s, _, _, cx| s.confirm(cx)))),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forbidden_message;
+
+    #[test]
+    fn names_the_forbidden_character_or_the_trailing_dot() {
+        assert!(forbidden_message("a:b").is_some_and(|m| m.contains(':')));
+        assert!(forbidden_message("Notiz.").is_some_and(|m| m.contains("Punkt")));
+        assert_eq!(forbidden_message("Notiz"), None);
+        assert_eq!(forbidden_message("Übung ö.1"), None);
     }
 }

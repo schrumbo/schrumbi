@@ -19,8 +19,6 @@ use crate::core::text::end_ellipsis;
 const NAME_IN_MENU: usize = 40;
 const NAMED_ENTRIES: usize = 5;
 
-const FORBIDDEN: &str = "\\/:*?\"<>|";
-
 /// Whether a file can be renamed by its module's convention right now; never offered while no naming convention is switched on in the settings.
 pub fn available(path: &Path, cx: &App) -> bool {
     state::read(cx, |l| l.convention_offer(path)) == ConventionOffer::Ready
@@ -164,7 +162,7 @@ impl ConventionRename {
             Verdict::Empty
         } else if name == current {
             Verdict::Same
-        } else if stem.contains(|c| FORBIDDEN.contains(c)) || stem.ends_with('.') {
+        } else if super::rename_sheet::forbidden_message(&stem).is_some() {
             Verdict::Forbidden
         } else if self.path.with_file_name(&name).exists() && !crate::core::library::same_file(&self.path, &self.path.with_file_name(&name)) {
             Verdict::Taken
@@ -274,7 +272,7 @@ impl Render for ConventionRename {
             Verdict::Off => note("info", t.secondary, tr("Weicht vom Namensmuster ab")),
             Verdict::Same => note("info", t.secondary, tr("Die Datei heißt schon so")),
             Verdict::Taken => note("triangle-alert", t.red, tr("Diesen Namen gibt es hier schon. Wähle einen anderen.")),
-            Verdict::Forbidden => note("triangle-alert", t.red, trf("Diese Zeichen gehen nicht: %@", &[&"\\ / : * ? \" < > |".to_string()])),
+            Verdict::Forbidden => note("triangle-alert", t.red, super::rename_sheet::forbidden_message(self.input.read(cx).value().trim()).unwrap_or_default()),
             Verdict::Empty => note("info", t.secondary, tr("Gib einen Namen ein.")),
         };
         let ready = matches!(verdict, Verdict::Fits | Verdict::Off);

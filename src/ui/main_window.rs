@@ -433,10 +433,12 @@ impl Render for MainWindow {
                 }
             })
             .on_action(|_: &super::app::RenameNote, window, cx| {
-                let searching = window.context_stack().iter().any(|c| c.contains("SearchField"));
+                if super::app::typing_in_field(window) {
+                    return;
+                }
                 match state::read(cx, super::app::rename_target) {
-                    Some(path) if !searching => super::app::rename_file(path, cx),
-                    _ => cx.propagate(),
+                    Some(path) => super::app::rename_file(path, cx),
+                    None => cx.propagate(),
                 }
             })
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| {

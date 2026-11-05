@@ -301,6 +301,7 @@ pub struct NoteView {
     version: u64,
     syncing: bool,
     autosave: Option<Task<()>>,
+    save_problem: Option<String>,
     /// Shown inside the main window with tabs, or in its own window.
     pub embedded: bool,
     focus: FocusHandle,
@@ -417,7 +418,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: text.len() <= RICH_EDITOR_UNTIL, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: text.len() <= RICH_EDITOR_UNTIL, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -2044,10 +2045,19 @@ impl NoteView {
             cx.notify();
             r
         });
-        if let Err(e) = result {
-            let message = save_failure(&path, &e);
-            act(cx, |l| l.last_error = Some(message));
+        let problem = result.err().map(|e| save_reason(&path, &e));
+        if problem != self.save_problem {
+            self.save_problem = problem;
+            cx.notify();
         }
+    }
+
+    fn save_notice(&self, cx: &mut Context<Self>, t: &Theme) -> impl IntoElement + use<> {
+        let me = cx.entity();
+        let retry = Button::new("save-retry").small().primary().label(tr("Erneut versuchen")).on_click(move |_, _, cx| me.update(cx, |n, cx| n.save(cx)));
+        let open = self.save_problem.is_some();
+        let detail = self.save_problem.clone();
+        super::motion::reveal("note-save-problem", open, div().p(px(space::S)).child(notice("triangle-alert", t.orange, tr("Diese Notiz ließ sich nicht sichern."), detail, retry, t)))
     }
 
     fn conflict_notice(&self, open: bool, t: &Theme) -> impl IntoElement + use<> {
@@ -3313,6 +3323,7 @@ impl Render for NoteView {
             .child(top)
             .children(self.find.bar.clone().filter(|_| self.find.open))
             .child(self.conflict_notice(conflict, &t))
+            .child(self.save_notice(cx, &t))
             .child(div().flex_1().min_h_0().child(content));
         let view = view.child(wheel);
         if self.embedded {
@@ -3420,11 +3431,15 @@ pub fn compare_note(path: PathBuf, cx: &mut App) {
     .detach();
 }
 
-fn save_failure(path: &Path, error: &std::io::Error) -> String {
+fn save_reason(path: &Path, error: &std::io::Error) -> String {
     if path.parent().is_some_and(|d| !d.exists()) {
         return tr("Der Ordner dieser Notiz gibt es nicht mehr. Dein Text bleibt offen und wird gesichert, sobald der Ordner wieder da ist.");
     }
-    trf("Notiz konnte nicht gesichert werden: %@", &[error])
+    crate::core::errors::explain_io(error).unwrap_or_else(|| error.to_string())
+}
+
+fn save_failure(path: &Path, error: &std::io::Error) -> String {
+    trf("Notiz konnte nicht gesichert werden: %@", &[&save_reason(path, error)])
 }
 
 /// Saves for closing, also during a sync. An undecided conflict keeps both versions, because nobody can answer anymore.
@@ -3948,6 +3963,7 @@ mod window_tests {
         let message = save_failure(&gone, &std::io::Error::from(std::io::ErrorKind::NotFound));
         assert!(message.contains("bleibt offen") && !message.contains("os error"), "{message}");
         let here = std::env::temp_dir().join("n.md");
-        assert!(save_failure(&here, &std::io::Error::from(std::io::ErrorKind::PermissionDenied)).contains("gesichert"));
+        let denied = save_failure(&here, &std::io::Error::from_raw_os_error(if cfg!(windows) { 5 } else { 13 }));
+        assert!(denied.contains("Berechtigung") && !denied.contains("os error") && !denied.contains("denied"), "{denied}");
     }
 }

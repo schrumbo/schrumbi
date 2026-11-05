@@ -2725,7 +2725,7 @@ impl Library {
     /// Gives a file the name typed. A note named after its heading keeps that heading; a convention name only has to say the same title.
     pub fn rename(&mut self, file: &Path, name: &str) {
         if let Err(e) = self.rename_checked(file, name) {
-            self.last_error = Some(e);
+            self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&e]));
         }
     }
 
@@ -2823,7 +2823,7 @@ impl Library {
     /// Renames a note named after its heading and brings the heading along; a convention name only has to say the same title.
     fn rename_titled(&mut self, file: &Path, name: &str, title: &str, convention: bool) {
         if let Err(e) = self.rename_titled_checked(file, name, title, convention) {
-            self.last_error = Some(e);
+            self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&e]));
         }
     }
 
@@ -2855,7 +2855,7 @@ impl Library {
 
     fn rename_file(&mut self, file: &Path, name: &str) {
         if let Err(e) = self.rename_recorded(file, name, true) {
-            self.last_error = Some(e);
+            self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&e]));
         }
     }
 
@@ -2884,7 +2884,7 @@ impl Library {
                 self.last_renamed = Some(target);
                 Ok(())
             }
-            Err(e) => Err(trf("Umbenennen fehlgeschlagen: %@", &[&explain(&e.into())])),
+            Err(e) => Err(explain(&e.into())),
         }
     }
 

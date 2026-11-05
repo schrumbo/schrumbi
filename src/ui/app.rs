@@ -256,6 +256,12 @@ pub fn note_is_active(cx: &App) -> bool {
     cx.try_global::<NoteWindowFront>().is_some_and(|f| f.0.is_some()) || state::read(cx, |l| matches!(l.route(), Route::Doc(_)) && l.focused_document().is_some_and(crate::core::markdown::is_markdown))
 }
 
+/// Whether a text field other than a note's own editor has the focus, where a key like F2 belongs to the field.
+pub fn typing_in_field(window: &Window) -> bool {
+    let stack = window.context_stack();
+    stack.iter().any(|c| c.contains("Input")) && !stack.iter().any(|c| c.contains("NoteEditor") || c.contains("LiveBlock"))
+}
+
 /// What Rename acts on: the shown note or file, else the row the explorer has selected.
 pub fn rename_target(l: &Library) -> Option<PathBuf> {
     match l.route() {

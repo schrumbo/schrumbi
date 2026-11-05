@@ -1454,7 +1454,6 @@
   "Einer Abgabe zuordnen": "Link to a submission",
   "Gehört zu": "Belongs to",
   "Gehört zu %@": "Belongs to %@",
-  "Klicken zum Umbenennen (F2)": "Click to rename (F2)",
   "Umbenennen & weiter": "Rename & continue",
   "Abgabe anzeigen": "Show submission",
   "Abgabeordner öffnen: %@": "Open submissions folder: %@",
@@ -1483,7 +1482,6 @@
   "Weicht vom Namensmuster ab": "Differs from the naming pattern",
   "Die Datei heißt schon so": "The file already has this name",
   "Diesen Namen gibt es hier schon. Wähle einen anderen.": "This name is already taken here. Choose another one.",
-  "Diese Zeichen gehen nicht: %@": "These characters are not allowed: %@",
   "Gib einen Namen ein.": "Enter a name.",
   "Jetzt: %@": "Now: %@",
   "Früheren Export ersetzen?": "Replace the earlier export?",
@@ -1591,5 +1589,6 @@
   "Ein Name darf nicht mit einem Punkt enden.": "A name cannot end with a period.",
   "Klicken zum Umbenennen": "Click to rename",
   "Ausgeblendete Ordner: %@": "Hidden folders: %@",
-  "Der Ordner dieser Notiz gibt es nicht mehr. Dein Text bleibt offen und wird gesichert, sobald der Ordner wieder da ist.": "This note’s folder no longer exists. Your text stays open and is saved as soon as the folder is back."
+  "Der Ordner dieser Notiz gibt es nicht mehr. Dein Text bleibt offen und wird gesichert, sobald der Ordner wieder da ist.": "This note’s folder no longer exists. Your text stays open and is saved as soon as the folder is back.",
+  "Diese Notiz ließ sich nicht sichern.": "This note could not be saved."
 }

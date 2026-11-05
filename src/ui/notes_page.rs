@@ -1201,7 +1201,7 @@ impl Render for NotesPage {
             .flex()
             .on_key_down(cx.listener(Self::on_key))
             .on_action(cx.listener(|this, _: &super::app::RenameNote, window, cx| {
-                if this.renaming.is_some() {
+                if this.renaming.is_some() || super::app::typing_in_field(window) {
                     return;
                 }
                 match this.selection_path() {
