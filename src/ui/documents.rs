@@ -29,7 +29,7 @@ use crate::core::edit_ops::{self, Edit};
 use crate::core::i18n::{tr, trf};
 use crate::core::library;
 use crate::core::markdown;
-use crate::core::note_buffer::{NoteBuffer, SaveStart, Snapshot};
+use crate::core::note_buffer::{NoteBuffer, Snapshot};
 use crate::core::naming::extension;
 use crate::core::prefs::{self, NoteSaveMode};
 use crate::core::search_index;
@@ -51,7 +51,6 @@ fn editor_viewport(s: &EditorState) -> Option<Bounds<Pixels>> {
 }
 
 const FIND_IN_BACKGROUND_FROM: usize = 200_000;
-const SAVE_IN_BACKGROUND_FROM: usize = 200_000;
 const SPLIT_HOLD: Duration = Duration::from_millis(300);
 const FIND_MARKS_AROUND: usize = 1000;
 
@@ -1735,50 +1734,13 @@ impl NoteView {
     pub fn save(&mut self, cx: &mut Context<Self>) {
         let path = self.path.clone();
         let result = state::lib(cx).update(cx, |l, cx| {
-            let r = l.buffers.get_mut(&path).map_or(Ok(SaveStart::Done), |b| if b.text.len() > SAVE_IN_BACKGROUND_FROM || b.saving() { b.save_in_background() } else { b.save().map(|()| SaveStart::Done) });
+            let r = l.buffers.get_mut(&path).map_or(Ok(()), |b| b.save());
             cx.notify();
             r
         });
-        match result {
-            Ok(SaveStart::Started) => self.follow_save(cx),
-            Ok(_) => {}
-            Err(e) => act(cx, |l| l.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]))),
+        if let Err(e) = result {
+            act(cx, |l| l.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e])));
         }
-    }
-
-    fn follow_save(&mut self, cx: &mut Context<Self>) {
-        let path = self.path.clone();
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_millis(20)).await;
-                let step = this.update(cx, |n, cx| {
-                    let done = state::lib(cx).update(cx, |l, cx| {
-                        let b = l.buffers.get_mut(&path)?;
-                        let result = b.poll_save()?;
-                        let again = b.take_save_again() && b.dirty;
-                        cx.notify();
-                        Some((result, again))
-                    });
-                    match done {
-                        None => state::read(cx, |l| l.buffers.get(&path).is_some_and(NoteBuffer::saving)),
-                        Some((Err(e), _)) => {
-                            act(cx, |l| l.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e])));
-                            false
-                        }
-                        Some((Ok(()), again)) => {
-                            if again {
-                                n.save(cx);
-                            }
-                            false
-                        }
-                    }
-                });
-                if !step.unwrap_or(false) {
-                    break;
-                }
-            }
-        })
-        .detach();
     }
 
     fn conflict_notice(&self, open: bool, t: &Theme) -> impl IntoElement + use<> {

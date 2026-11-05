@@ -48,109 +48,13 @@ pub struct NoteBuffer {
     pub touched: bool,
     version: u64,
     snapshot: Mutex<Option<(u64, Arc<Snapshot>)>>,
-    inflight: Option<Inflight>,
-    save_again: bool,
-}
-
-/// A write running on its own thread, and the text it writes.
-#[derive(Debug)]
-struct Inflight {
-    handle: std::thread::JoinHandle<SaveOutcome>,
-    text: Arc<str>,
-}
-
-#[derive(Debug)]
-enum SaveOutcome {
-    Written,
-    Recheck,
-    Failed(std::io::Error),
-}
-
-/// What `NoteBuffer::save_in_background` did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SaveStart {
-    /// Nothing needed writing, or the save was handled on the spot.
-    Done,
-    Started,
-    /// A write is still running; the text is written once it is done.
-    Busy,
-}
-
-impl Drop for NoteBuffer {
-    fn drop(&mut self) {
-        let _ = self.drain();
-    }
 }
 
 impl NoteBuffer {
     pub fn open(path: &Path) -> Self {
-        let mut b = Self { path: path.to_path_buf(), text: String::new(), dirty: false, missing: false, undecodable: false, last_saved: String::new(), known: None, revision: 0, conflict: None, held: false, save_wanted: false, touched: false, version: 0, snapshot: Mutex::new(None), inflight: None, save_again: false };
+        let mut b = Self { path: path.to_path_buf(), text: String::new(), dirty: false, missing: false, undecodable: false, last_saved: String::new(), known: None, revision: 0, conflict: None, held: false, save_wanted: false, touched: false, version: 0, snapshot: Mutex::new(None) };
         b.load();
         b
-    }
-
-    /// Whether a write is running in the background.
-    pub fn saving(&self) -> bool {
-        self.inflight.is_some()
-    }
-
-    /// Whether another save was asked for while one was running, once.
-    pub fn take_save_again(&mut self) -> bool {
-        std::mem::take(&mut self.save_again)
-    }
-
-    /// Takes in the result of the background write if it is done: `None` while it runs or when there is none.
-    pub fn poll_save(&mut self) -> Option<std::io::Result<()>> {
-        if self.inflight.as_ref().is_some_and(|f| f.handle.is_finished()) { Some(self.drain()) } else { None }
-    }
-
-    /// Waits for a background write and takes in its result.
-    fn drain(&mut self) -> std::io::Result<()> {
-        let Some(job) = self.inflight.take() else { return Ok(()) };
-        let outcome = job.handle.join().unwrap_or_else(|_| SaveOutcome::Failed(std::io::Error::other("save thread stopped")));
-        match outcome {
-            SaveOutcome::Written => {
-                self.missing = false;
-                self.last_saved = job.text.to_string();
-                self.known = self.modified();
-                self.dirty = self.text != self.last_saved;
-                Ok(())
-            }
-            SaveOutcome::Recheck => self.save(),
-            SaveOutcome::Failed(e) => Err(e),
-        }
-    }
-
-    /// Like `save`, but the file is written on another thread, so a large note does not stall the window.
-    /// Writes never overlap and every other way of saving waits for a running one, so the last text is the one that stays.
-    pub fn save_in_background(&mut self) -> std::io::Result<SaveStart> {
-        if let Some(done) = self.poll_save() {
-            done?;
-        }
-        if self.inflight.is_some() {
-            if self.dirty {
-                self.save_again = true;
-            }
-            return Ok(SaveStart::Busy);
-        }
-        if self.conflict.is_some() || self.undecodable || self.held || self.text == self.last_saved {
-            self.save()?;
-            return Ok(SaveStart::Done);
-        }
-        let (path, known, text) = (self.path.clone(), self.known, self.snapshot().text.clone());
-        let job_text = text.clone();
-        let handle = std::thread::Builder::new().spawn(move || {
-            let unchanged = known.is_some() && std::fs::metadata(&path).and_then(|m| m.modified()).ok() == known;
-            if !unchanged {
-                return SaveOutcome::Recheck;
-            }
-            match write_atomic(&path, job_text.as_bytes()) {
-                Ok(()) => SaveOutcome::Written,
-                Err(e) => SaveOutcome::Failed(e),
-            }
-        })?;
-        self.inflight = Some(Inflight { handle, text });
-        Ok(SaveStart::Started)
     }
 
     /// The current text, shared; copied only when it changed since the last call.
@@ -175,7 +79,6 @@ impl NoteBuffer {
     }
 
     pub fn load(&mut self) {
-        let _ = self.drain();
         match std::fs::read_to_string(&self.path) {
             Ok(s) => {
                 self.missing = false;
@@ -200,7 +103,6 @@ impl NoteBuffer {
 
     /// Follows a rename or move made by the app itself.
     pub fn moved_to(&mut self, path: &Path) {
-        let _ = self.drain();
         self.path = path.to_path_buf();
         self.known = self.modified();
     }
@@ -208,10 +110,6 @@ impl NoteBuffer {
     /// Picks up edits made in another app; with unsaved changes here the other version becomes a conflict.
     pub fn reload_if_changed(&mut self) -> bool {
         if self.held {
-            return false;
-        }
-        if self.inflight.is_some() {
-            let _ = self.poll_save();
             return false;
         }
         if self.undecodable {
@@ -280,7 +178,6 @@ impl NoteBuffer {
 
     /// Writes the note, unless another app changed the file since it was read: that becomes a `conflict`.
     pub fn save(&mut self) -> std::io::Result<()> {
-        let _ = self.drain();
         if self.conflict.is_some() || self.undecodable {
             return Ok(());
         }
@@ -503,71 +400,19 @@ mod tests {
         assert!(b.conflict.is_none());
     }
 
-    fn settle(b: &mut NoteBuffer) {
-        while b.saving() {
-            if let Some(done) = b.poll_save() {
-                done.unwrap();
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-    }
-
     #[test]
-    fn background_saves_in_a_row_keep_the_last_text() {
-        let path = note("background", "a");
+    fn a_large_note_saves_whole_and_atomically() {
+        let path = note("large", "a");
         let mut b = NoteBuffer::open(&path);
-        for round in 0..30 {
-            b.edited(format!("version {round}"));
-            if b.save_in_background().unwrap() == SaveStart::Busy {
-                assert!(b.dirty);
-            }
-            if round % 3 == 0 {
-                settle(&mut b);
-            }
-        }
-        let last = "version 29";
-        while b.saving() || b.dirty {
-            settle(&mut b);
-            if b.take_save_again() || b.dirty {
-                b.save_in_background().unwrap();
-            }
-        }
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), last);
-        assert_eq!(b.text, last);
-        assert!(!b.dirty);
-    }
-
-    #[test]
-    fn a_save_while_one_runs_waits_for_it_and_wins() {
-        let path = note("overlap", "a");
-        let mut b = NoteBuffer::open(&path);
-        b.edited("first".into());
-        assert_eq!(b.save_in_background().unwrap(), SaveStart::Started);
-        b.edited("second".into());
+        let big = "line of text ".repeat(40_000);
+        b.edited(big.clone());
         b.save().unwrap();
-        assert!(!b.saving());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), big);
         assert!(!b.dirty);
-    }
-
-    #[test]
-    fn dropping_a_buffer_finishes_its_write() {
-        let path = note("drop", "a");
-        let mut b = NoteBuffer::open(&path);
-        b.edited("kept".into());
-        assert_eq!(b.save_in_background().unwrap(), SaveStart::Started);
-        drop(b);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept");
-    }
-
-    #[test]
-    fn a_background_save_still_notices_a_change_from_outside() {
-        let path = note("background-conflict", "a");
-        let mut b = NoteBuffer::open(&path);
-        b.edited("mine".into());
+        assert_eq!(std::fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        b.edited(format!("{big}more"));
         outside(&path, "theirs", 5);
-        b.save_in_background().unwrap();
-        settle(&mut b);
+        b.save().unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
         assert_eq!(b.conflict.as_deref(), Some("theirs"));
         assert!(b.dirty);

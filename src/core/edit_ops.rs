@@ -66,7 +66,7 @@ fn is_punct(c: char) -> bool {
     !c.is_alphanumeric() && !c.is_whitespace()
 }
 
-fn opaque_ranges(line: &str) -> Vec<Range<usize>> {
+fn opaque_ranges(line: &str) -> Vec<(Range<usize>, bool)> {
     let bytes = line.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -74,7 +74,7 @@ fn opaque_ranges(line: &str) -> Vec<Range<usize>> {
         match bytes[i] {
             b'\\' => {
                 let next = line[i + 1..].chars().next().map_or(0, char::len_utf8);
-                out.push(i..i + 1 + next);
+                out.push((i..i + 1 + next, false));
                 i += 1 + next;
             }
             b'`' => {
@@ -95,7 +95,29 @@ fn opaque_ranges(line: &str) -> Vec<Range<usize>> {
                 }
                 match closed {
                     Some(end) => {
-                        out.push(i..end);
+                        out.push((i..end, false));
+                        i = end;
+                    }
+                    None => i += len,
+                }
+            }
+            b'$' => {
+                let len = bytes[i..].iter().take_while(|b| **b == b'$').count();
+                let mut j = i + len;
+                let mut closed = None;
+                while j < bytes.len() {
+                    match bytes[j] {
+                        b'\\' => j += 2,
+                        b'$' => {
+                            closed = Some(j + bytes[j..].iter().take_while(|b| **b == b'$').count());
+                            break;
+                        }
+                        _ => j += 1,
+                    }
+                }
+                match closed {
+                    Some(end) => {
+                        out.push((i..end, true));
                         i = end;
                     }
                     None => i += len,
@@ -107,12 +129,19 @@ fn opaque_ranges(line: &str) -> Vec<Range<usize>> {
     out
 }
 
+fn in_math(s: &str, at: usize) -> bool {
+    let ls = line_start(s, at);
+    let line = &s[ls..line_end(s, at)];
+    let rel = at - ls;
+    opaque_ranges(line).iter().any(|(r, math)| *math && r.start < rel && rel < r.end)
+}
+
 fn emphasis_spans(line: &str) -> Vec<Span> {
     let opaque = opaque_ranges(line);
     let mut runs: Vec<Run> = Vec::new();
     let mut chars = line.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
-        if (c != '*' && c != '_') || opaque.iter().any(|r| r.contains(&i)) {
+        if (c != '*' && c != '_') || opaque.iter().any(|(r, _)| r.contains(&i)) {
             continue;
         }
         let mut len = 1;
@@ -194,6 +223,13 @@ fn toggle_emphasis(s: &str, sel: &Range<usize>, token: &str) -> Option<Edit> {
         if a == cs && b == ce {
             return Some(unwrap(p, p.start..p.start + (ce - cs)));
         }
+        let crossing = all.iter().any(|q| {
+            let marks = [q.start..q.start + q.n, q.end - q.n..q.end];
+            [cs..a, b..ce].iter().any(|part| marks.iter().filter(|m| part.start <= m.start && m.end <= part.end).count() == 1)
+        });
+        if crossing {
+            return Some(Edit { range: sel.clone(), text: inner.to_string(), select: sel.clone() });
+        }
         let before = hugged(&s[cs..a], token);
         let after = hugged(&s[b..ce], token);
         let text = format!("{before}{inner}{after}");
@@ -235,6 +271,9 @@ fn toggle_emphasis(s: &str, sel: &Range<usize>, token: &str) -> Option<Edit> {
 pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
     let inner = &s[sel.clone()];
     if token == "**" || token == "*" {
+        if in_math(s, sel.start) || in_math(s, sel.end) {
+            return Edit { range: sel.clone(), text: inner.to_string(), select: sel };
+        }
         if let Some(edit) = toggle_emphasis(s, &sel, token) {
             return edit;
         }
@@ -786,6 +825,27 @@ mod tests {
         assert_eq!(toggled("**a**‹ b›", "**"), "‹**a b**›");
         assert_eq!(toggled("‹a **b**› **c** d", "**"), "‹**a b**› **c** d");
         assert!(!toggled("x ‹c **a›b** y **z** w", "**").contains("****"));
+    }
+
+    #[test]
+    fn math_is_never_touched() {
+        assert_eq!(toggled("$a*b|*c$", "*"), "$a*b|*c$");
+        assert_eq!(toggled("$a*b|*c$", "**"), "$a*b|*c$");
+        assert_eq!(toggled("$f^*(x) = g^‹*(x)› = h$", "*"), "$f^*(x) = g^‹*(x)› = h$");
+        assert_eq!(toggled("$$a_|b$$", "**"), "$$a_|b$$");
+        assert_eq!(toggled("x ‹y $a_b$ z› w", "**"), "x ‹**y $a_b$ z**› w");
+        assert_eq!(toggled("‹y $a_b› c$", "**"), "‹y $a_b› c$");
+        assert_eq!(toggled("a $x$ *b|* c", "*"), "a $x$ b| c");
+        assert_eq!(toggled("5 \\$ **b|** 6", "**"), "5 \\$ b| 6");
+        assert_eq!(toggled("$f^*(x)$ ‹g› $h^*(y)$", "*"), "$f^*(x)$ ‹*g*› $h^*(y)$");
+    }
+
+    #[test]
+    fn splitting_never_crosses_an_inner_span() {
+        assert_eq!(toggled("**a *b ‹c› d* e**", "**"), "**a *b ‹c› d* e**");
+        assert_eq!(toggled("**a ‹b *c› d* e**", "**"), "**a ‹b *c› d* e**");
+        assert_eq!(toggled("**a *b ‹c d* e›**", "**"), "**a *b ‹c d* e›**");
+        assert_eq!(toggled("**a *b* ‹c› d**", "**"), "**a *b*** ‹c› **d**");
     }
 
     #[test]
