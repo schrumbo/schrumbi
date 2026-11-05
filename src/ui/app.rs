@@ -1,11 +1,11 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
 use crate::core::i18n::{key_name, tr};
-use crate::core::library::{NewNoteRequest, Route};
+use crate::core::library::{Library, NewNoteRequest, Route};
 use crate::core::prefs;
 use crate::core::text::end_ellipsis;
 use crate::core::shortcuts::{Bound, ShortcutAction, released_bindings};
@@ -256,9 +256,18 @@ pub fn note_is_active(cx: &App) -> bool {
     cx.try_global::<NoteWindowFront>().is_some_and(|f| f.0.is_some()) || state::read(cx, |l| matches!(l.route(), Route::Doc(_)) && l.focused_document().is_some_and(crate::core::markdown::is_markdown))
 }
 
-/// Whether a note or file is shown that Rename acts on.
+/// What Rename acts on: the shown note or file, else the row the explorer has selected.
+pub fn rename_target(l: &Library) -> Option<PathBuf> {
+    match l.route() {
+        Route::Doc(_) => l.focused_document().map(Path::to_path_buf),
+        Route::Notes => l.explorer_selection.clone(),
+        _ => None,
+    }
+}
+
+/// Whether there is something Rename acts on.
 pub fn rename_is_available(cx: &App) -> bool {
-    state::read(cx, |l| l.focused_document().is_some() && matches!(l.route(), Route::Doc(_)))
+    state::read(cx, |l| rename_target(l).is_some())
 }
 
 /// Asks the explorer to rename `path`, showing it first when it was hidden.

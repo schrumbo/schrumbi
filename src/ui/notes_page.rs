@@ -682,6 +682,14 @@ impl NotesPage {
         cx.notify();
     }
 
+    fn selection_path(&self) -> Option<PathBuf> {
+        match &self.selected {
+            Some(Row::File { path, .. }) => Some(path.clone()),
+            Some(Row::Folder { rel, .. }) => Some(Self::folder_path(rel)),
+            _ => None,
+        }
+    }
+
     fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((path, ..)) = self.renaming.take() else { return };
         if self.pending_folder.as_ref() == Some(&path) || path.is_dir() || !markdown::is_markdown(&path) {
@@ -1069,13 +1077,13 @@ impl Render for NotesPage {
         if let Some(path) = state::lib(cx).update(cx, |l, _| l.rename_request.take()) {
             self.start_rename(path, window, cx);
         }
-        if state::lib(cx).update(cx, |l, _| std::mem::take(&mut l.rename_selected)) {
-            match self.selected.clone() {
-                Some(Row::File { path, .. }) => self.start_rename(path, window, cx),
-                Some(Row::Folder { rel, .. }) => self.start_rename(Self::folder_path(&rel), window, cx),
-                _ => {}
+        let selection = self.selection_path();
+        state::lib(cx).update(cx, |l, cx| {
+            if l.explorer_selection != selection {
+                l.explorer_selection = selection;
+                cx.notify();
             }
-        }
+        });
         let t = Theme::get(cx);
         let (tag, active, obsidian) = state::read(cx, |l| (l.notes_tag.clone(), l.active_document.clone(), l.is_vault));
         if self.view == View::Marks && !obsidian {
@@ -1192,6 +1200,15 @@ impl Render for NotesPage {
             .flex_none()
             .flex()
             .on_key_down(cx.listener(Self::on_key))
+            .on_action(cx.listener(|this, _: &super::app::RenameNote, window, cx| {
+                if this.renaming.is_some() {
+                    return;
+                }
+                match this.selection_path() {
+                    Some(path) => this.start_rename(path, window, cx),
+                    None => cx.propagate(),
+                }
+            }))
             .on_action(|_: &super::app::TogglePreview, _, cx| act(cx, |l| l.toggle_mode = l.active_document.as_deref().is_some_and(markdown::is_markdown)))
             .on_drag_move(cx.listener(|s, e: &DragMoveEvent<ExplorerSplit>, _, cx| {
                 let width = f32::from(e.event.position.x - e.bounds.left()).round().clamp(180., 420.);

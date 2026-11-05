@@ -433,13 +433,8 @@ impl Render for MainWindow {
                 }
             })
             .on_action(|_: &super::app::RenameNote, window, cx| {
-                let stack = window.context_stack();
-                if stack.iter().any(|c| c.contains("Explorer")) {
-                    act(cx, |l| l.rename_selected = true);
-                    return;
-                }
-                let searching = stack.iter().any(|c| c.contains("SearchField"));
-                match state::read(cx, |l| l.focused_document().map(std::path::Path::to_path_buf).filter(|_| matches!(l.route(), Route::Doc(_)))) {
+                let searching = window.context_stack().iter().any(|c| c.contains("SearchField"));
+                match state::read(cx, super::app::rename_target) {
                     Some(path) if !searching => super::app::rename_file(path, cx),
                     _ => cx.propagate(),
                 }

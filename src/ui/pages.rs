@@ -361,6 +361,18 @@ impl Pages {
 
 const KEPT_VIEWS: usize = 8;
 
+fn rekey_recent(recent: &mut Vec<std::path::PathBuf>, old: &std::path::Path, new: &std::path::Path) {
+    let mut seen = false;
+    recent.retain_mut(|p| {
+        if p == old {
+            *p = new.to_path_buf();
+        }
+        let keep = !(seen && p == new);
+        seen |= p == new;
+        keep
+    });
+}
+
 fn view_for_keys(view: &Entity<Pages>) -> Entity<Pages> {
     view.clone()
 }
@@ -617,9 +629,31 @@ impl Render for Pages {
         if !matches!(state::read(cx, |l| l.route().clone()), Route::Doc(_)) {
             self.shown_doc = None;
         }
+        let moved: Vec<(std::path::PathBuf, std::path::PathBuf)> = self
+            .docs
+            .iter()
+            .filter_map(|(key, view)| {
+                let note = view.clone().downcast::<super::documents::NoteView>().ok()?;
+                let now = note.read(cx).path().to_path_buf();
+                let to = if now != *key { now } else { state::read(cx, |l| l.moved_path(key))? };
+                (to != *key && open.contains(&to) && !self.docs.contains_key(&to)).then(|| (key.clone(), to))
+            })
+            .collect();
+        for (old, new) in moved {
+            if let Some(view) = self.docs.remove(&old) {
+                self.docs.insert(new.clone(), view);
+                rekey_recent(&mut self.doc_recent, &old, &new);
+            }
+        }
         self.doc_recent.retain(|p| open.contains(p));
-        let recent = &self.doc_recent;
-        self.docs.retain(|p, _| recent.contains(p));
+        let stale: Vec<std::path::PathBuf> = self.docs.keys().filter(|p| !self.doc_recent.contains(p)).cloned().collect();
+        for path in stale {
+            if let Some(view) = self.docs.remove(&path)
+                && let Ok(note) = view.downcast::<super::documents::NoteView>()
+            {
+                note.update(cx, |n, cx| n.save(cx));
+            }
+        }
         let t = Theme::get(cx);
         let lib = state::lib(cx);
         let view = cx.entity();
@@ -719,5 +753,21 @@ fn activate_doc(target: AnyView, window: &mut Window, cx: &mut App) {
         if let Some(action) = cx.default_global::<super::palette::PendingNoteAction>().0.take() {
             window.dispatch_action(action, cx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rekey_recent;
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_renamed_note_keeps_its_place_in_the_recent_views() {
+        let p = |s: &str| PathBuf::from(s);
+        let mut recent = vec![p("a"), p("b"), p("c")];
+        rekey_recent(&mut recent, &p("b"), &p("z"));
+        assert_eq!(recent, vec![p("a"), p("z"), p("c")]);
+        rekey_recent(&mut recent, &p("c"), &p("a"));
+        assert_eq!(recent, vec![p("a"), p("z")]);
     }
 }

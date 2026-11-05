@@ -539,14 +539,13 @@ const fn fixed_on(platform: Platform, key: &'static str, command: bool, shift: b
     Fixed { key, command, shift, option, label, notes_only, platform }
 }
 
-const FIXED: [Fixed; 26] = [
+const FIXED: [Fixed; 25] = [
     fixed("k", true, false, false, "Befehl suchen…", false),
     fixed("p", true, false, false, "Befehl suchen…", false),
     fixed("p", true, true, false, "Befehl suchen…", false),
     fixed("/", true, false, false, "Tastenkürzel anzeigen", false),
     fixed("7", true, true, false, "Tastenkürzel anzeigen", false),
     fixed("f1", false, false, false, "Schrumbi-Anleitung", false),
-    fixed("f2", false, false, false, "Umbenennen", false),
     fixed(",", true, false, false, "Einstellungen", false),
     fixed("s", true, false, false, "Sichern", false),
     fixed("w", true, true, false, "Fenster schließen", false),
@@ -915,6 +914,16 @@ mod tests {
         let fixed = ShortcutAction::ZoomOut.fixed_conflicts();
         ShortcutAction::ZoomOut.reset();
         assert_eq!(fixed.len(), 1);
+    }
+
+    #[test]
+    fn f2_is_the_rename_actions_own_key_and_not_a_fixed_one() {
+        let f2 = s("f2", false, false, false, false);
+        assert_eq!(ShortcutAction::RenameNote.default_shortcut(), Some(f2.clone()));
+        ShortcutAction::ZoomOut.set(Some(f2));
+        let fixed = ShortcutAction::ZoomOut.fixed_conflicts();
+        ShortcutAction::ZoomOut.reset();
+        assert!(fixed.is_empty());
     }
 
     #[test]

@@ -1590,5 +1590,6 @@
   "Das Zeichen „%@“ geht in einem Namen nicht.": "The character “%@” cannot be used in a name.",
   "Ein Name darf nicht mit einem Punkt enden.": "A name cannot end with a period.",
   "Klicken zum Umbenennen": "Click to rename",
-  "Ausgeblendete Ordner: %@": "Hidden folders: %@"
+  "Ausgeblendete Ordner: %@": "Hidden folders: %@",
+  "Der Ordner dieser Notiz gibt es nicht mehr. Dein Text bleibt offen und wird gesichert, sobald der Ordner wieder da ist.": "This note’s folder no longer exists. Your text stays open and is saved as soon as the folder is back."
 }

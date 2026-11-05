@@ -207,8 +207,8 @@ fn commands(cx: &App) -> Vec<Command> {
     if let Some(doc) = focused.clone().filter(|p| super::convention_rename::available(p, cx)) {
         add(&file, tr("Nach Muster benennen…"), "wand-sparkles", None, Run::WindowCall(Rc::new(move |window, cx| super::convention_rename::open(doc.clone(), window, cx))));
     }
-    if let Some(doc) = focused {
-        add(&file, tr("Umbenennen…"), "pencil", keys(S::RenameNote), Run::Call(Rc::new(move |cx| app::rename_file(doc.clone(), cx))));
+    if let Some(target) = state::read(cx, app::rename_target) {
+        add(&file, tr("Umbenennen…"), "pencil", keys(S::RenameNote), Run::Call(Rc::new(move |cx| app::rename_file(target.clone(), cx))));
     }
     if in_document && state::read(cx, |l| l.split_document.is_some()) {
         add(&view, tr("Geteilte Ansicht schließen"), "columns-2", None, Run::Call(Rc::new(|cx| act(cx, |l| l.set_split(None)))));

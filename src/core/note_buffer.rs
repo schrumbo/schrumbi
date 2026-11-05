@@ -167,6 +167,11 @@ impl NoteBuffer {
         self.version
     }
 
+    /// Whether an editor that last saw `version` and shows `text` is level with this buffer, so there is nothing to write back.
+    pub fn shows(&self, version: u64, text: &str) -> bool {
+        version == self.version && self.text == text
+    }
+
     /// The text of an editor that last saw `version`. Refused when the note changed since, e.g. in another view:
     /// that text would write over the newer one, so the editor has to show the current text first.
     pub fn edited_on(&mut self, version: u64, text: String) -> bool {
@@ -441,6 +446,32 @@ d", 10);
         assert_eq!(b.text, "mine");
         assert_eq!(b.conflict.as_deref(), Some("theirs"));
         assert!(!b.reload_if_changed());
+    }
+
+    #[test]
+    fn an_editor_level_with_the_buffer_has_nothing_to_write_back() {
+        let path = note("shows", "a");
+        let mut b = NoteBuffer::open(&path);
+        let seen = b.version();
+        assert!(b.shows(seen, "a"));
+        assert!(!b.shows(seen, "ab"));
+        b.edited("ab".into());
+        assert!(!b.shows(seen, "ab"), "an older version is not level");
+        assert!(b.shows(b.version(), "ab"));
+    }
+
+    #[test]
+    fn a_conflict_outlasts_the_text_returning_to_its_saved_state() {
+        let path = note("conflict-clean", "a");
+        let mut b = NoteBuffer::open(&path);
+        b.edited("mine".into());
+        outside(&path, "theirs", 5);
+        assert!(b.reload_if_changed());
+        b.edited("a".into());
+        assert!(!b.dirty && b.conflict.is_some(), "the notice has to stay while a conflict is recorded");
+        let copy = b.save_conflict_copy().unwrap();
+        assert!(copy.exists());
+        assert!(b.conflict.is_none());
     }
 
     #[test]

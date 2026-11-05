@@ -323,6 +323,9 @@ impl NoteView {
                     let text = e.read(cx).text().to_string();
                     let path = this.path.clone();
                     let seen = this.version;
+                    if state::read(cx, |l| l.buffers.get(&path).is_some_and(|b| b.shows(seen, &text))) {
+                        return;
+                    }
                     let written = state::lib(cx).update(cx, |l, cx| {
                         let written = l.buffers.get_mut(&path).map(|b| (b.edited_on(seen, text), b.version()));
                         if written.is_some_and(|(accepted, _)| accepted) {
@@ -905,6 +908,9 @@ impl NoteView {
                 } else {
                     s.set_selected_range(changed.clone(), cx);
                     s.replace(inserted.to_string(), window, cx);
+                    if s.value().to_string() != text {
+                        s.set_value(text.clone(), window, cx);
+                    }
                 }
                 let (start, end) = (start.min(text.len()), end.min(text.len()));
                 s.set_selected_range(start..end, cx);
@@ -2037,7 +2043,8 @@ impl NoteView {
             r
         });
         if let Err(e) = result {
-            act(cx, |l| l.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e])));
+            let message = save_failure(&path, &e);
+            act(cx, |l| l.last_error = Some(message));
         }
     }
 
@@ -3172,7 +3179,7 @@ impl Render for NoteView {
         let wheel = super::image_view::wheel_zoom(|factor, _, _, cx| scale_font(factor, cx));
         let (missing, snapshot, conflict) = lib.update(cx, |l, _| {
             let b = l.buffer(&self.path);
-            (b.missing, b.snapshot(), b.conflict.is_some() && b.dirty)
+            (b.missing, b.snapshot(), b.conflict.is_some())
         });
         let text = snapshot.text.clone();
         let request = take_find_request(&self.path, cx);
@@ -3411,6 +3418,13 @@ pub fn compare_note(path: PathBuf, cx: &mut App) {
     .detach();
 }
 
+fn save_failure(path: &Path, error: &std::io::Error) -> String {
+    if path.parent().is_some_and(|d| !d.exists()) {
+        return tr("Der Ordner dieser Notiz gibt es nicht mehr. Dein Text bleibt offen und wird gesichert, sobald der Ordner wieder da ist.");
+    }
+    trf("Notiz konnte nicht gesichert werden: %@", &[error])
+}
+
 /// Saves for closing, also during a sync. An undecided conflict keeps both versions, because nobody can answer anymore.
 fn save_buffer(path: &Path, cx: &mut App) -> bool {
     let result = state::lib(cx).update(cx, |l, cx| {
@@ -3431,7 +3445,8 @@ fn save_buffer(path: &Path, cx: &mut App) -> bool {
             true
         }
         Err(e) => {
-            act(cx, |l| l.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e])));
+            let message = save_failure(path, &e);
+            act(cx, |l| l.last_error = Some(message));
             false
         }
     }
@@ -3868,7 +3883,7 @@ fn writing_menu(field: Editor) -> Editor {
 
 #[cfg(test)]
 mod window_tests {
-    use super::{Mode, PARSE_IN_BACKGROUND_FROM, parses_in_background, spell_window};
+    use super::{Mode, PARSE_IN_BACKGROUND_FROM, parses_in_background, save_failure, spell_window};
 
     fn prose() -> String {
         (0..3000).map(|i| format!("Zeile {i} mit etwas Text darin\n")).collect()
@@ -3923,5 +3938,14 @@ mod window_tests {
         assert!(!parses_in_background(Mode::Read, PARSE_IN_BACKGROUND_FROM - 1));
         assert!(!parses_in_background(Mode::Live, PARSE_IN_BACKGROUND_FROM * 10));
         assert!(!parses_in_background(Mode::Source, PARSE_IN_BACKGROUND_FROM * 10));
+    }
+
+    #[test]
+    fn a_save_into_a_vanished_folder_says_the_text_stays_open() {
+        let gone = std::env::temp_dir().join("schrumbi-gone-folder").join("sub").join("n.md");
+        let message = save_failure(&gone, &std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert!(message.contains("bleibt offen") && !message.contains("os error"), "{message}");
+        let here = std::env::temp_dir().join("n.md");
+        assert!(save_failure(&here, &std::io::Error::from(std::io::ErrorKind::PermissionDenied)).contains("gesichert"));
     }
 }
