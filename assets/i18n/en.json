@@ -1583,16 +1583,14 @@
   "Ausgeblendete Ordner: %@": "Hidden folders: %@",
   "Den Ordner dieser Notiz gibt es nicht mehr. Dein Text bleibt offen und wird gesichert, sobald der Ordner wieder da ist.": "This note’s folder no longer exists. Your text stays open and is saved as soon as the folder is back.",
   "Diese Notiz ließ sich nicht sichern.": "This note could not be saved.",
-  "Große Notiz: ohne Hervorhebung": "Large note: no highlighting",
-  "Große Notiz: ohne Umbruch und Hervorhebung": "Large note: no wrapping or highlighting",
-  "Lange Notizen zeigen keine Hervorhebung, damit das Tippen schnell bleibt. Klicken schaltet den Zeilenumbruch aus.": "Long notes show no highlighting so typing stays fast. Click to turn line wrapping off.",
-  "Lange Notizen zeigen keinen Zeilenumbruch und keine Hervorhebung, damit das Tippen schnell bleibt. Klicken schaltet den Zeilenumbruch ein.": "Long notes show no line wrapping and no highlighting so typing stays fast. Click to turn line wrapping on.",
-  "Lange Notizen zeigen keine Hervorhebung, und die Rechtschreibung prüft nur den Text um die Schreibmarke. Klicken schaltet den Zeilenumbruch aus.": "Long notes show no highlighting, and spelling checks only the text around the caret. Click to turn line wrapping off.",
-  "Lange Notizen zeigen keinen Zeilenumbruch und keine Hervorhebung, und die Rechtschreibung prüft nur den Text um die Schreibmarke. Klicken schaltet den Zeilenumbruch ein.": "Long notes show no line wrapping and no highlighting, and spelling checks only the text around the caret. Click to turn line wrapping on.",
+  "Große Notiz: ohne Zeilenumbruch und Hervorhebung": "Large note: no line wrapping or highlighting",
+  "Lange Notizen zeigen keinen Zeilenumbruch und keine Hervorhebung, damit das Tippen schnell bleibt.": "Long notes show no line wrapping and no highlighting so typing stays fast.",
+  "Lange Notizen zeigen keinen Zeilenumbruch und keine Hervorhebung, und die Rechtschreibung prüft nur den Text um die Schreibmarke.": "Long notes show no line wrapping and no highlighting, and spelling checks only the text around the caret.",
   "Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück zu Live.": "A line this long stays fast in the source. Click to go back to Live.",
   "Diese Zeile ist zu lang für Live. Esc: zurück zu Live": "This line is too long for Live. Esc: back to Live",
   "Zeilenumbruch an": "Line wrapping on",
   "Zeilenumbruch aus": "Line wrapping off",
   "Hier steht nur der Anfang dieser langen Zeile, %@ KB mehr. Lesen zeigt alles.": "Only the start of this long line is shown here, %@ KB more. Reading shows all of it.",
-  "Diese Notiz ist zu lang zum Umbrechen, der Editor bleibt so schnell.": "This note is too long to wrap; the editor stays fast this way."
+  "Diese Notiz ist zu lang für den Zeilenumbruch. Lesen zeigt alles umgebrochen.": "This note is too long for line wrapping. Reading shows it all wrapped.",
+  "Klicken öffnet die Zeile im Quelltext.": "Click to open the line in the source."
 }

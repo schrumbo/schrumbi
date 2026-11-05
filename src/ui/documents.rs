@@ -59,6 +59,11 @@ const WRAP_UNTIL: usize = 100_000;
 const WRAP_MAX: usize = 120_000;
 const SPELL_WINDOW: usize = 40_000;
 
+/// Whether a note of this length can be wrapped at all.
+pub fn can_wrap(len: usize) -> bool {
+    wraps_lines(len, Some(true))
+}
+
 /// Whether the source editor wraps lines: the user's choice for this note while wrapping it takes under a frame, else only while the note is short.
 fn wraps_lines(len: usize, chosen: Option<bool>) -> bool {
     chosen.map_or(len <= WRAP_UNTIL, |wrap| wrap && len <= WRAP_MAX)
@@ -827,8 +832,8 @@ impl NoteView {
         }
         let wrap = !self.editor_wrap;
         let len = state::read(cx, |l| l.buffers.get(&self.path).map_or(0, |b| b.text.len()));
-        if wrap && !wraps_lines(len, Some(true)) {
-            act(cx, |l| l.notify(tr("Diese Notiz ist zu lang zum Umbrechen, der Editor bleibt so schnell."), "text", None, None));
+        if wrap && !can_wrap(len) {
+            act(cx, |l| l.notify(tr("Diese Notiz ist zu lang für den Zeilenumbruch. Lesen zeigt alles umgebrochen."), "text", None, None));
             return;
         }
         self.editor_wrap = wrap;
@@ -856,7 +861,7 @@ impl NoteView {
         cx.notify();
     }
 
-    /// The quiet line in the word count bar that says what a long note gives up, and turns wrapping on or off when the editor is plain.
+    /// The quiet line in the word count bar that says what a long note gives up.
     fn plain_caption(&self, len: usize, t: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let notice = self.wrap_notice.as_ref().map(|(on, _)| if *on { tr("Zeilenumbruch an") } else { tr("Zeilenumbruch aus") });
         if self.long_line && self.mode == Mode::Source {
@@ -875,7 +880,6 @@ impl NoteView {
             );
         }
         let spelling = prefs::get().spell_check && len > 2 * SPELL_WINDOW;
-        let me = cx.entity();
         let caption = div().id("plain-note").min_w_0().truncate().rounded(px(radius::SMALL)).px(px(space::XS));
         if !self.editor_plain {
             if let Some(notice) = notice {
@@ -883,22 +887,12 @@ impl NoteView {
             }
             return spelling.then(|| caption.tooltip(tip(tr("Die Rechtschreibung prüft in langen Notizen nur den Text um die Schreibmarke."))).child(tr("Rechtschreibung nur um die Schreibmarke")).into_any_element());
         }
-        let (label, help) = match (self.editor_wrap, spelling) {
-            (true, true) => (tr("Große Notiz: ohne Hervorhebung"), tr("Lange Notizen zeigen keine Hervorhebung, und die Rechtschreibung prüft nur den Text um die Schreibmarke. Klicken schaltet den Zeilenumbruch aus.")),
-            (true, false) => (tr("Große Notiz: ohne Hervorhebung"), tr("Lange Notizen zeigen keine Hervorhebung, damit das Tippen schnell bleibt. Klicken schaltet den Zeilenumbruch aus.")),
-            (false, true) => (tr("Große Notiz: ohne Umbruch und Hervorhebung"), tr("Lange Notizen zeigen keinen Zeilenumbruch und keine Hervorhebung, und die Rechtschreibung prüft nur den Text um die Schreibmarke. Klicken schaltet den Zeilenumbruch ein.")),
-            (false, false) => (tr("Große Notiz: ohne Umbruch und Hervorhebung"), tr("Lange Notizen zeigen keinen Zeilenumbruch und keine Hervorhebung, damit das Tippen schnell bleibt. Klicken schaltet den Zeilenumbruch ein.")),
+        let help = if spelling {
+            tr("Lange Notizen zeigen keinen Zeilenumbruch und keine Hervorhebung, und die Rechtschreibung prüft nur den Text um die Schreibmarke.")
+        } else {
+            tr("Lange Notizen zeigen keinen Zeilenumbruch und keine Hervorhebung, damit das Tippen schnell bleibt.")
         };
-        Some(
-            caption
-                .cursor_pointer()
-                .key_nav()
-                .soft(t.ink.opacity(0.06), radius::SMALL)
-                .tooltip(tip(help))
-                .on_click(move |_, window, cx| me.update(cx, |n, cx| n.toggle_wrap(window, cx)))
-                .child(notice.unwrap_or(label))
-                .into_any_element(),
-        )
+        Some(caption.tooltip(tip(help)).child(notice.unwrap_or_else(|| tr("Große Notiz: ohne Zeilenumbruch und Hervorhebung"))).into_any_element())
     }
 
     /// The source line at the top of the reader.
@@ -1578,7 +1572,7 @@ impl NoteView {
         let width = if cell { px(160.) } else { self.field_width(&value, window) };
         let style = window.text_style();
         let run = TextRun { len: value.len(), font: style.font(), color: style.color, background_color: None, underline: None, strikethrough: None };
-        let rows: usize = if cell { 1 } else { window.text_system().shape_text(value.clone().into(), px(size), &[run], Some(width), None).map_or(1, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum()) };
+        let rows: usize = if cell { 1 } else { window.text_system().shape_text(value.clone().into(), px(size), &[run.clone()], Some(width), None).map_or(1, |lines| lines.iter().map(|l| l.wrap_boundaries().len() + 1).sum()) };
         let line = px(size * 1.5);
         let height = line * (rows.max(1) as f32);
         let hidden: gpui_kit::base::input::EditorScrollbarRenderer = Rc::new(|_, _, _| div().into_any_element());
@@ -1611,6 +1605,12 @@ impl NoteView {
         let deficit = if below && preview.is_none() && !cell { (control::M + 2. * space::XS - self.blank_room_below()).max(0.) } else { 0. };
         let toolbar = bar.then(|| self.format_bar(&t, height, below, cell, cx));
         let hint = value.is_empty().then(|| div().absolute().top(px(if cell { LIVE_INSET } else { 0. })).left(px(if cell { LIVE_GUTTER } else { left })).when(cell, |d| d.right_0().overflow_hidden().whitespace_nowrap()).font_family(Theme::font_family()).text_size(px(size)).line_height(line).text_color(t.secondary).child(if cell { tr("Text") } else { tr("Schreibe oder tippe / für Befehle") }));
+        let more_right = cell && {
+            let shown = self.block.read(cx);
+            let text = f32::from(window.text_system().shape_line(value.clone().into(), px(size), &[run.clone()], None).width);
+            text + f32::from(shown.scroll_offset().x) > f32::from(shown.input_bounds().size.width) - LIVE_GUTTER
+        };
+        let cue = more_right.then(|| div().absolute().top_0().bottom_0().right_0().w(px(space::XL)).bg(linear_gradient(90., linear_color_stop(t.content.opacity(0.), 0.), linear_color_stop(t.content, 1.))));
         let wrapper = self.note_editor_wrapper(field.into_any_element(), cx);
         let editor = if cell { wrapper } else { div().absolute().top(px(-LIVE_INSET)).left_0().right_0().child(wrapper).into_any_element() };
         div()
@@ -1618,7 +1618,7 @@ impl NoteView {
             .relative()
             .when(cell, |d| d.mx(px(-LIVE_GUTTER)))
             .pb(px(deficit))
-            .child(div().relative().h(height).child(editor).children(hint).children(toolbar))
+            .child(div().relative().h(height).child(editor).children(hint).children(cue).children(toolbar))
             .children(preview)
             .into_any_element()
     }
@@ -2632,9 +2632,29 @@ impl NoteView {
             }
             let line = segment.line;
             let raw_middle = note_size(font::CALLOUT) * 0.75;
+            let cut_note = |left: usize| {
+                (left > 0).then(|| {
+                    let open_me = me.clone();
+                    div()
+                        .id(("live-cut", i))
+                        .text_size(px(font::CAPTION))
+                        .text_color(t.secondary)
+                        .rounded(px(radius::SMALL))
+                        .px(px(space::XS))
+                        .cursor_pointer()
+                        .key_nav()
+                        .soft(t.ink.opacity(hover::FLOAT), radius::SMALL)
+                        .tooltip(tip(tr("Klicken öffnet die Zeile im Quelltext.")))
+                        .on_click(move |_, window, cx| open_me.update(cx, |n, cx| n.open_line(line, None, window, cx)))
+                        .child(trf("Hier steht nur der Anfang dieser langen Zeile, %@ KB mehr. Lesen zeigt alles.", &[&crate::core::i18n::grouped(left.div_ceil(1024))]))
+                })
+            };
             let (body, lead, middle, fold, extra): (AnyElement, f32, Option<f32>, bool, Option<AnyElement>) = match segment.kind {
                 SegmentKind::Blank => (div().h(px(note_size(font::BODY) * 1.5)).into_any_element(), 0., None, false, None),
-                SegmentKind::Raw => (div().text_size(px(note_size(font::CALLOUT))).line_height(relative(1.5)).text_color(t.tertiary).child(source_lines.get(line).cloned().unwrap_or_default()).into_any_element(), 0., Some(raw_middle), false, None),
+                SegmentKind::Raw => {
+                    let (shown, left) = live_text::drawn_part(source_lines.get(line).map_or("", |s| s.as_str()));
+                    (div().child(div().text_size(px(note_size(font::CALLOUT))).line_height(relative(1.5)).text_color(t.tertiary).child(shown.to_string())).children(cut_note(left)).into_any_element(), 0., Some(raw_middle), false, None)
+                }
                 SegmentKind::Line { depth } => {
                     let written = source_lines.get(line).map_or("", |s| s.as_str());
                     let continues = source_lines.get(line + 1).is_some_and(|next| live_text::continues_paragraph(written, next));
@@ -2648,7 +2668,8 @@ impl NoteView {
                     };
                     let lead = depth as f32 * LIVE_INDENT;
                     if fragment.len() == 0 {
-                        (div().text_size(px(note_size(font::CALLOUT))).line_height(relative(1.5)).text_color(t.tertiary).child(written.to_string()).into_any_element(), 0., Some(raw_middle), false, None)
+                        let (plain, plain_left) = live_text::drawn_part(written);
+                        (div().child(div().text_size(px(note_size(font::CALLOUT))).line_height(relative(1.5)).text_color(t.tertiary).child(plain.to_string())).children(cut_note(plain_left)).into_any_element(), 0., Some(raw_middle), false, None)
                     } else {
                         let offset_toggle: markdown_view::OnToggle = {
                             let inner = toggle.clone();
@@ -2657,8 +2678,7 @@ impl NoteView {
                         let draw = markdown_view::LiveDraw { item: Some(i - 1), line, footnotes: Some(parsed.footnote_order()), open_cell: None, count: fragment.line_blocks() };
                         let drawn = markdown_view::render_live(&fragment, 0, base.as_deref(), Some(offset_toggle), None, Some(&focus), draw, &t);
                         let is_list = live_text::prefix_len(written) > 0 && !written.trim_start().starts_with('#') && !written.trim_start().starts_with('>');
-                        let cut_note = (left > 0).then(|| caption(trf("Hier steht nur der Anfang dieser langen Zeile, %@ KB mehr. Lesen zeigt alles.", &[&crate::core::i18n::grouped(left.div_ceil(1024))]), &t));
-                        (div().pl(px(lead)).when(is_list, |d| d.pb(px(space::XS))).child(drawn).children(cut_note).into_any_element(), lead, fragment.first_line_middle(0), fragment.has_margin_control(0), None)
+                        (div().pl(px(lead)).when(is_list, |d| d.pb(px(space::XS))).child(drawn).children(cut_note(left)).into_any_element(), lead, fragment.first_line_middle(0), fragment.has_margin_control(0), None)
                     }
                 }
                 SegmentKind::Whole { block } => {
@@ -3992,7 +4012,7 @@ fn writing_menu(field: Editor) -> Editor {
 
 #[cfg(test)]
 mod window_tests {
-    use super::{Mode, PARSE_IN_BACKGROUND_FROM, RICH_EDITOR_UNTIL, WRAP_MAX, WRAP_UNTIL, parses_in_background, save_failure, spell_window, wraps_lines};
+    use super::{Mode, PARSE_IN_BACKGROUND_FROM, WRAP_MAX, WRAP_UNTIL, parses_in_background, save_failure, spell_window, wraps_lines};
 
     fn prose() -> String {
         (0..3000).map(|i| format!("Zeile {i} mit etwas Text darin\n")).collect()

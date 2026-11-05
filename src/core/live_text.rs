@@ -491,6 +491,13 @@ mod tests {
     }
 
     #[test]
+    fn a_footnote_definition_and_a_raw_line_are_cut_like_any_long_line() {
+        let note = format!("[^1]: {}", "Wörter ".repeat(6_000));
+        let (shown, left) = drawn_part(&note);
+        assert!(shown.starts_with("[^1]: ") && left > 0 && shown.len() + left == note.len());
+    }
+
+    #[test]
     fn prefixes_and_styles_find_the_marks() {
         assert_eq!(prefix_len("## T"), 3);
         assert_eq!(prefix_len("  - [ ] a"), 8);

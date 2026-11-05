@@ -83,11 +83,11 @@ The words are listed in the settings under {ui:Eigenes Wörterbuch}; the cross r
 
 ## Large notes
 
-From about 100 KB the source does not wrap lines, and from about 200 KB it shows no highlighting either, so typing stays fast. The bar below says {ui:Große Notiz: ohne Umbruch und Hervorhebung}. Click it, press {key:toggleWrap}, or use {ui:Zeilenumbruch ein-/ausschalten} in the {key:CommandPalette}, to turn wrapping on or off for this note, up to about 120 KB; Schrumbi remembers it.
+From about 100 KB the source does not wrap lines. Press {key:toggleWrap}, or use {ui:Zeilenumbruch ein-/ausschalten} in the {key:CommandPalette}, to turn wrapping on or off for this note, up to about 120 KB; Schrumbi remembers it. From about 200 KB the source also shows no highlighting, so typing stays fast. The bar below says {ui:Große Notiz: ohne Zeilenumbruch und Hervorhebung}.
 
 A single line over about 250 KB opens in the source instead of Live. The bar below says {ui:Diese Zeile ist zu lang für Live. Esc: zurück zu Live}; {key:escape} or a click on it goes back.
 
-Live shows only the start of a line over about 32 KB; {ui:Lesen} shows all of it.
+Live shows only the start of a line over about 32 KB; {ui:Lesen} shows all of it, and a click on the note under it opens the line in the source.
 
 From about 80 KB spelling checks only the text around the caret. The bar below says {ui:Rechtschreibung nur um die Schreibmarke}.
 
