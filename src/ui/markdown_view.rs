@@ -1487,6 +1487,9 @@ fn text_click_of(cx: &Ctx) -> Option<super::selectable::TextClick> {
     Some(Rc::new(move |text, at, window, app| click(block, cell, text, at, window, app)))
 }
 
+/// What follows the text of a link that leaves the app, drawn in the regular face whatever the emphasis.
+const EXTERNAL_MARK: &str = " ↗";
+
 /// Appends what an inline draws as text: tags with their `#`, external links with `↗`, footnote references as raised numbers; pictures and formulas draw no text.
 fn push_drawn(text: &mut String, inline: &Inline, footnote_order: &[String]) {
     match inline {
@@ -1498,7 +1501,7 @@ fn push_drawn(text: &mut String, inline: &Inline, footnote_order: &[String]) {
         Inline::Link(s, _, url) => {
             text.push_str(s);
             if is_external(url) {
-                text.push_str(" ↗");
+                text.push_str(EXTERNAL_MARK);
             }
         }
         Inline::FootnoteRef(id) => text.push_str(&superscript(&footnote_order.iter().position(|f| f == id).map_or(0, |p| p + 1).to_string())),
@@ -1588,8 +1591,15 @@ fn styled_line(inlines: &[Inline], cx: &Ctx, size: f32) -> AnyElement {
                 if focused {
                     h.background_color = Some(t.accent.opacity(0.28));
                 }
+                let marker = matches!(i, Inline::Link(_, _, url) if is_external(url)).then(|| text.len() - EXTERNAL_MARK.len()..text.len());
                 if h != HighlightStyle::default() {
-                    highlights.push((start..text.len(), h));
+                    match marker {
+                        Some(mark) => {
+                            highlights.push((start..mark.start, h));
+                            highlights.push((mark, HighlightStyle { font_weight: Some(FontWeight::NORMAL), font_style: Some(FontStyle::Normal), ..h }));
+                        }
+                        None => highlights.push((start..text.len(), h)),
+                    }
                 }
             }
             Inline::FootnoteRef(_) => {

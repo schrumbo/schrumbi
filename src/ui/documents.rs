@@ -55,6 +55,7 @@ const PARSE_IN_BACKGROUND_FROM: usize = 100_000;
 const REPARSE_DELAY: Duration = Duration::from_millis(150);
 const NOTICE_AFTER: Duration = Duration::from_millis(300);
 const SAVE_RETRY_WAIT: Duration = Duration::from_millis(400);
+const WRAP_NOTICE_FOR: Duration = Duration::from_millis(1600);
 const SAVE_NOTICE_TINT: f32 = 0.08;
 const SAVE_FLASH_TINT: f32 = 0.16;
 const RICH_EDITOR_UNTIL: usize = 200_000;
@@ -277,6 +278,7 @@ pub struct NoteView {
     editor_plain: bool,
     editor_wrap: bool,
     wrap_override: Option<bool>,
+    wrap_notice: Option<(bool, Task<()>)>,
     /// Which editor the settings asked for when this view last looked.
     editor_kind: prefs::NoteEditor,
     reader_width: Pixels,
@@ -436,7 +438,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, reparse: None, parse_hold: false, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -843,11 +845,24 @@ impl NoteView {
             }
         });
         self.editor.update(cx, |s, cx| s.set_soft_wrap(wrap, window, cx));
+        self.wrap_notice = Some((
+            wrap,
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(WRAP_NOTICE_FOR).await;
+                let _ = this.update(cx, |n, cx| {
+                    n.wrap_notice = None;
+                    cx.notify();
+                });
+            }),
+        ));
         cx.notify();
     }
 
     /// The quiet line in the word count bar that says what a long note gives up, and turns wrapping on or off when the editor is plain.
     fn plain_caption(&self, len: usize, t: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if let Some((on, _)) = &self.wrap_notice {
+            return Some(div().id("wrap-notice").min_w_0().truncate().px(px(space::XS)).child(if *on { tr("Zeilenumbruch an") } else { tr("Zeilenumbruch aus") }).into_any_element());
+        }
         if self.long_line && self.mode == Mode::Source {
             let me = cx.entity();
             let caption = div().id("long-line").min_w_0().min_h(px(control::S)).flex().items_center().truncate().rounded(px(radius::SMALL)).px(px(space::XS)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::FLOAT), radius::SMALL).tooltip(tip(tr("Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück in die Live-Ansicht.")));
@@ -1598,7 +1613,7 @@ impl NoteView {
         let wrapper = self.note_editor_wrapper(field.into_any_element(), cx);
         let editor = if cell { wrapper } else { div().absolute().top(px(-LIVE_INSET)).left_0().right_0().child(wrapper).into_any_element() };
         div()
-            .key_context("LiveBlock")
+            .key_context(if cell { "LiveCell" } else { "LiveBlock" })
             .relative()
             .when(cell, |d| d.mx(px(-LIVE_GUTTER)))
             .pb(px(deficit))
@@ -3398,8 +3413,8 @@ impl Render for NoteView {
             .child(top)
             .children(self.find.bar.clone().filter(|_| self.find.open))
             .child(self.conflict_notice(conflict, &t))
-            .child(self.save_notice(window, cx, &t))
-            .child(div().flex_1().min_h_0().child(content));
+            .child(div().flex_1().min_h_0().child(content))
+            .child(self.save_notice(window, cx, &t));
         let view = view.child(wheel);
         if self.embedded {
             view.into_any_element()

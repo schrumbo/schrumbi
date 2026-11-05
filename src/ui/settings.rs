@@ -2504,6 +2504,8 @@ impl Render for Settings {
         let content = div()
             .id("settings")
             .track_focus(&self.focus)
+            .on_action(|_: &super::app::CloseWindow, window, _| window.remove_window())
+            .on_action(|_: &super::app::CloseTab, window, _| window.remove_window())
             .on_key_down(cx.listener(|s, e: &KeyDownEvent, window, cx| {
                 if s.recording.is_none() && e.keystroke.key == "escape" {
                     let filter_focused = s.filter.read(cx).focus_handle(cx).is_focused(window);

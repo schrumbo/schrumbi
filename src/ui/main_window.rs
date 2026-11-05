@@ -441,6 +441,7 @@ impl Render for MainWindow {
                 if super::app::typing_in_field(window) {
                     return;
                 }
+                super::sheets::close_popovers(window, cx);
                 match state::read(cx, super::app::rename_target) {
                     Some(path) => super::app::rename_file(path, cx),
                     None => cx.propagate(),

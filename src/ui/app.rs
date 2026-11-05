@@ -261,10 +261,10 @@ pub fn wrap_is_available(note: bool) -> bool {
     note && prefs::with(|p| p.note_editor == prefs::NoteEditor::Code && p.note_mode != prefs::NoteMode::Read)
 }
 
-/// Whether a text field other than a note's own editor has the focus, where a key like F2 belongs to the field.
+/// Whether a text field other than a note's own editor has the focus, where a key like F2 belongs to the field. A cell of a table being written counts as a field.
 pub fn typing_in_field(window: &Window) -> bool {
     let stack = window.context_stack();
-    stack.iter().any(|c| c.contains("Input")) && !stack.iter().any(|c| c.contains("NoteEditor") || c.contains("LiveBlock"))
+    stack.iter().any(|c| c.contains("Input")) && (stack.iter().any(|c| c.contains("LiveCell")) || !stack.iter().any(|c| c.contains("NoteEditor") || c.contains("LiveBlock")))
 }
 
 /// What Rename acts on: the shown note or file, else the row the explorer has selected.
@@ -281,9 +281,8 @@ pub fn rename_is_available(cx: &App) -> bool {
     state::read(cx, |l| rename_target(l).is_some())
 }
 
-/// Asks the explorer to rename `path`, showing it first when it was hidden.
+/// Asks the explorer to rename `path`; a hidden or narrow explorer stays hidden and a small sheet asks instead.
 pub fn rename_file(path: PathBuf, cx: &mut App) {
-    prefs::update(|p| p.notes_explorer_hidden = false);
     act(cx, |l| {
         l.rename_request = Some(path);
         l.quiet_open = true;

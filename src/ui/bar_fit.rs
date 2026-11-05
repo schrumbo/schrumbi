@@ -10,6 +10,8 @@ use super::theme::{Theme, control, font, iconsize, space, tab};
 pub const TAB_BASE: f32 = space::M + iconsize::M + space::S + space::S;
 /// The close button and the gap before it; a squeezed tab shows it only on hover, over its title.
 pub const TAB_CLOSE: f32 = iconsize::M + space::S;
+/// What a title gets beyond its measured width, so the face it is drawn in never cuts it short.
+pub const TAB_TEXT_SLACK: f32 = 4.;
 /// Width of an icon-only button.
 pub const ICON_BUTTON: f32 = control::S;
 
@@ -120,7 +122,7 @@ pub fn tab_natural(title: &str, window: &Window) -> f32 {
         });
         width
     });
-    TAB_BASE + TAB_CLOSE + text.min(tab::TITLE_MAX)
+    TAB_BASE + TAB_CLOSE + (text + TAB_TEXT_SLACK).min(tab::TITLE_MAX)
 }
 
 /// How wide a small outlined button with an icon and this label is.

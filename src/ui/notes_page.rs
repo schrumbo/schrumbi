@@ -280,6 +280,11 @@ impl Tree {
         if let Some(files) = self.files.get_mut(folder_of(&rel)) {
             files.retain(|p| p != path);
         }
+        let mut dir = folder_of(&rel);
+        while vault.root.is_dir() && !dir.is_empty() && !vault.root.join(dir).is_dir() {
+            self.remove_folder(dir);
+            dir = folder_of(dir);
+        }
         if !path.is_dir()
             && let Some(folders) = self.folders.get_mut(folder_of(&rel))
         {
@@ -469,7 +474,7 @@ impl NotesPage {
                 }
             }
         }
-        let in_rename = self.renaming.as_ref().map(|(p, ..)| p).filter(|p| Some(*p) != self.pending_folder.as_ref()).filter(|p| unlisted_rename(p, folder, tree.files.get(folder), &vault.root));
+        let in_rename = self.renaming.as_ref().map(|(p, ..)| p).filter(|p| Some(*p) != self.pending_folder.as_ref() && !p.is_dir()).filter(|p| unlisted_rename(p, folder, tree.files.get(folder), &vault.root));
         if let Some(path) = in_rename {
             out.push(Self::file_row(path, depth, false, None, vault));
         }
@@ -704,6 +709,24 @@ impl NotesPage {
         cx.notify();
     }
 
+    /// Opened folders, the selection and the target follow a folder that got a new name, before the next scan.
+    fn folder_renamed(&mut self, old: &Path, new: &Path) {
+        let root = index::current().root.clone();
+        let rel = |p: &Path| p.strip_prefix(&root).ok().map(|r| r.to_string_lossy().replace('\\', "/"));
+        let (Some(old), Some(new)) = (rel(old), rel(new)) else { return };
+        let below = format!("{old}/");
+        let follow = |r: &str| if r == old { Some(new.clone()) } else { r.strip_prefix(&below).map(|rest| format!("{new}/{rest}")) };
+        self.open_folders = self.open_folders.iter().map(|r| follow(r).unwrap_or_else(|| r.clone())).collect();
+        self.target_folder = self.target_folder.as_ref().map(|r| follow(r).unwrap_or_else(|| r.clone()));
+        if let Some(Row::Folder { rel, name, .. }) = &mut self.selected
+            && let Some(now) = follow(rel)
+        {
+            *name = now.rsplit('/').next().unwrap_or(&now).to_string();
+            *rel = now;
+        }
+        self.cache = None;
+    }
+
     fn finish_rename(&mut self, path: &Path, text: &str, hand: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.renaming.take().is_none() {
             return;
@@ -718,6 +741,9 @@ impl NotesPage {
                 text.to_string()
             };
             act(cx, |l| l.rename(path, &name));
+            if is_folder && !path.exists() {
+                self.folder_renamed(path, &path.with_file_name(&name));
+            }
             state::reindex(cx);
         }
         if is_folder {
@@ -1217,6 +1243,7 @@ impl Render for NotesPage {
                 if this.renaming.is_some() || super::app::typing_in_field(window) {
                     return;
                 }
+                super::sheets::close_popovers(window, cx);
                 match this.selection_path() {
                     Some(path) => this.start_rename(path, window, cx),
                     None => cx.propagate(),

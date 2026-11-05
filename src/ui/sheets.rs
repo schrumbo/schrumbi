@@ -143,7 +143,7 @@ pub fn typing(window: &Window) -> bool {
 }
 
 /// Closes a menu or popover that has the keyboard, so a sheet opened by a shortcut does not stack on top of it.
-fn close_popovers(window: &mut Window, cx: &mut App) -> bool {
+pub fn close_popovers(window: &mut Window, cx: &mut App) -> bool {
     let open = window.context_stack().iter().any(|c| c.contains("PopupMenu"));
     if open {
         window.dispatch_action(Box::new(Cancel), cx);
