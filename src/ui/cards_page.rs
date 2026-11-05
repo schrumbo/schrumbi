@@ -2135,7 +2135,7 @@ impl Render for CardComposer {
             .child(Textarea::new(&self.front))
             .when(!cloze, |d| d.child(field_label(tr("Rückseite"))).child(Textarea::new(&self.back)))
             .child(match self.notice(cx) {
-                Some(text) => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange).child(icon("triangle-alert", iconsize::XS, t.orange)).child(div().flex_1().min_w_0().child(text)),
+                Some(text) => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange_text).child(icon("triangle-alert", iconsize::XS, t.orange_text)).child(div().flex_1().min_w_0().child(text)),
                 None => caption(tr("Markdown, Formeln mit $…$ und Bilder gehen überall."), &t),
             });
         let preview = div()

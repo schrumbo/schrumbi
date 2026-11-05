@@ -237,7 +237,7 @@ fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fiel
     );
     let total: f64 = m.components.iter().map(|x| x.weight).sum();
     if m.components.len() > 1 && (total - 100.).abs() > 0.01 {
-        footer = footer.child(div().text_size(px(font::CALLOUT)).text_color(t.orange).child(trf("Gewichte ergeben %@ %%", &[&format_number(total, 2)])));
+        footer = footer.child(div().text_size(px(font::CALLOUT)).text_color(t.orange_text).child(trf("Gewichte ergeben %@ %%", &[&format_number(total, 2)])));
     }
     if system.uses_grades() && m.components.len() > 1 {
         let id = m.id.clone();

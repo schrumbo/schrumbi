@@ -986,7 +986,7 @@
   "Tab schließen": "Close Tab",
   "Tag": "Day",
   "Tagesübung": "In-class exercise",
-  "Tasten drücken …": "Press keys …",
+  "Tasten drücken…": "Press keys…",
   "Tastenkürzel": "Shortcuts",
   "Teilleistung": "Component",
   "Teilleistung entfernen": "Remove component",
@@ -1161,7 +1161,7 @@
   "⌘Z": "⌘Z",
   "Tastenkürzel anzeigen": "Show keyboard shortcuts",
   "In den Einstellungen ändern": "Change in Settings",
-  "Seitenleiste ein-/ausblenden": "Show/Hide Sidebar",
+  "Seitenleiste ein-/ausblenden": "Show/hide sidebar",
   "Hilfe": "Help",
   "Auswahl": "Selection",
   "Notiz, Textdatei oder Ordner in %@ anlegen": "Create a note, text file or folder in %@",
@@ -1529,7 +1529,7 @@
   "%lld Dateien gehören jetzt zu %@": "%lld files now belong to %@",
   "Angelegt für %@: %@": "Created for %@: %@",
   "PDF erstellt für %@: %@": "PDF created for %@: %@",
-  "Datei für %@ suchen …": "Find a file for %@ …",
+  "Datei für %@ suchen…": "Find a file for %@…",
   "Zugeordnet": "Linked",
   "Zuordnen": "Link",
   "Tippe einen Namen; gesucht wird im ganzen Studienordner.": "Type a name; the whole study folder is searched.",
@@ -1655,5 +1655,9 @@
   "Tastaturnavigation": "keyboard navigation",
   "kein Kürzel": "no shortcut",
   "Nach Muster benennen – erst Abgabe zuordnen": "Name by pattern – assign to a submission first",
-  "Suche…": "Searching…"
+  "Suche…": "Searching…",
+  "Textbearbeitung": "text editing",
+  "%@ – andere Tasten drücken": "%@ – press other keys",
+  "Zeilenumbruch ohne Liste": "Line break without a list item",
+  "Kürzel geändert": "Shortcut changed"
 }

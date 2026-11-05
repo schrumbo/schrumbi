@@ -982,7 +982,7 @@ impl NotesPage {
                                 let p = r.clone();
                                 m2.update(cx, |s, cx| s.start_rename(p, window, cx));
                             }))
-                            .when_some(super::convention_rename::menu_item(&menu, cx), |m, item| m.item(item))
+                            .when_some(super::convention_rename::menu_item_or_hint(&menu, cx), |m, item| m.item(item))
                             .item(PopupMenuItem::new(tr("In den Papierkorb")).icon(menu_icon("trash-2")).on_click(move |_, _, cx| {
                                 state::trash(vec![x.clone()], cx);
                             }))
@@ -1114,7 +1114,7 @@ impl Render for NotesPage {
             .child(self.view_button(View::Tasks, "circle-check", tr("Aufgaben"), open_tasks, &t, cx))
             .child(div().flex_1())
             .child(Button::new("explorer-hide").ghost().small().icon(menu_icon("panel-left-close")).tooltip(tr("Dateien ausblenden")).on_click(|_, _, cx| set_hidden(true, cx)))
-            .child(Button::new("explorer-new").ghost().small().icon(menu_icon("square-pen")).tooltip(tr("Neue Notiz")).on_click(cx.listener(|s, _, window, cx| s.new_note(window, cx))))
+            .child(Button::new("explorer-new").ghost().small().icon(menu_icon("square-pen")).tooltip(format!("{}{}", tr("Neue Notiz"), crate::core::shortcuts::ShortcutAction::NewFile.hint())).on_click(cx.listener(|s, _, window, cx| s.new_note(window, cx))))
             .child(Button::new("explorer-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu({
                 let me = me.clone();
                 move |menu, _, _| {

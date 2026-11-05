@@ -22,8 +22,16 @@ pub fn available(path: &Path, cx: &App) -> bool {
     state::read(cx, |l| l.convention_offer(path)) == ConventionOffer::Ready
 }
 
-/// The menu entry for renaming by convention: working, disabled with its reason for a file in a submission folder that belongs to no deadline yet, else none.
+/// The working menu entry for renaming by convention, else none.
 pub fn menu_item(path: &Path, cx: &App) -> Option<PopupMenuItem> {
+    match state::read(cx, |l| l.convention_offer(path)) {
+        ConventionOffer::Ready => menu_item_or_hint(path, cx),
+        ConventionOffer::Hidden | ConventionOffer::NeedsDeadline => None,
+    }
+}
+
+/// Like `menu_item`, but for a file in a submission folder that belongs to no deadline yet the entry is disabled with its reason; for menus that also offer to assign a deadline.
+pub fn menu_item_or_hint(path: &Path, cx: &App) -> Option<PopupMenuItem> {
     match state::read(cx, |l| l.convention_offer(path)) {
         ConventionOffer::Hidden => None,
         ConventionOffer::NeedsDeadline => Some(PopupMenuItem::new(tr("Nach Muster benennen – erst Abgabe zuordnen")).icon(menu_icon("wand-sparkles")).disabled(true)),
@@ -161,7 +169,7 @@ impl Render for ConventionRename {
             Verdict::Same => note("info", t.secondary, tr("Die Datei heißt schon so")),
             Verdict::Taken => note("triangle-alert", t.red, tr("Diesen Namen gibt es hier schon. Wähle einen anderen.")),
             Verdict::Forbidden => note("triangle-alert", t.red, trf("Diese Zeichen gehen nicht: %@", &[&"\\ / : * ? \" < > |".to_string()])),
-            Verdict::Empty => note("triangle-alert", t.red, tr("Gib einen Namen ein.")),
+            Verdict::Empty => note("info", t.secondary, tr("Gib einen Namen ein.")),
         };
         let ready = matches!(verdict, Verdict::Fits | Verdict::Off);
         let field = Input::new(&self.input).when(!self.ext.is_empty(), |i| i.suffix(div().text_color(t.secondary).child(format!(".{}", self.ext))));

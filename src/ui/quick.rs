@@ -309,7 +309,7 @@ impl QuickOpen {
     /// Finds a file to link to a deadline: its suggestions and the unlinked files in its folder first.
     pub fn linking(id: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let label = state::read(cx, |l| l.assignment(&id).map(crate::core::library::deadline_label)).unwrap_or_default();
-        Self::with(trf("Datei für %@ suchen …", &[&label]), Some(id), window, cx)
+        Self::with(trf("Datei für %@ suchen…", &[&label]), Some(id), window, cx)
     }
 
     fn with(placeholder: String, link_to: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {

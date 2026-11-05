@@ -670,7 +670,7 @@ impl Render for Pages {
                 }
                 page.into_any_element()
             }
-            Route::Notes => unavailable("book-open", tr("Keine Notiz offen"), match crate::core::shortcuts::ShortcutAction::NewFile.shortcut() {
+            Route::Notes => unavailable("book-open", tr("Keine Notiz offen"), match crate::core::shortcuts::ShortcutAction::NewFile.active_shortcut() {
                     Some(s) => trf("Wähle links eine Notiz oder lege mit %@ eine neue an.", &[&s.display()]),
                     None => tr("Wähle links eine Notiz oder lege eine neue an."),
                 }, &t).into_any_element(),

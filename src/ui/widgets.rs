@@ -28,8 +28,8 @@ pub trait KeyNav {
 
 impl KeyNav for Stateful<Div> {
     fn key_nav(self) -> Self {
-        let ring = rgb(0x0A84FF);
-        super::drive::marked(self, "clickable").tab_index(0).focus_visible(move |s| s.bg(Hsla::from(ring).opacity(0.28)))
+        let ring = super::theme::ring::fill();
+        super::drive::marked(self, "clickable").tab_index(0).focus_visible(move |s| s.bg(ring))
     }
 }
 
@@ -244,6 +244,9 @@ pub fn status_menu(menu: PopupMenu, id: &str, cx: &App) -> PopupMenu {
             .item(item(tr("Neue Notiz"), "square-pen", Box::new(move |cx| new_assignment_note(&id3, cx))))
             .item(item(tr("Datei zuordnen…"), "link", Box::new(move |cx| act(cx, |l| l.link_pick = Some(id2.clone())))))
             .item(item(tr("Abgabeordner öffnen"), "folder", Box::new(move |_| library::open_path(&folder))));
+        if let Some(rename) = e.files.iter().find_map(|f| super::convention_rename::menu_item(f, cx)) {
+            menu = menu.item(rename);
+        }
     }
     if l.manual_for(&a).is_some() {
         let id2 = id.to_string();

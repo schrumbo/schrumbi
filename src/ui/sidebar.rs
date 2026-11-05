@@ -79,7 +79,7 @@ pub fn set_hidden(key: &str, hidden: bool, cx: &mut App) {
 
 /// The first three modules answer to their own shortcuts, in sidebar order.
 fn module_help(name: String, index: usize) -> String {
-    match ShortcutAction::for_module(index).and_then(|a| a.shortcut()) {
+    match ShortcutAction::for_module(index).and_then(|a| a.active_shortcut()) {
         Some(s) => format!("{name}  {}", s.display()),
         None => name,
     }
@@ -166,7 +166,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
             continue;
         }
         let (hide_key, hide_label) = (e.key, e.label.clone());
-        let help = match e.shortcut.and_then(|a| a.shortcut()) {
+        let help = match e.shortcut.and_then(|a| a.active_shortcut()) {
             Some(k) => format!("{}  {}", e.label, k.display()),
             None => e.label.clone(),
         };

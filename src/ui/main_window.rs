@@ -535,6 +535,7 @@ impl Render for MainWindow {
 fn toast_view(message: String, icon_name: &'static str, action: Option<String>, t: &Theme) -> Stateful<Div> {
     div()
         .id("toast")
+        .occlude()
         .on_hover(|hovered, _, cx| state::lib(cx).update(cx, |l, _| l.toast_hovered = *hovered))
         .max_w(px(560.))
         .flex()

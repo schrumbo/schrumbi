@@ -60,7 +60,7 @@ fn fixed_shift_keys(key: &str) -> String {
 }
 
 fn keys(action: S) -> Option<String> {
-    action.shortcut().map(|s| s.display())
+    action.active_shortcut().map(|s| s.display())
 }
 
 /// Everything the app can do right now.
@@ -436,7 +436,7 @@ impl Render for ShortcutSheet {
         let t = Theme::get(cx);
         let section = |title: String, rows: Vec<Div>| div().flex().flex_col().gap(px(space::XS)).child(div().pb(px(space::XS)).font_weight(FontWeight::SEMIBOLD).child(title)).children(rows);
         let modules = state::read(cx, |l| l.semester_modules().iter().take(S::MODULES.len()).map(|m| m.display_name()).collect::<Vec<_>>());
-        let group = |g: Group| -> Vec<Div> { S::ALL.into_iter().filter(|a| a.group() == g && a.module_index().is_none_or(|i| i < modules.len())).filter_map(|a| a.shortcut().map(|s| shortcut_row(a.named(&modules), s.parts(), &t))).collect() };
+        let group = |g: Group| -> Vec<Div> { S::ALL.into_iter().filter(|a| a.group() == g && a.module_index().is_none_or(|i| i < modules.len())).filter_map(|a| a.active_shortcut().map(|s| shortcut_row(a.named(&modules), s.parts(), &t))).collect() };
         let mut general = vec![
             shortcut_row(tr("Befehl suchen…"), fixed_parts("P", true), &t),
             shortcut_row(tr("Tastenkürzel anzeigen"), fixed_parts("/", false), &t),

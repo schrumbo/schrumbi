@@ -82,7 +82,7 @@ fn recent_notes(t: &Theme) -> Option<Div> {
         inset_file_row(("recent-note", i), &path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t)
             .child(caption(super::notes_page::changed_ago(now - modified), t).flex_none())
             .on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
-            .context_menu(move |m, window, cx| deadline_submenu(file_menu(m, menu.clone()).when_some(super::convention_rename::menu_item(&menu, cx), |m, item| m.item(item)).separator(), &menu, window, cx))
+            .context_menu(move |m, window, cx| deadline_submenu(file_menu(m, menu.clone()).when_some(super::convention_rename::menu_item_or_hint(&menu, cx), |m, item| m.item(item)).separator(), &menu, window, cx))
     });
     Some(div().flex().flex_col().gap(px(space::S)).child(section_title(tr("Zuletzt geschrieben"))).child(inset_list(t).children(rows)))
 }
@@ -381,7 +381,7 @@ fn getting_started(t: &Theme) -> Div {
                 .gap(px(space::M))
                 .child(step("calendar-plus", tr("Aus Moodle importieren"), tr("Einstellungen → Kalender abonnieren, Adresse eintragen.")))
                 .child(step("repeat", tr("Wiederkehrende Abgaben"), tr("Einstellungen → Module → Regel hinzufügen, z. B. jeden Montag 18:00.")))
-                .child(step("circle-plus", tr("Einzeln hinzufügen"), trf("%@ für Aufgaben, Abgaben und Prüfungen.", &[&crate::core::shortcuts::ShortcutAction::NewEntry.shortcut().map_or_else(|| tr("Plus"), |s| s.display())]))),
+                .child(step("circle-plus", tr("Einzeln hinzufügen"), trf("%@ für Aufgaben, Abgaben und Prüfungen.", &[&crate::core::shortcuts::ShortcutAction::NewEntry.active_shortcut().map_or_else(|| tr("Plus"), |s| s.display())]))),
         )
 }
 

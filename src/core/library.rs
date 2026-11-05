@@ -374,8 +374,6 @@ pub struct Library {
     pub show_conflicts: bool,
     /// The toast asked to take back the last conflict resolution.
     pub sync_undo_requested: bool,
-    /// The toast gave the custom shortcuts back; the key bindings are rebuilt.
-    pub shortcuts_restored: bool,
     /// A file was put where it belongs; automatic sync takes it up right away.
     pub sync_soon: bool,
     /// Undo or redo changed files; the index catches up right away.
@@ -515,7 +513,6 @@ impl Library {
             show_sync_setup: false,
             show_conflicts: false,
             sync_undo_requested: false,
-            shortcuts_restored: false,
             sync_soon: false,
             notes_touched: false,
             sync_gate: false,

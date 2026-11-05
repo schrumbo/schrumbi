@@ -92,6 +92,20 @@ pub mod radius {
     pub const FULL: f32 = 999.;
 }
 
+/// The fill a control gets while the keyboard has the focus.
+pub mod ring {
+    use gpui_kit::{Hsla, rgb};
+
+    const COLOR: u32 = 0x0A84FF;
+    const OPACITY: f32 = 0.28;
+    /// The tint of a shortcut chip that is waiting for keys.
+    pub const ARMED: f32 = 0.08;
+
+    pub fn fill() -> Hsla {
+        Hsla::from(rgb(COLOR)).opacity(OPACITY)
+    }
+}
+
 /// macOS text styles in points.
 pub mod font {
     pub const LARGE_TITLE: f32 = 26.;
@@ -205,7 +219,7 @@ impl Theme {
             green: if dark { c(0x30D158) } else { c(0x34C759) },
             blue: if dark { c(0x0A84FF) } else { c(0x007AFF) },
             orange: if dark { c(0xFF9F0A) } else { c(0xFF9500) },
-            orange_text: if dark { c(0xFF9F0A) } else { c(0x9A5700) },
+            orange_text: if dark { c(0xFF9F0A) } else { c(0x854A00) },
             red: if dark { c(0xFF453A) } else { c(0xFF3B30) },
             gray: c(0x8E8E93),
             ink,
@@ -535,7 +549,13 @@ mod tests {
         for kind in [Kind::Light, Kind::Dark, Kind::Nord, Kind::Dracula] {
             let dark = kind;
             let t = Theme::new(kind);
+            let ring = ring::fill();
             for background in [t.content, t.sidebar, t.secondary_bg, t.column] {
+                let focused = background.blend(ring);
+                let armed = background.blend(t.accent.opacity(ring::ARMED));
+                assert!(contrast(t.orange_text, armed) >= 4.5, "orange text on the armed chip, {dark:?}: {}", contrast(t.orange_text, armed));
+                assert!(!matches!(kind, Kind::Light | Kind::Dark) || contrast(t.accent_text, armed) >= 4.5, "accent text on the armed chip, {dark:?}: {}", contrast(t.accent_text, armed));
+                assert!(!matches!(kind, Kind::Light | Kind::Dark) || contrast(t.orange_text, focused) >= 4.5, "orange text on the focus fill, {dark:?}: {}", contrast(t.orange_text, focused));
                 assert!(contrast(t.primary, background) >= 7., "primary, {dark:?}");
                 assert!(contrast(t.secondary, background) >= 4.5, "secondary, {dark:?}: {}", contrast(t.secondary, background));
                 assert!(contrast(t.accent_text, background) >= 4.5, "accent, {dark:?}: {}", contrast(t.accent_text, background));

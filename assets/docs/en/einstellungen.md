@@ -25,10 +25,10 @@ Search knows other words too: `dark` finds the appearance, `git` the sync. It al
 ## Change Shortcuts
 
 1. Open {ui:Tastenkürzel} and click a shortcut or its name, or Tab to it and press {key:return}.
-2. Press the new keys. A modifier key must be included, for arrows, Tab and Return Shift is enough, F keys work alone. Without a modifier a hint appears. Shortcuts that Schrumbi or the system use for fixed purposes (copy, paste, close tab) cannot be set; the reason appears on the row.
+2. Press the new keys. A modifier key must be included, for arrows, Tab and Return Shift is enough, F keys work alone. Without a modifier a hint appears. Copy, paste, cut, select all, undo, redo, close tab, quit, {key:tab} and the text editing keys (arrows with Shift, word and line jumps, deleting words) cannot be set; the reason appears on the row. All other Schrumbi keys can be reassigned.
 3. {key:escape} cancels, {key:delete} removes the shortcut.
 
-A click in the search field or elsewhere ends recording. With no hit, {key:escape} in the field clears the search. If a shortcut is used twice, {ui:Doppelt} appears next to it, and its hint names the other command. While recording, the key triggers nothing, so a key already in use can be set too. {ui:Alle zurücksetzen} restores the defaults, {ui:Rückgängig} in the notice next to the search field brings your shortcuts back; it disappears after a few seconds.
+A click in the search field or elsewhere ends recording. If something is in the search field, {key:escape} clears it. If a shortcut is used twice, {ui:Doppelt} and the other command appear on the row. While recording, the key triggers nothing, so a key already in use can be set too. {ui:Alle zurücksetzen} restores the defaults. After every change a notice with {ui:Rückgängig} appears below the search field and brings the previous state back; it disappears after a few seconds.
 
 ## Next Semester
 

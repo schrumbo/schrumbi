@@ -141,7 +141,7 @@ fn binding_shortcut(binding: &KeyBinding) -> Option<Shortcut> {
 /// The keys for a `{key:…}` name: a configurable shortcut id, a fixed app action, or a plain key like `return`.
 fn key_text(name: &str, cx: &App) -> Option<String> {
     if let Some(a) = ShortcutAction::ALL.iter().find(|a| a.id() == name) {
-        return a.shortcut().map(|s| s.display());
+        return a.active_shortcut().map(|s| s.display());
     }
     if name.chars().next().is_some_and(char::is_uppercase) {
         let suffix = format!("::{name}");

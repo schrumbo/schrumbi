@@ -6,7 +6,7 @@ use super::find_bar::{CloseFind, FindInNote, ReplaceInNote};
 use crate::core::shortcuts::ShortcutAction as S;
 
 fn bind<A: Action>(a: S, action: A) -> Option<KeyBinding> {
-    a.shortcut().map(|s| kb(s.keystroke(), action, Some("NoteEditor > Input")))
+    a.active_shortcut().map(|s| kb(s.keystroke(), action, Some("NoteEditor > Input")))
 }
 
 /// Note editor shortcuts from the user's settings, plus list-aware Return and Tab.

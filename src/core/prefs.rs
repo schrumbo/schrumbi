@@ -324,6 +324,11 @@ pub fn get() -> Prefs {
     PREFS.read().unwrap().clone()
 }
 
+/// Reads the current settings without copying them.
+pub fn with<R>(f: impl FnOnce(&Prefs) -> R) -> R {
+    f(&PREFS.read().unwrap())
+}
+
 /// Changes settings and writes them to disk.
 pub fn update(f: impl FnOnce(&mut Prefs)) {
     let snapshot = {

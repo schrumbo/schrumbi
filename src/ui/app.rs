@@ -267,7 +267,7 @@ pub fn kb<A: Action>(keys: String, a: A, context: Option<&str>) -> KeyBinding {
 }
 
 fn binding<A: Action>(action: ShortcutAction, a: A, context: Option<&str>) -> Option<KeyBinding> {
-    action.shortcut().map(|s| kb(s.keystroke(), a, context))
+    action.active_shortcut().map(|s| kb(s.keystroke(), a, context))
 }
 
 /// `cmd-…` on macOS, `ctrl-…` elsewhere.
@@ -359,6 +359,10 @@ pub fn bind_keys(cx: &mut App) {
             binding(ShortcutAction::TogglePreview, TogglePreview, None),
             binding(ShortcutAction::SplitPreview, SplitPreview, None),
             binding(ShortcutAction::ExportPdf, ExportPdf, None),
+            binding(ShortcutAction::FindInNote, super::find_bar::FindInNote, None),
+            Some(kb(cmd("alt-f"), super::find_bar::ReplaceInNote, None)),
+            #[cfg(not(target_os = "macos"))]
+            Some(kb("ctrl-h".into(), super::find_bar::ReplaceInNote, None)),
             binding(ShortcutAction::FindInNote, super::find_bar::FindInNote, Some("NoteView")),
             Some(kb(cmd("alt-f"), super::find_bar::ReplaceInNote, Some("NoteView"))),
         ]

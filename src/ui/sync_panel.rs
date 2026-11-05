@@ -195,7 +195,7 @@ impl Render for SyncPanel {
         let too_large = s.too_large.clone();
         let conflicts = s.conflicts.len();
         let root = s.git.as_ref().map(|g| g.root.clone());
-        let keys = ShortcutAction::Sync.shortcut().map(|k| k.display());
+        let keys = ShortcutAction::Sync.active_shortcut().map(|k| k.display());
         let modules: Vec<(String, String)> = state::read(cx, |l| l.config.as_ref().map(|c| c.modules.iter().map(|m| (m.folder.clone(), m.code.clone())).collect()).unwrap_or_default());
         let code = |path: &str| modules.iter().filter(|(f, _)| path.starts_with(&format!("{f}/"))).max_by_key(|(f, _)| f.len()).map(|(_, c)| c.clone());
         let head = div()

@@ -746,7 +746,7 @@ impl Render for Setup {
                     .border_color(t.separator)
                     .when(step < SETUP_DONE, |d| d.child(Button::new("setup-later").ghost().label(tr("Später einrichten")).on_click(move |_, _, cx| later.update(cx, |s, cx| s.finish(false, cx)))))
                     .child(div().flex_1())
-                    .children(problem.map(|text| div().text_size(px(font::CALLOUT)).text_color(t.orange).child(text)))
+                    .children(problem.map(|text| div().text_size(px(font::CALLOUT)).text_color(t.orange_text).child(text)))
                     .when(step > 0, |d| {
                         d.child(Button::new("setup-back").label(tr("Zurück")).on_click(move |_, _, cx| back.update(cx, |s, cx| {
                             s.step -= 1;
