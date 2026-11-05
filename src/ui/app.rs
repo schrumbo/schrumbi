@@ -220,13 +220,13 @@ pub fn init(cx: &mut App) {
     rebuild_menus(cx);
     let lib = state::lib(cx);
     let mut modules: Vec<String> = Vec::new();
-    let mut note = (note_is_active(cx), find_is_available(cx), rename_is_available(cx), wrap_is_available(cx));
+    let mut note = (note_is_active(cx), find_is_available(cx), rename_is_available(cx), wrap_is_available(cx), tab_is_shown(cx));
     cx.observe(&lib, move |lib, cx| {
         if let Some(path) = lib.update(cx, |l, _| l.raise_note_window.take()) {
             cx.defer(move |cx| super::note_window::open(&path, cx));
         }
         let now: Vec<String> = lib.read(cx).semester_modules().iter().map(|m| format!("{}{}", m.id, m.display_name())).collect();
-        let open = (note_is_active(cx), find_is_available(cx), rename_is_available(cx), wrap_is_available(cx));
+        let open = (note_is_active(cx), find_is_available(cx), rename_is_available(cx), wrap_is_available(cx), tab_is_shown(cx));
         if now != modules || open != note {
             modules = now;
             note = open;
@@ -262,12 +262,17 @@ pub fn note_is_active(cx: &App) -> bool {
     cx.try_global::<NoteWindowFront>().is_some_and(|f| f.0.is_some()) || state::read(cx, |l| matches!(l.route(), Route::Doc(_)) && l.focused_document().is_some_and(crate::core::markdown::is_markdown))
 }
 
+/// Whether a tab of the main window or a separate note window is there for Close Tab to close.
+pub fn tab_is_shown(cx: &App) -> bool {
+    cx.try_global::<NoteWindowFront>().is_some_and(|f| f.0.is_some()) || state::read(cx, |l| matches!(l.route(), Route::Doc(_)))
+}
+
 /// Whether notes are written in the Live view.
 pub fn live_is_on() -> bool {
     prefs::with(|p| p.note_editor == prefs::NoteEditor::Live)
 }
 
-/// Switches between the Live view and the code editor for notes; the menu follows.
+/// Switches between the Live view and the source editor for notes; the menu follows.
 pub fn toggle_live(cx: &mut App) {
     prefs::update(|p| p.note_editor = if p.note_editor == prefs::NoteEditor::Live { prefs::NoteEditor::Code } else { prefs::NoteEditor::Live });
     rebuild_menus(cx);
@@ -512,7 +517,7 @@ pub fn bind_keys(cx: &mut App) {
 /// The menu bar: Schrumbi, Ablage, Bearbeiten, Darstellung, Gehe zu, Fenster.
 pub fn rebuild_menus(cx: &mut App) {
     let (note, find) = (note_is_active(cx), find_is_available(cx));
-    let renamable = rename_is_available(cx);
+    let (renamable, tab) = (rename_is_available(cx), tab_is_shown(cx));
     let modules: Vec<(String, String)> = state::read(cx, |l| l.semester_modules().iter().map(|m| (m.id.clone(), m.display_name())).collect());
     let recents: Vec<MenuItem> = prefs::get()
         .recent_workspaces
@@ -575,7 +580,7 @@ pub fn rebuild_menus(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action(tr("Sichern"), Save),
             MenuItem::action(tr("Jetzt synchronisieren"), SyncNow),
-            MenuItem::action(tr("Tab schließen"), CloseTab),
+            MenuItem::action(tr("Tab schließen"), CloseTab).disabled(!tab),
             MenuItem::action(tr("Geschlossenen Tab wieder öffnen"), ReopenTab),
             MenuItem::action(tr("Fenster schließen"), CloseWindow),
         ]),
@@ -592,8 +597,8 @@ pub fn rebuild_menus(cx: &mut App) {
             MenuItem::action(tr("In Notiz ersetzen"), super::find_bar::ReplaceInNote).disabled(!note),
         ]),
         Menu::new(tr("Darstellung")).items([
-            MenuItem::action(tr("Lesen / Bearbeiten"), TogglePreview),
-            MenuItem::action(tr("Geteilte Ansicht"), SplitPreview),
+            MenuItem::action(tr("Lesen / Bearbeiten"), TogglePreview).disabled(!note),
+            MenuItem::action(tr("Geteilte Ansicht"), SplitPreview).disabled(!note),
             MenuItem::action(tr("Live-Ansicht"), ToggleLive).checked(live_is_on()).disabled(!note),
             MenuItem::action(tr("Zeilenumbruch ein-/ausschalten"), super::documents::ToggleWrap).disabled(!wrap_is_available(cx)),
             MenuItem::action(tr("Notiz als PDF exportieren"), ExportPdf),

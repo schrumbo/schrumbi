@@ -326,6 +326,17 @@ fn a_rename_leaves_a_trail_for_views_that_still_show_the_old_path() {
 }
 
 #[test]
+fn a_rename_of_a_tab_that_has_no_buffer_yet_leaves_a_trail_too() {
+    let (root, p) = notes("rename-trail-bare", &["a.md"]);
+    let mut lib = opened(&p);
+    lib.buffers.remove(&p[0]);
+    lib.rename_checked(&p[0], "neu.md").unwrap();
+    let new = root.join("neu.md");
+    assert_eq!(lib.open_documents, vec![new.clone()]);
+    assert_eq!(lib.moved_path(&p[0]), Some(new));
+}
+
+#[test]
 fn renaming_a_folder_moves_the_buffers_windows_and_trails_of_the_notes_inside() {
     let (root, _) = notes("rename-folder", &[]);
     let dir = root.join("kurs");

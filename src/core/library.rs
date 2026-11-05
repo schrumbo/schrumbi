@@ -104,6 +104,8 @@ pub enum Change {
     Highlights { key: String, list: Vec<Highlight> },
     /// Puts a note's text back, as chosen when another app changed the file.
     Note { path: PathBuf, text: String },
+    /// Takes a note back to a decision still open: `theirs` on disk, `mine` kept in the note.
+    Conflict { path: PathBuf, mine: String, theirs: String },
     /// Puts a file's bytes back, for restoring an earlier version.
     Bytes { path: PathBuf, bytes: Vec<u8> },
     /// Puts cards' progress back, in the vault whose cards they are.
@@ -1330,21 +1332,36 @@ impl Library {
         let name = name_of(path);
         let (stem, ext) = (super::naming::stem(&name), extension(&name));
         let suffix = if ext.is_empty() { String::new() } else { format!(".{ext}") };
-        let copy = unique_path(&path.with_file_name(format!("{stem} ({}){suffix}", tr("andere Version"))));
-        if let Err(e) = std::fs::copy(path, &copy) {
-            self.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]));
-            return;
-        }
+        let label = tr("andere Version");
+        let numbered = |i: u32| path.with_file_name(format!("{stem} ({}){suffix}", if i == 1 { label.clone() } else { format!("{label} {i}") }));
+        let copy = (1..1000).map(numbered).find(|p| !p.exists()).unwrap_or_else(|| unique_path(&numbered(1)));
+        let mine = buffer.text.clone();
+        let copied = match std::fs::copy(path, &copy) {
+            Ok(_) => true,
+            Err(_) if !path.exists() => std::fs::write(&copy, &theirs).is_ok(),
+            Err(e) => {
+                self.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]));
+                return;
+            }
+        };
         let Some(buffer) = self.buffers.get_mut(path) else { return };
         buffer.keep_mine();
         if let Err(e) = buffer.save() {
-            let _ = std::fs::remove_file(&copy);
+            if copied {
+                let _ = std::fs::remove_file(&copy);
+            }
             self.last_error = Some(trf("Notiz konnte nicht gesichert werden: %@", &[&e]));
             return;
         }
         self.refresh();
-        let kept = trf("Andere Version gesichert als „%@“", &[&name_of(&copy)]);
-        self.commit(kept, "check", vec![Change::Note { path: path.to_path_buf(), text: theirs }, Change::Trash(copy)]);
+        let mut undo = vec![Change::Conflict { path: path.to_path_buf(), mine, theirs }];
+        let kept = if copied {
+            undo.push(Change::Trash(copy.clone()));
+            trf("Andere Version gesichert als „%@“", &[&name_of(&copy)])
+        } else {
+            tr("Meine behalten")
+        };
+        self.commit(kept, "check", undo);
     }
 
     /// Shows the version another app wrote; the text here stays in the undo history.
@@ -2455,8 +2472,14 @@ impl Library {
                     buffer.restore(text)?;
                     Change::Note { path, text: before }
                 }
+                Change::Conflict { path, mine, theirs } => {
+                    let buffer = self.buffer(&path);
+                    let before = buffer.text.clone();
+                    buffer.put_conflict(mine, theirs)?;
+                    Change::Note { path, text: before }
+                }
                 Change::Cards { root, swaps } => {
-                    let back = super::cards::swap(root.as_deref(), swaps).unwrap_or_else(|| {
+                    let back =super::cards::swap(root.as_deref(), swaps).unwrap_or_else(|| {
                         self.last_error = Some(tr("Die Karten gehören zu einem anderen Ordner und bleiben, wie sie sind."));
                         Vec::new()
                     });
@@ -3002,7 +3025,7 @@ impl Library {
 
     /// Where a note went that was open at `from`, so a view that still shows the old path can follow.
     pub fn moved_path(&self, from: &Path) -> Option<PathBuf> {
-        self.moves.get(from).filter(|to| self.buffers.contains_key(*to)).cloned()
+        self.moves.get(from).filter(|to| self.buffers.contains_key(*to) || self.open_documents.contains(to) || self.split_document.as_ref() == Some(*to)).cloned()
     }
 
     /// Keeps tabs, open notes, links and remembered positions on a file that moved.
@@ -3010,12 +3033,13 @@ impl Library {
         let (old, new) = (self.relative_path(from), self.relative_path(to));
         let settled = |p: &Path| p.parent().and_then(|d| dunce::canonicalize(d).ok()).zip(p.file_name()).map_or_else(|| p.to_path_buf(), |(d, n)| d.join(n));
         let (from, to) = (settled(from), settled(to));
-        let under = |p: &Path| p.strip_prefix(&from).ok().map(|rest| if rest.as_os_str().is_empty() { to.clone() } else { to.join(rest) });
+        let under =|p: &Path| p.strip_prefix(&from).ok().map(|rest| if rest.as_os_str().is_empty() { to.clone() } else { to.join(rest) });
         let swap = |p: &mut PathBuf| {
             if let Some(now) = under(p) {
                 *p = now;
             }
         };
+        let shown: Vec<(PathBuf, PathBuf)> = self.open_documents.iter().chain(self.split_document.iter()).filter_map(|p| under(p).map(|n| (p.clone(), n))).collect();
         self.open_documents.iter_mut().for_each(swap);
         self.closed_documents.iter_mut().for_each(|(p, _)| swap(p));
         self.preview_document.iter_mut().for_each(swap);
@@ -3047,6 +3071,14 @@ impl Library {
         }
         if let Route::Doc(p) = &mut self.route {
             swap(p);
+        }
+        for (was, now) in shown {
+            if !self.buffers.contains_key(&was) {
+                self.moves.values_mut().filter(|v| **v == was).for_each(|v| v.clone_from(&now));
+                self.moves.insert(was, now.clone());
+                self.moves.remove(&now);
+                self.moves.retain(|k, v| k != v);
+            }
         }
         let buffered: Vec<(PathBuf, PathBuf)> = self.buffers.keys().filter_map(|p| under(p).map(|n| (p.clone(), n))).collect();
         for (was, now) in buffered {

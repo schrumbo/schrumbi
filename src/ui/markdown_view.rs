@@ -1413,6 +1413,8 @@ struct Ctx<'a> {
     links_seen: &'a Cell<usize>,
     /// The top-level block being drawn.
     block: usize,
+    /// The note and view being drawn, so what is remembered per block stays with them.
+    scope: u64,
     /// Drawing the head of a foldable block, where a click folds instead of opening.
     head_text: Cell<bool>,
     /// The table cell being drawn, with row and column.
@@ -1730,6 +1732,7 @@ struct Table {
     first: usize,
     /// The item of the note this table is drawn for.
     block: usize,
+    scope: u64,
     /// Whether the top and the bottom edge of the table are drawn here.
     ends: (bool, bool),
     /// The sideways scroll shared with the table's other parts.
@@ -1826,7 +1829,7 @@ impl RenderOnce for Table {
         };
         let border = self.border;
         let (with_head, (top, bottom)) = (self.with_head, self.ends);
-        let (first, block) = (self.first, self.block);
+        let (first, block, scope) = (self.first, self.block, self.scope);
         let mut rows = self.cells.into_iter().enumerate().map(|(r, row)| {
             div().flex().when(r > 0 || !top, |d| d.border_t_1().border_color(border)).on_children_prepainted(move |cells, _, _| {
                 let height = cells.iter().map(|b| f32::from(b.size.height)).fold(0., f32::max);
@@ -1835,7 +1838,7 @@ impl RenderOnce for Table {
                     if known.len() > 4096 {
                         known.clear();
                     }
-                    known.insert((block, first + r), height);
+                    known.insert((scope, block, first + r), height);
                 });
             }).children(row.into_iter().enumerate().map(|(c, element)| column(c, element)).collect::<Vec<_>>())
         });
@@ -2061,7 +2064,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
     let note = embedded_note(&path, target);
     let mut chain = cx.chain.clone();
     chain.push(path.clone());
-    let inner = Ctx { floor: None, t, base: path.parent(), on_toggle: None, footnote_order: &note.footnote_order, order: cx.order, chain, focus: None, links_seen: cx.links_seen, block: cx.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
+    let inner = Ctx { floor: None, t, base: path.parent(), on_toggle: None, footnote_order: &note.footnote_order, order: cx.order, chain, focus: None, links_seen: cx.links_seen, block: cx.block, scope: cx.scope, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
     let blocks = render_blocks(&note.blocks, &inner);
     div()
         .flex()
@@ -2352,7 +2355,7 @@ fn table(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>], aligns: &[pulldown_cma
         let open = cx.open_cell.as_ref().filter(|(r, c, _)| *r == row && *c == i).and_then(|(_, _, field)| field.borrow_mut().take());
         let drawn = match open {
             Some(field) => {
-                let kept = ROW_HEIGHTS.with(|known| known.borrow().get(&(cx.block, row)).copied());
+                let kept = ROW_HEIGHTS.with(|known| known.borrow().get(&(cx.scope, cx.block, row)).copied());
                 d.when_some(kept, |d, height| d.min_h(px(height))).child(field)
             }
             None => {
@@ -2406,11 +2409,11 @@ fn table(head: &[Vec<Inline>], rows: &[Vec<Vec<Inline>>], aligns: &[pulldown_cma
         None => measure(),
     };
     let scroll = part.map(|(.., source)| table_scroll(source));
-    Table { id: ElementId::from(("md-table", order)), columns, cells, measure, key, with_head, first: if with_head { 0 } else { from + 1 }, block: cx.block, ends: (with_head, to >= rows.len()), scroll, size, border: t.separator, head_bg: t.secondary_bg }.into_any_element()
+    Table { id: ElementId::from(("md-table", order)), columns, cells, measure, key, with_head, first: if with_head { 0 } else { from + 1 }, block: cx.block, scope: cx.scope, ends: (with_head, to >= rows.len()), scroll, size, border: t.separator, head_bg: t.secondary_bg }.into_any_element()
 }
 
 thread_local! {
-    static ROW_HEIGHTS: RefCell<HashMap<(usize, usize), f32>> = RefCell::new(HashMap::new());
+    static ROW_HEIGHTS: RefCell<HashMap<(u64, usize, usize), f32>> = RefCell::new(HashMap::new());
     static TABLE_SCROLLS: RefCell<HashMap<(u64, usize), ScrollHandle>> = RefCell::new(HashMap::new());
     static TABLE_TEXTS: RefCell<HashMap<u64, Rc<Vec<Vec<CellText>>>>> = RefCell::new(HashMap::new());
 }
@@ -2906,7 +2909,7 @@ pub const FOUND_HOLD: std::time::Duration = std::time::Duration::from_millis(300
 /// Renders a parsed note; task boxes call `on_toggle` with their source line.
 pub fn render(note: &ParsedNote, base: Option<&Path>, on_toggle: Option<OnToggle>, t: &Theme) -> Div {
     let (order, links_seen) = (Cell::new(0), Cell::new(0));
-    let cx = Ctx { floor: None, t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
+    let cx = Ctx { floor: None, t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, scope: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
     div().flex().flex_col().gap(px(space::M)).children(render_blocks(&note.blocks, &cx)).children(render_footnotes(note, None, t))
 }
 
@@ -2950,6 +2953,8 @@ pub struct LiveDraw<'a> {
     pub open_cell: Option<(usize, usize, std::cell::RefCell<Option<AnyElement>>)>,
     /// How many blocks from the first are drawn together, as one line can make several.
     pub count: usize,
+    /// Names the note and view drawn, so table row heights are not shared between them.
+    pub scope: u64,
 }
 
 /// Renders one top-level block on its own, so long notes only build what is on screen.
@@ -2965,7 +2970,7 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
     let together = note.blocks.get(i..(i + live.count).min(note.blocks.len())).filter(|b| b.len() > 1);
     let order = Cell::new((item as u64 + 1) * 100_000);
     let links_seen = Cell::new(note.links.iter().take_while(|(_, top)| *top < i).count());
-    let cx = Ctx { floor: None, t, base, on_toggle, footnote_order: live.footnotes.unwrap_or(&note.footnote_order), order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: item, head_text: Cell::new(false), cell: Cell::new(None), open_cell: live.open_cell, find: FindDraw::new(focus, |m| match (live.item, live.footnotes) {
+    let cx = Ctx { floor: None, t, base, on_toggle, footnote_order: live.footnotes.unwrap_or(&note.footnote_order), order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: item, scope: live.scope, head_text: Cell::new(false), cell: Cell::new(None), open_cell: live.open_cell, find: FindDraw::new(focus, |m| match (live.item, live.footnotes) {
         (Some(_), Some(_)) => (live.line == m.line).then_some(m.line_nth),
         _ => (m.block == i).then_some(m.nth),
     }) };
@@ -3036,7 +3041,7 @@ pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_to
         Some(Block::Paragraph(inl)) => Some(inl.as_slice()),
         _ => None,
     };
-    let cx = Ctx { floor: note.floors.get(&row.block).cloned(), t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: row.block, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: FindDraw::new(focus, |m| paragraph.and_then(|inl| current_in_part(inl, note.sources.get(row.block).map_or(0, |s| s.hash), row, m, &note.footnote_order))) };
+    let cx = Ctx { floor: note.floors.get(&row.block).cloned(), t, base, on_toggle, footnote_order: &note.footnote_order, order: &order, chain: focus.and_then(|f| f.note.clone()).into_iter().collect(), focus, links_seen: &links_seen, block: row.block, scope: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: FindDraw::new(focus, |m| paragraph.and_then(|inl| current_in_part(inl, note.sources.get(row.block).map_or(0, |s| s.hash), row, m, &note.footnote_order))) };
     let element = match note.blocks.get(row.block) {
         Some(Block::List { start, items }) => list_items(start, items.get(from..to.min(items.len())).unwrap_or_default(), from, &cx).into_any_element(),
         Some(Block::Table { head, rows, aligns }) => table(head, rows, aligns, Some((from, to, note.sources.get(row.block).map_or((0, 0), |s| (s.hash, s.line)))), &cx),
@@ -3127,7 +3132,7 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<(ListState, Rc<dyn Fn(us
         return None;
     }
     let (order, links_seen) = (Cell::new(u64::MAX / 2), Cell::new(0));
-    let cx = Ctx { floor: None, t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
+    let cx = Ctx { floor: None, t, base: None, on_toggle: None, footnote_order: &note.footnote_order, order: &order, chain: Vec::new(), focus: None, links_seen: &links_seen, block: 0, scope: 0, head_text: Cell::new(false), cell: Cell::new(None), open_cell: None, find: None };
     let rows = used.iter().enumerate().map(|(i, (id, blocks))| {
         let home = note.footnote_homes.get(id).copied().unwrap_or(0);
         let list = list.clone();

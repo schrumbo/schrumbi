@@ -606,9 +606,13 @@ fn deciding_about_another_apps_version_can_be_undone_and_redone() {
     lib.undo();
     assert!(!copy.exists());
     assert_eq!(std::fs::read_to_string(&key).unwrap(), "fremd");
-    assert_eq!(lib.buffer(&key).text, "fremd");
+    assert_eq!(lib.buffer(&key).text, "meins", "undoing the decision never takes the text away");
+    assert_eq!(lib.buffer(&key).conflict.as_deref(), Some("fremd"));
+    assert!(lib.buffer(&key).dirty);
     lib.redo();
     assert_eq!(std::fs::read_to_string(&key).unwrap(), "meins");
+    assert!(lib.buffer(&key).conflict.is_none());
+    assert_eq!(std::fs::read_to_string(&copy).unwrap(), "fremd");
     lib.buffer(&key).edited("meins 2".into());
     std::fs::write(&key, "fremd 2").unwrap();
     let _ = lib.buffer(&key).save();
@@ -617,6 +621,46 @@ fn deciding_about_another_apps_version_can_be_undone_and_redone() {
     lib.undo();
     assert_eq!(lib.buffer(&key).text, "meins 2");
     assert_eq!(std::fs::read_to_string(&key).unwrap(), "meins 2");
+}
+
+#[test]
+fn a_second_other_version_copy_is_numbered_inside_the_brackets() {
+    let root = folder("note-mine-twice");
+    std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();
+    let note = root.join("n.md");
+    std::fs::write(&note, "alt").unwrap();
+    let mut lib = open(&root);
+    let key = dunce::canonicalize(&note).unwrap();
+    for (mine, theirs) in [("m1", "f1"), ("m2", "f2")] {
+        lib.buffer(&key).edited(mine.into());
+        std::fs::write(&key, theirs).unwrap();
+        let _ = lib.buffer(&key).save();
+        lib.keep_note_mine(&key);
+    }
+    let label = crate::core::i18n::tr("andere Version");
+    assert_eq!(std::fs::read_to_string(root.join(format!("n ({label}).md"))).unwrap(), "f1");
+    assert_eq!(std::fs::read_to_string(root.join(format!("n ({label} 2).md"))).unwrap(), "f2");
+}
+
+#[test]
+fn keeping_mine_works_when_the_other_app_removed_the_file() {
+    let root = folder("note-mine-gone");
+    std::fs::write(root.join("schrumbi.json"), config(1, 1).to_string()).unwrap();
+    let note = root.join("n.md");
+    std::fs::write(&note, "alt").unwrap();
+    let mut lib = open(&root);
+    let key = dunce::canonicalize(&note).unwrap();
+    lib.buffer(&key).edited("meins".into());
+    std::fs::write(&key, "fremd").unwrap();
+    let _ = lib.buffer(&key).save();
+    assert_eq!(lib.buffer(&key).conflict.as_deref(), Some("fremd"));
+    std::fs::remove_file(&key).unwrap();
+    lib.keep_note_mine(&key);
+    assert!(lib.last_error.is_none());
+    assert!(lib.buffer(&key).conflict.is_none());
+    assert_eq!(std::fs::read_to_string(&key).unwrap(), "meins");
+    let copy = root.join(format!("n ({}).md", crate::core::i18n::tr("andere Version")));
+    assert_eq!(std::fs::read_to_string(&copy).unwrap(), "fremd");
 }
 
 #[test]

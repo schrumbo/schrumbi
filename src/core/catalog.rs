@@ -94,7 +94,8 @@ impl FileKind {
     }
 }
 
-type Headings = HashMap<PathBuf, (DateTime<Local>, Option<String>)>;
+type Stamp = (std::time::SystemTime, u64);
+type Headings = HashMap<PathBuf, (Stamp, Option<String>)>;
 
 static HEADINGS: LazyLock<Mutex<HashMap<PathBuf, Headings>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -138,11 +139,14 @@ pub fn build(files: &[IndexedFile], root: &Path, config: &StudyConfig) -> Vec<Ca
             }
             let place: Vec<String> = components[..components.len() - 1].iter().map(|s| s.to_string()).collect();
             let base = module.map_or_else(|| root.to_path_buf(), |m| root.join(&m.folder));
-            let heading = match known.get(&f.path).filter(|(modified, _)| *modified == f.modified) {
+            let stamp = std::fs::metadata(&f.path).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
+            let heading = match known.get(&f.path).filter(|(seen, _)| Some(*seen) == stamp) {
                 Some((_, heading)) => heading.clone(),
                 None => note_heading(&f.path),
             };
-            kept.insert(f.path.clone(), (f.modified, heading.clone()));
+            if let Some(stamp) = stamp {
+                kept.insert(f.path.clone(), (stamp, heading.clone()));
+            }
             let title = heading.or_else(|| module.and_then(|m| namings.get(m.id.as_str())?.parse(&f.name)).map(|p| p.title.replace('-', " ")));
             let haystack = fold(&[module.map_or("", |m| m.code.as_str())].into_iter().chain(place.iter().map(String::as_str)).chain([f.name.as_str(), title.as_deref().unwrap_or("")]).collect::<Vec<_>>().join(" "));
             Some(CatalogFile {
@@ -337,10 +341,30 @@ mod tests {
         let titles = |c: Vec<CatalogFile>| c.into_iter().map(|f| f.title).collect::<Vec<_>>();
         let config = StudyConfig::default();
         assert_eq!(titles(build(&files(then), &dir, &config)), [Some("Alt".to_string()), Some("Bleibt".to_string())]);
+        let kept = std::fs::metadata(&b).unwrap().modified().unwrap();
         std::fs::write(&a, "# Neu\n").unwrap();
-        std::fs::write(&b, "# Ignoriert\n").unwrap();
+        std::fs::write(&b, "# Anders\n").unwrap();
+        std::fs::File::options().write(true).open(&b).unwrap().set_modified(kept).unwrap();
         let later = then + chrono::Duration::seconds(5);
         assert_eq!(titles(build(&files(later), &dir, &config)), [Some("Neu".to_string()), Some("Bleibt".to_string())]);
+    }
+
+    #[test]
+    fn headings_follow_the_file_even_when_the_index_time_stood_still() {
+        let dir = std::env::temp_dir().join(format!("schrumbi-headings-fresh-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.md");
+        std::fs::write(&a, "# Alt\n").unwrap();
+        let then = Local::now();
+        let files = vec![IndexedFile { path: a.clone(), name: "a.md".into(), modified: then }];
+        let config = StudyConfig::default();
+        assert_eq!(build(&files, &dir, &config)[0].title.as_deref(), Some("Alt"));
+        std::fs::write(&a, "# Neuer\n").unwrap();
+        assert_eq!(build(&files, &dir, &config)[0].title.as_deref(), Some("Neuer"));
+        let before = std::fs::metadata(&a).unwrap().modified().unwrap();
+        std::fs::write(&a, "# Neuem\n").unwrap();
+        std::fs::File::options().write(true).open(&a).unwrap().set_modified(before + std::time::Duration::from_millis(50)).unwrap();
+        assert_eq!(build(&files, &dir, &config)[0].title.as_deref(), Some("Neuem"));
     }
 
     #[test]

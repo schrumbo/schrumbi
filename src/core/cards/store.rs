@@ -319,7 +319,7 @@ pub fn all_cards() -> Arc<Vec<Card>> {
 }
 
 fn written_cards(vault: &VaultIndex) -> Vec<(Arc<RawCard>, Arc<PathBuf>, Arc<String>)> {
-    let mut notes: Vec<(&PathBuf, &std::sync::Arc<index::NoteFacts>)> = vault.notes.iter().filter(|(p, f)| !f.cards.is_empty() && !vault.is_template(p) && markdown::is_markdown(p)).collect();
+    let mut notes: Vec<(&PathBuf, &std::sync::Arc<index::NoteFacts>)> = vault.notes.iter().filter(|(p, f)| !f.cards.is_empty() && !vault.is_template(p) && markdown::is_markdown(p) && !crate::core::naming::is_conflict_copy(p)).collect();
     notes.sort_by(|a, b| a.0.cmp(b.0));
     let mut seen = HashSet::new();
     let mut cards = Vec::new();
@@ -1344,6 +1344,17 @@ mod first_open {
 
     fn lock() -> std::sync::MutexGuard<'static, ()> {
         crate::core::edge_tests::VAULT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[test]
+    fn cards_stay_with_the_note_when_a_conflict_copy_repeats_them() {
+        let _guard = lock();
+        let root = vault("copies", &[("A.md", "Wer? :: ich\n"), ("A (andere Version).md", "Wer? :: ich\nNur hier? :: ja\n"), ("A (Konflikt 2026-11-05).md", "Dritte? :: nein\n")]);
+        scan(&root);
+        let cards = all_cards();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].note.file_name().unwrap(), "A.md");
+        close();
     }
 
     #[test]
