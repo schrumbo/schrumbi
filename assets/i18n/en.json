@@ -1608,5 +1608,16 @@
   "Live-Ansicht ausschalten": "Turn Live view off",
   "Live-Ansicht einschalten": "Turn Live view on",
   "Live-Ansicht ein-/ausschalten": "Turn Live view on or off",
-  "Live-Ansicht": "Live view"
+  "Live-Ansicht": "Live view",
+  "mit Markierungen": "with marks",
+  "Die PDF ist geschützt": "The PDF is protected",
+  "Sie ist mit einem Passwort gesichert. Schrumbi ändert sie nicht, damit nichts kaputtgeht.": "It is locked with a password. Schrumbi does not change it, so nothing breaks.",
+  "Die PDF ist unterschrieben": "The PDF is signed",
+  "Jede Änderung würde die Unterschrift ungültig machen. Die Datei bleibt, wie sie ist.": "Any change would make the signature invalid. The file stays as it is.",
+  "Das hat nicht geklappt": "That didn’t work",
+  "Die PDF ließ sich nicht sicher ändern. Die Datei bleibt, wie sie ist.": "The PDF could not be changed safely. The file stays as it is.",
+  "Das geht so nicht": "That doesn’t work",
+  "Es müssen Seiten ausgewählt sein, und eine PDF braucht mindestens eine Seite.": "Pages must be selected, and a PDF needs at least one page.",
+  "Änderungen werden gerade nicht gespeichert. Die PDF bleibt, wie sie ist.": "Changes are not being saved right now. The PDF stays as it is.",
+  "Vom Original ließ sich keine Sicherung anlegen. Die PDF bleibt, wie sie ist.": "No backup of the original could be made. The PDF stays as it is."
 }

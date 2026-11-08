@@ -596,6 +596,43 @@ impl Library {
         self.record(trf("PDF erstellt: %@", &[&name_of(target)]), changes);
     }
 
+    /// Replaces a PDF with an edited version and moves its marks to the new content key, as one step. Undo brings back the exact old file and the old marks.
+    pub fn replace_pdf(&mut self, path: &Path, bytes: Vec<u8>, old_key: &str, list: Vec<Highlight>, label: String) {
+        if self.read_only {
+            self.last_error = Some(tr("Änderungen werden gerade nicht gespeichert. Die PDF bleibt, wie sie ist."));
+            self.changed();
+            return;
+        }
+        let new_key = highlights::document_key(&bytes);
+        let Some(backup) = self.keep_for_undo(path) else {
+            self.last_error = Some(tr("Vom Original ließ sich keine Sicherung anlegen. Die PDF bleibt, wie sie ist."));
+            self.changed();
+            return;
+        };
+        if let Err(e) = super::note_buffer::write_atomic(path, &bytes) {
+            let _ = backup.parent().map(std::fs::remove_dir_all);
+            self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&explain(&e.into())]));
+            self.changed();
+            return;
+        }
+        let before_old = self.store_highlights(old_key, Vec::new());
+        let before_new = self.store_highlights(&new_key, list);
+        self.commit(label, "file-text", vec![Change::Replaced { path: path.to_path_buf(), backup }, Change::Highlights { key: old_key.to_string(), list: before_old }, Change::Highlights { key: new_key, list: before_new }]);
+    }
+
+    /// Writes a PDF with the marks built in next to its source, under a name that is still free. Undo removes it.
+    pub fn export_marked_pdf(&mut self, source: &Path, bytes: Vec<u8>) -> Option<PathBuf> {
+        let name = name_of(source);
+        let target = unique_path(&source.with_file_name(format!("{} {}.pdf", super::naming::stem(&name), tr("mit Markierungen"))));
+        if let Err(e) = super::note_buffer::write_atomic(&target, &bytes) {
+            self.last_error = Some(trf("PDF-Export fehlgeschlagen: %@", &[&explain(&e.into())]));
+            self.changed();
+            return None;
+        }
+        self.record_export(&target, None, source);
+        Some(target)
+    }
+
     pub fn close(&mut self) {
         self.undo_steps.clear();
         self.redo_steps.clear();

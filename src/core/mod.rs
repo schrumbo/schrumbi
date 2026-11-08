@@ -34,6 +34,7 @@ pub mod vault;
 pub mod workspace;
 #[cfg(test)]
 mod tests;
+pub mod pdf_edit;
 pub mod pdf_render;
 pub mod edit_ops;
 pub mod errors;

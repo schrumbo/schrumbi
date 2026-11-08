@@ -862,7 +862,7 @@ impl PdfView {
         let id = list.iter().map(|h| h.id).max().map_or(1, |m| m + 1);
         self.active_mark = Some(id);
         self.removed_mark = None;
-        list.push(Highlight { id, color: color.to_string(), text, parts });
+        list.push(Highlight { id, color: color.to_string(), text, parts, ..Default::default() });
         super::state::act(cx, |l| l.set_highlights(&key, list, tr("Markiert")));
     }
 
