@@ -860,6 +860,42 @@ mod tests {
         assert_eq!(texts(&out), ["Zwei", "Eins"]);
     }
 
+    fn nested(levels: usize, cyclic: bool) -> Vec<u8> {
+        let mut doc = Document::with_version("1.5");
+        let root = doc.new_object_id();
+        let font = font(&mut doc);
+        let ids: Vec<ObjectId> = (0..levels).map(|_| doc.new_object_id()).collect();
+        let page = leaf(&mut doc, *ids.last().unwrap_or(&root), "Tief");
+        let own = dictionary! { "Font" => dictionary! { "F1" => font } };
+        for (i, id) in ids.iter().enumerate() {
+            let kid: Object = match ids.get(i + 1) {
+                Some(next) => (*next).into(),
+                None if cyclic => root.into(),
+                None => page.into(),
+            };
+            doc.objects.insert(*id, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![kid], "Count" => 1 }));
+        }
+        let top: Object = ids.first().map_or(page.into(), |id| (*id).into());
+        doc.objects.insert(root, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![top], "Count" => 1, "MediaBox" => media(612, 792), "Resources" => own }));
+        finish_doc(doc, root, &[("Tief", page)])
+    }
+
+    #[test]
+    fn page_trees_that_are_absurdly_deep_or_loop_are_refused() {
+        let ok = apply(&nested(60, false), &PageOp::Rotate { pages: vec![0], clockwise: true }).unwrap();
+        assert_eq!(texts(&ok), ["Tief"]);
+        assert_eq!(apply(&nested(63, false), &PageOp::Rotate { pages: vec![0], clockwise: true }).map(|b| texts(&b)), Ok(vec!["Tief".to_string()]));
+        assert_eq!(apply(&nested(64, false), &PageOp::Rotate { pages: vec![0], clockwise: true }), Err(EditError::Broken));
+        assert_eq!(apply(&nested(3, true), &PageOp::Rotate { pages: vec![0], clockwise: true }), Err(EditError::Broken));
+    }
+
+    #[test]
+    fn marks_beyond_the_known_pages_stay_where_they_are() {
+        let list = vec![mark(1, 7)];
+        assert_eq!(remap(&list, &PageOp::Move { pages: vec![1], to: 0 }, &[(612., 792.); 3], 0), list);
+        assert_eq!(remap(&list, &PageOp::Delete(vec![1]), &[(612., 792.); 3], 0)[0].parts[0].page, 6);
+    }
+
     #[test]
     fn a_deleted_page_takes_its_outline_entry_along_and_the_entries_below_move_up() {
         let mut doc = Document::with_version("1.5");

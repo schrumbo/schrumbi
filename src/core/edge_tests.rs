@@ -1989,3 +1989,25 @@ fn a_pdf_with_marks_belongs_to_the_deadline_its_source_belongs_to() {
     assert!(!copy.exists() && !lib.is_linked(&copy, &a.id));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn a_pdf_that_cannot_be_written_is_left_alone_and_nothing_is_recorded() {
+    use crate::core::highlights::document_key;
+    let (root, mut lib) = workspace("replace-pdf-locked", &config(1, 0));
+    let path = root.join("Skript.pdf");
+    std::fs::write(&path, b"alt").unwrap();
+    let key = document_key(b"alt");
+    lib.set_highlights(&key, vec![pdf_mark(1, 0)], "markiert".into());
+    let open = std::fs::metadata(&path).unwrap().permissions();
+    let mut locked = open.clone();
+    locked.set_readonly(true);
+    std::fs::set_permissions(&path, locked).unwrap();
+    lib.replace_pdf(&path, b"neu".to_vec(), &key, Vec::new(), "x".into());
+    std::fs::set_permissions(&path, open).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"alt");
+    assert_eq!(lib.highlights_of(&key), vec![pdf_mark(1, 0)]);
+    assert!(lib.last_error.is_some());
+    lib.undo();
+    assert!(lib.highlights_of(&key).is_empty() && !lib.can_undo(), "only the marking was recorded");
+    let _ = std::fs::remove_dir_all(root);
+}
