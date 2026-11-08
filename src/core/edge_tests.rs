@@ -1889,10 +1889,10 @@ fn replacing_a_pdf_moves_its_marks_and_undo_and_redo_bring_everything_back() {
     lib.set_highlights(&old_key, vec![pdf_mark(1, 0), pdf_mark(2, 2)], "markiert".into());
     lib.replace_pdf(&path, new.clone(), &old_key, vec![pdf_mark(2, 1)], "Seite gelöscht".into());
     assert_eq!(std::fs::read(&path).unwrap(), new);
-    assert!(lib.highlights_of(&old_key).is_empty());
+    assert_eq!(lib.highlights_of(&old_key), vec![pdf_mark(1, 0), pdf_mark(2, 2)], "identical copies of the old file keep their marks");
     assert_eq!(lib.highlights_of(&new_key), vec![pdf_mark(2, 1)]);
     let stored: Highlights = crate::core::workspace::load(&root.join(FILE_NAME)).unwrap().unwrap();
-    assert!(!stored.contains_key(&old_key) && stored[&new_key] == vec![pdf_mark(2, 1)]);
+    assert!(stored.contains_key(&old_key) && stored[&new_key] == vec![pdf_mark(2, 1)]);
     assert!(lib.toast.as_ref().is_some_and(|t| t.message == "Seite gelöscht"));
     lib.undo();
     assert_eq!(std::fs::read(&path).unwrap(), old, "the file is byte-identical again");
@@ -1902,8 +1902,80 @@ fn replacing_a_pdf_moves_its_marks_and_undo_and_redo_bring_everything_back() {
     assert!(stored.contains_key(&old_key) && !stored.contains_key(&new_key));
     lib.redo();
     assert_eq!(std::fs::read(&path).unwrap(), new);
-    assert!(lib.highlights_of(&old_key).is_empty());
+    assert_eq!(lib.highlights_of(&old_key), vec![pdf_mark(1, 0), pdf_mark(2, 2)]);
     assert_eq!(lib.highlights_of(&new_key), vec![pdf_mark(2, 1)]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn an_identical_copy_of_a_replaced_pdf_keeps_its_marks() {
+    use crate::core::highlights::document_key;
+    let (root, mut lib) = workspace("replace-pdf-copy", &config(1, 0));
+    let (path, copy) = (root.join("Skript.pdf"), root.join("Kopie.pdf"));
+    let old = b"%PDF-1.4 alt".to_vec();
+    std::fs::write(&path, &old).unwrap();
+    std::fs::write(&copy, &old).unwrap();
+    let key = document_key(&old);
+    lib.set_highlights(&key, vec![pdf_mark(1, 0)], "markiert".into());
+    lib.replace_pdf(&path, b"%PDF-1.4 neu".to_vec(), &key, Vec::new(), "x".into());
+    assert_eq!(lib.highlights_of(&key), vec![pdf_mark(1, 0)]);
+    assert_eq!(document_key(&std::fs::read(&copy).unwrap()), key);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_pdf_changed_since_it_was_read_is_not_replaced() {
+    use crate::core::highlights::document_key;
+    let (root, mut lib) = workspace("replace-pdf-stale", &config(1, 0));
+    let path = root.join("Skript.pdf");
+    std::fs::write(&path, b"%PDF-1.4 jetzt").unwrap();
+    let stale = document_key(b"%PDF-1.4 vorher");
+    lib.set_highlights(&stale, vec![pdf_mark(1, 0)], "markiert".into());
+    lib.replace_pdf(&path, b"%PDF-1.4 neu".to_vec(), &stale, vec![pdf_mark(1, 1)], "x".into());
+    assert_eq!(std::fs::read(&path).unwrap(), b"%PDF-1.4 jetzt");
+    assert_eq!(lib.last_error.as_deref(), Some(crate::core::i18n::tr("Die Datei wurde inzwischen geändert. Bitte noch einmal versuchen.").as_str()));
+    assert!(lib.highlights_of(&document_key(b"%PDF-1.4 neu")).is_empty());
+    lib.undo();
+    assert!(lib.highlights_of(&stale).is_empty() && !lib.can_undo(), "only the marking was recorded");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_failed_restore_leaves_the_marks_with_the_file_that_is_still_there() {
+    use crate::core::highlights::document_key;
+    let (root, mut lib) = workspace("replace-pdf-undo-fails", &config(1, 0));
+    let path = root.join("Skript.pdf");
+    let (old, new) = (b"%PDF-1.4 alt".to_vec(), b"%PDF-1.4 neu".to_vec());
+    std::fs::write(&path, &old).unwrap();
+    let (old_key, new_key) = (document_key(&old), document_key(&new));
+    lib.set_highlights(&old_key, vec![pdf_mark(1, 0)], "markiert".into());
+    lib.replace_pdf(&path, new.clone(), &old_key, vec![pdf_mark(1, 1)], "x".into());
+    std::fs::remove_file(&path).unwrap();
+    lib.undo();
+    assert!(lib.last_error.is_some() && !path.exists());
+    assert_eq!(lib.highlights_of(&new_key), vec![pdf_mark(1, 1)], "the marks stay with the edited content");
+    std::fs::write(&path, &new).unwrap();
+    lib.undo();
+    assert_eq!(std::fs::read(&path).unwrap(), old);
+    assert!(lib.highlights_of(&new_key).is_empty());
+    assert_eq!(lib.highlights_of(&old_key), vec![pdf_mark(1, 0)]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn undoing_an_export_that_replaced_a_file_brings_the_old_one_back_and_drops_the_copy() {
+    let (root, mut lib) = workspace("export-replaced", &config(1, 0));
+    let (source, target) = (root.join("Quelle.pdf"), root.join("Ziel.pdf"));
+    std::fs::write(&source, b"quelle").unwrap();
+    std::fs::write(&target, b"alt").unwrap();
+    let backup = lib.keep_for_undo(&target).unwrap();
+    std::fs::write(&target, b"neu").unwrap();
+    lib.record_export(&target, Some(backup.clone()), &source);
+    lib.undo();
+    assert_eq!(std::fs::read(&target).unwrap(), b"alt");
+    assert!(!backup.exists());
+    lib.redo();
+    assert_eq!(std::fs::read(&target).unwrap(), b"neu");
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -1920,6 +1992,11 @@ fn replacing_a_pdf_with_the_same_bytes_keeps_the_marks_under_their_key() {
     assert_eq!(lib.highlights_of(&key).len(), 2);
     lib.undo();
     assert_eq!(lib.highlights_of(&key), vec![pdf_mark(1, 0)]);
+    lib.redo();
+    assert_eq!(lib.highlights_of(&key), vec![pdf_mark(1, 0), pdf_mark(3, 0)], "redo keeps the marks");
+    lib.undo();
+    assert_eq!(lib.highlights_of(&key), vec![pdf_mark(1, 0)]);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -2009,5 +2086,43 @@ fn a_pdf_that_cannot_be_written_is_left_alone_and_nothing_is_recorded() {
     assert!(lib.last_error.is_some());
     lib.undo();
     assert!(lib.highlights_of(&key).is_empty() && !lib.can_undo(), "only the marking was recorded");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn the_highlights_file_carries_a_version_and_old_plain_files_still_load() {
+    use crate::core::highlights::{FILE_NAME, Highlights, VERSION, VERSION_KEY};
+    let (root, mut lib) = workspace("highlights-version", &config(1, 0));
+    let file = root.join(FILE_NAME);
+    std::fs::write(&file, r#"{"k":[{"id":1,"color":"yellow","text":"Wort","parts":[{"page":0,"rects":[[1.0,2.0,3.0,4.0]]}]}]}"#).unwrap();
+    lib.open(&root);
+    assert_eq!(lib.highlights_of("k"), vec![pdf_mark(1, 0)]);
+    lib.set_highlights("j", vec![pdf_mark(2, 0)], "markiert".into());
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains(&format!("{VERSION_KEY}{VERSION}")), "{text}");
+    let plain: Highlights = serde_json::from_str(&text).unwrap();
+    assert_eq!(plain["k"], vec![pdf_mark(1, 0)], "an app that knows no version still reads it");
+    lib.open(&root);
+    assert_eq!((lib.highlights_of("k"), lib.highlights_of("j")), (vec![pdf_mark(1, 0)], vec![pdf_mark(2, 0)]));
+    assert!(lib.highlights_of(&format!("{VERSION_KEY}{VERSION}")).is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn highlights_from_a_newer_version_are_never_written() {
+    use crate::core::highlights::{FILE_NAME, VERSION, VERSION_KEY, document_key};
+    let (root, mut lib) = workspace("highlights-newer", &config(1, 0));
+    let file = root.join(FILE_NAME);
+    let future = format!(r#"{{"{VERSION_KEY}{}":[],"k":[{{"id":1,"color":"yellow","text":"Wort","parts":[],"zukunft":true}}]}}"#, VERSION + 1);
+    std::fs::write(&file, &future).unwrap();
+    lib.open(&root);
+    assert!(lib.last_error.is_some());
+    lib.set_highlights("j", vec![pdf_mark(2, 0)], "markiert".into());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), future, "the file stays as the newer app wrote it");
+    let path = root.join("Skript.pdf");
+    std::fs::write(&path, b"alt").unwrap();
+    lib.replace_pdf(&path, b"neu".to_vec(), &document_key(b"alt"), vec![pdf_mark(3, 0)], "x".into());
+    assert_eq!(std::fs::read(&path).unwrap(), b"alt");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), future);
     let _ = std::fs::remove_dir_all(root);
 }

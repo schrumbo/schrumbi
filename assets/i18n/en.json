@@ -1619,5 +1619,7 @@
   "Das geht so nicht": "That doesn’t work",
   "Es müssen Seiten ausgewählt sein, und eine PDF braucht mindestens eine Seite.": "Pages must be selected, and a PDF needs at least one page.",
   "Änderungen werden gerade nicht gespeichert. Die PDF bleibt, wie sie ist.": "Changes are not being saved right now. The PDF stays as it is.",
-  "Vom Original ließ sich keine Sicherung anlegen. Die PDF bleibt, wie sie ist.": "No backup of the original could be made. The PDF stays as it is."
+  "Vom Original ließ sich keine Sicherung anlegen. Die PDF bleibt, wie sie ist.": "No backup of the original could be made. The PDF stays as it is.",
+  "Die Datei wurde inzwischen geändert. Bitte noch einmal versuchen.": "The file has changed in the meantime. Please try again.",
+  "Die Markierungen stammen aus einer neueren App-Version. Änderungen daran werden nicht gespeichert, bis du die App aktualisierst.": "The marks come from a newer version of the app. Changes to them are not saved until you update the app."
 }

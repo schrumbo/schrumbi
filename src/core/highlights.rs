@@ -82,6 +82,37 @@ impl Highlight {
 /// Highlights per document.
 pub type Highlights = HashMap<String, Vec<Highlight>>;
 
+/// The version of the file layout. Older files have none and count as 1.
+pub const VERSION: u32 = 2;
+
+/// Key of the marker entry that holds the version in its name, an empty list so that apps which do not know it still read the file.
+pub const VERSION_KEY: &str = "~version:";
+
+/// Splits what was read from the file into the highlights and the version it was written in.
+pub fn from_stored(mut stored: Highlights) -> (Highlights, u32) {
+    let markers: Vec<String> = stored.keys().filter(|k| k.starts_with(VERSION_KEY)).cloned().collect();
+    let version = markers.iter().filter_map(|k| k[VERSION_KEY.len()..].parse::<u32>().ok()).max().unwrap_or(1);
+    markers.iter().for_each(|k| {
+        stored.remove(k);
+    });
+    (stored, version)
+}
+
+/// The highlights as written to the file, with the version marker.
+pub struct Stored<'a>(pub &'a Highlights);
+
+impl Serialize for Stored<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.0.len() + 1))?;
+        map.serialize_entry(&format!("{VERSION_KEY}{VERSION}"), &Vec::<Highlight>::new())?;
+        for (key, list) in self.0 {
+            map.serialize_entry(key, list)?;
+        }
+        map.end()
+    }
+}
+
 /// Identifies a document by its content, so highlights survive renaming and moving it, also outside the app.
 pub fn document_key(data: &[u8]) -> String {
     Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
@@ -185,6 +216,21 @@ mod tests {
         let json = serde_json::to_string(&pin()).unwrap();
         let old: Old = serde_json::from_str(&json).unwrap();
         assert_eq!((old.id, old.parts.len()), (2, 0));
+    }
+
+    #[test]
+    fn the_version_marker_is_written_and_read_back_without_leaking_into_the_marks() {
+        let store: Highlights = HashMap::from([("k".to_string(), vec![sample()])]);
+        let json = serde_json::to_string(&Stored(&store)).unwrap();
+        let plain: Highlights = serde_json::from_str(&json).unwrap();
+        assert_eq!(plain.len(), 2, "an app that knows no version reads the marker as an empty list");
+        let (back, version) = from_stored(plain);
+        assert_eq!((back, version), (store.clone(), VERSION));
+        let (old, version) = from_stored(store.clone());
+        assert_eq!((old, version), (store, 1));
+        let future = HashMap::from([(format!("{VERSION_KEY}{}", VERSION + 1), Vec::new()), ("k".to_string(), vec![sample()])]);
+        assert_eq!(from_stored(future).1, VERSION + 1);
+        assert_eq!(from_stored(HashMap::from([(format!("{VERSION_KEY}x"), Vec::new())])), (HashMap::new(), 1));
     }
 
     #[test]

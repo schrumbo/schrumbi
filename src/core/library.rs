@@ -259,6 +259,7 @@ pub struct Library {
     pub catalog: Vec<CatalogFile>,
     pub search_index: Arc<SearchIndex>,
     highlights: Highlights,
+    highlights_locked: bool,
     naming_cache: std::sync::Mutex<Option<(String, Arc<Vec<Naming>>)>>,
     pub now: DateTime<Local>,
     pub selected_semester_id: Option<String>,
@@ -445,6 +446,7 @@ impl Library {
             catalog: Vec::new(),
             search_index: Arc::new(SearchIndex::open()),
             highlights: Highlights::new(),
+            highlights_locked: false,
             naming_cache: Default::default(),
             now: Local::now(),
             selected_semester_id: None,
@@ -598,26 +600,35 @@ impl Library {
 
     /// Replaces a PDF with an edited version and moves its marks to the new content key, as one step. Undo brings back the exact old file and the old marks.
     pub fn replace_pdf(&mut self, path: &Path, bytes: Vec<u8>, old_key: &str, list: Vec<Highlight>, label: String) {
-        if self.read_only {
+        if self.read_only || self.highlights_locked {
             self.last_error = Some(tr("Änderungen werden gerade nicht gespeichert. Die PDF bleibt, wie sie ist."));
             self.changed();
             return;
         }
         let new_key = highlights::document_key(&bytes);
+        if new_key == old_key {
+            self.set_highlights(old_key, list, label);
+            return;
+        }
         let Some(backup) = self.keep_for_undo(path) else {
             self.last_error = Some(tr("Vom Original ließ sich keine Sicherung anlegen. Die PDF bleibt, wie sie ist."));
             self.changed();
             return;
         };
+        if std::fs::read(&backup).ok().map(|kept| highlights::document_key(&kept)).as_deref() != Some(old_key) {
+            let _ = backup.parent().map(std::fs::remove_dir_all);
+            self.last_error = Some(tr("Die Datei wurde inzwischen geändert. Bitte noch einmal versuchen."));
+            self.changed();
+            return;
+        }
         if let Err(e) = super::note_buffer::write_atomic(path, &bytes) {
             let _ = backup.parent().map(std::fs::remove_dir_all);
             self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&explain(&e.into())]));
             self.changed();
             return;
         }
-        let before_old = self.store_highlights(old_key, Vec::new());
-        let before_new = self.store_highlights(&new_key, list);
-        self.commit(label, "file-text", vec![Change::Replaced { path: path.to_path_buf(), backup }, Change::Highlights { key: old_key.to_string(), list: before_old }, Change::Highlights { key: new_key, list: before_new }]);
+        let before = self.store_highlights(&new_key, list);
+        self.commit(label, "file-text", vec![Change::Highlights { key: new_key, list: before }, Change::Replaced { path: path.to_path_buf(), backup }]);
     }
 
     /// Writes a PDF with the marks built in next to its source, under a name that is still free. Undo removes it.
@@ -715,8 +726,8 @@ impl Library {
 
     fn store_highlights(&mut self, key: &str, list: Vec<Highlight>) -> Vec<Highlight> {
         let before = if list.is_empty() { self.highlights.remove(key) } else { self.highlights.insert(key.to_string(), list) };
-        if let Some(path) = self.highlights_path().filter(|_| !self.read_only)
-            && let Err(e) = workspace::save(&self.highlights, &path)
+        if let Some(path) = self.highlights_path().filter(|_| !self.read_only && !self.highlights_locked)
+            && let Err(e) = workspace::save(&highlights::Stored(&self.highlights), &path)
         {
             self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&e]));
         }
@@ -725,7 +736,13 @@ impl Library {
 
     fn load_state(&mut self) {
         prune_undo_copies();
-        self.highlights = self.highlights_path().and_then(|p| workspace::load::<Highlights>(&p).ok().flatten()).unwrap_or_default();
+        let stored = self.highlights_path().and_then(|p| workspace::load::<Highlights>(&p).ok().flatten()).unwrap_or_default();
+        let (stored, version) = highlights::from_stored(stored);
+        self.highlights = stored;
+        self.highlights_locked = version > highlights::VERSION;
+        if self.highlights_locked {
+            self.last_error = Some(tr("Die Markierungen stammen aus einer neueren App-Version. Änderungen daran werden nicht gespeichert, bis du die App aktualisierst."));
+        }
         let Some(path) = self.state_path() else { return };
         match workspace::load::<StudyState>(&path) {
             Ok(s) => self.state = s.unwrap_or_else(|| StudyState { links_adopted: self.config_created, ..Default::default() }),
@@ -2436,13 +2453,21 @@ impl Library {
     fn apply_step(&mut self, step: Step) -> (Step, Vec<Change>) {
         self.rows_moved = true;
         let (mut inverse, mut failed) = (Vec::new(), Vec::new());
-        for change in step.changes.into_iter().rev() {
+        let mut changes = step.changes.into_iter().rev();
+        while let Some(change) = changes.next() {
             if !matches!(change, Change::State(_) | Change::Config(_) | Change::Highlights { .. } | Change::Cards { .. }) {
                 self.notes_touched = true;
             }
             match self.apply_change(change.clone()) {
                 Some(done) => inverse.push(done),
-                None => failed.push(change),
+                None => {
+                    let file = matches!(change, Change::Replaced { .. });
+                    failed.push(change);
+                    if file {
+                        failed.extend(changes);
+                        break;
+                    }
+                }
             }
         }
         inverse.retain(|c| !matches!(c, Change::Cards { swaps, .. } if swaps.is_empty()));
@@ -2490,8 +2515,13 @@ impl Library {
                     Change::Trash(path)
                 }
                 Change::Replaced { path, backup } => {
+                    let kept = std::fs::read(&backup)?;
                     let current = stash(&path)?;
-                    move_path(&backup, &path)?;
+                    if let Err(e) = super::note_buffer::write_atomic(&path, &kept) {
+                        let _ = current.parent().map(std::fs::remove_dir_all);
+                        return Err(e.into());
+                    }
+                    let _ = backup.parent().map(std::fs::remove_dir_all);
                     Change::Replaced { path, backup: current }
                 }
                 Change::Highlights { key, list } => {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use hayro::hayro_interpret::util::TransformExt;
 use hayro::hayro_syntax::Pdf;
 use hayro::kurbo::{Affine, Point};
-use lopdf::{Dictionary, Document, Object, ObjectId, Stream, dictionary};
+use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId, Stream, dictionary};
 
 use super::highlights::{Highlight, HighlightPart, InkLine, Pin};
 use super::i18n::tr;
@@ -86,8 +86,26 @@ fn is_signed(doc: &Document) -> bool {
         || doc.objects.values().filter_map(dict_of).any(|d| d.get(b"FT").and_then(Object::as_name).is_ok_and(|n| n == b"Sig") && d.get(b"V").is_ok_and(|v| !v.is_null()))
 }
 
+fn reachable(doc: &Document) -> HashSet<ObjectId> {
+    let mut stack = Vec::new();
+    doc.trailer.iter().for_each(|(_, o)| refs_of(o, &mut stack));
+    let mut keep = HashSet::new();
+    while let Some(id) = stack.pop() {
+        if keep.insert(id)
+            && let Some(object) = doc.objects.get(&id)
+        {
+            refs_of(object, &mut stack);
+        }
+    }
+    keep
+}
+
+fn lost_objects(doc: &Document) -> bool {
+    reachable(doc).iter().any(|id| !doc.objects.contains_key(id) && doc.reference_table.get(id.0).is_some_and(|e| e.is_normal() || e.is_compressed()))
+}
+
 fn read(data: &[u8]) -> Result<Document, EditError> {
-    let doc = match Document::load_mem(data) {
+    let doc = match Document::load_mem_with_options(data, LoadOptions { strict: true, ..Default::default() }) {
         Ok(doc) => doc,
         Err(_) if mentions_encryption(data) => return Err(EditError::Protected),
         Err(_) => return Err(EditError::Broken),
@@ -97,6 +115,9 @@ fn read(data: &[u8]) -> Result<Document, EditError> {
     }
     if is_signed(&doc) {
         return Err(EditError::Signed);
+    }
+    if lost_objects(&doc) {
+        return Err(EditError::Broken);
     }
     Ok(doc)
 }
@@ -161,7 +182,7 @@ fn number(doc: &Document, object: Option<&Object>) -> Option<f32> {
     doc.dereference(object?).ok()?.1.as_float().ok()
 }
 
-fn absorb(doc: &mut Document, other: &mut Document, extra: Vec<Entry>) -> Result<Vec<Entry>, EditError> {
+fn absorb(doc: &mut Document, other: &mut Document, extra: Vec<Entry>, carry: &mut Dictionary) -> Result<Vec<Entry>, EditError> {
     let top = doc.objects.keys().map(|k| k.0).max().unwrap_or(0).max(doc.max_id);
     let incoming = other.objects.keys().map(|k| k.0).max().unwrap_or(0);
     let end = top.checked_add(incoming).ok_or(EditError::Broken)?;
@@ -175,6 +196,7 @@ fn absorb(doc: &mut Document, other: &mut Document, extra: Vec<Entry>) -> Result
         doc.objects.insert((n + top, g), object);
     }
     doc.max_id = end;
+    carry.iter_mut().for_each(|(_, o)| each_ref(o, &mut shift));
     Ok(extra
         .into_iter()
         .map(|((n, g), mut inherited)| {
@@ -202,27 +224,30 @@ fn points_at(doc: &Document, item: ObjectId, gone: &HashSet<ObjectId>) -> bool {
     dest.and_then(|d| doc.dereference(d).ok()).and_then(|(_, d)| d.as_array().ok()).and_then(|a| a.first()).and_then(|p| p.as_reference().ok()).is_some_and(|p| gone.contains(&p))
 }
 
-fn outline_survivors(doc: &Document, parent: ObjectId, gone: &HashSet<ObjectId>, depth: usize, out: &mut Vec<ObjectId>) {
+fn outline_survivors(doc: &Document, parent: ObjectId, gone: &HashSet<ObjectId>, depth: usize, seen: &mut HashSet<ObjectId>, out: &mut Vec<ObjectId>) {
     if depth > DEPTH {
         return;
     }
     for kid in outline_kids(doc, parent) {
+        if !seen.insert(kid) {
+            continue;
+        }
         if points_at(doc, kid, gone) {
-            outline_survivors(doc, kid, gone, depth + 1, out);
+            outline_survivors(doc, kid, gone, depth + 1, seen, out);
         } else {
             out.push(kid);
         }
     }
 }
 
-fn relink(doc: &mut Document, parent: ObjectId, gone: &HashSet<ObjectId>, depth: usize) -> i64 {
+fn relink(doc: &mut Document, parent: ObjectId, gone: &HashSet<ObjectId>, depth: usize, seen: &mut HashSet<ObjectId>) -> i64 {
     let mut kids = Vec::new();
-    outline_survivors(doc, parent, gone, depth, &mut kids);
+    outline_survivors(doc, parent, gone, depth, seen, &mut kids);
     let closed = doc.get_dictionary(parent).ok().and_then(|d| d.get(b"Count").ok()).and_then(|o| o.as_i64().ok()).is_some_and(|c| c < 0);
     let mut total = kids.len() as i64;
     for (i, &kid) in kids.iter().enumerate() {
         if depth < DEPTH {
-            total += relink(doc, kid, gone, depth + 1);
+            total += relink(doc, kid, gone, depth + 1, seen);
         }
         let Ok(dict) = doc.get_dictionary_mut(kid) else { continue };
         dict.set("Parent", parent);
@@ -259,7 +284,162 @@ fn relink(doc: &mut Document, parent: ObjectId, gone: &HashSet<ObjectId>, depth:
 fn tidy_outline(doc: &mut Document, gone: &HashSet<ObjectId>) {
     let root = doc.catalog().ok().and_then(|c| c.get(b"Outlines").ok()).and_then(|o| o.as_reference().ok());
     if let Some(root) = root {
-        relink(doc, root, gone, 0);
+        relink(doc, root, gone, 0, &mut HashSet::from([root]));
+    }
+}
+
+fn resolved_dict(doc: &Document, object: Option<&Object>) -> Option<Dictionary> {
+    doc.dereference(object?).ok()?.1.as_dict().ok().cloned()
+}
+
+fn resolved_list(doc: &Document, object: Option<&Object>) -> Vec<Object> {
+    object.and_then(|o| doc.dereference(o).ok()).and_then(|(_, o)| o.as_array().ok()).cloned().unwrap_or_default()
+}
+
+fn catalog_entry(doc: &Document, key: &[u8]) -> Option<Dictionary> {
+    resolved_dict(doc, doc.catalog().ok()?.get(key).ok())
+}
+
+fn put(doc: &mut Document, key: &[u8], value: Dictionary) {
+    match doc.catalog().ok().and_then(|c| c.get(key).ok()).and_then(|o| o.as_reference().ok()) {
+        Some(id) => {
+            doc.objects.insert(id, Object::Dictionary(value));
+        }
+        None => {
+            if let Ok(catalog) = doc.catalog_mut() {
+                catalog.set(key.to_vec(), value);
+            }
+        }
+    }
+}
+
+fn carried(other: &Document) -> Dictionary {
+    let mut out = Dictionary::new();
+    if let Some(form) = catalog_entry(other, b"AcroForm") {
+        let fields = resolved_list(other, form.get(b"Fields").ok());
+        if !fields.is_empty() {
+            out.set("Fields", fields);
+            for key in ["DR", "DA", "NeedAppearances"] {
+                if let Ok(value) = form.get(key.as_bytes()) {
+                    out.set(key, value.clone());
+                }
+            }
+        }
+    }
+    if let Some(props) = catalog_entry(other, b"OCProperties") {
+        let groups = resolved_list(other, props.get(b"OCGs").ok());
+        if !groups.is_empty() {
+            let config = resolved_dict(other, props.get(b"D").ok()).unwrap_or_default();
+            let listed = |key: &[u8]| resolved_list(other, config.get(key).ok());
+            let without = |list: &[Object]| groups.iter().filter(|g| !list.contains(g)).cloned().collect::<Vec<_>>();
+            let (off, on) = if config.get(b"BaseState").and_then(Object::as_name).is_ok_and(|n| n == b"OFF") {
+                let on = listed(b"ON");
+                (without(&on), on)
+            } else {
+                let off = listed(b"OFF");
+                let on = without(&off);
+                (off, on)
+            };
+            out.set("OCGs", groups);
+            out.set("Off", off);
+            out.set("On", on);
+        }
+    }
+    out
+}
+
+fn merge_form(doc: &mut Document, carry: &Dictionary) {
+    let Ok(Object::Array(fields)) = carry.get(b"Fields") else { return };
+    let mut form = catalog_entry(doc, b"AcroForm").unwrap_or_default();
+    let mut all = resolved_list(doc, form.get(b"Fields").ok());
+    all.extend(fields.iter().cloned());
+    form.set("Fields", all);
+    if !form.has(b"DA")
+        && let Ok(da) = carry.get(b"DA")
+    {
+        form.set("DA", da.clone());
+    }
+    if carry.get(b"NeedAppearances").is_ok_and(|v| matches!(v, Object::Boolean(true))) {
+        form.set("NeedAppearances", true);
+    }
+    let mut resources = resolved_dict(doc, form.get(b"DR").ok()).unwrap_or_default();
+    if let Some(extra) = resolved_dict(doc, carry.get(b"DR").ok()) {
+        for (category, value) in extra.iter() {
+            match (resolved_dict(doc, resources.get(category).ok()), resolved_dict(doc, Some(value))) {
+                (Some(mut mine), Some(theirs)) => {
+                    let fresh: Vec<(Vec<u8>, Object)> = theirs.iter().filter(|(name, _)| !mine.has(name)).map(|(name, item)| (name.clone(), item.clone())).collect();
+                    fresh.into_iter().for_each(|(name, item)| mine.set(name, item));
+                    resources.set(category.clone(), mine);
+                }
+                _ if !resources.has(category) => resources.set(category.clone(), value.clone()),
+                _ => {}
+            }
+        }
+    }
+    if !resources.is_empty() {
+        form.set("DR", resources);
+    }
+    put(doc, b"AcroForm", form);
+}
+
+fn merge_layers(doc: &mut Document, carry: &Dictionary) {
+    let Ok(Object::Array(groups)) = carry.get(b"OCGs") else { return };
+    let mut props = catalog_entry(doc, b"OCProperties").unwrap_or_default();
+    let mut all = resolved_list(doc, props.get(b"OCGs").ok());
+    all.extend(groups.iter().cloned());
+    props.set("OCGs", all);
+    let mut config = resolved_dict(doc, props.get(b"D").ok()).unwrap_or_default();
+    let list = |key: &str| carry.get(key.as_bytes()).ok().and_then(|o| o.as_array().ok()).cloned().unwrap_or_default();
+    let (off, on) = (list("Off"), list("On"));
+    if !off.is_empty() {
+        let mut all = resolved_list(doc, config.get(b"OFF").ok());
+        all.extend(off);
+        config.set("OFF", all);
+    }
+    if config.get(b"BaseState").and_then(Object::as_name).is_ok_and(|n| n == b"OFF") && !on.is_empty() {
+        let mut all = resolved_list(doc, config.get(b"ON").ok());
+        all.extend(on);
+        config.set("ON", all);
+    }
+    props.set("D", config);
+    put(doc, b"OCProperties", props);
+}
+
+fn annots_of(doc: &Document, page: ObjectId) -> Vec<ObjectId> {
+    let list = resolved_list(doc, doc.get_dictionary(page).ok().and_then(|p| p.get(b"Annots").ok()));
+    list.iter().filter_map(|o| o.as_reference().ok()).collect()
+}
+
+fn live_field(doc: &mut Document, field: ObjectId, dead: &HashSet<ObjectId>, seen: &mut HashSet<ObjectId>, depth: usize) -> bool {
+    if dead.contains(&field) {
+        return false;
+    }
+    if depth > DEPTH || !seen.insert(field) {
+        return true;
+    }
+    let Some(kids) = doc.get_dictionary(field).ok().map(|d| resolved_list(doc, d.get(b"Kids").ok())).filter(|k| !k.is_empty()) else { return true };
+    let keep: Vec<Object> = kids.iter().filter(|k| k.as_reference().map_or(true, |id| live_field(doc, id, dead, seen, depth + 1))).cloned().collect();
+    if keep.len() != kids.len()
+        && let Ok(dict) = doc.get_dictionary_mut(field)
+    {
+        dict.set("Kids", keep.clone());
+    }
+    !keep.is_empty()
+}
+
+fn drop_fields(doc: &mut Document, gone: &HashSet<ObjectId>, kept: &HashSet<ObjectId>) {
+    let staying: HashSet<ObjectId> = kept.iter().flat_map(|&p| annots_of(doc, p)).collect();
+    let dead: HashSet<ObjectId> = gone.iter().flat_map(|&p| annots_of(doc, p)).filter(|id| !staying.contains(id)).collect();
+    let Some(mut form) = catalog_entry(doc, b"AcroForm") else { return };
+    if dead.is_empty() {
+        return;
+    }
+    let fields = resolved_list(doc, form.get(b"Fields").ok());
+    let mut seen = HashSet::new();
+    let keep: Vec<Object> = fields.iter().filter(|f| f.as_reference().map_or(true, |id| live_field(doc, id, &dead, &mut seen, 0))).cloned().collect();
+    if keep.len() != fields.len() {
+        form.set("Fields", keep);
+        put(doc, b"AcroForm", form);
     }
 }
 
@@ -283,29 +463,23 @@ fn cut(doc: &mut Document, gone: &HashSet<ObjectId>) {
 }
 
 fn prune(doc: &mut Document) {
-    let mut stack = Vec::new();
-    doc.trailer.iter().for_each(|(_, o)| refs_of(o, &mut stack));
-    let mut keep = HashSet::new();
-    while let Some(id) = stack.pop() {
-        if keep.insert(id)
-            && let Some(object) = doc.objects.get(&id)
-        {
-            refs_of(object, &mut stack);
-        }
-    }
+    let keep = reachable(doc);
     doc.objects.retain(|id, _| keep.contains(id));
 }
 
 fn install(doc: &mut Document, before: HashSet<ObjectId>, entries: Vec<Entry>, turn: Option<&(HashSet<usize>, bool)>) -> Result<(), EditError> {
     let root = pages_root(doc)?;
     doc.max_id = doc.max_id.max(doc.objects.keys().map(|k| k.0).max().unwrap_or(0));
+    let mut counts: HashMap<ObjectId, usize> = HashMap::new();
+    entries.iter().for_each(|(id, _)| *counts.entry(*id).or_default() += 1);
+    let originals: HashMap<ObjectId, Object> = counts.into_iter().filter(|(_, n)| *n > 1).filter_map(|(id, _)| Some((id, doc.objects.get(&id)?.clone()))).collect();
     let mut seen = HashSet::new();
     let mut kept = Vec::with_capacity(entries.len());
     for (position, (id, inherited)) in entries.into_iter().enumerate() {
         let id = if seen.insert(id) {
             id
         } else {
-            let copy = doc.objects.get(&id).cloned().ok_or(EditError::Broken)?;
+            let copy = originals.get(&id).cloned().ok_or(EditError::Broken)?;
             doc.add_object(copy)
         };
         let current = number(doc, doc.get_dictionary(id).ok().and_then(|p| p.get(b"Rotate").ok())).or_else(|| number(doc, inherited.get(b"Rotate").ok()));
@@ -331,7 +505,12 @@ fn install(doc: &mut Document, before: HashSet<ObjectId>, entries: Vec<Entry>, t
     let tree = doc.get_dictionary_mut(root).map_err(|_| EditError::Broken)?;
     tree.set("Kids", kept.iter().map(|&id| Object::Reference(id)).collect::<Vec<_>>());
     tree.set("Count", count);
-    let gone: HashSet<ObjectId> = before.difference(&kept.into_iter().collect::<HashSet<_>>()).copied().collect();
+    INHERITED.iter().for_each(|key| {
+        tree.remove(key);
+    });
+    let kept: HashSet<ObjectId> = kept.into_iter().collect();
+    let gone: HashSet<ObjectId> = before.difference(&kept).copied().collect();
+    drop_fields(doc, &gone, &kept);
     cut(doc, &gone);
     prune(doc);
     Ok(())
@@ -387,9 +566,17 @@ pub fn apply(data: &[u8], op: &PageOp) -> Result<Vec<u8>, EditError> {
             if extra.is_empty() {
                 return Err(EditError::Empty);
             }
-            let extra = absorb(&mut doc, &mut other, extra)?;
+            let mut carry = carried(&other);
+            let extra = absorb(&mut doc, &mut other, extra, &mut carry)?;
+            merge_form(&mut doc, &carry);
+            merge_layers(&mut doc, &carry);
             entries.splice((*at).min(count)..(*at).min(count), extra);
         }
+    }
+    if !matches!(op, PageOp::Rotate { .. })
+        && let Ok(catalog) = doc.catalog_mut()
+    {
+        catalog.remove(b"PageLabels");
     }
     let expected = entries.len();
     install(&mut doc, before, entries, turn.as_ref())?;
@@ -611,7 +798,7 @@ pub fn with_annotations(data: &[u8], list: &[Highlight], tint: &dyn Fn(&str) -> 
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use crate::core::pdf_render::PdfDoc;
     use lopdf::content::{Content, Operation};
@@ -1205,5 +1392,265 @@ mod tests {
         let plain = with_annotations(&bytes, &[], &tint).unwrap();
         assert_eq!(texts(&plain), texts(&bytes));
         assert_eq!(annots(&plain, 0).len(), 1);
+    }
+
+    fn wrong_offset(bytes: &[u8], id: usize) -> Vec<u8> {
+        let mut doc = Document::load_mem(bytes).unwrap();
+        doc.reference_table.cross_reference_type = lopdf::xref::XrefType::CrossReferenceTable;
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        let at = out.windows(6).rposition(|w| w == b"\nxref\n").unwrap() + 1;
+        let line = |from: usize| from + out[from..].iter().position(|&b| b == b'\n').unwrap() + 1;
+        let mut slots = HashMap::new();
+        let mut at = line(at);
+        while let Some([start, count]) = std::str::from_utf8(&out[at..line(at) - 1]).ok().map(|h| h.split(' ').filter_map(|n| n.parse::<usize>().ok()).collect::<Vec<_>>()).and_then(|n| <[usize; 2]>::try_from(n).ok()) {
+            at = line(at);
+            for id in start..start + count {
+                slots.insert(id, at);
+                at += 20;
+            }
+        }
+        let at = slots[&id];
+        out[at..at + 10].copy_from_slice(b"0000000003");
+        out
+    }
+
+    fn with_broken_object_stream(bytes: &[u8]) -> Vec<u8> {
+        let mut doc = Document::load_mem(bytes).unwrap();
+        let mut out = Vec::new();
+        doc.save_modern(&mut out).unwrap();
+        let at = out.windows(6).position(|w| w == b"ObjStm").unwrap();
+        let start = at + out[at..].windows(7).position(|w| w == b"stream\n").unwrap() + 7;
+        out[start..start + 12].iter_mut().for_each(|b| *b ^= 0xff);
+        out
+    }
+
+    #[test]
+    fn a_file_that_loses_objects_while_loading_is_refused() {
+        let crossed = wrong_offset(&fixture(), 14);
+        assert!(!Document::load_mem(&crossed).unwrap().objects.contains_key(&(14, 0)), "the lenient reader opens it and drops an object");
+        assert_eq!(apply(&crossed, &PageOp::Rotate { pages: vec![0], clockwise: true }), Err(EditError::Broken));
+        assert_eq!(apply(&fixture(), &PageOp::Insert { at: 0, pdf: crossed.clone() }), Err(EditError::Broken));
+        assert_eq!(with_annotations(&crossed, &[], &|_| [0, 0, 0]), Err(EditError::Broken));
+        let packed = with_broken_object_stream(&fixture());
+        assert_eq!(apply(&packed, &PageOp::Delete(vec![0])), Err(EditError::Broken));
+    }
+
+    fn with_page_entry(bytes: &[u8], key: &str, value: Object) -> Vec<u8> {
+        let mut doc = Document::load_mem(bytes).unwrap();
+        let root = doc.catalog().unwrap().get(b"Pages").unwrap().as_reference().unwrap();
+        doc.get_object_mut(root).unwrap().as_dict_mut().unwrap().set(key, value);
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn inserted_pages_do_not_inherit_what_sits_on_the_host_root() {
+        let host = with_page_entry(&appendix(), "Rotate", 90.into());
+        let host = with_page_entry(&host, "MediaBox", media(100, 100));
+        let out = apply(&host, &PageOp::Insert { at: 1, pdf: fixture() }).unwrap();
+        assert_eq!(sizes(&out), [(400., 300.), (792., 612.), (612., 792.), (792., 612.), (612., 792.), (400., 300.)]);
+        let doc = Document::load_mem(&out).unwrap();
+        let root = doc.get_dictionary(pages_root(&doc).unwrap()).unwrap();
+        assert!(INHERITED.iter().all(|k| !root.has(k)), "{root:?}");
+    }
+
+    #[test]
+    fn a_page_listed_twice_is_cloned_from_its_original_state() {
+        let mut doc = Document::with_version("1.5");
+        let root = doc.new_object_id();
+        let font = font(&mut doc);
+        let a = leaf(&mut doc, root, "Eins");
+        let b = leaf(&mut doc, root, "Zwei");
+        doc.objects.insert(root, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![a.into(), b.into(), a.into()], "Count" => 3, "MediaBox" => media(612, 792), "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } } }));
+        let bytes = finish_doc(doc, root, &[("A", a)]);
+        let out = apply(&bytes, &PageOp::Rotate { pages: vec![0], clockwise: true }).unwrap();
+        assert_eq!(rotations(&out), [Some(90), None, None]);
+        let out = apply(&bytes, &PageOp::Rotate { pages: vec![0, 2], clockwise: false }).unwrap();
+        assert_eq!(rotations(&out), [Some(270), None, Some(270)]);
+    }
+
+    #[test]
+    fn a_looping_outline_is_handled_in_a_blink() {
+        let mut doc = Document::with_version("1.5");
+        let root = doc.new_object_id();
+        let font = font(&mut doc);
+        let (one, two) = (leaf(&mut doc, root, "Eins"), leaf(&mut doc, root, "Zwei"));
+        doc.objects.insert(root, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![one.into(), two.into()], "Count" => 2, "MediaBox" => media(612, 792), "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } } }));
+        let (outlines, a, b) = (doc.new_object_id(), doc.new_object_id(), doc.new_object_id());
+        let dest = |page: ObjectId| -> Object { vec![page.into(), "Fit".into()].into() };
+        doc.objects.insert(a, Object::Dictionary(dictionary! { "Title" => Object::string_literal("A"), "Parent" => outlines, "Dest" => dest(one), "Next" => b, "First" => a }));
+        doc.objects.insert(b, Object::Dictionary(dictionary! { "Title" => Object::string_literal("B"), "Parent" => outlines, "Dest" => dest(two), "Prev" => a, "First" => a }));
+        doc.objects.insert(outlines, Object::Dictionary(dictionary! { "Type" => "Outlines", "First" => a, "Last" => b, "Count" => 2 }));
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => root, "Outlines" => outlines });
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        let started = std::time::Instant::now();
+        let out = apply(&bytes, &PageOp::Delete(vec![0])).unwrap();
+        assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+        assert_eq!(texts(&out), ["Zwei"]);
+        let doc = Document::load_mem(&out).unwrap();
+        let outline = doc.get_dictionary(doc.catalog().unwrap().get(b"Outlines").unwrap().as_reference().unwrap()).unwrap();
+        assert_eq!(outline.get(b"Count").unwrap().as_i64().unwrap(), 1);
+        assert_eq!(outline.get(b"First").unwrap(), outline.get(b"Last").unwrap());
+    }
+
+    fn widget(doc: &mut Document, page: ObjectId, parent: Option<ObjectId>, name: &str) -> ObjectId {
+        let mut dict = dictionary! { "Type" => "Annot", "Subtype" => "Widget", "T" => Object::string_literal(name), "P" => page, "Rect" => vec![0.into(), 0.into(), 50.into(), 20.into()] };
+        if let Some(parent) = parent {
+            dict.set("Parent", parent);
+        } else {
+            dict.set("FT", "Tx");
+        }
+        let id = doc.add_object(dict);
+        let dict = doc.get_object_mut(page).unwrap().as_dict_mut().unwrap();
+        let mut list = dict.get(b"Annots").ok().and_then(|o| o.as_array().ok()).cloned().unwrap_or_default();
+        list.push(id.into());
+        dict.set("Annots", list);
+        id
+    }
+
+    fn field_names(bytes: &[u8]) -> Vec<String> {
+        fn names(doc: &Document, object: &Object, out: &mut Vec<String>) {
+            let Some(dict) = doc.dereference(object).ok().and_then(|(_, o)| o.as_dict().ok()) else { return };
+            if let Ok(t) = dict.get(b"T") {
+                out.push(lopdf::decode_text_string(t).unwrap());
+            }
+            if let Some(kids) = dict.get(b"Kids").ok().and_then(|o| doc.dereference(o).ok()).and_then(|(_, o)| o.as_array().ok()) {
+                kids.iter().for_each(|k| names(doc, k, out));
+            }
+        }
+        let doc = Document::load_mem(bytes).unwrap();
+        let form = doc.catalog().unwrap().get(b"AcroForm").ok().and_then(|o| doc.dereference(o).ok()).and_then(|(_, o)| o.as_dict().ok());
+        let fields = form.and_then(|f| f.get(b"Fields").ok()).and_then(|o| doc.dereference(o).ok()).and_then(|(_, o)| o.as_array().ok());
+        let mut out = Vec::new();
+        fields.into_iter().flatten().for_each(|f| names(&doc, f, &mut out));
+        out
+    }
+
+    fn with_form(bytes: &[u8]) -> Vec<u8> {
+        let mut doc = Document::load_mem(bytes).unwrap();
+        let pages: Vec<ObjectId> = doc.page_iter().collect();
+        let single = widget(&mut doc, pages[0], None, "einzeln");
+        let other = widget(&mut doc, pages[1], None, "bleibt");
+        let group = doc.add_object(dictionary! { "FT" => "Tx", "T" => Object::string_literal("gruppe") });
+        let (w1, w2) = (widget(&mut doc, pages[0], Some(group), "w1"), widget(&mut doc, pages[1], Some(group), "w2"));
+        doc.get_object_mut(group).unwrap().as_dict_mut().unwrap().set("Kids", vec![Object::from(w1), w2.into()]);
+        let all_gone = doc.add_object(dictionary! { "FT" => "Tx", "T" => Object::string_literal("alles weg") });
+        let w3 = widget(&mut doc, pages[0], Some(all_gone), "w3");
+        doc.get_object_mut(all_gone).unwrap().as_dict_mut().unwrap().set("Kids", vec![Object::from(w3)]);
+        let bare = doc.add_object(dictionary! { "FT" => "Tx", "T" => Object::string_literal("ohne Widget") });
+        let fields = doc.add_object(vec![Object::from(single), other.into(), group.into(), all_gone.into(), bare.into()]);
+        doc.catalog_mut().unwrap().set("AcroForm", dictionary! { "Fields" => fields });
+        doc.catalog_mut().unwrap().set("PageLabels", dictionary! { "Nums" => vec![0.into(), dictionary! { "S" => "r" }.into()] });
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn deleting_a_page_takes_the_form_fields_that_lived_on_it() {
+        let bytes = with_form(&fixture());
+        assert_eq!(field_names(&bytes), ["einzeln", "bleibt", "gruppe", "w1", "w2", "alles weg", "w3", "ohne Widget"]);
+        let out = apply(&bytes, &PageOp::Delete(vec![0])).unwrap();
+        assert_eq!(field_names(&out), ["bleibt", "gruppe", "w2", "ohne Widget"]);
+        assert!(!contains(&out, b"alles weg") && !contains(&out, b"einzeln"));
+        let out = apply(&bytes, &PageOp::Delete(vec![0, 1])).unwrap();
+        assert_eq!(field_names(&out), ["ohne Widget"]);
+        let out = apply(&bytes, &PageOp::Delete(vec![3])).unwrap();
+        assert_eq!(field_names(&out), field_names(&bytes));
+    }
+
+    #[test]
+    fn page_labels_are_dropped_when_the_page_count_or_order_changes() {
+        let bytes = with_form(&fixture());
+        let has_labels = |bytes: &[u8]| Document::load_mem(bytes).unwrap().catalog().unwrap().has(b"PageLabels");
+        assert!(has_labels(&bytes));
+        assert!(has_labels(&apply(&bytes, &PageOp::Rotate { pages: vec![0], clockwise: true }).unwrap()));
+        assert!(!has_labels(&apply(&bytes, &PageOp::Delete(vec![0])).unwrap()));
+        assert!(!has_labels(&apply(&bytes, &PageOp::Move { pages: vec![0], to: 2 }).unwrap()));
+        assert!(!has_labels(&apply(&bytes, &PageOp::Insert { at: 0, pdf: appendix() }).unwrap()));
+    }
+
+    fn with_source_form(bytes: &[u8], da: Option<&str>) -> Vec<u8> {
+        let mut doc = Document::load_mem(bytes).unwrap();
+        let page = doc.page_iter().next().unwrap();
+        let field = widget(&mut doc, page, None, "quelle");
+        let helv = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let mut form = dictionary! { "Fields" => vec![Object::from(field)], "DR" => dictionary! { "Font" => dictionary! { "Helv" => helv } } };
+        if let Some(da) = da {
+            form.set("DA", Object::string_literal(da));
+        }
+        doc.catalog_mut().unwrap().set("AcroForm", form);
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn inserting_brings_the_form_fields_of_the_other_file() {
+        let source = with_source_form(&appendix(), Some("/Helv 0 Tf 0 g"));
+        let out = apply(&fixture(), &PageOp::Insert { at: 1, pdf: source.clone() }).unwrap();
+        assert_eq!(field_names(&out), ["quelle"]);
+        let doc = Document::load_mem(&out).unwrap();
+        let form = doc.dereference(doc.catalog().unwrap().get(b"AcroForm").unwrap()).unwrap().1.as_dict().unwrap();
+        assert_eq!(form.get(b"DA").unwrap().as_str().unwrap(), b"/Helv 0 Tf 0 g");
+        let fonts = doc.dereference(form.get(b"DR").unwrap()).unwrap().1.as_dict().unwrap().get(b"Font").unwrap().as_dict().unwrap();
+        assert!(fonts.has(b"Helv"));
+        let annots = doc.get_page_annotations(doc.page_iter().nth(1).unwrap()).unwrap();
+        assert_eq!(lopdf::decode_text_string(annots[0].get(b"T").unwrap()).unwrap(), "quelle");
+
+        let host = with_form(&fixture());
+        let out = apply(&host, &PageOp::Insert { at: 0, pdf: source }).unwrap();
+        assert_eq!(field_names(&out), ["einzeln", "bleibt", "gruppe", "w1", "w2", "alles weg", "w3", "ohne Widget", "quelle"]);
+        let doc = Document::load_mem(&out).unwrap();
+        let form = doc.dereference(doc.catalog().unwrap().get(b"AcroForm").unwrap()).unwrap().1.as_dict().unwrap();
+        assert!(form.has(b"DA") && form.has(b"DR"), "the host form takes over what the new fields need");
+        let none = apply(&host, &PageOp::Insert { at: 0, pdf: appendix() }).unwrap();
+        assert_eq!(field_names(&none), field_names(&host));
+    }
+
+    fn with_layers(bytes: &[u8], names: &[(&str, bool)], base_off: bool) -> Vec<u8> {
+        let mut doc = Document::load_mem(bytes).unwrap();
+        let ids: Vec<(ObjectId, bool)> = names.iter().map(|(n, on)| (doc.add_object(dictionary! { "Type" => "OCG", "Name" => Object::string_literal(*n) }), *on)).collect();
+        let mut d = Dictionary::new();
+        if base_off {
+            d.set("BaseState", "OFF");
+            d.set("ON", ids.iter().filter(|(_, on)| *on).map(|(id, _)| Object::from(*id)).collect::<Vec<_>>());
+        } else {
+            d.set("OFF", ids.iter().filter(|(_, on)| !*on).map(|(id, _)| Object::from(*id)).collect::<Vec<_>>());
+        }
+        doc.catalog_mut().unwrap().set("OCProperties", dictionary! { "OCGs" => ids.iter().map(|(id, _)| Object::from(*id)).collect::<Vec<_>>(), "D" => d });
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        out
+    }
+
+    fn layers(bytes: &[u8]) -> (Vec<String>, Vec<String>, Vec<String>) {
+        let doc = Document::load_mem(bytes).unwrap();
+        let props = doc.dereference(doc.catalog().unwrap().get(b"OCProperties").unwrap()).unwrap().1.as_dict().unwrap();
+        let named = |o: Option<&Object>| -> Vec<String> {
+            let list = o.and_then(|o| doc.dereference(o).ok()).and_then(|(_, o)| o.as_array().ok()).cloned().unwrap_or_default();
+            list.iter().map(|g| lopdf::decode_text_string(doc.dereference(g).unwrap().1.as_dict().unwrap().get(b"Name").unwrap()).unwrap()).collect()
+        };
+        let d = doc.dereference(props.get(b"D").unwrap()).unwrap().1.as_dict().unwrap();
+        (named(props.get(b"OCGs").ok()), named(d.get(b"OFF").ok()), named(d.get(b"ON").ok()))
+    }
+
+    #[test]
+    fn inserting_brings_the_layers_of_the_other_file_with_their_default_state() {
+        let source = with_layers(&appendix(), &[("Quelle an", true), ("Quelle aus", false)], false);
+        let host = with_layers(&fixture(), &[("Host", true)], false);
+        let out = apply(&host, &PageOp::Insert { at: 0, pdf: source.clone() }).unwrap();
+        assert_eq!(layers(&out), (vec!["Host".into(), "Quelle an".into(), "Quelle aus".into()], vec!["Quelle aus".into()], vec![]));
+        let out = apply(&fixture(), &PageOp::Insert { at: 0, pdf: source }).unwrap();
+        assert_eq!(layers(&out), (vec!["Quelle an".into(), "Quelle aus".into()], vec!["Quelle aus".into()], vec![]));
+        let off_source = with_layers(&appendix(), &[("Quelle an", true), ("Quelle aus", false)], true);
+        let out = apply(&with_layers(&fixture(), &[("Host", false)], false), &PageOp::Insert { at: 0, pdf: off_source.clone() }).unwrap();
+        assert_eq!(layers(&out), (vec!["Host".into(), "Quelle an".into(), "Quelle aus".into()], vec!["Host".into(), "Quelle aus".into()], vec![]));
+        let out = apply(&with_layers(&fixture(), &[("Host", true)], true), &PageOp::Insert { at: 0, pdf: off_source }).unwrap();
+        assert_eq!(layers(&out).2, ["Host", "Quelle an"]);
     }
 }
