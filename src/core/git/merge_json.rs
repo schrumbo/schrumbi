@@ -356,10 +356,11 @@ fremd");
         let list = &marks["k"];
         assert_eq!(list.iter().map(|h| h.text.as_str()).collect::<Vec<_>>(), ["Mac", "Windows"]);
         assert_eq!(list[0].note, "Notiz Mac");
-        assert!(!list[1].note.contains("Mac"), "{:?}", list[1].note);
-        let kept: Vec<&str> = list.iter().map(|h| h.note.as_str()).chain(orphans["k"].values().map(|a| a.note.as_str())).collect();
-        assert!(kept.contains(&"Notiz Windows"), "{kept:?}");
-        assert!(kept.iter().all(|n| !n.contains("Mac") || !n.contains("Windows")), "{kept:?}");
+        assert_eq!(list[1].note, "Notiz Windows");
+        assert!(!orphans.contains_key("k"), "{orphans:?}");
+        let (_, saved) = highlights::split(&marks, &orphans);
+        let (back, _) = highlights::merge(&serde_json::from_str(&main).unwrap(), &saved);
+        assert_eq!(back["k"][1].note, "Notiz Windows");
     }
 
     #[test]

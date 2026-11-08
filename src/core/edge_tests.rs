@@ -2167,7 +2167,7 @@ fn a_rewrite_by_the_first_release_keeps_notes_pins_and_drawings() {
 fn a_passage_that_reuses_an_id_in_the_first_release_gets_no_foreign_note() {
     use crate::core::highlights::{ANNOTATIONS_NAME, Annotations};
     let (root, mut lib) = workspace("highlights-id-reuse", &config(1, 0));
-    lib.set_highlights("k", vec![pdf_noted(1, 0, "Gehört zum alten Wort"), pdf_mark(2, 0)], "markiert".into());
+    lib.set_highlights("k", vec![pdf_noted(1, 0, "Gehört zum alten Wort"), pdf_mark(2, 1)], "markiert".into());
     rewrite_like_the_first_release(&root, |list| {
         list.retain(|h| h.id != 1);
         list.push(FirstRelease { id: 1, color: "green".into(), text: "Anderes Wort".into(), parts: pdf_mark(1, 3).parts });

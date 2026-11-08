@@ -194,7 +194,17 @@ pub fn merge(main: &Highlights, annotations: &Annotations) -> (Highlights, Orpha
             }
         }
         if let Some(extra) = extra {
-            let lost: BTreeMap<u64, Attached> = extra.notes.iter().filter(|(id, _)| !used.contains(id)).map(|(id, a)| (*id, a.clone())).collect();
+            let mut lost: BTreeMap<u64, Attached> = extra.notes.iter().filter(|(id, _)| !used.contains(id)).map(|(id, a)| (*id, a.clone())).collect();
+            for h in list.iter_mut().filter(|h| !used.contains(&h.id) && !extra.notes.contains_key(&h.id)) {
+                let print = fingerprint(h);
+                if let Some(id) = lost.iter().find(|(_, a)| a.text_fingerprint == print).map(|(id, _)| *id)
+                    && let Some(a) = lost.remove(&id)
+                {
+                    h.note = a.note;
+                    h.pin = a.pin;
+                    h.ink = a.ink;
+                }
+            }
             if !lost.is_empty() {
                 orphans.insert(key.clone(), lost);
             }
