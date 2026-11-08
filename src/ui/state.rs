@@ -6,6 +6,7 @@ use notify::{EventKind, RecursiveMode, Watcher};
 
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{Library, Reminder};
+use crate::core::highlights;
 use crate::core::workspace::{CONFIG_NAME, STATE_NAME};
 
 /// Many apps empty a file before writing it; reading in between would show an empty note.
@@ -226,7 +227,7 @@ fn classify(event: &notify::Event, roots: &[PathBuf]) -> Change {
             c.history = true;
             continue;
         }
-        if name == CONFIG_NAME || name == STATE_NAME {
+        if name == CONFIG_NAME || name == STATE_NAME || name == highlights::FILE_NAME || name == highlights::ANNOTATIONS_NAME {
             c.config = true;
             continue;
         }
