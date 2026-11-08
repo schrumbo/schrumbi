@@ -272,6 +272,29 @@ pub fn next_id(list: &[Highlight], orphans: Option<&BTreeMap<u64, Attached>>, pa
     }
 }
 
+/// Brings the edits made here since `base` onto the list that was pulled meanwhile: what was removed here stays removed, what was added or changed here is kept, the rest is as pulled. A new mark whose id another pulled mark already has gets a fresh one.
+pub fn rebase(base: &[Highlight], local: &[Highlight], pulled: Vec<Highlight>, orphans: Option<&BTreeMap<u64, Attached>>) -> Vec<Highlight> {
+    let local_ids: BTreeSet<u64> = local.iter().map(|h| h.id).collect();
+    let mut out = pulled;
+    out.retain(|h| local_ids.contains(&h.id) || !base.iter().any(|b| b.id == h.id));
+    for h in local {
+        let known = base.iter().find(|b| b.id == h.id);
+        if known == Some(h) {
+            continue;
+        }
+        match (out.iter().position(|o| o.id == h.id), known) {
+            (None, _) => out.push(h.clone()),
+            (Some(i), Some(_)) => out[i] = h.clone(),
+            (Some(i), None) if out[i] == *h => {}
+            (Some(_), None) => {
+                let id = next_id(&out, orphans, !h.parts.is_empty());
+                out.push(Highlight { id, ..h.clone() });
+            }
+        }
+    }
+    out
+}
+
 /// Reads both files of a workspace. A file that cannot be read or comes from a newer version locks the marks, so nothing is written over it. A sidecar that cannot be used leaves the plain highlights visible.
 pub fn load(root: &Path) -> Loaded {
     let mut raw = match workspace::load::<Highlights>(&root.join(FILE_NAME)) {

@@ -2368,3 +2368,117 @@ fn a_passage_with_a_negative_zero_keeps_its_note_across_saving_and_loading() {
     assert_eq!(lib.highlights_of("k")[0].note, "Merken");
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn undo_after_a_marks_reload_never_writes_back_a_list_without_what_came_in() {
+    use crate::core::highlights;
+    let (root, mut lib) = workspace("highlights-undo-reload", &config(1, 0));
+    lib.set_highlights("k", vec![pdf_mark(1, 0)], "markiert".into());
+    lib.set_highlights("k", vec![pdf_mark(1, 0), pdf_mark(2, 1)], "markiert".into());
+    let outside: highlights::Highlights = std::collections::HashMap::from([("k".to_string(), vec![pdf_noted(1, 0, "Von außen"), pdf_mark(2, 1)])]);
+    write_marks_like_a_pull(&root, &outside);
+    assert!(lib.reload_external());
+    lib.undo();
+    assert!(!lib.can_undo());
+    let loaded = highlights::load(&root);
+    assert_eq!(loaded.marks["k"], vec![pdf_noted(1, 0, "Von außen"), pdf_mark(2, 1)]);
+    assert_eq!(lib.highlights_of("k"), loaded.marks["k"]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_reload_keeps_undo_steps_of_other_documents_and_drops_whole_steps() {
+    use crate::core::highlights;
+    let (root, mut lib) = workspace("highlights-undo-other", &config(1, 0));
+    lib.set_highlights("j", vec![pdf_mark(1, 0)], "markiert".into());
+    lib.set_highlights("k", vec![pdf_mark(1, 0)], "markiert".into());
+    let outside: highlights::Highlights = std::collections::HashMap::from([("j".to_string(), vec![pdf_mark(1, 0)]), ("k".to_string(), vec![pdf_noted(1, 0, "Von außen")])]);
+    write_marks_like_a_pull(&root, &outside);
+    assert!(lib.reload_external());
+    assert!(lib.can_undo());
+    lib.undo();
+    assert!(!lib.can_undo());
+    assert_eq!(highlights::load(&root).marks["k"], vec![pdf_noted(1, 0, "Von außen")]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn an_edit_during_a_sync_keeps_what_the_sync_brought_for_the_same_pdf() {
+    use crate::core::highlights::{self, ANNOTATIONS_NAME};
+    let (root, mut lib) = workspace("highlights-merge-sync", &config(1, 0));
+    lib.set_highlights("k", vec![pdf_mark(1, 0)], "markiert".into());
+    lib.begin_sync();
+    lib.set_highlights("k", vec![pdf_mark(1, 0), pdf_mark(3, 2)], "markiert".into());
+    let pulled: highlights::Highlights = std::collections::HashMap::from([("k".to_string(), vec![pdf_mark(1, 0), pdf_noted(2, 1, "Gezogen")])]);
+    write_marks_like_a_pull(&root, &pulled);
+    lib.finish_sync(&[root.join(ANNOTATIONS_NAME)]);
+    let ids = |list: &[highlights::Highlight]| list.iter().map(|h| (h.id, h.note.clone())).collect::<Vec<_>>();
+    let expected = vec![(1, String::new()), (2, "Gezogen".to_string()), (3, String::new())];
+    assert_eq!(ids(&lib.highlights_of("k")), expected);
+    assert_eq!(ids(&highlights::load(&root).marks["k"]), expected);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_mark_made_during_a_sync_with_an_id_the_sync_also_used_gets_a_fresh_one() {
+    use crate::core::highlights::{self, ANNOTATIONS_NAME};
+    let (root, mut lib) = workspace("highlights-merge-clash", &config(1, 0));
+    lib.set_highlights("k", vec![pdf_mark(1, 0)], "markiert".into());
+    lib.begin_sync();
+    lib.set_highlights("k", vec![pdf_mark(1, 0), pdf_mark(2, 5)], "markiert".into());
+    let pulled: highlights::Highlights = std::collections::HashMap::from([("k".to_string(), vec![pdf_mark(1, 0), pdf_noted(2, 1, "Gezogen")])]);
+    write_marks_like_a_pull(&root, &pulled);
+    lib.finish_sync(&[root.join(ANNOTATIONS_NAME)]);
+    let shown = lib.highlights_of("k");
+    assert_eq!(shown.len(), 3, "{shown:?}");
+    assert!(shown.iter().any(|h| h.id == 2 && h.note == "Gezogen" && h.parts[0].page == 1));
+    assert!(shown.iter().any(|h| h.id == 3 && h.parts[0].page == 5));
+    assert_eq!(highlights::load(&root).marks["k"], shown);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn undoing_back_to_the_start_during_a_sync_keeps_what_the_sync_brought() {
+    use crate::core::highlights::{self, ANNOTATIONS_NAME};
+    let (root, mut lib) = workspace("highlights-merge-undo", &config(1, 0));
+    lib.set_highlights("k", vec![pdf_mark(1, 0)], "markiert".into());
+    lib.begin_sync();
+    lib.set_highlights("k", vec![pdf_mark(1, 0), pdf_mark(3, 2)], "markiert".into());
+    lib.undo();
+    assert_eq!(lib.highlights_of("k"), vec![pdf_mark(1, 0)]);
+    let pulled: highlights::Highlights = std::collections::HashMap::from([("k".to_string(), vec![pdf_mark(1, 0), pdf_noted(2, 1, "Gezogen")])]);
+    write_marks_like_a_pull(&root, &pulled);
+    lib.finish_sync(&[root.join(ANNOTATIONS_NAME)]);
+    assert_eq!(lib.highlights_of("k"), vec![pdf_mark(1, 0), pdf_noted(2, 1, "Gezogen")]);
+    assert_eq!(highlights::load(&root).marks["k"], lib.highlights_of("k"));
+    lib.undo();
+    assert_eq!(highlights::load(&root).marks["k"], vec![pdf_mark(1, 0), pdf_noted(2, 1, "Gezogen")]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_mark_removed_during_a_sync_stays_removed_next_to_what_the_sync_brought() {
+    use crate::core::highlights::{self, ANNOTATIONS_NAME};
+    let (root, mut lib) = workspace("highlights-merge-remove", &config(1, 0));
+    lib.set_highlights("k", vec![pdf_mark(1, 0), pdf_mark(2, 1)], "markiert".into());
+    lib.begin_sync();
+    lib.set_highlights("k", vec![pdf_mark(2, 1)], "entfernt".into());
+    let pulled: highlights::Highlights = std::collections::HashMap::from([("k".to_string(), vec![pdf_mark(1, 0), pdf_mark(2, 1), pdf_noted(3, 2, "Gezogen")])]);
+    write_marks_like_a_pull(&root, &pulled);
+    lib.finish_sync(&[root.join(ANNOTATIONS_NAME)]);
+    assert_eq!(lib.highlights_of("k"), vec![pdf_mark(2, 1), pdf_noted(3, 2, "Gezogen")]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn the_marks_lock_message_goes_away_when_the_lock_lifts() {
+    use crate::core::highlights::FILE_NAME;
+    let (root, mut lib) = workspace("highlights-lock-lifts", &config(1, 0));
+    std::fs::write(root.join(FILE_NAME), "kaputt{").unwrap();
+    lib.open(&root);
+    assert!(lib.last_error.is_some());
+    std::fs::write(root.join(FILE_NAME), "{}").unwrap();
+    assert!(lib.reload_external());
+    assert_eq!(lib.last_error, None);
+    let _ = std::fs::remove_dir_all(root);
+}

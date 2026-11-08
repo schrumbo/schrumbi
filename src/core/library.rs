@@ -1,6 +1,6 @@
 use super::errors::explain;
 use super::next_action::{self, NextAction};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -262,7 +262,7 @@ pub struct Library {
     highlights_lock: Option<String>,
     highlights_orphans: highlights::Orphans,
     highlights_disk: (Highlights, highlights::Annotations),
-    deferred_marks: BTreeSet<String>,
+    deferred_marks: BTreeMap<String, Vec<Highlight>>,
     naming_cache: std::sync::Mutex<Option<(String, Arc<Vec<Naming>>)>>,
     pub now: DateTime<Local>,
     pub selected_semester_id: Option<String>,
@@ -452,7 +452,7 @@ impl Library {
             highlights_lock: None,
             highlights_orphans: highlights::Orphans::new(),
             highlights_disk: Default::default(),
-            deferred_marks: BTreeSet::new(),
+            deferred_marks: BTreeMap::new(),
             naming_cache: Default::default(),
             now: Local::now(),
             selected_semester_id: None,
@@ -742,7 +742,7 @@ impl Library {
         }
         let before = if list.is_empty() { self.highlights.remove(key) } else { self.highlights.insert(key.to_string(), list) };
         if self.sync_gate {
-            self.deferred_marks.insert(key.to_string());
+            self.deferred_marks.entry(key.to_string()).or_insert_with(|| before.clone().unwrap_or_default());
         }
         self.write_highlights();
         Some(before.unwrap_or_default())
@@ -790,15 +790,27 @@ impl Library {
         if loaded.disk == self.highlights_disk && loaded.lock.is_some() == self.highlights_lock.is_some() {
             return false;
         }
-        let local: Vec<(String, Option<Vec<Highlight>>)> = self.deferred_marks.iter().map(|key| (key.clone(), self.highlights.get(key).cloned())).collect();
+        let was_locked = self.highlights_lock.take();
+        let before = std::mem::take(&mut self.highlights);
         self.adopt_highlights(loaded);
         if self.highlights_lock.is_none() {
-            for (key, list) in local {
-                match list {
-                    Some(list) => self.highlights.insert(key, list),
-                    None => self.highlights.remove(&key),
-                };
+            if was_locked.is_some() && self.last_error == was_locked {
+                self.last_error = None;
             }
+            for (key, base) in &self.deferred_marks {
+                let local = before.get(key).map_or(&[][..], Vec::as_slice);
+                let pulled = self.highlights.remove(key).unwrap_or_default();
+                let merged = highlights::rebase(base, local, pulled, self.highlights_orphans.get(key));
+                if !merged.is_empty() {
+                    self.highlights.insert(key.clone(), merged);
+                }
+            }
+        }
+        let moved: BTreeSet<String> = before.keys().chain(self.highlights.keys()).filter(|key| before.get(*key) != self.highlights.get(*key)).cloned().collect();
+        if !moved.is_empty() {
+            let touches = |step: &Step| step.changes.iter().any(|c| matches!(c, Change::Highlights { key, .. } if moved.contains(key)));
+            self.undo_steps.retain(|step| !touches(step));
+            self.redo_steps.retain(|step| !touches(step));
         }
         true
     }
