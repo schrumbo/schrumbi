@@ -6,7 +6,7 @@ use hayro::hayro_syntax::Pdf;
 use hayro::kurbo::{Affine, Point};
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId, Stream, dictionary};
 
-use super::highlights::{Highlight, HighlightPart, InkLine, Pin};
+use super::highlights::{self, Highlight, HighlightPart, InkLine, Pin, SIDECAR_ID_BASE};
 use super::i18n::tr;
 
 const INHERITED: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
@@ -602,7 +602,8 @@ pub fn apply(data: &[u8], op: &PageOp) -> Result<Vec<u8>, EditError> {
 }
 
 fn reshape(list: &[Highlight], page: &dyn Fn(usize) -> Option<usize>, point: &dyn Fn(usize, [f32; 2]) -> [f32; 2], rect: &dyn Fn(usize, [f32; 4]) -> [f32; 4]) -> Vec<Highlight> {
-    list.iter()
+    let mut out: Vec<(Highlight, bool)> = list
+        .iter()
         .filter_map(|h| {
             let mut out = h.clone();
             out.parts = h.parts.iter().filter_map(|p| Some(HighlightPart { page: page(p.page)?, rects: p.rects.iter().map(|r| rect(p.page, *r)).collect() })).collect();
@@ -613,9 +614,18 @@ fn reshape(list: &[Highlight], page: &dyn Fn(usize) -> Option<usize>, point: &dy
             out.ink = h.ink.iter().filter_map(|l| Some(InkLine { page: page(l.page)?, width: l.width, points: l.points.iter().map(|q| point(l.page, *q)).collect() })).collect();
             let lost = out.parts.len() < h.parts.len() || (h.pin.is_some() && out.pin.is_none()) || out.ink.len() < h.ink.len();
             let empty = out.parts.is_empty() && out.pin.is_none() && out.ink.is_empty();
-            (!(lost && empty)).then_some(out)
+            let demoted = !h.parts.is_empty() && out.parts.is_empty() && h.id < SIDECAR_ID_BASE;
+            (!(lost && empty)).then_some((out, demoted))
         })
-        .collect()
+        .collect();
+    let mut taken: HashSet<u64> = out.iter().map(|(h, _)| h.id).collect();
+    for (h, demoted) in &mut out {
+        if *demoted {
+            h.id = highlights::random_id(|id| taken.contains(&id));
+            taken.insert(h.id);
+        }
+    }
+    out.into_iter().map(|(h, _)| h).collect()
 }
 
 /// Carries marks over a page change. `sizes` are the display sizes of the pages before the change, `inserted` is the number of pages an insert added. A mark left with nothing after a delete is dropped.
@@ -1197,6 +1207,20 @@ pub mod tests {
         assert_eq!(out.iter().map(|h| h.id).collect::<Vec<_>>(), [2, 4, 5, 6]);
         assert_eq!(out[0].parts.iter().map(|p| p.page).collect::<Vec<_>>(), [0]);
         assert_eq!(out[1].ink[0].page, 0);
+    }
+
+    #[test]
+    fn a_mark_left_without_text_gets_an_id_that_the_first_release_never_hands_out() {
+        use crate::core::highlights::SIDECAR_ID_BASE;
+        let both = Highlight { id: 2, pin: Some(Pin { page: 2, x: 30., y: 40. }), parts: vec![HighlightPart { page: 1, rects: vec![[1., 2., 3., 4.]] }], ..Default::default() };
+        let list = vec![mark(1, 0), both];
+        let out = remap(&list, &PageOp::Delete(vec![1]), &[(612., 792.); 4], 0);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].id, 1);
+        assert!(out[1].parts.is_empty() && out[1].pin.is_some());
+        assert!(out[1].id >= SIDECAR_ID_BASE, "{}", out[1].id);
+        let kept = remap(&list, &PageOp::Delete(vec![3]), &[(612., 792.); 4], 0);
+        assert_eq!(kept, list, "a mark that still has its text keeps its id");
     }
 
     #[test]

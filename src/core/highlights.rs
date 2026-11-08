@@ -153,8 +153,27 @@ pub struct Loaded {
 
 /// Identifies a passage by its text and parts, so a note only follows the passage it was written on.
 pub fn fingerprint(h: &Highlight) -> String {
-    let json = serde_json::to_string(&(&h.text, &h.parts)).unwrap_or_default();
+    let unsigned = |v: f32| if v == 0. { 0. } else { v };
+    let parts: Vec<HighlightPart> = h.parts.iter().map(|p| HighlightPart { page: p.page, rects: p.rects.iter().map(|r| r.map(unsigned)).collect() }).collect();
+    let json = serde_json::to_string(&(&h.text, &parts)).unwrap_or_default();
     Sha256::digest(json.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+const ID_BITS: u32 = 40;
+
+/// A sidecar id derived from `seed`, the first free one from there on. The same seed and the same taken ids always give the same id.
+pub fn derived_id(seed: &[u8], taken: impl Fn(u64) -> bool) -> u64 {
+    let digest = Sha256::digest(seed);
+    let mut id = SIDECAR_ID_BASE + (u64::from_be_bytes([0, 0, 0, digest[0], digest[1], digest[2], digest[3], digest[4]]) & ((1 << ID_BITS) - 1));
+    while taken(id) {
+        id += 1;
+    }
+    id
+}
+
+/// A random sidecar id that is not taken, so two devices hand out different ones.
+pub fn random_id(taken: impl Fn(u64) -> bool) -> u64 {
+    derived_id(uuid::Uuid::new_v4().as_bytes(), taken)
 }
 
 /// Joins the main file and the sidecar into the marks as the app shows them, and the notes that fit no passage.
@@ -179,7 +198,18 @@ pub fn merge(main: &Highlights, annotations: &Annotations) -> (Highlights, Orpha
             if !lost.is_empty() {
                 orphans.insert(key.clone(), lost);
             }
-            list.extend(extra.items.iter().cloned());
+            let mut taken: BTreeSet<u64> = list.iter().chain(&extra.items).map(|h| h.id).collect();
+            let passages: BTreeSet<u64> = list.iter().map(|h| h.id).collect();
+            let mut seen = BTreeSet::new();
+            for item in &extra.items {
+                let mut item = item.clone();
+                if item.id < SIDECAR_ID_BASE && (passages.contains(&item.id) || !seen.insert(item.id)) {
+                    let seed = serde_json::to_vec(&item).unwrap_or_default();
+                    item.id = derived_id(&seed, |id| taken.contains(&id));
+                    taken.insert(item.id);
+                }
+                list.push(item);
+            }
         }
         if !list.is_empty() {
             marks.insert(key.clone(), list);
@@ -214,45 +244,58 @@ pub fn split(marks: &Highlights, orphans: &Orphans) -> (Highlights, Annotations)
     }
     for (key, lost) in orphans {
         let extra = annotations.documents.entry(key.clone()).or_default();
+        let mut taken: BTreeSet<u64> = extra.notes.keys().copied().chain(extra.items.iter().map(|h| h.id)).chain(lost.keys().copied()).collect();
         for (id, a) in lost {
-            extra.notes.entry(*id).or_insert_with(|| a.clone());
+            if extra.notes.contains_key(id) {
+                let seed = format!("{key}
+{id}
+{}", a.text_fingerprint);
+                let moved = derived_id(seed.as_bytes(), |candidate| taken.contains(&candidate));
+                taken.insert(moved);
+                extra.notes.insert(moved, a.clone());
+            } else {
+                extra.notes.insert(*id, a.clone());
+            }
         }
     }
     (main, annotations)
 }
 
-/// A free id for a new mark: passages count up from the highest id below the reserved range, pins and drawings from inside it. Ids of orphaned notes count as taken.
+/// A free id for a new mark: passages count up from the highest id below the reserved range, pins and drawings get a random one inside it. Ids of orphaned notes count as taken.
 pub fn next_id(list: &[Highlight], orphans: Option<&BTreeMap<u64, Attached>>, passage: bool) -> u64 {
     let ids = list.iter().map(|h| h.id).chain(orphans.into_iter().flat_map(|o| o.keys().copied()));
     if passage {
         ids.filter(|id| *id < SIDECAR_ID_BASE).max().map_or(1, |m| m + 1)
     } else {
-        ids.filter(|id| *id >= SIDECAR_ID_BASE).max().map_or(SIDECAR_ID_BASE, |m| m + 1)
+        let taken: BTreeSet<u64> = ids.collect();
+        random_id(|id| taken.contains(&id))
     }
 }
 
-/// Reads both files of a workspace. A file that cannot be read or comes from a newer version locks the marks, so nothing is written over it.
+/// Reads both files of a workspace. A file that cannot be read or comes from a newer version locks the marks, so nothing is written over it. A sidecar that cannot be used leaves the plain highlights visible.
 pub fn load(root: &Path) -> Loaded {
-    let unreadable = || Loaded { lock: Some(Lock::Unreadable), ..Default::default() };
     let mut raw = match workspace::load::<Highlights>(&root.join(FILE_NAME)) {
         Ok(found) => found.unwrap_or_default(),
-        Err(_) => return unreadable(),
+        Err(_) => return Loaded { lock: Some(Lock::Unreadable), ..Default::default() },
     };
     let disk_main = raw.clone();
     raw.retain(|key, _| !key.starts_with(VERSION_KEY));
+    let locked = |raw: &Highlights, lock: Lock| {
+        let (marks, _) = merge(raw, &Annotations::default());
+        Loaded { marks, disk: (disk_main.clone(), Annotations::default()), lock: Some(lock), ..Default::default() }
+    };
     let annotations = match workspace::load::<serde_json::Value>(&root.join(ANNOTATIONS_NAME)) {
         Ok(None) => Annotations::default(),
         Ok(Some(value)) => {
             if value.get("version").and_then(|v| v.as_u64()).is_some_and(|v| v > u64::from(ANNOTATIONS_VERSION)) {
-                let (marks, _) = merge(&raw, &Annotations::default());
-                return Loaded { marks, disk: (disk_main, Annotations::default()), lock: Some(Lock::Newer), ..Default::default() };
+                return locked(&raw, Lock::Newer);
             }
             match serde_json::from_value::<Annotations>(value) {
                 Ok(annotations) => annotations,
-                Err(_) => return unreadable(),
+                Err(_) => return locked(&raw, Lock::Unreadable),
             }
         }
-        Err(_) => return unreadable(),
+        Err(_) => return locked(&raw, Lock::Unreadable),
     };
     let (marks, orphans) = merge(&raw, &annotations);
     Loaded { marks, orphans, disk: (disk_main, annotations), lock: None }
@@ -407,9 +450,83 @@ mod tests {
         let lost = BTreeMap::from([(7, Attached::default())]);
         assert_eq!(next_id(&list, None, true), 2);
         assert_eq!(next_id(&list, Some(&lost), true), 8);
-        assert_eq!(next_id(&list, None, false), SIDECAR_ID_BASE + 2);
-        assert_eq!(next_id(&[], None, false), SIDECAR_ID_BASE);
         assert_eq!(next_id(&[], None, true), 1);
+        let free = |id: u64| (SIDECAR_ID_BASE..SIDECAR_ID_BASE + (1 << 40)).contains(&id);
+        let (a, b) = (next_id(&list, None, false), next_id(&list, None, false));
+        assert!(free(a) && free(b) && a != SIDECAR_ID_BASE && a != SIDECAR_ID_BASE + 1);
+        assert_ne!(a, b, "two devices must not hand out the same id");
+    }
+
+    #[test]
+    fn an_orphaned_note_stays_when_a_live_passage_with_its_id_gets_a_note() {
+        let old = Attached { note: "alt".into(), text_fingerprint: "weg".into(), ..Default::default() };
+        let orphans = Orphans::from([("k".to_string(), BTreeMap::from([(1, old)]))]);
+        let mut noted = sample();
+        noted.note = "neu".into();
+        let marks: Highlights = HashMap::from([("k".to_string(), vec![noted])]);
+        let (main, annotations) = split(&marks, &orphans);
+        let notes: Vec<&str> = annotations.documents["k"].notes.values().map(|a| a.note.as_str()).collect();
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes.contains(&"alt") && notes.contains(&"neu"));
+        assert_eq!(split(&marks, &orphans).1, annotations, "saving twice writes the same file");
+        let (shown, lost) = merge(&main, &annotations);
+        assert_eq!(shown["k"][0].note, "neu");
+        assert_eq!(lost["k"].values().map(|a| a.note.as_str()).collect::<Vec<_>>(), ["alt"]);
+        assert_eq!(split(&shown, &lost).1, annotations, "and again after loading");
+    }
+
+    #[test]
+    fn negative_zero_does_not_change_a_fingerprint_across_saving_and_loading() {
+        let mut h = sample();
+        h.parts[0].rects[0] = [-0., 20., -0., 5.];
+        let mut zero = h.clone();
+        zero.parts[0].rects[0] = [0., 20., 0., 5.];
+        assert_eq!(fingerprint(&h), fingerprint(&zero));
+        let dir = std::env::temp_dir().join(format!("schrumbi-fingerprint-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(FILE_NAME);
+        workspace::save(&HashMap::from([("k".to_string(), vec![h.clone()])]), &path).unwrap();
+        let back: Highlights = workspace::load(&path).unwrap().unwrap();
+        assert_eq!(fingerprint(&back["k"][0]), fingerprint(&h));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_mark_without_parts_that_shares_a_main_file_id_gets_a_sidecar_id() {
+        let main: Highlights = HashMap::from([("k".to_string(), vec![sample()])]);
+        let mut shared = pin();
+        shared.id = 1;
+        let annotations = Annotations { documents: BTreeMap::from([("k".to_string(), DocumentAnnotations { notes: BTreeMap::new(), items: vec![shared.clone()] })]), ..Default::default() };
+        let (shown, _) = merge(&main, &annotations);
+        let ids: Vec<u64> = shown["k"].iter().map(|h| h.id).collect();
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ids[0], 1);
+        assert!(ids[1] >= SIDECAR_ID_BASE);
+        assert_eq!(shown["k"][1].pin, shared.pin);
+        let (_, again) = merge(&main, &split(&shown, &Orphans::new()).1);
+        assert_eq!(again, Orphans::new());
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("schrumbi-highlights-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_broken_sidecar_locks_the_marks_but_keeps_the_plain_highlights_visible() {
+        let dir = scratch("broken-sidecar");
+        workspace::save(&HashMap::from([("k".to_string(), vec![sample()])]), &dir.join(FILE_NAME)).unwrap();
+        std::fs::write(dir.join(ANNOTATIONS_NAME), "[1,2").unwrap();
+        let loaded = load(&dir);
+        assert_eq!(loaded.lock, Some(Lock::Unreadable));
+        assert_eq!(loaded.marks["k"], vec![sample()]);
+        assert!(loaded.disk.1 == Annotations::default());
+        std::fs::write(dir.join(ANNOTATIONS_NAME), r#"{"version":1,"documents":{"k":{"notes":"kaputt"}}}"#).unwrap();
+        let loaded = load(&dir);
+        assert_eq!((loaded.lock, loaded.marks["k"].len()), (Some(Lock::Unreadable), 1));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

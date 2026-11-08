@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde_json::{Map, Value};
 
 use crate::core::json::to_swift_json;
@@ -91,14 +93,30 @@ fn merge_lists(base: Option<&Vec<Value>>, ours: &[Value], theirs: &[Value], poli
     let empty = Vec::new();
     let base = base.unwrap_or(&empty);
     let null = Value::Null;
+    let sidecar_items = policy == Policy::State && matches!(path, ["documents", _, "items"]);
+    let clashes = |id: &Value| {
+        sidecar_items && id.is_u64() && find(base, id).is_none() && matches!((find(ours, id), find(theirs, id)), (Some(o), Some(t)) if o != t)
+    };
     let mut out = Vec::new();
     for item in ours.iter().chain(theirs.iter().filter(|t| find(ours, &t["id"]).is_none())) {
         let id = &item["id"];
+        if clashes(id) {
+            out.push(item.clone());
+            continue;
+        }
         let (b, o, t) = (find(base, id), find(ours, id), find(theirs, id));
         let merged = merge(b.as_ref().unwrap_or(&null), o.as_ref().unwrap_or(&null), t.as_ref().unwrap_or(&null), policy, path)?;
         if !merged.is_null() {
             out.push(merged);
         }
+    }
+    let mut taken: HashSet<u64> = base.iter().chain(ours).chain(theirs).filter_map(|v| v["id"].as_u64()).collect();
+    for item in theirs.iter().filter(|t| clashes(&t["id"])) {
+        let id = crate::core::highlights::derived_id(item.to_string().as_bytes(), |id| taken.contains(&id));
+        taken.insert(id);
+        let mut moved = item.clone();
+        moved["id"] = Value::from(id);
+        out.push(moved);
     }
     Some(Value::Array(out))
 }
@@ -117,6 +135,14 @@ fn merge_sets(base: Option<&Vec<Value>>, ours: &[Value], theirs: &[Value]) -> Va
 fn contradiction(ours: &Value, theirs: &Value, policy: Policy, path: &[&str]) -> Option<Value> {
     if policy == Policy::Config {
         return None;
+    }
+    if path.first() == Some(&"documents") && path.last() == Some(&"note") {
+        return Some(match (ours.as_str(), theirs.as_str()) {
+            (Some(o), Some(t)) => Value::String([o, t].into_iter().filter(|text| !text.is_empty()).collect::<Vec<_>>().join("
+
+")),
+            _ => if ours.is_null() { theirs.clone() } else { ours.clone() },
+        });
     }
     match path.first().copied() {
         Some("notes") => match (ours.as_str(), theirs.as_str()) {
@@ -226,6 +252,46 @@ mod tests {
         let theirs = json!({"version": 1, "documents": {"k": {"notes": {"2": note("b")}, "items": []}}}).to_string();
         let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &ours, &theirs).unwrap()).unwrap();
         assert_eq!(merged["documents"]["k"]["notes"].as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn concurrent_edits_of_one_note_in_the_annotations_both_stay() {
+        let name = crate::core::highlights::ANNOTATIONS_NAME;
+        let doc = |note: &str| json!({"version": 1, "documents": {"k": {"notes": {"1": {"note": note, "text_fingerprint": "f"}}, "items": [{"id": 5, "color": "blue", "text": "", "parts": [], "note": note}]}}}).to_string();
+        let (base, ours, theirs) = (doc("alt"), doc("meins"), doc("fremd"));
+        let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &ours, &theirs).unwrap()).unwrap();
+        assert_eq!(merged["documents"]["k"]["notes"]["1"]["note"], "meins
+
+fremd");
+        assert_eq!(merged["documents"]["k"]["items"][0]["note"], "meins
+
+fremd");
+        let removed = doc("");
+        let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &removed, &theirs).unwrap()).unwrap();
+        assert_eq!(merged["documents"]["k"]["notes"]["1"]["note"], "fremd", "a deleted note does not hide the other text");
+    }
+
+    #[test]
+    fn pins_with_the_same_id_from_two_devices_both_stay() {
+        let name = crate::core::highlights::ANNOTATIONS_NAME;
+        let base_id = crate::core::highlights::SIDECAR_ID_BASE;
+        let pin = |id: u64, note: &str| json!({"id": id, "color": "blue", "text": "", "parts": [], "note": note, "pin": {"page": 0, "x": 1.0, "y": 2.0}});
+        let doc = |items: Vec<Value>| json!({"version": 1, "documents": {"k": {"notes": {}, "items": items}}}).to_string();
+        let base = doc(vec![]);
+        let ours = doc(vec![pin(base_id, "Mac")]);
+        let theirs = doc(vec![pin(base_id, "Windows")]);
+        let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &ours, &theirs).unwrap()).unwrap();
+        let items = merged["documents"]["k"]["items"].as_array().unwrap();
+        let notes: Vec<&str> = items.iter().map(|i| i["note"].as_str().unwrap()).collect();
+        assert_eq!(notes, ["Mac", "Windows"]);
+        let ids: Vec<u64> = items.iter().map(|i| i["id"].as_u64().unwrap()).collect();
+        assert_eq!(ids[0], base_id);
+        assert!(ids[1] > base_id && ids[0] != ids[1]);
+        let again: Value = serde_json::from_str(&merge_file(name, Some(&base), &ours, &theirs).unwrap()).unwrap();
+        assert_eq!(again, merged, "merging twice gives the same file");
+        let same = doc(vec![pin(base_id, "gleich")]);
+        let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &same, &same).unwrap()).unwrap();
+        assert_eq!(merged["documents"]["k"]["items"].as_array().unwrap().len(), 1);
     }
 
     #[test]

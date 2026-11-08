@@ -1,6 +1,6 @@
 use super::errors::explain;
 use super::next_action::{self, NextAction};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -262,6 +262,7 @@ pub struct Library {
     highlights_lock: Option<String>,
     highlights_orphans: highlights::Orphans,
     highlights_disk: (Highlights, highlights::Annotations),
+    deferred_marks: BTreeSet<String>,
     naming_cache: std::sync::Mutex<Option<(String, Arc<Vec<Naming>>)>>,
     pub now: DateTime<Local>,
     pub selected_semester_id: Option<String>,
@@ -451,6 +452,7 @@ impl Library {
             highlights_lock: None,
             highlights_orphans: highlights::Orphans::new(),
             highlights_disk: Default::default(),
+            deferred_marks: BTreeSet::new(),
             naming_cache: Default::default(),
             now: Local::now(),
             selected_semester_id: None,
@@ -739,11 +741,17 @@ impl Library {
             return None;
         }
         let before = if list.is_empty() { self.highlights.remove(key) } else { self.highlights.insert(key.to_string(), list) };
+        if self.sync_gate {
+            self.deferred_marks.insert(key.to_string());
+        }
         self.write_highlights();
         Some(before.unwrap_or_default())
     }
 
     fn write_highlights(&mut self) {
+        if self.sync_gate {
+            return;
+        }
         let Some(root) = self.root.clone().filter(|_| !self.read_only && self.highlights_lock.is_none()) else { return };
         let (main, annotations) = highlights::split(&self.highlights, &self.highlights_orphans);
         let mut failed = None;
@@ -764,9 +772,7 @@ impl Library {
         }
     }
 
-    fn load_state(&mut self) {
-        prune_undo_copies();
-        let loaded = self.root.as_deref().map(highlights::load).unwrap_or_default();
+    fn adopt_highlights(&mut self, loaded: highlights::Loaded) {
         self.highlights = loaded.marks;
         self.highlights_orphans = loaded.orphans;
         self.highlights_disk = loaded.disk;
@@ -777,6 +783,30 @@ impl Library {
         if self.highlights_lock.is_some() {
             self.last_error = self.highlights_lock.clone();
         }
+    }
+
+    fn reload_highlights(&mut self) -> bool {
+        let Some(loaded) = self.root.as_deref().map(highlights::load) else { return false };
+        if loaded.disk == self.highlights_disk && loaded.lock.is_some() == self.highlights_lock.is_some() {
+            return false;
+        }
+        let local: Vec<(String, Option<Vec<Highlight>>)> = self.deferred_marks.iter().map(|key| (key.clone(), self.highlights.get(key).cloned())).collect();
+        self.adopt_highlights(loaded);
+        if self.highlights_lock.is_none() {
+            for (key, list) in local {
+                match list {
+                    Some(list) => self.highlights.insert(key, list),
+                    None => self.highlights.remove(&key),
+                };
+            }
+        }
+        true
+    }
+
+    fn load_state(&mut self) {
+        prune_undo_copies();
+        let loaded = self.root.as_deref().map(highlights::load).unwrap_or_default();
+        self.adopt_highlights(loaded);
         let Some(path) = self.state_path() else { return };
         match workspace::load::<StudyState>(&path) {
             Ok(s) => self.state = s.unwrap_or_else(|| StudyState { links_adopted: self.config_created, ..Default::default() }),
@@ -882,6 +912,9 @@ impl Library {
             && s != self.state
         {
             self.state = s;
+            changed = true;
+        }
+        if self.reload_highlights() {
             changed = true;
         }
         if changed {
@@ -1515,6 +1548,9 @@ impl Library {
         let held_config = std::mem::take(&mut self.deferred_config).then(|| self.config.clone()).flatten();
         let held_state = std::mem::take(&mut self.deferred_state).then(|| self.state.clone());
         self.reload_external();
+        if !std::mem::take(&mut self.deferred_marks).is_empty() {
+            self.write_highlights();
+        }
         if let Some(c) = held_config {
             self.config = Some(c);
             self.write_config();
