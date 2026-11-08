@@ -805,12 +805,26 @@ impl Library {
                     self.highlights.insert(key.clone(), merged);
                 }
             }
+            if !self.deferred_marks.is_empty() {
+                self.deferred_marks.clear();
+                self.write_highlights();
+            }
+        } else {
+            for key in self.deferred_marks.keys() {
+                match before.get(key) {
+                    Some(list) => self.highlights.insert(key.clone(), list.clone()),
+                    None => self.highlights.remove(key),
+                };
+            }
         }
         let moved: BTreeSet<String> = before.keys().chain(self.highlights.keys()).filter(|key| before.get(*key) != self.highlights.get(*key)).cloned().collect();
         if !moved.is_empty() {
-            let touches = |step: &Step| step.changes.iter().any(|c| matches!(c, Change::Highlights { key, .. } if moved.contains(key)));
-            self.undo_steps.retain(|step| !touches(step));
-            self.redo_steps.retain(|step| !touches(step));
+            for steps in [&mut self.undo_steps, &mut self.redo_steps] {
+                for step in steps.iter_mut() {
+                    step.changes.retain(|c| !matches!(c, Change::Highlights { key, .. } if moved.contains(key)));
+                }
+                steps.retain(|step| !step.changes.is_empty());
+            }
         }
         true
     }
@@ -1560,7 +1574,7 @@ impl Library {
         let held_config = std::mem::take(&mut self.deferred_config).then(|| self.config.clone()).flatten();
         let held_state = std::mem::take(&mut self.deferred_state).then(|| self.state.clone());
         self.reload_external();
-        if !std::mem::take(&mut self.deferred_marks).is_empty() {
+        if self.highlights_lock.is_none() && !std::mem::take(&mut self.deferred_marks).is_empty() {
             self.write_highlights();
         }
         if let Some(c) = held_config {

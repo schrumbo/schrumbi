@@ -79,7 +79,7 @@ fn merge_objects(base: Option<&Map<String, Value>>, ours: &Map<String, Value>, t
     for key in keys {
         if notes {
             let (b, o, t) = (fingerprint(base, key), fingerprint(Some(ours), key), fingerprint(Some(theirs), key));
-            if o.is_some() && t.is_some() && o != t && b != o && b != t {
+            if o.is_some() && t.is_some() && o != t {
                 out.insert(key.clone(), ours[key].clone());
                 moved.push(key);
                 continue;
@@ -361,6 +361,23 @@ fremd");
         let (_, saved) = highlights::split(&marks, &orphans);
         let (back, _) = highlights::merge(&serde_json::from_str(&main).unwrap(), &saved);
         assert_eq!(back["k"][1].note, "Notiz Windows");
+    }
+
+    #[test]
+    fn a_note_edited_here_is_never_glued_to_a_note_of_another_passage_there() {
+        let name = crate::core::highlights::ANNOTATIONS_NAME;
+        let doc = |note: &str, print: &str| json!({"version": 1, "documents": {"k": {"notes": {"2": {"note": note, "text_fingerprint": print}}, "items": []}}}).to_string();
+        let (base, ours, theirs) = (doc("alt", "Win"), doc("alt bearbeitet", "Win"), doc("Mac", "Mac"));
+        let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &ours, &theirs).unwrap()).unwrap();
+        let notes = merged["documents"]["k"]["notes"].as_object().unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes["2"]["note"], "alt bearbeitet");
+        assert_eq!(notes["2"]["text_fingerprint"], "Win");
+        let other = notes.iter().find(|(id, _)| id.as_str() != "2").unwrap().1;
+        assert_eq!(other["note"], "Mac");
+        assert_eq!(other["text_fingerprint"], "Mac");
+        let again: Value = serde_json::from_str(&merge_file(name, Some(&base), &ours, &theirs).unwrap()).unwrap();
+        assert_eq!(again, merged);
     }
 
     #[test]

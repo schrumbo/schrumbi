@@ -2482,3 +2482,41 @@ fn the_marks_lock_message_goes_away_when_the_lock_lifts() {
     assert_eq!(lib.last_error, None);
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn a_reload_of_the_new_marks_leaves_the_pdf_edit_undoable() {
+    use crate::core::highlights::{self, document_key};
+    let (root, mut lib) = workspace("highlights-reload-replaced", &config(1, 0));
+    let path = root.join("Skript.pdf");
+    let (old, new) = (b"%PDF-1.4 alt".to_vec(), b"%PDF-1.4 neu".to_vec());
+    std::fs::write(&path, &old).unwrap();
+    let (old_key, new_key) = (document_key(&old), document_key(&new));
+    lib.set_highlights(&old_key, vec![pdf_mark(1, 0)], "markiert".into());
+    lib.replace_pdf(&path, new.clone(), &old_key, vec![pdf_mark(2, 1)], "Seite gelöscht".into());
+    let outside: highlights::Highlights = std::collections::HashMap::from([(old_key.clone(), vec![pdf_mark(1, 0)]), (new_key.clone(), vec![pdf_noted(2, 1, "Von außen")])]);
+    write_marks_like_a_pull(&root, &outside);
+    assert!(lib.reload_external());
+    assert!(lib.can_undo());
+    lib.undo();
+    assert_eq!(std::fs::read(&path).unwrap(), old, "the original PDF is back");
+    assert_eq!(highlights::load(&root).marks[&new_key], vec![pdf_noted(2, 1, "Von außen")], "what came in is not written back over");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn marks_made_during_a_sync_that_locks_the_files_wait_for_the_lock_to_lift() {
+    use crate::core::highlights::{self, FILE_NAME};
+    let (root, mut lib) = workspace("highlights-sync-locked", &config(1, 0));
+    lib.set_highlights("k", vec![pdf_mark(1, 0)], "markiert".into());
+    lib.begin_sync();
+    lib.set_highlights("m", vec![pdf_noted(1, 0, "Unterwegs")], "markiert".into());
+    std::fs::write(root.join(FILE_NAME), "kaputt{").unwrap();
+    lib.finish_sync(&[root.join(FILE_NAME)]);
+    assert_eq!(lib.highlights_of("m"), vec![pdf_noted(1, 0, "Unterwegs")], "still shown while the files are locked");
+    assert_eq!(std::fs::read_to_string(root.join(FILE_NAME)).unwrap(), "kaputt{", "never written over a locked file");
+    std::fs::write(root.join(FILE_NAME), "{}").unwrap();
+    assert!(lib.reload_external());
+    assert_eq!(lib.highlights_of("m"), vec![pdf_noted(1, 0, "Unterwegs")]);
+    assert_eq!(highlights::load(&root).marks["m"], vec![pdf_noted(1, 0, "Unterwegs")], "written when the lock lifted");
+    let _ = std::fs::remove_dir_all(root);
+}

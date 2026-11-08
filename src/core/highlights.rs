@@ -282,11 +282,38 @@ pub fn next_id(list: &[Highlight], orphans: Option<&BTreeMap<u64, Attached>>, pa
     }
 }
 
-/// Brings the edits made here since `base` onto the list that was pulled meanwhile: what was removed here stays removed, what was added or changed here is kept, the rest is as pulled. A new mark whose id another pulled mark already has gets a fresh one.
+fn joined(pulled: &str, local: &str) -> String {
+    if local.is_empty() || local == pulled {
+        pulled.to_string()
+    } else if pulled.is_empty() {
+        local.to_string()
+    } else {
+        format!("{pulled}\n\n{local}")
+    }
+}
+
+fn combined(base: &Highlight, pulled: &Highlight, local: &Highlight) -> Highlight {
+    let mut out = pulled.clone();
+    if local.color != base.color {
+        out.color = local.color.clone();
+    }
+    if local.note != base.note {
+        out.note = if pulled.note == base.note { local.note.clone() } else { joined(&pulled.note, &local.note) };
+    }
+    if local.pin != base.pin && pulled.pin == base.pin {
+        out.pin = local.pin;
+    }
+    if local.ink != base.ink && pulled.ink == base.ink {
+        out.ink = local.ink.clone();
+    }
+    out
+}
+
+/// Brings the edits made here since `base` onto the list that was pulled meanwhile: what was removed here stays removed unless the pull changed it, what was added or changed here is kept, the rest is as pulled. Where both sides changed one mark, the pulled one stays with the local color and note added; a local mark whose id is another passage in the pull gets a fresh id.
 pub fn rebase(base: &[Highlight], local: &[Highlight], pulled: Vec<Highlight>, orphans: Option<&BTreeMap<u64, Attached>>) -> Vec<Highlight> {
     let local_ids: BTreeSet<u64> = local.iter().map(|h| h.id).collect();
     let mut out = pulled;
-    out.retain(|h| local_ids.contains(&h.id) || !base.iter().any(|b| b.id == h.id));
+    out.retain(|h| local_ids.contains(&h.id) || !base.contains(h));
     for h in local {
         let known = base.iter().find(|b| b.id == h.id);
         if known == Some(h) {
@@ -294,9 +321,10 @@ pub fn rebase(base: &[Highlight], local: &[Highlight], pulled: Vec<Highlight>, o
         }
         match (out.iter().position(|o| o.id == h.id), known) {
             (None, _) => out.push(h.clone()),
-            (Some(i), Some(_)) => out[i] = h.clone(),
+            (Some(i), Some(b)) if out[i] == *b => out[i] = h.clone(),
+            (Some(i), Some(b)) if out[i].text == h.text && out[i].parts == h.parts => out[i] = combined(b, &out[i], h),
             (Some(i), None) if out[i] == *h => {}
-            (Some(_), None) => {
+            (Some(_), _) => {
                 let id = next_id(&out, orphans, !h.parts.is_empty());
                 out.push(Highlight { id, ..h.clone() });
             }
@@ -560,6 +588,65 @@ mod tests {
         let loaded = load(&dir);
         assert_eq!((loaded.lock, loaded.marks["k"].len()), (Some(Lock::Unreadable), 1));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn passage(id: u64, text: &str) -> Highlight {
+        Highlight { id, color: "yellow".into(), text: text.into(), parts: vec![HighlightPart { page: 0, rects: vec![[1., 2., 3., 4.]] }], ..Default::default() }
+    }
+
+    #[test]
+    fn a_note_pulled_and_a_recolor_made_here_both_stay() {
+        let base = vec![passage(1, "a")];
+        let local = vec![Highlight { color: "blue".into(), ..passage(1, "a") }];
+        let pulled = vec![Highlight { note: "Gezogen".into(), ..passage(1, "a") }];
+        let out = rebase(&base, &local, pulled, None);
+        assert_eq!(out.len(), 1);
+        assert_eq!((out[0].color.as_str(), out[0].note.as_str()), ("blue", "Gezogen"));
+    }
+
+    #[test]
+    fn notes_changed_on_both_sides_join_and_a_local_edit_over_an_unchanged_note_replaces_it() {
+        let base = vec![Highlight { note: "alt".into(), ..passage(1, "a") }];
+        let local = vec![Highlight { note: "meins".into(), ..passage(1, "a") }];
+        let pulled = vec![Highlight { note: "fremd".into(), ..passage(1, "a") }];
+        assert_eq!(rebase(&base, &local, pulled, None)[0].note, "fremd
+
+meins");
+        let unchanged = base.clone();
+        assert_eq!(rebase(&base, &local, unchanged, None)[0].note, "meins");
+    }
+
+    #[test]
+    fn a_pulled_note_keeps_its_passage_when_it_was_deleted_here() {
+        let base = vec![passage(1, "a"), passage(2, "b")];
+        let local = vec![passage(2, "b")];
+        let pulled = vec![Highlight { note: "Gezogen".into(), ..passage(1, "a") }, passage(2, "b")];
+        let out = rebase(&base, &local, pulled, None);
+        assert_eq!(out.iter().map(|h| (h.id, h.note.as_str())).collect::<Vec<_>>(), [(1, "Gezogen"), (2, "")]);
+        let out = rebase(&base, &local, base.clone(), None);
+        assert_eq!(out.iter().map(|h| h.id).collect::<Vec<_>>(), [2]);
+    }
+
+    #[test]
+    fn a_passage_reusing_an_id_in_the_pull_and_a_recolor_of_the_old_one_both_survive() {
+        let base = vec![passage(1, "alt")];
+        let local = vec![Highlight { color: "blue".into(), ..passage(1, "alt") }];
+        let pulled = vec![passage(1, "neu")];
+        let out = rebase(&base, &local, pulled, None);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().any(|h| h.id == 1 && h.text == "neu" && h.color == "yellow"));
+        assert!(out.iter().any(|h| h.id != 1 && h.text == "alt" && h.color == "blue"));
+    }
+
+    #[test]
+    fn a_pin_moved_here_stays_unless_the_pull_moved_it_too() {
+        let at = |x: f32| Some(Pin { page: 1, x, y: 2. });
+        let base = vec![Highlight { pin: at(1.), ..pin() }];
+        let local = vec![Highlight { pin: at(5.), ..pin() }];
+        let recolored = vec![Highlight { color: "red".into(), ..base[0].clone() }];
+        assert_eq!(rebase(&base, &local, recolored, None)[0].pin, at(5.));
+        let moved = vec![Highlight { pin: at(9.), ..base[0].clone() }];
+        assert_eq!(rebase(&base, &local, moved, None)[0].pin, at(9.));
     }
 
     #[test]
