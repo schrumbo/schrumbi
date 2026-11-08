@@ -20,7 +20,7 @@ pub fn merge_file(path: &str, base: Option<&str>, ours: &str, theirs: &str) -> O
         let merged = merge_values(base, ours, theirs, Policy::Config)?;
         let typed: StudyConfig = serde_json::from_value(merged).ok()?;
         to_swift_json(&typed).ok()
-    } else if name == crate::core::highlights::FILE_NAME {
+    } else if name == crate::core::highlights::FILE_NAME || name == crate::core::highlights::ANNOTATIONS_NAME {
         let merged = merge_values(base, ours, theirs, Policy::State)?;
         to_swift_json(&merged).ok()
     } else if name == STATE_NAME {
@@ -215,6 +215,17 @@ mod tests {
         let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &ours, &theirs).unwrap()).unwrap();
         assert_eq!(merged["k"].as_array().unwrap().len(), 2);
         assert_eq!(merged["l"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn annotations_from_two_devices_both_stay() {
+        let name = crate::core::highlights::ANNOTATIONS_NAME;
+        let note = |text: &str| json!({"note": text, "text_fingerprint": "f"});
+        let base = json!({"version": 1, "documents": {}}).to_string();
+        let ours = json!({"version": 1, "documents": {"k": {"notes": {"1": note("a")}, "items": []}}}).to_string();
+        let theirs = json!({"version": 1, "documents": {"k": {"notes": {"2": note("b")}, "items": []}}}).to_string();
+        let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &ours, &theirs).unwrap()).unwrap();
+        assert_eq!(merged["documents"]["k"]["notes"].as_object().unwrap().len(), 2);
     }
 
     #[test]

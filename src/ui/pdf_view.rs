@@ -859,7 +859,7 @@ impl PdfView {
         self.selection = None;
         self.last_color = color;
         let mut list = self.marks.clone();
-        let id = list.iter().map(|h| h.id).max().map_or(1, |m| m + 1);
+        let id = super::state::read(cx, |l| l.next_mark_id(&key, true));
         self.active_mark = Some(id);
         self.removed_mark = None;
         list.push(Highlight { id, color: color.to_string(), text, parts, ..Default::default() });

@@ -105,7 +105,7 @@ fn lost_objects(doc: &Document) -> bool {
 }
 
 fn read(data: &[u8]) -> Result<Document, EditError> {
-    let doc = match Document::load_mem_with_options(data, LoadOptions { strict: true, ..Default::default() }) {
+    let doc = match Document::load_mem_with_options(data, LoadOptions { strict: true, ..Default::default() }).or_else(|_| Document::load_mem(data)) {
         Ok(doc) => doc,
         Err(_) if mentions_encryption(data) => return Err(EditError::Protected),
         Err(_) => return Err(EditError::Broken),
@@ -348,10 +348,28 @@ fn carried(other: &Document) -> Dictionary {
     out
 }
 
+fn field_name(doc: &Document, field: &Object) -> Option<String> {
+    let dict = doc.dereference(field).ok()?.1.as_dict().ok()?;
+    lopdf::decode_text_string(dict.get(b"T").ok()?).ok()
+}
+
 fn merge_form(doc: &mut Document, carry: &Dictionary) {
     let Ok(Object::Array(fields)) = carry.get(b"Fields") else { return };
     let mut form = catalog_entry(doc, b"AcroForm").unwrap_or_default();
     let mut all = resolved_list(doc, form.get(b"Fields").ok());
+    let mut taken: HashSet<String> = all.iter().filter_map(|f| field_name(doc, f)).collect();
+    for field in fields {
+        if let Object::Reference(id) = field
+            && let Some(name) = field_name(doc, field)
+            && !taken.insert(name.clone())
+        {
+            let fresh = (2..).map(|n| format!("{name} {n}")).find(|candidate| !taken.contains(candidate)).unwrap_or_default();
+            if let Ok(dict) = doc.get_dictionary_mut(*id) {
+                dict.set("T", lopdf::text_string(&fresh));
+            }
+            taken.insert(fresh);
+        }
+    }
     all.extend(fields.iter().cloned());
     form.set("Fields", all);
     if !form.has(b"DA")
@@ -1436,6 +1454,32 @@ pub mod tests {
         assert_eq!(apply(&packed, &PageOp::Delete(vec![0])), Err(EditError::Broken));
     }
 
+    fn with_short_xref_entries(bytes: &[u8]) -> Vec<u8> {
+        let mut doc = Document::load_mem(bytes).unwrap();
+        doc.reference_table.cross_reference_type = lopdf::xref::XrefType::CrossReferenceTable;
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        let at = out.windows(6).rposition(|w| w == b"\nxref\n").unwrap() + 1;
+        let mut head = out[..at].to_vec();
+        let rest = String::from_utf8(out[at..].to_vec()).unwrap();
+        for line in rest.split_inclusive('\n') {
+            match line.strip_suffix(" \n") {
+                Some(entry) if entry.len() == 18 => head.extend_from_slice(format!("{entry}\n").as_bytes()),
+                _ => head.extend_from_slice(line.as_bytes()),
+            }
+        }
+        head
+    }
+
+    #[test]
+    fn a_file_with_short_xref_entries_that_viewers_open_is_edited() {
+        let short = with_short_xref_entries(&fixture());
+        assert!(Document::load_mem_with_options(&short, LoadOptions { strict: true, ..Default::default() }).is_err(), "the strict reader refuses it");
+        let out = apply(&short, &PageOp::Rotate { pages: vec![0], clockwise: true }).unwrap();
+        assert_eq!(sizes(&out).len(), sizes(&fixture()).len());
+        assert!(apply(&fixture(), &PageOp::Insert { at: 0, pdf: short }).is_ok());
+    }
+
     fn with_page_entry(bytes: &[u8], key: &str, value: Object) -> Vec<u8> {
         let mut doc = Document::load_mem(bytes).unwrap();
         let root = doc.catalog().unwrap().get(b"Pages").unwrap().as_reference().unwrap();
@@ -1610,6 +1654,20 @@ pub mod tests {
         assert!(form.has(b"DA") && form.has(b"DR"), "the host form takes over what the new fields need");
         let none = apply(&host, &PageOp::Insert { at: 0, pdf: appendix() }).unwrap();
         assert_eq!(field_names(&none), field_names(&host));
+    }
+
+    #[test]
+    fn inserting_the_same_form_again_renames_its_fields_instead_of_doubling_them() {
+        let source = with_source_form(&appendix(), None);
+        let once = apply(&fixture(), &PageOp::Insert { at: 1, pdf: source.clone() }).unwrap();
+        let twice = apply(&once, &PageOp::Insert { at: 0, pdf: source.clone() }).unwrap();
+        let thrice = apply(&twice, &PageOp::Insert { at: 0, pdf: source }).unwrap();
+        assert_eq!(field_names(&twice), ["quelle", "quelle 2"]);
+        assert_eq!(field_names(&thrice), ["quelle", "quelle 2", "quelle 3"]);
+        let doc = Document::load_mem(&thrice).unwrap();
+        let shown: Vec<String> = doc.page_iter().flat_map(|p| doc.get_page_annotations(p).unwrap_or_default()).filter_map(|a| a.get(b"T").ok().and_then(|t| lopdf::decode_text_string(t).ok())).collect();
+        assert_eq!(shown.len(), 3);
+        assert!(shown.contains(&"quelle 2".to_string()) && shown.contains(&"quelle 3".to_string()), "{shown:?}");
     }
 
     fn with_layers(bytes: &[u8], names: &[(&str, bool)], base_off: bool) -> Vec<u8> {

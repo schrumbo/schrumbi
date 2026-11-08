@@ -2089,40 +2089,207 @@ fn a_pdf_that_cannot_be_written_is_left_alone_and_nothing_is_recorded() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+fn pdf_noted(id: u64, page: usize, note: &str) -> crate::core::highlights::Highlight {
+    crate::core::highlights::Highlight { note: note.into(), ..pdf_mark(id, page) }
+}
+
+fn pdf_pin(id: u64) -> crate::core::highlights::Highlight {
+    use crate::core::highlights::{Highlight, Pin};
+    Highlight { id, color: "blue".into(), note: "Frage".into(), pin: Some(Pin { page: 0, x: 5., y: 6. }), ..Default::default() }
+}
+
+fn pdf_ink(id: u64) -> crate::core::highlights::Highlight {
+    use crate::core::highlights::{Highlight, InkLine};
+    Highlight { id, color: "red".into(), ink: vec![InkLine { page: 0, width: 2., points: vec![[1., 1.], [9., 9.]] }], ..Default::default() }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FirstRelease {
+    id: u64,
+    color: String,
+    text: String,
+    parts: Vec<crate::core::highlights::HighlightPart>,
+}
+
+fn rewrite_like_the_first_release(root: &Path, edit: impl FnOnce(&mut Vec<FirstRelease>)) {
+    let path = root.join(crate::core::highlights::FILE_NAME);
+    let mut store: std::collections::HashMap<String, Vec<FirstRelease>> = crate::core::workspace::load(&path).unwrap().unwrap();
+    edit(store.get_mut("k").unwrap());
+    crate::core::workspace::save(&store, &path).unwrap();
+}
+
 #[test]
-fn the_highlights_file_carries_a_version_and_old_plain_files_still_load() {
-    use crate::core::highlights::{FILE_NAME, Highlights, VERSION, VERSION_KEY};
-    let (root, mut lib) = workspace("highlights-version", &config(1, 0));
+fn the_highlights_file_stays_as_the_first_release_wrote_it_and_old_files_load() {
+    use crate::core::highlights::{ANNOTATIONS_NAME, FILE_NAME, SIDECAR_ID_BASE};
+    let (root, mut lib) = workspace("highlights-layout", &config(1, 0));
     let file = root.join(FILE_NAME);
     std::fs::write(&file, r#"{"k":[{"id":1,"color":"yellow","text":"Wort","parts":[{"page":0,"rects":[[1.0,2.0,3.0,4.0]]}]}]}"#).unwrap();
     lib.open(&root);
     assert_eq!(lib.highlights_of("k"), vec![pdf_mark(1, 0)]);
-    lib.set_highlights("j", vec![pdf_mark(2, 0)], "markiert".into());
+    lib.set_highlights("k", vec![pdf_mark(1, 0)], "markiert".into());
+    assert!(!root.join(ANNOTATIONS_NAME).exists(), "plain marks need no sidecar");
+    let all = vec![pdf_noted(1, 0, "Merken"), pdf_pin(SIDECAR_ID_BASE), pdf_ink(SIDECAR_ID_BASE + 1)];
+    lib.set_highlights("k", all.clone(), "markiert".into());
     let text = std::fs::read_to_string(&file).unwrap();
-    assert!(text.contains(&format!("{VERSION_KEY}{VERSION}")), "{text}");
-    let plain: Highlights = serde_json::from_str(&text).unwrap();
-    assert_eq!(plain["k"], vec![pdf_mark(1, 0)], "an app that knows no version still reads it");
+    assert!(!text.contains("note") && !text.contains("pin") && !text.contains("ink") && !text.contains("~version"), "{text}");
+    let side = std::fs::read_to_string(root.join(ANNOTATIONS_NAME)).unwrap();
+    assert!(side.contains("\"version\"") && side.contains("Merken") && side.contains("Frage"), "{side}");
     lib.open(&root);
-    assert_eq!((lib.highlights_of("k"), lib.highlights_of("j")), (vec![pdf_mark(1, 0)], vec![pdf_mark(2, 0)]));
-    assert!(lib.highlights_of(&format!("{VERSION_KEY}{VERSION}")).is_empty());
+    assert_eq!(lib.highlights_of("k"), all, "both files come back as one list");
     let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
-fn highlights_from_a_newer_version_are_never_written() {
-    use crate::core::highlights::{FILE_NAME, VERSION, VERSION_KEY, document_key};
+fn a_rewrite_by_the_first_release_keeps_notes_pins_and_drawings() {
+    use crate::core::highlights::{ANNOTATIONS_NAME, SIDECAR_ID_BASE};
+    let (root, mut lib) = workspace("highlights-first-release", &config(1, 0));
+    let all = vec![pdf_noted(1, 0, "Merken"), pdf_mark(2, 1), pdf_pin(SIDECAR_ID_BASE), pdf_ink(SIDECAR_ID_BASE + 1)];
+    lib.set_highlights("k", all.clone(), "markiert".into());
+    let side = std::fs::read(root.join(ANNOTATIONS_NAME)).unwrap();
+    rewrite_like_the_first_release(&root, |list| {
+        let next = list.iter().map(|h| h.id).max().unwrap() + 1;
+        list.push(FirstRelease { id: next, color: "green".into(), text: "Neu".into(), parts: Vec::new() });
+    });
+    assert_eq!(std::fs::read(root.join(ANNOTATIONS_NAME)).unwrap(), side, "the first release never touches the sidecar");
+    lib.open(&root);
+    let shown = lib.highlights_of("k");
+    assert_eq!(shown.len(), 5);
+    assert_eq!(shown[..2], all[..2]);
+    assert_eq!(shown[2].id, 3);
+    assert!(shown[2].note.is_empty() && shown.contains(&all[2]) && shown.contains(&all[3]));
+    lib.set_highlights("k", shown.clone(), "markiert".into());
+    lib.open(&root);
+    assert_eq!(lib.highlights_of("k"), shown);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_passage_that_reuses_an_id_in_the_first_release_gets_no_foreign_note() {
+    use crate::core::highlights::{ANNOTATIONS_NAME, Annotations};
+    let (root, mut lib) = workspace("highlights-id-reuse", &config(1, 0));
+    lib.set_highlights("k", vec![pdf_noted(1, 0, "Gehört zum alten Wort"), pdf_mark(2, 0)], "markiert".into());
+    rewrite_like_the_first_release(&root, |list| {
+        list.retain(|h| h.id != 1);
+        list.push(FirstRelease { id: 1, color: "green".into(), text: "Anderes Wort".into(), parts: pdf_mark(1, 3).parts });
+    });
+    lib.open(&root);
+    let shown = lib.highlights_of("k");
+    assert!(shown.iter().all(|h| h.note.is_empty()), "{shown:?}");
+    assert_eq!(lib.next_mark_id("k", true), 3);
+    let mut again = shown.clone();
+    again.push(pdf_noted(3, 0, "Neu"));
+    lib.set_highlights("k", again, "markiert".into());
+    let side: Annotations = crate::core::workspace::load(&root.join(ANNOTATIONS_NAME)).unwrap().unwrap();
+    assert_eq!(side.documents["k"].notes[&1].note, "Gehört zum alten Wort", "the orphaned note stays in the file");
+    assert_eq!(side.documents["k"].notes[&3].note, "Neu");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_sidecar_from_a_newer_version_locks_the_marks_and_stays_as_it_is() {
+    use crate::core::highlights::{ANNOTATIONS_NAME, ANNOTATIONS_VERSION, FILE_NAME, document_key};
     let (root, mut lib) = workspace("highlights-newer", &config(1, 0));
-    let file = root.join(FILE_NAME);
-    let future = format!(r#"{{"{VERSION_KEY}{}":[],"k":[{{"id":1,"color":"yellow","text":"Wort","parts":[],"zukunft":true}}]}}"#, VERSION + 1);
-    std::fs::write(&file, &future).unwrap();
+    let main = r#"{"k":[{"id":1,"color":"yellow","text":"Wort","parts":[{"page":0,"rects":[[1.0,2.0,3.0,4.0]]}]}]}"#;
+    let future = format!(r#"{{"version":{},"documents":{{"k":{{"zukunft":true}}}}}}"#, ANNOTATIONS_VERSION + 1);
+    std::fs::write(root.join(FILE_NAME), main).unwrap();
+    std::fs::write(root.join(ANNOTATIONS_NAME), &future).unwrap();
     lib.open(&root);
     assert!(lib.last_error.is_some());
     lib.set_highlights("j", vec![pdf_mark(2, 0)], "markiert".into());
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), future, "the file stays as the newer app wrote it");
+    assert!(lib.highlights_of("j").is_empty() && !lib.can_undo());
+    assert_eq!(std::fs::read_to_string(root.join(ANNOTATIONS_NAME)).unwrap(), future);
+    assert_eq!(std::fs::read_to_string(root.join(FILE_NAME)).unwrap(), main);
     let path = root.join("Skript.pdf");
     std::fs::write(&path, b"alt").unwrap();
     lib.replace_pdf(&path, b"neu".to_vec(), &document_key(b"alt"), vec![pdf_mark(3, 0)], "x".into());
     assert_eq!(std::fs::read(&path).unwrap(), b"alt");
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), future);
+    assert_eq!(std::fs::read_to_string(root.join(ANNOTATIONS_NAME)).unwrap(), future);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn marks_files_that_cannot_be_read_are_never_written_over() {
+    use crate::core::highlights::{ANNOTATIONS_NAME, FILE_NAME};
+    for (name, broken) in [(FILE_NAME, "kaputt{"), (ANNOTATIONS_NAME, "[1,2")] {
+        let (root, mut lib) = workspace("highlights-unreadable", &config(1, 0));
+        std::fs::write(root.join(name), broken).unwrap();
+        lib.open(&root);
+        let message = crate::core::i18n::tr("Die Markierungen konnten nicht gelesen werden. Schrumbi ändert die Datei nicht.");
+        assert_eq!(lib.last_error.as_deref(), Some(message.as_str()), "{name}");
+        lib.set_highlights("k", vec![pdf_noted(1, 0, "x")], "markiert".into());
+        assert_eq!(std::fs::read_to_string(root.join(name)).unwrap(), broken, "{name}");
+        assert!(lib.highlights_of("k").is_empty() && !lib.can_undo());
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[test]
+fn locked_marks_are_refused_with_the_reason_every_time() {
+    use crate::core::highlights::FILE_NAME;
+    let (root, mut lib) = workspace("highlights-locked", &config(1, 0));
+    std::fs::write(root.join(FILE_NAME), "kaputt{").unwrap();
+    lib.open(&root);
+    let message = lib.last_error.clone();
+    assert!(message.is_some());
+    for _ in 0..2 {
+        lib.last_error = None;
+        lib.toast = None;
+        lib.set_highlights("k", vec![pdf_mark(1, 0)], "Markiert".into());
+        assert_eq!(lib.last_error, message);
+        assert!(lib.toast.is_none() && !lib.can_undo() && lib.highlights_of("k").is_empty());
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn replacing_a_pdf_moves_notes_and_drawings_in_both_files_and_undo_restores_them() {
+    use crate::core::highlights::{ANNOTATIONS_NAME, Annotations, SIDECAR_ID_BASE, document_key};
+    let (root, mut lib) = workspace("replace-pdf-annotations", &config(1, 0));
+    let path = root.join("Skript.pdf");
+    let (old, new) = (b"%PDF-1.4 alt".to_vec(), b"%PDF-1.4 neu".to_vec());
+    std::fs::write(&path, &old).unwrap();
+    let (old_key, new_key) = (document_key(&old), document_key(&new));
+    let marks = vec![pdf_noted(1, 0, "Merken"), pdf_pin(SIDECAR_ID_BASE)];
+    lib.set_highlights(&old_key, marks.clone(), "markiert".into());
+    let moved = vec![pdf_noted(1, 1, "Merken"), pdf_pin(SIDECAR_ID_BASE)];
+    lib.replace_pdf(&path, new, &old_key, moved.clone(), "Seite eingefügt".into());
+    let side: Annotations = crate::core::workspace::load(&root.join(ANNOTATIONS_NAME)).unwrap().unwrap();
+    assert!(side.documents.contains_key(&old_key) && side.documents[&new_key].items.len() == 1);
+    assert_eq!((lib.highlights_of(&old_key), lib.highlights_of(&new_key)), (marks.clone(), moved.clone()));
+    lib.undo();
+    let side: Annotations = crate::core::workspace::load(&root.join(ANNOTATIONS_NAME)).unwrap().unwrap();
+    assert!(side.documents.contains_key(&old_key) && !side.documents.contains_key(&new_key));
+    lib.open(&root);
+    assert_eq!((lib.highlights_of(&old_key), lib.highlights_of(&new_key)), (marks, Vec::new()));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_marks_file_whose_content_did_not_change_is_not_written() {
+    use crate::core::highlights::{ANNOTATIONS_NAME, FILE_NAME};
+    let (root, mut lib) = workspace("highlights-unchanged", &config(1, 0));
+    lib.set_highlights("k", vec![pdf_mark(1, 0)], "markiert".into());
+    let modified = |name: &str| std::fs::metadata(root.join(name)).and_then(|m| m.modified()).ok();
+    let main = modified(FILE_NAME);
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    lib.set_highlights("k", vec![pdf_noted(1, 0, "Merken")], "Notiz".into());
+    assert_eq!(modified(FILE_NAME), main, "a note leaves the file of the first release alone");
+    let side = modified(ANNOTATIONS_NAME);
+    assert!(side.is_some());
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    lib.set_highlights("k", vec![pdf_noted(1, 0, "Merken")], "Notiz".into());
+    assert_eq!(modified(ANNOTATIONS_NAME), side);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_version_marker_from_an_earlier_build_is_dropped_on_load_and_the_next_save() {
+    use crate::core::highlights::{FILE_NAME, VERSION_KEY};
+    let (root, mut lib) = workspace("highlights-marker", &config(1, 0));
+    std::fs::write(root.join(FILE_NAME), format!(r#"{{"{VERSION_KEY}2":[],"k":[{{"id":1,"color":"yellow","text":"Wort","parts":[{{"page":0,"rects":[[1.0,2.0,3.0,4.0]]}}]}}]}}"#)).unwrap();
+    lib.open(&root);
+    assert!(lib.highlights_of(&format!("{VERSION_KEY}2")).is_empty() && lib.last_error.is_none());
+    lib.set_highlights("j", vec![pdf_mark(2, 0)], "markiert".into());
+    assert!(!std::fs::read_to_string(root.join(FILE_NAME)).unwrap().contains("~version"));
     let _ = std::fs::remove_dir_all(root);
 }

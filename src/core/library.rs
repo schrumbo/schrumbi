@@ -259,7 +259,9 @@ pub struct Library {
     pub catalog: Vec<CatalogFile>,
     pub search_index: Arc<SearchIndex>,
     highlights: Highlights,
-    highlights_locked: bool,
+    highlights_lock: Option<String>,
+    highlights_orphans: highlights::Orphans,
+    highlights_disk: (Highlights, highlights::Annotations),
     naming_cache: std::sync::Mutex<Option<(String, Arc<Vec<Naming>>)>>,
     pub now: DateTime<Local>,
     pub selected_semester_id: Option<String>,
@@ -446,7 +448,9 @@ impl Library {
             catalog: Vec::new(),
             search_index: Arc::new(SearchIndex::open()),
             highlights: Highlights::new(),
-            highlights_locked: false,
+            highlights_lock: None,
+            highlights_orphans: highlights::Orphans::new(),
+            highlights_disk: Default::default(),
             naming_cache: Default::default(),
             now: Local::now(),
             selected_semester_id: None,
@@ -600,7 +604,7 @@ impl Library {
 
     /// Replaces a PDF with an edited version and moves its marks to the new content key, as one step. Undo brings back the exact old file and the old marks.
     pub fn replace_pdf(&mut self, path: &Path, bytes: Vec<u8>, old_key: &str, list: Vec<Highlight>, label: String) {
-        if self.read_only || self.highlights_locked {
+        if self.read_only || self.highlights_lock.is_some() {
             self.last_error = Some(tr("Änderungen werden gerade nicht gespeichert. Die PDF bleibt, wie sie ist."));
             self.changed();
             return;
@@ -627,7 +631,7 @@ impl Library {
             self.changed();
             return;
         }
-        let before = self.store_highlights(&new_key, list);
+        let before = self.store_highlights(&new_key, list).unwrap_or_default();
         self.commit(label, "file-text", vec![Change::Highlights { key: new_key, list: before }, Change::Replaced { path: path.to_path_buf(), backup }]);
     }
 
@@ -709,39 +713,69 @@ impl Library {
         self.changed();
     }
 
-    fn highlights_path(&self) -> Option<PathBuf> {
-        self.root.as_ref().map(|r| r.join(highlights::FILE_NAME))
-    }
-
     /// The highlights of a document, by its content key.
     pub fn highlights_of(&self, key: &str) -> Vec<Highlight> {
         self.highlights.get(key).cloned().unwrap_or_default()
     }
 
-    /// Replaces a document's highlights as one step of the undo history.
+    /// A free id for a new mark of a document: `passage` for marked text, otherwise for a pin or a drawing.
+    pub fn next_mark_id(&self, key: &str, passage: bool) -> u64 {
+        highlights::next_id(self.highlights.get(key).map_or(&[], Vec::as_slice), self.highlights_orphans.get(key), passage)
+    }
+
+    /// Replaces a document's highlights as one step of the undo history. Refused while the files cannot be written, so nothing is lost silently.
     pub fn set_highlights(&mut self, key: &str, list: Vec<Highlight>, message: String) {
-        let before = self.store_highlights(key, list);
+        if let Some(lock) = self.highlights_lock.clone() {
+            self.last_error = Some(lock);
+            self.changed();
+            return;
+        }
+        let Some(before) = self.store_highlights(key, list) else { return };
         self.commit(message, "highlighter", vec![Change::Highlights { key: key.to_string(), list: before }]);
     }
 
-    fn store_highlights(&mut self, key: &str, list: Vec<Highlight>) -> Vec<Highlight> {
+    fn store_highlights(&mut self, key: &str, list: Vec<Highlight>) -> Option<Vec<Highlight>> {
+        if self.highlights_lock.is_some() {
+            return None;
+        }
         let before = if list.is_empty() { self.highlights.remove(key) } else { self.highlights.insert(key.to_string(), list) };
-        if let Some(path) = self.highlights_path().filter(|_| !self.read_only && !self.highlights_locked)
-            && let Err(e) = workspace::save(&highlights::Stored(&self.highlights), &path)
-        {
+        self.write_highlights();
+        Some(before.unwrap_or_default())
+    }
+
+    fn write_highlights(&mut self) {
+        let Some(root) = self.root.clone().filter(|_| !self.read_only && self.highlights_lock.is_none()) else { return };
+        let (main, annotations) = highlights::split(&self.highlights, &self.highlights_orphans);
+        let mut failed = None;
+        if annotations != self.highlights_disk.1 {
+            match workspace::save(&annotations, &root.join(highlights::ANNOTATIONS_NAME)) {
+                Ok(()) => self.highlights_disk.1 = annotations,
+                Err(e) => failed = Some(e),
+            }
+        }
+        if failed.is_none() && main != self.highlights_disk.0 {
+            match workspace::save(&main, &root.join(highlights::FILE_NAME)) {
+                Ok(()) => self.highlights_disk.0 = main,
+                Err(e) => failed = Some(e),
+            }
+        }
+        if let Some(e) = failed {
             self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&e]));
         }
-        before.unwrap_or_default()
     }
 
     fn load_state(&mut self) {
         prune_undo_copies();
-        let stored = self.highlights_path().and_then(|p| workspace::load::<Highlights>(&p).ok().flatten()).unwrap_or_default();
-        let (stored, version) = highlights::from_stored(stored);
-        self.highlights = stored;
-        self.highlights_locked = version > highlights::VERSION;
-        if self.highlights_locked {
-            self.last_error = Some(tr("Die Markierungen stammen aus einer neueren App-Version. Änderungen daran werden nicht gespeichert, bis du die App aktualisierst."));
+        let loaded = self.root.as_deref().map(highlights::load).unwrap_or_default();
+        self.highlights = loaded.marks;
+        self.highlights_orphans = loaded.orphans;
+        self.highlights_disk = loaded.disk;
+        self.highlights_lock = loaded.lock.map(|lock| match lock {
+            highlights::Lock::Newer => tr("Die Markierungen stammen aus einer neueren App-Version. Änderungen daran werden nicht gespeichert, bis du die App aktualisierst."),
+            highlights::Lock::Unreadable => tr("Die Markierungen konnten nicht gelesen werden. Schrumbi ändert die Datei nicht."),
+        });
+        if self.highlights_lock.is_some() {
+            self.last_error = self.highlights_lock.clone();
         }
         let Some(path) = self.state_path() else { return };
         match workspace::load::<StudyState>(&path) {
@@ -2525,7 +2559,7 @@ impl Library {
                     Change::Replaced { path, backup: current }
                 }
                 Change::Highlights { key, list } => {
-                    let before = self.store_highlights(&key, list);
+                    let before = self.store_highlights(&key, list).ok_or_else(|| anyhow::anyhow!(self.highlights_lock.clone().unwrap_or_default()))?;
                     Change::Highlights { key, list: before }
                 }
                 Change::Bytes { path, bytes } => {
