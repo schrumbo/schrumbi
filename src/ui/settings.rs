@@ -892,8 +892,9 @@ impl Settings {
                         .when_some(r1, |d, r| d.child(Button::new("g-show-root").small().label(tr("Zeigen")).on_click(move |_, _, _| crate::core::library::reveal(&r))))
                         .child(Button::new("g-change-root").small().label(tr("Ändern…")).on_click(|_, _, cx| {
                             super::platform::choose_folder(cx, |p, cx| {
-                                state::close_workspace(cx);
-                                state::open_workspace(&p, cx);
+                                if state::close_workspace(cx) {
+                                    state::open_workspace(&p, cx);
+                                }
                             })
                         })),
                     t,

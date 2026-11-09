@@ -370,7 +370,7 @@ pub fn document_key(data: &[u8]) -> String {
     Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Thins a stroke with Ramer-Douglas-Peucker: no dropped point lies farther than `tolerance` from the line left; the first and last point stay.
+/// Thins a stroke with Ramer-Douglas-Peucker: no dropped point lies farther than `tolerance` from the segment left; the first and last point stay.
 pub fn simplify(points: &[[f32; 2]], tolerance: f32) -> Vec<[f32; 2]> {
     if points.len() < 3 || !tolerance.is_finite() || tolerance < 0. {
         return points.to_vec();
@@ -381,11 +381,9 @@ pub fn simplify(points: &[[f32; 2]], tolerance: f32) -> Vec<[f32; 2]> {
     let mut spans = vec![(0, points.len() - 1)];
     while let Some((first, last)) = spans.pop() {
         let (a, b) = (points[first], points[last]);
-        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-        let length = dx.hypot(dy);
         let mut far = (first, 0f32);
         for (i, p) in points.iter().enumerate().take(last).skip(first + 1) {
-            let gap = if length > 0. { ((p[0] - a[0]) * dy - (p[1] - a[1]) * dx).abs() / length } else { (p[0] - a[0]).hypot(p[1] - a[1]) };
+            let gap = distance_to_segment(*p, a, b);
             if gap > far.1 {
                 far = (i, gap);
             }
@@ -445,6 +443,28 @@ mod tests {
         assert_eq!(simplify(&[[1., 1.], [1., 1.], [1., 1.]], 0.25), vec![[1., 1.], [1., 1.]]);
         let back = [[0., 0.], [10., 0.], [0., 0.]];
         assert_eq!(simplify(&back, 0.25), back.to_vec());
+    }
+
+    #[test]
+    fn an_overshoot_beyond_the_chord_is_kept() {
+        let line = [[0., 0.], [100., 0.], [30., 0.]];
+        assert_eq!(simplify(&line, 0.25), line.to_vec());
+    }
+
+    #[test]
+    fn a_back_and_forth_scribble_keeps_its_extent() {
+        let scribble: Vec<[f32; 2]> = (0..200).map(|i| {
+            let along = (i % 20) as f32 * 5.;
+            let x = if (i / 20) % 2 == 0 { along } else { 100. - along };
+            [x, (i as f32 * 1.3).sin() * 0.1]
+        }).collect();
+        let thin = simplify(&scribble, 0.25);
+        let extent = |l: &[[f32; 2]]| l.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[0]), hi.max(p[0])));
+        assert_eq!(extent(&thin), extent(&scribble));
+        assert!(thin.len() >= 3);
+        for p in &scribble {
+            assert!(thin.windows(2).map(|w| distance_to_segment(*p, w[0], w[1])).fold(f32::MAX, f32::min) <= 0.26);
+        }
     }
 
     #[test]

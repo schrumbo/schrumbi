@@ -255,6 +255,7 @@ struct NoteEditor {
     target: NoteTarget,
     draft: Option<Draft>,
     root: Option<PathBuf>,
+    known: bool,
     input: Entity<TextareaState>,
     _sub: Subscription,
 }
@@ -345,18 +346,28 @@ struct OpenViews(Vec<WeakEntity<PdfView>>);
 
 impl Global for OpenViews {}
 
-/// Writes every note still open in a PDF view and closes its editor. Call it while the folder the notes belong to is still the open one.
-pub fn flush_notes(cx: &mut App) {
+/// Writes every note still open in a PDF view and closes its editor. Call it while the folder the notes belong to is still the open one. `false` when a note could not be written: its editor stays open and the caller must not go on.
+pub fn flush_notes(cx: &mut App) -> bool {
     let views: Vec<Entity<PdfView>> = {
         let open = cx.default_global::<OpenViews>();
         open.0.retain(|v| v.upgrade().is_some());
         open.0.iter().filter_map(WeakEntity::upgrade).collect()
     };
+    let mut all = true;
     for view in views {
-        view.update(cx, |v, cx| {
-            v.flush_note(cx);
-        });
+        all &= view.update(cx, |v, cx| v.flush_note(cx));
     }
+    all
+}
+
+/// What an open note editor holds, with the document and folder it belongs to: for writing it when the view goes away.
+struct Unsaved {
+    key: String,
+    root: Option<PathBuf>,
+    target: NoteTarget,
+    text: String,
+    draft: Option<Draft>,
+    known: bool,
 }
 
 /// A page of the old file that is dragged, or the pages selected with it, and the view they belong to.
@@ -652,8 +663,8 @@ impl PdfView {
                         cx.notify();
                     }
                 });
-                if let Some((key, root, target, text, draft)) = unsaved {
-                    super::state::act(cx, |l| commit_note(l, &key, &root, target, &text, draft.as_ref()));
+                if let Some(n) = unsaved {
+                    super::state::act(cx, |l| commit_note(l, &n.key, &n.root, n.target, &n.text, n.draft.as_ref(), n.known));
                 }
             });
             this.queue.close();
@@ -1594,7 +1605,7 @@ impl PdfView {
         let mut layer: HashMap<usize, Vec<InkPaint>> = HashMap::new();
         for h in self.marks.iter().filter(|h| !self.erased.contains(&h.id)) {
             for line in &h.ink {
-                if let Some(paint) = InkPaint::new(h.id, &h.color, line.width, &highlights::simplify(&line.points, INK_SIMPLIFY)) {
+                if let Some(paint) = InkPaint::new(h.id, &h.color, line.width, &line.points) {
                     layer.entry(line.page).or_default().push(paint);
                 }
             }
@@ -1654,7 +1665,8 @@ impl PdfView {
             }
         });
         let root = super::state::read(cx, |l| l.root.clone());
-        self.note = Some(NoteEditor { target, draft, root, input, _sub: sub });
+        let known = self.marks_key.as_ref().is_some_and(|key| super::state::read(cx, |l| l.has_highlights(key)));
+        self.note = Some(NoteEditor { target, draft, root, known, input, _sub: sub });
         window.prevent_default();
         cx.notify();
     }
@@ -1671,23 +1683,36 @@ impl PdfView {
         self.close_note(window, cx);
     }
 
-    /// What an open note editor holds, with the document and folder it belongs to: for writing it when the view goes away.
-    fn unsaved_note(&self, cx: &App) -> Option<(String, Option<PathBuf>, NoteTarget, String, Option<Draft>)> {
+    fn unsaved_note(&self, cx: &App) -> Option<Unsaved> {
         let editor = self.note.as_ref()?;
         let key = self.marks_key.clone()?;
-        Some((key, editor.root.clone(), editor.target, editor.input.read(cx).value().trim().to_string(), editor.draft.clone()))
+        Some(Unsaved { key, root: editor.root.clone(), target: editor.target, text: editor.input.read(cx).value().trim().to_string(), draft: editor.draft.clone(), known: editor.known })
     }
 
-    /// Writes the open note under the key it was opened on and closes its editor, without a window. Call it before the key can change. `false` when the folder takes no changes and the text is lost.
+    /// Why the open note cannot be written now.
+    fn note_blocked_reason(&self, cx: &App) -> String {
+        if super::state::read(cx, |l| l.pdf_blocked()) {
+            tr("Änderungen werden gerade nicht gespeichert. Die Notiz bleibt offen.")
+        } else {
+            tr("Die Stelle der Notiz gibt es in der PDF nicht mehr. Die Notiz bleibt offen.")
+        }
+    }
+
+    /// Writes the open note under the key it was opened on and closes its editor, without a window. Call it before the key can change. `false` when it could not be written: the editor then stays open with its text and says why.
     fn flush_note(&mut self, cx: &mut Context<Self>) -> bool {
-        let unsaved = self.unsaved_note(cx);
-        let Some(editor) = self.note.take() else { return true };
+        let Some(editor) = self.note.as_ref() else { return true };
         let own = editor.input.read(cx).focus_handle(cx);
-        drop(editor);
-        let written = match unsaved {
-            Some((key, root, target, text, draft)) => super::state::act(cx, |l| commit_note(l, &key, &root, target, &text, draft.as_ref())),
-            None => true,
+        let written = match self.unsaved_note(cx) {
+            Some(n) => super::state::act(cx, |l| commit_note(l, &n.key, &n.root, n.target, &n.text, n.draft.as_ref(), n.known)),
+            None => editor.input.read(cx).value().trim().is_empty() && matches!(editor.target, NoteTarget::NewPin { .. } | NoteTarget::NewPassage),
         };
+        if !written {
+            let why = self.note_blocked_reason(cx);
+            self.show_notice(tr("Notiz noch offen"), why, cx);
+            cx.notify();
+            return false;
+        }
+        self.note = None;
         let focus = self.focus.clone();
         cx.defer(move |cx| {
             if let Some(window) = cx.active_window() {
@@ -1702,6 +1727,19 @@ impl PdfView {
         written
     }
 
+    /// Writes the notes still open in the other views of this PDF, so the edit that starts now carries them to the new content.
+    fn flush_sibling_notes(&self, cx: &mut Context<Self>) {
+        let me = cx.entity_id();
+        let views: Vec<Entity<PdfView>> = cx.default_global::<OpenViews>().0.iter().filter_map(WeakEntity::upgrade).filter(|v| v.entity_id() != me).collect();
+        for view in views {
+            if view.read(cx).path == self.path {
+                view.update(cx, |v, cx| {
+                    v.flush_note(cx);
+                });
+            }
+        }
+    }
+
     /// Whether the open note has been stored: only then there is something to delete.
     fn note_stored(&self) -> bool {
         match self.note.as_ref().map(|e| e.target) {
@@ -1714,7 +1752,7 @@ impl PdfView {
     /// Writes the open note, or removes it when `discard`, and closes the editor. The editor stays open with a hint when the note cannot be written now; `false` then.
     fn finish_note(&mut self, discard: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(editor) = self.note.as_ref() else { return true };
-        let (target, draft) = (editor.target, editor.draft.clone());
+        let (target, draft, known) = (editor.target, editor.draft.clone(), editor.known);
         let text = if discard { String::new() } else { editor.input.read(cx).value().trim().to_string() };
         let Some(key) = self.marks_key.clone() else {
             if matches!(target, NoteTarget::NewPin { .. }) && text.is_empty() {
@@ -1727,6 +1765,12 @@ impl PdfView {
         };
         let mut list = super::state::read(cx, |l| l.highlights_of(&key));
         let id = super::state::read(cx, |l| l.next_mark_id(&key, matches!(target, NoteTarget::NewPassage)));
+        let key_gone = known && !super::state::read(cx, |l| l.has_highlights(&key));
+        if !text.is_empty() && note_orphaned(&list, target, key_gone) {
+            let why = self.note_blocked_reason(cx);
+            self.show_notice(tr("Notiz noch offen"), why, cx);
+            return false;
+        }
         let Some(label) = note_change(&mut list, target, &text, id, draft.as_ref()) else {
             self.close_note(window, cx);
             return true;
@@ -2380,6 +2424,11 @@ impl PdfView {
             _ if is_shortcut(ShortcutAction::SelectTool, k) => {
                 if !e.is_held {
                     self.set_tool(Tool::Select, window, cx);
+                }
+            }
+            _ if is_shortcut(ShortcutAction::MarkList, k) => {
+                if !e.is_held {
+                    self.show_marks(window, cx);
                 }
             }
             _ if is_shortcut(ShortcutAction::ExportMarkedPdf, k) => {
@@ -3486,6 +3535,7 @@ impl PdfView {
         self.finish_stroke(cx);
         self.finish_erase(cx);
         self.flush_note(cx);
+        self.flush_sibling_notes(cx);
         let Some(old_key) = self.marks_key.clone() else { return };
         let pages = match &edit {
             Edit::Op(PageOp::Rotate { pages, .. } | PageOp::Move { pages, .. } | PageOp::Delete(pages)) => pages.clone(),
@@ -3589,10 +3639,9 @@ impl PdfView {
                 return;
             }
             Err(Failure::Unreadable(names)) => {
-                self.queued.clear();
-                self.dropped = 0;
                 let (title, body) = unreadable_notice(&names);
                 self.show_notice(title, body, cx);
+                self.run_queue(cx);
                 return;
             }
         };
@@ -4557,12 +4606,23 @@ fn note_change(list: &mut Vec<Highlight>, target: NoteTarget, text: &str, new_id
     }
 }
 
-/// Writes a note that was still open when its viewer went away or its document is about to change, unless another folder is open by now. `false` when it could not be written because the folder takes no changes.
-fn commit_note(l: &mut Library, key: &str, root: &Option<PathBuf>, target: NoteTarget, text: &str, draft: Option<&Draft>) -> bool {
+/// Whether a note with text has nowhere to go: its pin or passage is not in the marks any more, or the document it was opened on had marks and has none now.
+fn note_orphaned(list: &[Highlight], target: NoteTarget, key_gone: bool) -> bool {
+    match target {
+        NoteTarget::NewPin { .. } | NoteTarget::NewPassage => key_gone,
+        NoteTarget::Pin(id) | NoteTarget::Passage(id) => !list.iter().any(|h| h.id == id),
+    }
+}
+
+/// Writes a note that was still open when its viewer went away or its document is about to change, unless another folder is open by now. `known` is whether the document had marks when the editor opened. `false` when it could not be written: the folder takes no changes, or the note has nowhere to go.
+fn commit_note(l: &mut Library, key: &str, root: &Option<PathBuf>, target: NoteTarget, text: &str, draft: Option<&Draft>, known: bool) -> bool {
     if l.root != *root {
         return true;
     }
     let mut list = l.highlights_of(key);
+    if !text.is_empty() && note_orphaned(&list, target, known && !l.has_highlights(key)) {
+        return false;
+    }
     let id = l.next_mark_id(key, matches!(target, NoteTarget::NewPassage));
     let Some(label) = note_change(&mut list, target, text, id, draft) else { return true };
     if !l.can_edit_pdf() {
@@ -4790,7 +4850,7 @@ mod tests {
         let old_key = document_key(&old);
         let target = NoteTarget::NewPin { page: 0, x: 10., y: 10. };
         let root = lib.root.clone();
-        assert!(commit_note(&mut lib, &old_key, &root, target, "Prüfungsfrage", None));
+        assert!(commit_note(&mut lib, &old_key, &root, target, "Prüfungsfrage", None, false));
         assert_eq!(lib.highlights_of(&old_key).len(), 1);
         let new = b"%PDF-1.4 neu".to_vec();
         let written = write_edited_pdf(lib.root.clone(), &path, &new, &old_key).ok().expect("written");
@@ -4806,11 +4866,45 @@ mod tests {
     fn a_note_of_another_folder_is_not_written_and_an_empty_new_pin_writes_nothing() {
         let (dir, mut lib) = scratch_library("note-other-folder");
         let target = NoteTarget::NewPin { page: 0, x: 1., y: 1. };
-        assert!(commit_note(&mut lib, "k", &Some(dir.join("anderer")), target, "Text", None));
+        assert!(commit_note(&mut lib, "k", &Some(dir.join("anderer")), target, "Text", None, false));
         assert!(lib.highlights_of("k").is_empty());
         let root = lib.root.clone();
-        assert!(commit_note(&mut lib, "k", &root, target, "", None));
+        assert!(commit_note(&mut lib, "k", &root, target, "", None, false));
         assert!(lib.highlights_of("k").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_note_is_refused_and_not_written_while_the_marks_file_is_locked() {
+        let dir = std::env::temp_dir().join(format!("schrumbi-pdf-view-{}", std::process::id())).join("note-locked");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("folder");
+        std::fs::write(dir.join(crate::core::highlights::FILE_NAME), b"{ not json").expect("marks");
+        let mut lib = crate::core::library::Library::new();
+        lib.open(&dir);
+        assert!(lib.pdf_blocked());
+        let root = lib.root.clone();
+        let pin = NoteTarget::NewPin { page: 0, x: 5., y: 5. };
+        assert!(!commit_note(&mut lib, "k", &root, pin, "Meine Frage", None, false));
+        assert!(lib.highlights_of("k").is_empty());
+        assert!(commit_note(&mut lib, "k", &root, pin, "", None, false));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_note_with_text_is_refused_when_its_document_or_mark_is_gone() {
+        let (dir, mut lib) = scratch_library("note-orphaned");
+        let root = lib.root.clone();
+        let pin = NoteTarget::NewPin { page: 0, x: 5., y: 5. };
+        assert!(!commit_note(&mut lib, "alt", &root, pin, "Frage", None, true));
+        assert!(!lib.has_highlights("alt"));
+        assert!(commit_note(&mut lib, "alt", &root, pin, "Frage", None, false));
+        assert_eq!(lib.highlights_of("alt").len(), 1);
+        assert!(!commit_note(&mut lib, "alt", &root, NoteTarget::Pin(999), "Neu", None, false));
+        assert!(commit_note(&mut lib, "alt", &root, NoteTarget::Pin(999), "", None, false));
+        let id = lib.highlights_of("alt")[0].id;
+        assert!(commit_note(&mut lib, "alt", &root, NoteTarget::Pin(id), "Geändert", None, true));
+        assert_eq!(lib.highlights_of("alt")[0].note, "Geändert");
         let _ = std::fs::remove_dir_all(dir);
     }
 

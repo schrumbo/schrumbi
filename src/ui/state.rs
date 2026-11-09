@@ -186,12 +186,20 @@ pub fn reindex(cx: &mut App) {
     .detach();
 }
 
+/// Writes the notes still open in PDF views. When one cannot be written it stays open, the user is told, and the caller must not leave the folder or quit.
+pub fn notes_settled(cx: &mut App) -> bool {
+    if super::pdf_view::flush_notes(cx) {
+        return true;
+    }
+    act(cx, |l| l.last_error = Some(tr("Eine PDF-Notiz ist noch offen und lässt sich gerade nicht speichern. Mit Esc verwirfst du sie.")));
+    false
+}
+
 /// Opens a workspace, starts watching it and indexes it.
 pub fn open_workspace(path: &Path, cx: &mut App) {
-    if !path.is_dir() {
+    if !path.is_dir() || !notes_settled(cx) {
         return;
     }
-    super::pdf_view::flush_notes(cx);
     act(cx, |l| l.open(path));
     watch(path.to_path_buf(), cx);
     reindex(cx);
@@ -199,8 +207,11 @@ pub fn open_workspace(path: &Path, cx: &mut App) {
     super::sync::workspace_opened(path, cx);
 }
 
-pub fn close_workspace(cx: &mut App) {
-    super::pdf_view::flush_notes(cx);
+/// Closes the open folder; `false` and nothing closed while a PDF note cannot be written.
+pub fn close_workspace(cx: &mut App) -> bool {
+    if !notes_settled(cx) {
+        return false;
+    }
     flush_pending(cx);
     let store = cx.global_mut::<Store>();
     store.watcher = None;
@@ -208,6 +219,7 @@ pub fn close_workspace(cx: &mut App) {
     crate::core::vault::index::reset();
     super::sync::workspace_closed(cx);
     act(cx, |l| l.close());
+    true
 }
 
 #[derive(Default, Clone, Copy)]

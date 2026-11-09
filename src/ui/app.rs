@@ -157,15 +157,17 @@ pub fn init(cx: &mut App) {
     });
     cx.on_action(|_: &OpenOtherWorkspace, cx| {
         super::platform::choose_folder(cx, |path, cx| {
-            state::close_workspace(cx);
-            state::open_workspace(&path, cx);
+            if state::close_workspace(cx) {
+                state::open_workspace(&path, cx);
+            }
         })
     });
     cx.on_action(|a: &OpenRecent, cx| {
         if let Some(p) = prefs::get().recent_workspaces.get(a.0).cloned() {
             if p.is_dir() {
-                state::close_workspace(cx);
-                state::open_workspace(&p, cx);
+                if state::close_workspace(cx) {
+                    state::open_workspace(&p, cx);
+                }
             } else {
                 prefs::forget_workspace(&p);
                 act(cx, |l| l.last_error = Some(crate::core::i18n::trf("%@ ist nicht mehr erreichbar.", &[&p.file_name().unwrap_or_default().to_string_lossy()])));

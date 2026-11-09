@@ -770,6 +770,11 @@ impl Library {
         self.highlights.get(key).cloned().unwrap_or_default()
     }
 
+    /// Whether a document has any marks stored: a document edited elsewhere has none under its old key.
+    pub fn has_highlights(&self, key: &str) -> bool {
+        self.highlights.contains_key(key)
+    }
+
     /// A free id for a new mark of a document: `passage` for marked text, otherwise for a pin or a drawing.
     pub fn next_mark_id(&self, key: &str, passage: bool) -> u64 {
         highlights::next_id(self.highlights.get(key).map_or(&[], Vec::as_slice), passage)

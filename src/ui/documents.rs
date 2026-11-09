@@ -4258,7 +4258,9 @@ impl Render for FileViewer {
 
 /// Saves or asks about every open note, then quits.
 pub fn prepare_to_quit(cx: &mut App) {
-    super::pdf_view::flush_notes(cx);
+    if !state::notes_settled(cx) {
+        return;
+    }
     state::flush_pending(cx);
     act(cx, |l| {
         if let Some(path) = l.active_document.clone() {
