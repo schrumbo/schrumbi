@@ -53,7 +53,7 @@ Bearbeiten geht in der Standard-App: ⋯ → {ui:Mit Standard-App öffnen}. Sich
 
 ## PDFs
 
-Markieren und Seiten ordnen, in der Datei selbst und nur bei PDFs.
+Markieren und Seiten verschieben, in der Datei selbst und nur bei PDFs.
 
 | Kürzel | Wirkung |
 |---|---|
@@ -70,21 +70,22 @@ Links in {ui:Seiten}. Ein Klick wählt und springt, Strg plus Klick (Mac: ⌘) f
 
 | Befehl | Kürzel |
 |---|---|
-| {ui:Seite links drehen} | {key:rotatePagesLeft} |
-| {ui:Seite rechts drehen} | {key:rotatePagesRight} |
-| {ui:Seite nach oben} | {key:movePagesUp} |
-| {ui:Seite nach unten} | {key:movePagesDown} |
-| {ui:Seite löschen} | {key:deletePages} oder {key:delete} in der Seitenliste |
+| {ui:Seiten links drehen} | {key:rotatePagesLeft} |
+| {ui:Seiten rechts drehen} | {key:rotatePagesRight} |
+| {ui:Seiten nach oben verschieben} | {key:movePagesUp} |
+| {ui:Seiten nach unten verschieben} | {key:movePagesDown} |
+| {ui:Seiten löschen} | {key:deletePages} oder {key:delete} in der Seitenleiste |
 | {ui:Seiten aus PDF einfügen …} | {key:insertPdf} |
 
-- Die Befehle nennen, auf wie viele Seiten sie wirken. Die Leiste unter der Liste zählt die Auswahl, das Kreuz hebt sie auf.
-- In der Liste: {key:up} und {key:down} wechseln die Seite, {key:shift-up} und {key:shift-down} erweitern die Auswahl, {key:cmd-a} wählt alle, {key:shift-f10} öffnet das Menü.
+- Die Befehle nennen die Seite oder wie viele Seiten sie wirken. Ab zwei gewählten Seiten zählt die Leiste unter der Liste mit, das Kreuz hebt die Auswahl auf.
+- {key:rotatePagesLeft}, {key:rotatePagesRight} und {key:insertPdf} wirken nur in der Seitenleiste, die anderen Kürzel und die Befehlspalette überall.
+- In der Seitenleiste: {key:up} und {key:down} wechseln die Seite, {key:home} und {key:end} gehen zur ersten und letzten, {key:pageup} und {key:pagedown} blättern, {key:shift-up}, {key:shift-down}, {key:shift-home}, {key:shift-end}, {key:shift-pageup} und {key:shift-pagedown} erweitern die Auswahl, {key:cmd-a} wählt alle, {key:shift-f10} öffnet das Menü.
 - Seiten ziehen, die Linie zeigt, wohin sie kommen. {key:escape} bricht das Ziehen ab.
-- PDFs aus dem Dateimanager auf die Liste ziehen fügt sie nacheinander an der Linie ein, jede als eigener Schritt für {key:Undo}.
+- PDFs aus dem Dateimanager auf die Seitenleiste ziehen fügt sie nacheinander an der Linie ein, jede als eigener Schritt für {key:Undo}. Während eine PDF gespeichert wird, warten weitere; {key:escape} verwirft die übrigen.
 - Rechtsklick auf eine Seite zeigt dieselben Befehle.
 - Ein Hinweis verschwindet mit {key:escape}.
 - Die Datei ändert sich wirklich. {key:Undo} und {key:Redo} stellen sie Byte für Byte wieder her, die Markierungen bleiben an ihrem Text.
-- Die letzte Seite lässt sich nicht löschen.
+- Die letzte Seite lässt sich nicht löschen. Andere Dateien als PDFs werden übersprungen.
 
 ````example Seite verlinken
 ![[Skript.pdf#page=3]]

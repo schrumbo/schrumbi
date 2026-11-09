@@ -58,10 +58,8 @@ const SPINNER_AFTER: Duration = Duration::from_millis(150);
 const NOTICE_FOR: Duration = Duration::from_secs(8);
 const DRAG_EDGE: f32 = 28.;
 const DRAG_SCROLL: f32 = 16.;
-const NOTICE_WIDTH: f32 = 360.;
-const MENU_AFTER_MOVE: Duration = Duration::from_millis(40);
-const DRAG_TICK: Duration = Duration::from_millis(16);
 const KEPT_STATES: usize = 16;
+const ATLAS_SIDE: usize = 1024;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Fit {
@@ -113,8 +111,13 @@ struct Edited {
 struct Started {
     sizes: Vec<(f32, f32)>,
     pages: Vec<usize>,
-    label: String,
     old_key: String,
+}
+
+/// A PDF waiting to be inserted: at the gap given, or right after the one inserted before it.
+struct Queued {
+    file: PathBuf,
+    at: Option<usize>,
 }
 
 /// The selection and the place a document had, kept per content so undo and redo bring them back.
@@ -122,6 +125,7 @@ struct Started {
 struct ViewState {
     selected: BTreeSet<usize>,
     anchor: Option<Anchor>,
+    cursor: Option<usize>,
 }
 
 /// Where the view goes once the edited file is loaded: the pages to select, and either the place it kept or the page to show.
@@ -129,6 +133,7 @@ struct AfterEdit {
     select: Vec<usize>,
     page: usize,
     anchor: Option<Anchor>,
+    cursor: Option<usize>,
 }
 
 /// Where the page lists of open PDFs are on screen, so a dragged file dropped there is not taken for "open beside".
@@ -153,6 +158,7 @@ impl Global for PagePanels {}
 struct DraggedPages {
     view: EntityId,
     pages: Vec<usize>,
+    grab: Point<Pixels>,
 }
 
 impl Render for DraggedPages {
@@ -162,7 +168,8 @@ impl Render for DraggedPages {
             [page] => page_word(false, page + 1),
             many => trf("%lld Seiten", &[&many.len()]),
         };
-        div().flex().items_center().gap(px(space::S)).px(px(space::S)).py(px(space::XS)).rounded(px(radius::INNER)).bg(t.material).text_color(t.primary).shadow_md().child(icon("arrow-up-down", iconsize::M, t.secondary)).child(label)
+        let chip = div().flex().items_center().gap(px(space::S)).px(px(space::S)).py(px(space::XS)).rounded(px(radius::INNER)).bg(t.material).text_color(t.primary).shadow_md().child(icon("arrow-up-down", iconsize::M, t.secondary)).child(label);
+        div().ml(self.grab.x + px(space::S)).mt(self.grab.y - px(pages::CHIP_HALF)).child(chip)
     }
 }
 
@@ -174,6 +181,44 @@ fn new_index(op: &PageOp, count: usize, inserted: usize, page: usize) -> Option<
         PageOp::Move { pages, to } => pdf_edit::move_order(count, pages, *to).iter().position(|old| *old == page),
         PageOp::Insert { at, .. } => Some(if page >= (*at).min(count) { page + inserted } else { page }),
     }
+}
+
+/// What an image of this size holds in video memory: the atlas gives one that is more than half as wide or high as its 1024 pixel textures a texture of its own.
+fn atlas_bytes(width: usize, height: usize) -> usize {
+    if width * 2 > ATLAS_SIDE || height * 2 > ATLAS_SIDE { width.max(ATLAS_SIDE) * height.max(ATLAS_SIDE) * 4 } else { width * height * 4 }
+}
+
+/// The gap, counted in pages before it, that a gap becomes once `op` has been applied; a gap before a page follows that page.
+fn gap_after(op: &PageOp, count: usize, inserted: usize, gap: usize) -> usize {
+    match op {
+        PageOp::Rotate { .. } => gap,
+        PageOp::Delete(gone) => {
+            let gone: BTreeSet<usize> = gone.iter().copied().collect();
+            gap - gone.iter().filter(|g| **g < gap).count()
+        }
+        PageOp::Move { .. } if gap >= count => count,
+        PageOp::Move { .. } => new_index(op, count, inserted, gap).unwrap_or(gap),
+        PageOp::Insert { at, .. } if gap >= (*at).min(count) => gap + inserted,
+        PageOp::Insert { .. } => gap,
+    }
+}
+
+/// The widest page, and the page size a fit is measured against: the median, so one odd page does not rescale the document.
+fn page_extent(sizes: &[(f32, f32)]) -> ((f32, f32), (f32, f32)) {
+    let median = |mut values: Vec<f32>| {
+        let mid = values.len() / 2;
+        (*values.select_nth_unstable_by(mid, f32::total_cmp).1).max(1.)
+    };
+    if sizes.is_empty() {
+        return ((1., 1.), (1., 1.));
+    }
+    let widest = sizes.iter().fold((1., 1.), |m, s| (f32::max(m.0, s.0), f32::max(m.1, s.1)));
+    (widest, (median(sizes.iter().map(|s| s.0).collect()), median(sizes.iter().map(|s| s.1).collect())))
+}
+
+/// "PDF 2 von 3" while several PDFs wait in the queue; `left` counts those after the one being written.
+fn progress_label(total: usize, left: usize) -> Option<String> {
+    (total > 1).then(|| trf("PDF %@ von %@", &[&(total - left.min(total - 1)), &total]))
 }
 
 /// The pages to select and the page to show after a change, given the page that was shown and the pages it acted on. After a delete the page that took the first gone one's place is shown.
@@ -226,6 +271,7 @@ pub struct PdfView {
     stamp: Option<(std::time::SystemTime, u64)>,
     sizes: Vec<(f32, f32)>,
     max_size: (f32, f32),
+    fit_size: (f32, f32),
     failed: Option<Option<OpenError>>,
     cache: HashMap<PageKey, Cached>,
     page_marks: Arc<HashMap<usize, Vec<MarkPaint>>>,
@@ -276,8 +322,12 @@ pub struct PdfView {
     drag_pointer: Option<(Point<Pixels>, Bounds<Pixels>)>,
     states: Vec<(String, ViewState)>,
     restore_on_key: bool,
-    queued: Vec<PathBuf>,
+    queued: Vec<Queued>,
     queue_at: usize,
+    queue_total: usize,
+    hint: bool,
+    status_since: Option<Instant>,
+    status_label: String,
     bar_listed: bool,
     working: Option<Instant>,
     after_edit: Option<AfterEdit>,
@@ -356,10 +406,12 @@ impl PdfView {
         let release = cx.on_release(move |this: &mut Self, cx| {
             cx.default_global::<PagePanels>().0.remove(&id);
             let lib = super::state::lib(cx);
-            lib.update(cx, |l, cx| {
-                if l.page_bars.remove(&id.as_u64()).is_some() {
-                    cx.notify();
-                }
+            cx.defer(move |cx| {
+                lib.update(cx, |l, cx| {
+                    if l.page_bars.remove(&id.as_u64()).is_some() {
+                        cx.notify();
+                    }
+                });
             });
             this.queue.close();
             this.search_generation.fetch_add(1, Ordering::Relaxed);
@@ -380,6 +432,7 @@ impl PdfView {
             slides,
             sizes: Vec::new(),
             max_size: (1., 1.),
+            fit_size: (1., 1.),
             failed: None,
             cache: HashMap::new(),
             page_marks: Arc::default(),
@@ -432,6 +485,10 @@ impl PdfView {
             restore_on_key: false,
             queued: Vec::new(),
             queue_at: 0,
+            queue_total: 0,
+            hint: false,
+            status_since: None,
+            status_label: String::new(),
             bar_listed: false,
             working: None,
             after_edit: None,
@@ -473,7 +530,10 @@ impl PdfView {
             return;
         }
         self.stamp = now;
-        self.marks_key = None;
+        if let Some(key) = self.marks_key.take() {
+            let state = ViewState { selected: self.selected.clone(), anchor: self.anchor_at(0., 0.), cursor: self.list_cursor };
+            self.remember(key, state);
+        }
         self.selection = None;
         self.active_mark = None;
         self.selecting = false;
@@ -503,7 +563,7 @@ impl PdfView {
                 self.current_hit = None;
                 self.selection = None;
                 self.failed = None;
-                self.max_size = sizes.iter().fold((1., 1.), |m, s| (f32::max(m.0, s.0), f32::max(m.1, s.1)));
+                (self.max_size, self.fit_size) = page_extent(&sizes);
                 self.marks_key = None;
                 self.marks.clear();
                 self.marks_dirty = true;
@@ -514,6 +574,7 @@ impl PdfView {
                 if let Some(after) = self.after_edit.take() {
                     self.selected = after.select.into_iter().filter(|p| *p <= last).collect();
                     self.select_anchor = self.selected.first().copied();
+                    self.list_cursor = after.cursor.filter(|p| *p <= last);
                     self.pending = Some(match after.anchor {
                         Some(anchor) => Anchor { page: anchor.page.min(last), ..anchor },
                         None => Anchor { page: after.page.min(last), x: 0., y: 0., view_x: 0., view_y: PADDING },
@@ -523,7 +584,7 @@ impl PdfView {
                 self.geo.tops.clear();
             }
             Message::Opened(sizes) => {
-                self.max_size = sizes.iter().fold((1., 1.), |m, s| (f32::max(m.0, s.0), f32::max(m.1, s.1)));
+                (self.max_size, self.fit_size) = page_extent(&sizes);
                 self.sizes = sizes;
             }
             Message::Key(key) => {
@@ -533,6 +594,7 @@ impl PdfView {
                     let last = self.page_count().saturating_sub(1);
                     self.selected = state.selected.iter().copied().filter(|p| *p <= last).collect();
                     self.select_anchor = self.selected.first().copied();
+                    self.list_cursor = state.cursor.filter(|p| *p <= last);
                     if let Some(anchor) = state.anchor {
                         self.pending = Some(Anchor { page: anchor.page.min(last), ..anchor });
                     }
@@ -544,11 +606,12 @@ impl PdfView {
             Message::Failed(why) => {
                 self.reloading = false;
                 self.queued.clear();
+                self.queue_total = 0;
                 self.failed = Some(why);
             }
             Message::Page(key, image, baked, baked_sigs) => {
                 let size = image.size(0);
-                let bytes = size.width.0 as usize * size.height.0 as usize * 4;
+                let bytes = atlas_bytes(size.width.0 as usize, size.height.0 as usize);
                 self.tick += 1;
                 self.page_arrived = true;
                 if self.page_hash(key.0) != baked {
@@ -605,8 +668,8 @@ impl PdfView {
     }
 
     fn scale_for(&self, view: (f32, f32)) -> f32 {
-        let width = ((view.0 - PADDING * 2.) / self.max_size.0).max(0.05);
-        let height = ((view.1 - PADDING * 2.) / self.max_size.1).max(0.05);
+        let width = ((view.0 - PADDING * 2.) / self.fit_size.0).max(0.05);
+        let height = ((view.1 - PADDING * 2.) / self.fit_size.1).max(0.05);
         match self.fit {
             Fit::Width => width,
             Fit::Page => width.min(height),
@@ -1464,7 +1527,8 @@ impl PdfView {
     }
 
     fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
-        if self.page_notice.take().is_some() {
+        if self.clear_queue() {
+        } else if self.page_notice.take().is_some() {
             self.notice_task = None;
         } else if cx.has_active_drag() {
             cx.stop_active_drag(window);
@@ -1480,8 +1544,16 @@ impl PdfView {
         } else if self.panel_open && self.floating() {
             self.panel_open = false;
             window.focus(&self.focus, cx);
-        } else if self.active_mark.take().is_none() && self.selection.take().is_none() && std::mem::take(&mut self.selected).is_empty() {
-            cx.propagate();
+        } else if self.active_mark.take().is_none() && self.selection.take().is_none() {
+            let had_selection = !std::mem::take(&mut self.selected).is_empty();
+            if !had_selection && self.list_cursor.is_none() {
+                cx.propagate();
+            }
+            self.select_anchor = None;
+            self.list_cursor = None;
+            if self.pages_focus.contains_focused(window, cx) {
+                window.focus(&self.focus, cx);
+            }
         }
         cx.notify();
     }
@@ -1492,9 +1564,10 @@ impl PdfView {
         let command = if cfg!(target_os = "macos") { m.platform } else { m.control };
         let typing = in_field(window);
         let key = k.key.as_str();
-        let panel = self.pages_focus.contains_focused(window, cx) && self.editable();
+        let listed = self.pages_focus.contains_focused(window, cx);
+        let panel = listed && self.editable();
         let page_step = (self.geo.view.1 - LINE_STEP).max(LINE_STEP);
-        let page_command = PAGE_COMMANDS.into_iter().find(|a| is_shortcut(*a, k)).filter(|a| !(is_plain(*a) && self.edit_block().is_some()));
+        let page_command = PAGE_COMMANDS.into_iter().find(|a| is_shortcut(*a, k)).filter(|a| listed || !is_plain(*a));
         match key {
             "f" if command && !m.shift => self.open_search(window, cx),
             "g" if command => self.step_hit(if m.shift { -1 } else { 1 }, cx),
@@ -1505,9 +1578,18 @@ impl PdfView {
                     self.run_page_command(action, cx);
                 }
             }
-            "f10" if panel && m.shift => self.open_row_menu(window, cx),
-            "menu" if panel => self.open_row_menu(window, cx),
+            "f10" if panel && m.shift => {
+                if !e.is_held {
+                    self.open_row_menu(window, cx);
+                }
+            }
+            "menu" if panel => {
+                if !e.is_held {
+                    self.open_row_menu(window, cx);
+                }
+            }
             "up" | "down" if panel && !command && !m.alt => self.step_page(if key == "up" { -1 } else { 1 }, m.shift, cx),
+            "home" | "end" | "pageup" | "pagedown" if panel && !command && !m.alt => self.step_far(key, m.shift, cx),
             "backspace" | "delete" if panel && !self.selected.is_empty() => self.delete_pages(None, cx),
             "backspace" | "delete" if self.active_mark.is_some() => {
                 if let Some(id) = self.active_mark {
@@ -1853,13 +1935,13 @@ impl PdfView {
                                         cx.notify();
                                     })
                                 })
-                                .on_drag(DraggedPages { view: me.entity_id(), pages: dragged }, move |d, _, window, cx| {
+                                .on_drag(DraggedPages { view: me.entity_id(), pages: dragged, grab: Point::default() }, move |d, grab, window, cx| {
                                     drag_view.update(cx, |v, cx| {
                                         v.dragging = d.pages.iter().copied().collect();
                                         window.focus(&v.pages_focus, cx);
                                         cx.notify();
                                     });
-                                    cx.new(|_| d.clone())
+                                    cx.new(|_| DraggedPages { grab, ..d.clone() })
                                 })
                             });
                         let row = if editable { row.context_menu(move |menu, _, _| Self::thumb_menu(menu, page, menu_view.clone(), labels.clone(), up, down)).into_any_element() } else { row.into_any_element() };
@@ -1902,7 +1984,8 @@ impl PdfView {
                 .size_full(),
             )
             .when(editable, |d| {
-                d.on_drag_move::<DraggedPages>(cx.listener(|v, e: &DragMoveEvent<DraggedPages>, _, cx| {
+                d.drag_over::<DraggedPages>(move |style, dragged, _, _| if dragged.view == id { style } else { style.opacity(tint::DISABLED) })
+                .on_drag_move::<DraggedPages>(cx.listener(|v, e: &DragMoveEvent<DraggedPages>, _, cx| {
                     if e.drag(cx).view == cx.entity_id() {
                         v.hover_slot(e.event.position, e.bounds, cx);
                     }
@@ -1926,7 +2009,7 @@ impl PdfView {
             .track_focus(&self.pages_focus)
             .key_context("PdfPages")
             .child(body)
-            .children((editable || self.edit_block().is_some()).then(|| self.page_bar(cx, t)))
+            .children(editable.then(|| self.page_bar(cx, t)))
             .into_any_element()
     }
 
@@ -2069,7 +2152,7 @@ impl PdfView {
 
     /// Why page changes are not offered for this file; `None` when they are.
     fn edit_block(&self) -> Option<String> {
-        matches!(self.source, pdf_worker::Source::Office(_)).then(|| tr("Seiten ordnen geht nur bei PDF-Dateien."))
+        matches!(self.source, pdf_worker::Source::Office(_)).then(|| tr("Seiten drehen, verschieben und löschen geht nur bei PDF-Dateien."))
     }
 
     /// The pages a command acts on: the selection, or the page it was asked on, or else the page shown.
@@ -2086,12 +2169,14 @@ impl PdfView {
         let pages = self.targets(page);
         let n = pages.len();
         let after = pages.last().map_or(0, |p| p + 1);
+        let first = pages.first().map_or(0, |p| p + 1);
+        let label = |one: &str, many: &str| if n == 1 { trf(one, &[&first]) } else { trf(many, &[&n]) };
         PageLabels {
-            left: if n == 1 { tr("Seite links drehen") } else { trf("%lld Seiten links drehen", &[&n]) },
-            right: if n == 1 { tr("Seite rechts drehen") } else { trf("%lld Seiten rechts drehen", &[&n]) },
-            up: if n == 1 { tr("Seite nach oben") } else { trf("%lld Seiten nach oben", &[&n]) },
-            down: if n == 1 { tr("Seite nach unten") } else { trf("%lld Seiten nach unten", &[&n]) },
-            delete: if n == 1 { tr("Seite löschen") } else { trf("%lld Seiten löschen", &[&n]) },
+            left: label("Seite %lld links drehen", "%lld Seiten links drehen"),
+            right: label("Seite %lld rechts drehen", "%lld Seiten rechts drehen"),
+            up: label("Seite %lld nach oben verschieben", "%lld Seiten nach oben verschieben"),
+            down: label("Seite %lld nach unten verschieben", "%lld Seiten nach unten verschieben"),
+            delete: label("Seite %lld löschen", "%lld Seiten löschen"),
             insert: trf("PDF nach Seite %lld einfügen …", &[&after]),
         }
     }
@@ -2113,13 +2198,28 @@ impl PdfView {
         self.show_notice(title, body, cx);
     }
 
-    /// Whether a page command may start now; tells why when this file cannot be changed at all.
-    fn ready(&mut self, cx: &mut Context<Self>) -> bool {
+    /// Whether this file takes page changes at all; tells why when it does not.
+    fn allowed(&mut self, cx: &mut Context<Self>) -> bool {
         if let Some(why) = self.edit_block() {
             self.show_notice(tr("Das geht hier nicht"), why, cx);
             return false;
         }
-        self.editable() && !self.busy()
+        self.editable()
+    }
+
+    /// Whether a page command may start now; while a change is still being written it says so instead of staying silent.
+    fn ready(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.allowed(cx) {
+            return false;
+        }
+        if self.busy() {
+            if self.working.is_some() || self.reloading {
+                self.hint = true;
+                cx.notify();
+            }
+            return false;
+        }
+        true
     }
 
     fn rotate_pages(&mut self, page: Option<usize>, clockwise: bool, cx: &mut Context<Self>) {
@@ -2180,7 +2280,7 @@ impl PdfView {
     }
 
     fn choose_pdf(&mut self, page: Option<usize>, cx: &mut Context<Self>) {
-        if !self.ready(cx) {
+        if !self.allowed(cx) {
             return;
         }
         let at = self.targets(page).last().map_or(0, |p| p + 1);
@@ -2190,30 +2290,43 @@ impl PdfView {
         });
     }
 
-    /// Inserts the PDFs one after another, in the order given, each as its own undo step.
+    /// Inserts the PDFs one after another, in the order given, each as its own undo step. While a change is still being written they wait their turn.
     fn insert_pdfs(&mut self, paths: Vec<PathBuf>, at: usize, cx: &mut Context<Self>) {
-        let pdfs: Vec<PathBuf> = paths.into_iter().filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"))).collect();
+        let (pdfs, others): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")));
         if pdfs.is_empty() {
             self.show_notice(tr("Das ist keine PDF"), tr("Es lassen sich nur PDFs einfügen."), cx);
             return;
         }
-        if !self.ready(cx) {
+        if !self.allowed(cx) {
             return;
         }
-        self.queued = pdfs;
-        self.queue_at = at.min(self.page_count());
+        self.queue_total += pdfs.len();
+        self.queued.extend(pdfs.into_iter().enumerate().map(|(i, file)| Queued { file, at: (i == 0).then_some(at) }));
         self.run_queue(cx);
+        if !others.is_empty() {
+            let title = if others.len() == 1 { tr("Eine Datei übersprungen, keine PDF") } else { trf("%@ Dateien übersprungen, keine PDF", &[&others.len()]) };
+            self.show_notice(title, String::new(), cx);
+        }
     }
 
     fn run_queue(&mut self, cx: &mut Context<Self>) {
         if self.queued.is_empty() || self.busy() {
             return;
         }
-        let file = self.queued.remove(0);
-        self.start_edit(Edit::Insert { at: self.queue_at, file }, cx);
+        let next = self.queued.remove(0);
+        let at = next.at.unwrap_or(self.queue_at).min(self.page_count());
+        self.start_edit(Edit::Insert { at, file: next.file }, cx);
         if self.working.is_none() {
             self.queued.clear();
+            self.queue_total = 0;
         }
+    }
+
+    fn clear_queue(&mut self) -> bool {
+        let waiting = !self.queued.is_empty();
+        self.queue_total = self.queue_total.saturating_sub(self.queued.len());
+        self.queued.clear();
+        waiting
     }
 
     fn start_edit(&mut self, edit: Edit, cx: &mut Context<Self>) {
@@ -2221,17 +2334,11 @@ impl PdfView {
         if !self.editable() || self.working.is_some() || self.reloading || !super::state::act(cx, |l| l.can_edit_pdf()) {
             return;
         }
-        let (pages, label) = match &edit {
-            Edit::Op(op) => (
-                match op {
-                    PageOp::Rotate { pages, .. } | PageOp::Move { pages, .. } | PageOp::Delete(pages) => pages.clone(),
-                    PageOp::Insert { .. } => Vec::new(),
-                },
-                edit_label(op),
-            ),
-            Edit::Insert { .. } => (Vec::new(), tr("PDF eingefügt")),
+        let pages = match &edit {
+            Edit::Op(PageOp::Rotate { pages, .. } | PageOp::Move { pages, .. } | PageOp::Delete(pages)) => pages.clone(),
+            Edit::Op(PageOp::Insert { .. }) | Edit::Insert { .. } => Vec::new(),
         };
-        let started = Started { sizes: self.sizes.clone(), pages, label, old_key: old_key.clone() };
+        let started = Started { sizes: self.sizes.clone(), pages, old_key: old_key.clone() };
         let path = self.path.clone();
         let root = super::state::read(cx, |l| l.root.clone());
         let task = cx.background_spawn(async move {
@@ -2291,28 +2398,39 @@ impl PdfView {
             Ok(done) => done,
             Err(Failure::Edit(e)) => {
                 self.queued.clear();
+                self.queue_total = 0;
                 self.show_error(e, cx);
                 return;
             }
             Err(Failure::Write(e)) => {
                 self.queued.clear();
+                self.queue_total = 0;
                 super::state::act(cx, |l| l.pdf_edit_failed(e));
                 cx.notify();
                 return;
             }
         };
         let count = started.sizes.len();
+        if self.queued.is_empty() {
+            self.queue_total = 0;
+        }
+        for waiting in &mut self.queued {
+            waiting.at = waiting.at.map(|gap| gap_after(&done.op, count, done.inserted, gap));
+        }
+        let label = edit_label(&done.op, &started.pages, done.inserted, count);
         let before = self.anchor_at(0., 0.);
         let (select, page, jump) = follow_edit(&done.op, count, done.inserted, self.current_page(), &started.pages);
         let anchor = before.filter(|_| !jump).and_then(|a| new_index(&done.op, count, done.inserted, a.page).map(|page| Anchor { page, ..a }));
         let landing = anchor.unwrap_or(Anchor { page, x: 0., y: 0., view_x: 0., view_y: PADDING });
-        self.remember(started.old_key.clone(), ViewState { selected: self.selected.clone(), anchor: before });
-        self.remember(done.written.new_key().to_string(), ViewState { selected: select.iter().copied().collect(), anchor: Some(landing) });
+        let cursor = self.list_cursor.and_then(|c| new_index(&done.op, count, done.inserted, c));
+        self.remember(started.old_key.clone(), ViewState { selected: self.selected.clone(), anchor: before, cursor: self.list_cursor });
+        self.remember(done.written.new_key().to_string(), ViewState { selected: select.iter().copied().collect(), anchor: Some(landing), cursor });
         self.queue_at = if matches!(done.op, PageOp::Insert { .. }) { select.last().map_or(0, |p| p + 1) } else { 0 };
-        self.after_edit = Some(AfterEdit { select, page, anchor });
-        super::state::act(cx, |l| l.finish_pdf_edit(done.written, &done.op, &started.sizes, done.inserted, started.label));
+        self.after_edit = Some(AfterEdit { select, page, anchor, cursor });
+        super::state::act(cx, |l| l.finish_pdf_edit(done.written, &done.op, &started.sizes, done.inserted, label));
         if stamp(&self.path) == self.stamp {
             self.after_edit = None;
+            self.run_queue(cx);
         } else {
             self.reload_if_changed(cx);
         }
@@ -2352,6 +2470,29 @@ impl PdfView {
         }
         let from = self.list_cursor.unwrap_or_else(|| self.current_page()).min(count - 1);
         let to = (from as isize + by).clamp(0, count as isize - 1) as usize;
+        self.go_page(to, extend, cx);
+    }
+
+    /// Home, End, PageUp and PageDown in the page list: to the first or last page, or by as many pages as the list shows.
+    fn step_far(&mut self, key: &str, extend: bool, cx: &mut Context<Self>) {
+        let count = self.page_count();
+        if count == 0 {
+            return;
+        }
+        let shown = cx.try_global::<PagePanels>().and_then(|p| p.0.get(&cx.entity_id()).copied()).map_or(self.thumb_range.len(), |b| (f32::from(b.size.height) / THUMB_ROW).floor() as usize).max(1);
+        let from = self.list_cursor.unwrap_or_else(|| self.current_page()).min(count - 1);
+        let to = match key {
+            "home" => 0,
+            "end" => count - 1,
+            "pageup" => from.saturating_sub(shown),
+            _ => (from + shown).min(count - 1),
+        };
+        self.go_page(to, extend, cx);
+    }
+
+    fn go_page(&mut self, to: usize, extend: bool, cx: &mut Context<Self>) {
+        let count = self.page_count();
+        let from = self.list_cursor.unwrap_or_else(|| self.current_page()).min(count.saturating_sub(1));
         self.active_mark = None;
         self.selection = None;
         if extend {
@@ -2385,25 +2526,56 @@ impl PdfView {
         cx.notify();
     }
 
-    /// Opens the menu of the row the keyboard is on, as a right click on it would.
-    fn open_row_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(bounds) = cx.try_global::<PagePanels>().and_then(|p| p.0.get(&cx.entity_id()).copied()) else { return };
-        let page = self.list_cursor.unwrap_or_else(|| self.current_page());
+    /// The middle of a page's row in the list, when the whole row is on screen.
+    fn row_point(&self, id: EntityId, page: usize, cx: &App) -> Option<Point<Pixels>> {
+        let bounds = cx.try_global::<PagePanels>().and_then(|p| p.0.get(&id).copied())?;
         let offset = self.thumbs.0.borrow().base_handle.offset();
-        let top = f32::from(bounds.top());
-        let y = (top + f32::from(offset.y) + (page as f32 + 0.5) * THUMB_ROW).clamp(top + 1., f32::from(bounds.bottom()) - 1.);
-        let position = point(bounds.center().x, px(y));
-        window.defer(cx, move |window, cx| {
-            window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers: Modifiers::none() }), cx);
-            window
-                .spawn(cx, async move |cx| {
-                    cx.background_executor().timer(MENU_AFTER_MOVE).await;
-                    let _ = cx.update(|window, cx| {
-                        window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Right, position, modifiers: Modifiers::none(), click_count: 1, first_mouse: false }), cx);
-                    });
-                })
-                .detach();
-        });
+        let top = f32::from(bounds.top()) + f32::from(offset.y) + page as f32 * THUMB_ROW;
+        (top >= f32::from(bounds.top()) - 0.5 && top + THUMB_ROW <= f32::from(bounds.bottom()) + 0.5).then(|| point(bounds.center().x, px(top + THUMB_ROW / 2.)))
+    }
+
+    /// Opens the menu of the row the keyboard is on, as a right click on it would: the row is scrolled fully into view first, and the click only goes out while it still is.
+    fn open_row_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let count = self.page_count();
+        let Some(bounds) = cx.try_global::<PagePanels>().and_then(|p| p.0.get(&cx.entity_id()).copied()) else { return };
+        if count == 0 {
+            return;
+        }
+        let page = self.list_cursor.or_else(|| self.selected.first().copied()).unwrap_or_else(|| self.current_page()).min(count - 1);
+        let handle = self.thumbs.0.borrow().base_handle.clone();
+        let offset = handle.offset();
+        let (shown, top, height) = (f32::from(offset.y), page as f32 * THUMB_ROW, f32::from(bounds.size.height));
+        let wanted = if top + shown < 0. {
+            -top
+        } else if top + THUMB_ROW + shown > height {
+            height - top - THUMB_ROW
+        } else {
+            shown
+        };
+        let wanted = wanted.clamp(-f32::from(handle.max_offset().y), 0.);
+        let moved = (wanted - shown).abs() > 0.5;
+        if moved {
+            handle.set_offset(point(offset.x, px(wanted)));
+            cx.notify();
+        }
+        let (view, id) = (cx.entity().downgrade(), cx.entity_id());
+        window
+            .spawn(cx, async move |cx| {
+                let at = |cx: &mut AsyncWindowContext| view.read_with(cx, |v, cx| v.row_point(id, page, cx)).ok().flatten();
+                if moved {
+                    cx.background_executor().timer(motion::MENU_AFTER_MOVE).await;
+                }
+                let Some(position) = at(cx) else { return };
+                let _ = cx.update(|window, cx| window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers: Modifiers::none() }), cx));
+                cx.background_executor().timer(motion::MENU_AFTER_MOVE).await;
+                if at(cx) != Some(position) {
+                    return;
+                }
+                let _ = cx.update(|window, cx| {
+                    window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Right, position, modifiers: Modifiers::none(), click_count: 1, first_mouse: false }), cx);
+                });
+            })
+            .detach();
     }
 
     fn scroll_thumbs(&mut self, step: f32) {
@@ -2442,7 +2614,7 @@ impl PdfView {
             self.drag_ticking = true;
             cx.spawn(async move |this, cx| {
                 loop {
-                    cx.background_executor().timer(DRAG_TICK).await;
+                    cx.background_executor().timer(motion::DRAG_TICK).await;
                     let go = this.update(cx, |v, cx| {
                         if v.drag_step == 0. || !cx.has_active_drag() {
                             v.drag_step = 0.;
@@ -2464,10 +2636,10 @@ impl PdfView {
         self.place_slot(cx);
     }
 
-    fn page_button(&self, id: &'static str, icon_name: &'static str, help: String, busy: bool, t: &Theme) -> Stateful<Div> {
+    fn page_button(&self, id: &'static str, icon_name: &'static str, help: String, disabled: bool, t: &Theme) -> Stateful<Div> {
         let base = div().id(id).size(px(control::S)).flex().items_center().justify_center().rounded(px(radius::SMALL)).tooltip(tip(help));
-        if busy {
-            base.opacity(tint::DISABLED).key_nav().child(icon(icon_name, iconsize::S, t.secondary))
+        if disabled {
+            base.opacity(tint::DISABLED).child(icon(icon_name, iconsize::S, t.secondary))
         } else {
             base.cursor_pointer().key_nav().soft(t.ink.opacity(0.08), radius::SMALL).child(icon(icon_name, iconsize::S, t.secondary))
         }
@@ -2475,93 +2647,123 @@ impl PdfView {
 
     fn page_bar(&self, cx: &mut Context<Self>, t: &Theme) -> Div {
         let bar = div().flex_none().h(px(control::SUBBAR)).flex().items_center().gap(px(space::XS)).px(px(space::S)).border_t_1().border_color(t.separator);
-        if let Some(why) = self.edit_block() {
-            return bar.child(icon("info", iconsize::S, t.secondary)).child(div().flex_1().min_w_0().child(caption(why, t).line_clamp(2)));
-        }
-        let busy = self.busy();
         let labels = self.page_labels(None);
-        let help = |a: ShortcutAction, label: String| if busy { tr("Wird gespeichert …") } else { format!("{label}{}", a.hint()) };
+        let help = |a: ShortcutAction, label: String| format!("{label}{}", a.hint());
         let me = cx.entity();
         let on = |button: Stateful<Div>, run: fn(&mut PdfView, &mut Context<PdfView>)| {
             let view = me.clone();
-            if busy { button } else { button.on_click(move |_, _, cx| view.update(cx, |v, cx| run(v, cx))) }
+            button.on_click(move |_, _, cx| view.update(cx, |v, cx| run(v, cx)))
         };
         let chosen = self.selected.len();
+        let whole = self.targets(None).len() >= self.page_count();
         let clear = {
             let view = me.clone();
-            self.page_button("pdf-pages-clear", "x", tr("Auswahl aufheben"), false, t).on_click(move |_, _, cx| view.update(cx, |v, cx| v.clear_page_selection(cx)))
+            self.page_button("pdf-pages-clear", "x", tr("Auswahl aufheben (Esc)"), false, t).on_click(move |_, _, cx| view.update(cx, |v, cx| v.clear_page_selection(cx)))
         };
-        bar.child(on(self.page_button("pdf-pages-left", "rotate-ccw", help(ShortcutAction::RotatePagesLeft, labels.left), busy, t), |v, cx| v.rotate_pages(None, false, cx)))
-            .child(on(self.page_button("pdf-pages-right", "rotate-cw", help(ShortcutAction::RotatePagesRight, labels.right), busy, t), |v, cx| v.rotate_pages(None, true, cx)))
-            .child(on(self.page_button("pdf-pages-delete", "trash-2", help(ShortcutAction::DeletePages, labels.delete), busy, t), |v, cx| v.delete_pages(None, cx)))
-            .child(on(self.page_button("pdf-pages-insert", "file-plus", help(ShortcutAction::InsertPdf, labels.insert), busy, t), |v, cx| v.choose_pdf(None, cx)))
+        let delete = if whole {
+            self.page_button("pdf-pages-delete", "trash-2", tr("Eine Seite muss bleiben"), true, t)
+        } else {
+            on(self.page_button("pdf-pages-delete", "trash-2", help(ShortcutAction::DeletePages, labels.delete), false, t), |v, cx| v.delete_pages(None, cx))
+        };
+        bar.child(on(self.page_button("pdf-pages-left", "rotate-ccw", help(ShortcutAction::RotatePagesLeft, labels.left), false, t), |v, cx| v.rotate_pages(None, false, cx)))
+            .child(on(self.page_button("pdf-pages-right", "rotate-cw", help(ShortcutAction::RotatePagesRight, labels.right), false, t), |v, cx| v.rotate_pages(None, true, cx)))
+            .child(delete)
+            .child(on(self.page_button("pdf-pages-insert", "file-plus", help(ShortcutAction::InsertPdf, labels.insert), false, t), |v, cx| v.choose_pdf(None, cx)))
             .child(div().flex_1())
-            .when(chosen > 0, |d| {
+            .when(chosen > 1, |d| {
                 d.child(div().min_w_0().truncate().font_features(tabular()).text_size(px(font::CAPTION)).text_color(t.secondary).child(trf("%lld ausgewählt", &[&chosen]))).child(clear)
             })
     }
 
-    /// The notice about a page change, or the sign that one is being written, over the pages.
-    fn page_status(&self, cx: &mut Context<Self>, t: &Theme) -> Option<AnyElement> {
-        let card: AnyElement = if let Some((title, body)) = self.page_notice.clone() {
+    /// The notice about a page change, and the sign that one is being written, over the pages.
+    fn page_status(&mut self, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Option<AnyElement> {
+        if self.hint && self.working.is_none() && !self.reloading {
+            self.hint = false;
+        }
+        let saving = self.working.is_some_and(|since| since.elapsed() >= SPINNER_AFTER) || self.hint;
+        if saving {
+            self.status_since.get_or_insert_with(Instant::now);
+            self.status_label = if self.hint {
+                tr("Einen Moment, die PDF wird noch gespeichert.")
+            } else {
+                progress_label(self.queue_total, self.queued.len()).unwrap_or_else(|| tr("Wird gespeichert …"))
+            };
+        }
+        let shown = saving || self.status_since.is_some_and(|since| since.elapsed() < motion::STATUS_MIN);
+        if shown && !saving {
+            window.request_animation_frame();
+        } else if !shown {
+            self.status_since = None;
+        }
+        let level = motion::follow("pdf-status", if shown { 1. } else { 0. }, motion::MEDIUM, window, cx);
+        let mut cards = Vec::new();
+        if let Some((title, body)) = self.page_notice.clone() {
             let me = cx.entity();
-            div()
-                .id("pdf-pages-notice")
-                .occlude()
-                .max_w(px(NOTICE_WIDTH))
-                .flex()
-                .items_start()
-                .gap(px(space::S))
-                .p(px(space::S))
-                .rounded(px(radius::INNER))
-                .bg(t.material)
-                .border_1()
-                .border_color(t.separator)
-                .shadow_md()
-                .child(icon("info", iconsize::M, t.secondary))
-                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).child(title)).child(caption(body, t)))
-                .child(
-                    div()
-                        .id("pdf-pages-notice-close")
-                        .flex_none()
-                        .size(px(control::S))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(radius::SMALL))
-                        .cursor_pointer()
-                        .key_nav()
-                        .soft(t.ink.opacity(0.08), radius::SMALL)
-                        .tooltip(tip(tr("Schließen")))
-                        .on_click(move |_, _, cx| {
-                            me.update(cx, |v, cx| {
-                                v.page_notice = None;
-                                cx.notify();
+            cards.push(
+                div()
+                    .id("pdf-pages-notice")
+                    .occlude()
+                    .max_w(px(pages::NOTICE_WIDTH))
+                    .flex()
+                    .items_start()
+                    .gap(px(space::S))
+                    .p(px(space::S))
+                    .rounded(px(radius::INNER))
+                    .bg(t.material)
+                    .border_1()
+                    .border_color(t.separator)
+                    .shadow_md()
+                    .child(icon("info", iconsize::M, t.secondary))
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).child(title)).children((!body.is_empty()).then(|| caption(body, t))))
+                    .child(
+                        div()
+                            .id("pdf-pages-notice-close")
+                            .flex_none()
+                            .size(px(control::S))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(radius::SMALL))
+                            .cursor_pointer()
+                            .key_nav()
+                            .soft(t.ink.opacity(0.08), radius::SMALL)
+                            .tooltip(tip(tr("Schließen")))
+                            .on_click(move |_, _, cx| {
+                                me.update(cx, |v, cx| {
+                                    v.page_notice = None;
+                                    cx.notify();
+                                })
                             })
-                        })
-                        .child(icon("x", iconsize::S, t.secondary)),
-                )
-                .into_any_element()
-        } else if self.working.is_some_and(|since| since.elapsed() >= SPINNER_AFTER) {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(space::S))
-                .px(px(space::M))
-                .py(px(space::XS))
-                .rounded_full()
-                .bg(t.material)
-                .border_1()
-                .border_color(t.separator)
-                .shadow_md()
-                .text_size(px(font::CALLOUT))
-                .child(motion::spinner(iconsize::S, t.secondary))
-                .child(tr("Wird gespeichert …"))
-                .into_any_element()
-        } else {
+                            .child(icon("x", iconsize::S, t.secondary)),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if level > 0. {
+            cards.push(
+                div()
+                    .id("pdf-pages-status")
+                    .opacity(level)
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S))
+                    .px(px(space::M))
+                    .py(px(space::XS))
+                    .rounded_full()
+                    .bg(t.material)
+                    .border_1()
+                    .border_color(t.separator)
+                    .shadow_md()
+                    .text_size(px(font::CALLOUT))
+                    .child(motion::spinner(iconsize::S, t.secondary))
+                    .child(self.status_label.clone())
+                    .into_any_element(),
+            );
+        }
+        if cards.is_empty() {
             return None;
-        };
-        Some(div().absolute().top(px(space::S)).left_0().right_0().px(px(space::L)).flex().justify_center().child(card).into_any_element())
+        }
+        Some(div().absolute().top(px(space::S)).left_0().right_0().px(px(space::L)).flex().flex_col().items_center().gap(px(space::S)).children(cards).into_any_element())
     }
 
     fn thumb_menu(menu: PopupMenu, page: usize, view: Entity<PdfView>, labels: PageLabels, up: bool, down: bool) -> PopupMenu {
@@ -2581,7 +2783,10 @@ impl PdfView {
 /// Finishes an edit whose viewer is gone, so the written file is still recorded or put back.
 fn settle_without_view(result: Result<Edited, Failure>, started: Started, cx: &mut App) {
     match result {
-        Ok(done) => super::state::act(cx, |l| l.finish_pdf_edit(done.written, &done.op, &started.sizes, done.inserted, started.label)),
+        Ok(done) => {
+            let label = edit_label(&done.op, &started.pages, done.inserted, started.sizes.len());
+            super::state::act(cx, |l| l.finish_pdf_edit(done.written, &done.op, &started.sizes, done.inserted, label));
+        }
         Err(Failure::Edit(e)) => {
             let (title, body) = e.describe();
             super::state::act(cx, |l| l.last_error = Some(format!("{title}: {body}")));
@@ -2590,13 +2795,18 @@ fn settle_without_view(result: Result<Edited, Failure>, started: Started, cx: &m
     }
 }
 
-fn edit_label(op: &PageOp) -> String {
-    let one = |pages: &[usize]| pages.len() == 1;
+/// The name of a change in the history: the page it acted on, or how many pages.
+fn edit_label(op: &PageOp, pages: &[usize], inserted: usize, count: usize) -> String {
+    let named = |one: &str, many: &str, pages: &[usize]| match pages {
+        [page] => trf(one, &[&(page + 1)]),
+        _ => trf(many, &[&pages.len()]),
+    };
     match op {
-        PageOp::Rotate { pages, .. } => if one(pages) { tr("Seite gedreht") } else { tr("Seiten gedreht") },
-        PageOp::Delete(pages) => if one(pages) { tr("Seite gelöscht") } else { tr("Seiten gelöscht") },
-        PageOp::Move { pages, .. } => if one(pages) { tr("Seite verschoben") } else { tr("Seiten verschoben") },
-        PageOp::Insert { .. } => tr("PDF eingefügt"),
+        PageOp::Rotate { .. } => named("Seite %lld gedreht", "%lld Seiten gedreht", pages),
+        PageOp::Delete(_) => named("Seite %lld gelöscht", "%lld Seiten gelöscht", pages),
+        PageOp::Move { .. } => named("Seite %lld verschoben", "%lld Seiten verschoben", pages),
+        PageOp::Insert { at, .. } if inserted == 1 => trf("Seite %lld eingefügt", &[&((*at).min(count) + 1)]),
+        PageOp::Insert { .. } => trf("%lld Seiten eingefügt", &[&inserted]),
     }
 }
 
@@ -2803,7 +3013,7 @@ impl Render for PdfView {
                                 v.zoom_by(factor, Some(at), cx);
                             })
                         }))
-                        .children(self.page_status(cx, &t))
+                        .children(self.page_status(window, cx, &t))
                         .children(badge),
                 ).children(floated),
             )
@@ -2861,7 +3071,7 @@ fn stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ShortcutAction, follow_edit, is_mark_key, is_plain, is_shortcut, new_index};
+    use super::{ShortcutAction, edit_label, follow_edit, gap_after, is_mark_key, is_plain, is_shortcut, new_index, page_extent, progress_label};
     use crate::core::pdf_edit::PageOp;
     use gpui_kit::Keystroke;
 
@@ -2919,5 +3129,50 @@ mod tests {
         assert!(is_mark_key(&h));
         assert!(!is_mark_key(&Keystroke::parse("g").expect("key")));
         assert!(!is_mark_key(&Keystroke::parse("shift-h").expect("key")));
+    }
+
+    #[test]
+    fn a_waiting_slot_follows_the_edit_that_lands_first() {
+        let delete = PageOp::Delete(vec![1, 2]);
+        assert_eq!(gap_after(&delete, 6, 0, 0), 0);
+        assert_eq!(gap_after(&delete, 6, 0, 2), 1);
+        assert_eq!(gap_after(&delete, 6, 0, 4), 2);
+        assert_eq!(gap_after(&delete, 6, 0, 6), 4);
+        let insert = PageOp::Insert { at: 2, pdf: Vec::new() };
+        assert_eq!(gap_after(&insert, 4, 3, 1), 1);
+        assert_eq!(gap_after(&insert, 4, 3, 2), 5);
+        assert_eq!(gap_after(&insert, 4, 3, 4), 7);
+        let moved = PageOp::Move { pages: vec![1, 2], to: 3 };
+        assert_eq!(gap_after(&moved, 6, 0, 4), 2);
+        assert_eq!(gap_after(&moved, 6, 0, 6), 6);
+        assert_eq!(gap_after(&PageOp::Rotate { pages: vec![0], clockwise: true }, 4, 0, 3), 3);
+    }
+
+    #[test]
+    fn the_fit_ignores_a_single_odd_page() {
+        let (widest, fit) = page_extent(&[(100., 200.), (100., 200.), (200., 100.), (100., 200.)]);
+        assert_eq!(widest, (200., 200.));
+        assert_eq!(fit, (100., 200.));
+        assert_eq!(page_extent(&[]), ((1., 1.), (1., 1.)));
+    }
+
+    #[test]
+    fn labels_name_the_page_or_count_the_pages() {
+        let turn = PageOp::Rotate { pages: vec![2], clockwise: true };
+        assert_eq!(edit_label(&turn, &[2], 0, 6), "Seite 3 gedreht");
+        assert_eq!(edit_label(&turn, &[0, 2], 0, 6), "2 Seiten gedreht");
+        assert_eq!(edit_label(&PageOp::Delete(vec![2]), &[2], 0, 6), "Seite 3 gelöscht");
+        assert_eq!(edit_label(&PageOp::Move { pages: vec![1, 2], to: 3 }, &[1, 2], 0, 6), "2 Seiten verschoben");
+        let insert = PageOp::Insert { at: 2, pdf: Vec::new() };
+        assert_eq!(edit_label(&insert, &[], 2, 6), "2 Seiten eingefügt");
+        assert_eq!(edit_label(&insert, &[], 1, 6), "Seite 3 eingefügt");
+    }
+
+    #[test]
+    fn the_queue_counts_only_when_several_wait() {
+        assert_eq!(progress_label(1, 0), None);
+        assert_eq!(progress_label(0, 0), None);
+        assert_eq!(progress_label(3, 2).as_deref(), Some("PDF 1 von 3"));
+        assert_eq!(progress_label(3, 0).as_deref(), Some("PDF 3 von 3"));
     }
 }

@@ -144,6 +144,10 @@ pub mod tint {
 pub mod pages {
     /// The line that shows where dragged pages land.
     pub const DROP_LINE: f32 = 2.;
+    /// The widest a notice over the pages grows.
+    pub const NOTICE_WIDTH: f32 = 360.;
+    /// Half the height of the chip that follows dragged pages, so the pointer is level with its middle.
+    pub const CHIP_HALF: f32 = 16.;
 }
 
 /// The fill a control gets while the keyboard has the focus.

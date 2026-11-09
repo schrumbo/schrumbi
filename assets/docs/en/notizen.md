@@ -53,7 +53,7 @@ Edit in the default app: ⋯ → {ui:Mit Standard-App öffnen}. When it saves, S
 
 ## PDFs
 
-Highlight and arrange pages, in the file itself and only for PDFs.
+Highlight and move pages, in the file itself and only for PDFs.
 
 | Shortcut | Effect |
 |---|---|
@@ -70,21 +70,22 @@ On the left in {ui:Seiten}. A click selects and jumps, Ctrl plus click (Mac: ⌘
 
 | Command | Shortcut |
 |---|---|
-| {ui:Seite links drehen} | {key:rotatePagesLeft} |
-| {ui:Seite rechts drehen} | {key:rotatePagesRight} |
-| {ui:Seite nach oben} | {key:movePagesUp} |
-| {ui:Seite nach unten} | {key:movePagesDown} |
-| {ui:Seite löschen} | {key:deletePages} or {key:delete} in the page list |
+| {ui:Seiten links drehen} | {key:rotatePagesLeft} |
+| {ui:Seiten rechts drehen} | {key:rotatePagesRight} |
+| {ui:Seiten nach oben verschieben} | {key:movePagesUp} |
+| {ui:Seiten nach unten verschieben} | {key:movePagesDown} |
+| {ui:Seiten löschen} | {key:deletePages} or {key:delete} in the sidebar |
 | {ui:Seiten aus PDF einfügen …} | {key:insertPdf} |
 
-- The commands say how many pages they act on. The bar under the list counts the selection, the cross clears it.
-- In the list: {key:up} and {key:down} change the page, {key:shift-up} and {key:shift-down} extend the selection, {key:cmd-a} selects all, {key:shift-f10} opens the menu.
+- The commands name the page or say how many pages they act on. From two selected pages on, the bar under the list counts along, the cross clears the selection.
+- {key:rotatePagesLeft}, {key:rotatePagesRight} and {key:insertPdf} only work in the sidebar, the other shortcuts and the command palette everywhere.
+- In the sidebar: {key:up} and {key:down} change the page, {key:home} and {key:end} go to the first and last, {key:pageup} and {key:pagedown} page through, {key:shift-up}, {key:shift-down}, {key:shift-home}, {key:shift-end}, {key:shift-pageup} and {key:shift-pagedown} extend the selection, {key:cmd-a} selects all, {key:shift-f10} opens the menu.
 - Drag pages, the line shows where they land. {key:escape} cancels the drag.
-- Drag PDFs from the file manager onto the list to insert them one after another at the line, each as its own step for {key:Undo}.
+- Drag PDFs from the file manager onto the sidebar to insert them one after another at the line, each as its own step for {key:Undo}. While a PDF is being saved, more wait; {key:escape} drops the rest.
 - Right-clicking a page shows the same commands.
 - A notice goes away with {key:escape}.
 - The file really changes. {key:Undo} and {key:Redo} restore it byte for byte, and the highlights stay with their text.
-- The last page cannot be deleted.
+- The last page cannot be deleted. Files that are not PDFs are skipped.
 
 ````example Link a page
 ![[Skript.pdf#page=3]]

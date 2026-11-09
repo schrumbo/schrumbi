@@ -63,8 +63,8 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Markieren} | {key:markText} |
 | {ui:Seiten links drehen} | {key:rotatePagesLeft} |
 | {ui:Seiten rechts drehen} | {key:rotatePagesRight} |
-| {ui:Seiten nach oben schieben} | {key:movePagesUp} |
-| {ui:Seiten nach unten schieben} | {key:movePagesDown} |
+| {ui:Seiten nach oben verschieben} | {key:movePagesUp} |
+| {ui:Seiten nach unten verschieben} | {key:movePagesDown} |
 | {ui:Seiten löschen} | {key:deletePages} |
 | {ui:Seiten aus PDF einfügen …} | {key:insertPdf} |
 

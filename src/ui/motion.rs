@@ -18,6 +18,15 @@ pub const SLOW: Duration = Duration::from_millis(240);
 /// How long the offer to take back a settings change stays.
 pub const NOTICE: Duration = Duration::from_secs(8);
 
+/// How long the sign that a PDF is being written stays once it showed, so it does not flicker.
+pub const STATUS_MIN: Duration = Duration::from_millis(400);
+
+/// How long the page list waits for a frame after it moved a row into view, before it opens that row's menu.
+pub const MENU_AFTER_MOVE: Duration = Duration::from_millis(40);
+
+/// How often a page list scrolls while a dragged item rests at its edge.
+pub const DRAG_TICK: Duration = Duration::from_millis(16);
+
 /// How long a section found by search stays lit.
 pub const FLASH: Duration = Duration::from_millis(1400);
 
