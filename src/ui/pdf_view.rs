@@ -373,11 +373,15 @@ fn gap_after(op: &PageOp, count: usize, inserted: usize, gap: usize) -> usize {
 }
 
 /// The widest page, and the page size a fit is measured against: the median, so one odd page does not rescale the document.
-fn content_width_for(fitted: bool, widest: f32, scale: f32, view: f32) -> f32 {
-    if fitted {
-        view
+fn content_width_for(widest: f32, scale: f32, view: f32) -> f32 {
+    (widest * scale + PADDING * 2.).max(view)
+}
+
+fn page_left(width: f32, view: f32) -> f32 {
+    if width + PADDING * 2. <= view {
+        (view - width) / 2.
     } else {
-        (widest * scale + PADDING * 2.).max(view)
+        PADDING
     }
 }
 
@@ -427,7 +431,6 @@ struct Geometry {
     total: f32,
     content_width: f32,
     view: (f32, f32),
-    fitted: bool,
 }
 
 struct Cached {
@@ -905,7 +908,7 @@ impl PdfView {
     fn page_rect(&self, page: usize) -> (f32, f32, f32, f32) {
         let (w, h) = self.sizes[page];
         let (w, h) = (w * self.geo.scale, h * self.geo.scale);
-        ((self.geo.content_width - w) / 2., self.geo.tops[page], w, h)
+        (page_left(w, self.geo.view.0), self.geo.tops[page], w, h)
     }
 
     /// The page whose area contains a vertical position in the content.
@@ -941,8 +944,7 @@ impl PdfView {
 
     fn update_geometry(&mut self, view: (f32, f32)) {
         let scale = self.scale_for(view).clamp(0.05, MAX_SCALE);
-        let fitted = !matches!(self.fit, Fit::Scale(_));
-        if !self.geo.tops.is_empty() && (self.geo.scale - scale).abs() < 0.0005 && self.geo.view == view && self.geo.fitted == fitted {
+        if !self.geo.tops.is_empty() && (self.geo.scale - scale).abs() < 0.0005 && self.geo.view == view {
             return;
         }
         let anchor = self.pending.take().or_else(|| {
@@ -955,7 +957,7 @@ impl PdfView {
             tops.push(top);
             top += h * scale + GAP;
         }
-        self.geo = Geometry { scale, tops, total: top - GAP + PADDING, content_width: content_width_for(fitted, self.max_size.0, scale, view.0), view, fitted };
+        self.geo = Geometry { scale, tops, total: top - GAP + PADDING, content_width: content_width_for(self.max_size.0, scale, view.0), view };
         if let Some(a) = anchor {
             self.apply_anchor(a);
         }
@@ -1208,7 +1210,8 @@ impl PdfView {
     }
 
     fn jump_to(&mut self, page: usize, cx: &mut Context<Self>) {
-        self.pending = Some(Anchor { page, x: 0., y: 0., view_x: 0., view_y: PADDING });
+        let view_x = self.sizes.get(page).map_or(0., |s| page_left(s.0 * self.geo.scale, self.geo.view.0));
+        self.pending = Some(Anchor { page, x: 0., y: 0., view_x, view_y: PADDING });
         self.apply_pending();
         cx.notify();
     }
@@ -1729,7 +1732,7 @@ impl PdfView {
         if !self.geo.tops.is_empty() && page < self.sizes.len() {
             let (_, _, _, h) = self.page_rect(page);
             let (ox, _) = self.offset();
-            self.pending = Some(Anchor { page, x: 0., y: r[1] * self.geo.scale / h.max(1.), view_x: ox + (self.geo.content_width - self.sizes[page].0 * self.geo.scale) / 2., view_y: self.geo.view.1 * 0.3 });
+            self.pending = Some(Anchor { page, x: 0., y: r[1] * self.geo.scale / h.max(1.), view_x: ox + self.page_rect(page).0, view_y: self.geo.view.1 * 0.3 });
             self.apply_pending();
         }
         cx.notify();
@@ -2131,7 +2134,7 @@ impl PdfView {
             let y = top + r.y * self.geo.scale;
             let (ox, oy) = self.offset();
             if y + oy < 0. || y + oy + r.h * self.geo.scale > self.geo.view.1 {
-                self.pending = Some(Anchor { page, x: 0., y: (y - top) / h.max(1.), view_x: ox + (self.geo.content_width - self.sizes[page].0 * self.geo.scale) / 2., view_y: self.geo.view.1 * 0.3 });
+                self.pending = Some(Anchor { page, x: 0., y: (y - top) / h.max(1.), view_x: ox + self.page_rect(page).0, view_y: self.geo.view.1 * 0.3 });
                 self.apply_pending();
             }
         }
@@ -4474,7 +4477,7 @@ fn stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PADDING, content_width_for, ink_width, Draft, InkPaint, NoteTarget, badge_x, edge_crossing, ShortcutAction, TOOLS, Tool, clamp_to_page, edit_label, erasable, first_line, follow_edit, gap_after, is_drawing, is_mark_key, is_pin, is_plain, is_shortcut, left_out_title, new_index, note_change, page_extent, progress_label, push_point, tint_map};
+    use super::{PADDING, content_width_for, page_left, ink_width, Draft, InkPaint, NoteTarget, badge_x, edge_crossing, ShortcutAction, TOOLS, Tool, clamp_to_page, edit_label, erasable, first_line, follow_edit, gap_after, is_drawing, is_mark_key, is_pin, is_plain, is_shortcut, left_out_title, new_index, note_change, page_extent, progress_label, push_point, tint_map};
     use crate::core::highlights::{Highlight, HighlightPart, InkLine, Pin};
     use crate::core::pdf_edit::PageOp;
     use crate::ui::theme::annot;
@@ -4556,10 +4559,17 @@ mod tests {
     }
 
     #[test]
-    fn a_fitted_view_centres_its_pages_and_a_fixed_zoom_scrolls_to_the_widest() {
-        assert_eq!(content_width_for(true, 842., 1., 635.), 635.);
-        assert_eq!(content_width_for(false, 842., 1., 635.), 842. + PADDING * 2.);
-        assert_eq!(content_width_for(false, 100., 1., 635.), 635.);
+    fn a_page_twice_the_median_is_fully_reachable_by_scrolling() {
+        let (widest, fit) = page_extent(&[(300., 400.), (300., 400.), (600., 400.), (300., 400.), (300., 400.)]);
+        let view = 635.;
+        let scale = (view - PADDING * 2.) / fit.0;
+        let content = content_width_for(widest.0, scale, view);
+        let wide = widest.0 * scale;
+        assert_eq!(page_left(wide, view), PADDING);
+        assert!(page_left(wide, view) + wide + PADDING <= content + 0.001);
+        let narrow = fit.0 * scale;
+        assert_eq!(page_left(narrow, view), (view - narrow) / 2.);
+        assert_eq!(content_width_for(100., 1., view), view);
     }
 
     #[test]
