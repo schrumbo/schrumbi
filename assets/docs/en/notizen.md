@@ -59,7 +59,7 @@ Highlight and move pages, in the file itself and only for PDFs.
 |---|---|
 | Select text, {key:markText} | Highlight in the color you chose last |
 | Color in the bar | Colors the highlight, an existing one too |
-| Click a highlight, {key:delete} | Remove. {ui:Markierung entfernen} works with the mouse too |
+| Click a highlight, {key:delete} | Remove. {ui:Markierung löschen} works with the mouse too |
 | {key:Undo} | Takes back highlighting and removing |
 
 Highlighting the same passage again recolors it instead of doubling it.
@@ -78,6 +78,8 @@ Highlighting the same passage again recolors it instead of doubling it.
 - While the PDF loads or saves, and when the folder cannot be written, the tools are grey. The tooltip says why.
 - The eraser deletes only drawings, never highlights or notes.
 - Click a drawing, {key:delete} removes it.
+- A stroke that leaves the page ends at the edge. Thin strokes and dots are at least two pixels wide.
+- Colors, width and {ui:Auswahl} are also in the command palette, the search word draw finds them.
 
 ### Notes
 
@@ -85,13 +87,16 @@ Highlighting the same passage again recolors it instead of doubling it.
 |---|---|
 | {key:noteTool}, click on the page | {ui:Notiz setzen}: a note at that spot |
 | {key:noteTool}, then {key:return} | A note in the middle of the visible page |
+| Select text, {key:noteOnSelection} or {ui:Notiz hinzufügen} in the bar | Highlight and note in one step |
 | Click a highlight, {ui:Notiz hinzufügen} in the bar | A note on the highlight |
 | Click a note | Edit |
 | {ui:Speichern} or {key:cmd-return} | Save. A click outside saves too |
 | {key:escape} | Discard |
 
 - An empty note places nothing. Emptying an existing note deletes it, the highlight stays. {ui:Notiz löschen} only exists for stored notes.
+- With a new pin, a pale pin shows the spot while the note is open. Under the field it says how to save or discard.
 - A note that is still open when you close the PDF is saved.
+- A note on text shows as a small symbol left of the first line, never on the text.
 - Everything is also listed in the {ui:Marker} tab, a click jumps there. {key:up} and {key:down} change the row, {key:return} jumps, {key:delete} removes.
 
 ### Export with marks

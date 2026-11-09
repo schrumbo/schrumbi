@@ -187,6 +187,19 @@ pub mod annot {
     pub const HIT_ROW: f32 = 0.15;
     /// A row of the marker list, with its slot.
     pub const MARK_ROW: f32 = 88.;
+    /// The space between a passage badge and the text it belongs to.
+    pub const BADGE_GAP: f32 = 2.;
+    /// A pin whose note is still being written, before it is placed.
+    pub const GHOST: f32 = 0.55;
+    /// How far the flash around a revealed mark reaches past it, and the least it measures, in screen pixels.
+    pub const FLASH_PAD: f32 = 12.;
+    pub const FLASH_MIN: f32 = 32.;
+    /// The fill of that flash.
+    pub const FLASH_TINT: f32 = 0.2;
+    /// The edge of a pen color swatch in the dark theme, where black needs to be told from the ground.
+    pub const SWATCH_EDGE_DARK: f32 = 0.5;
+    /// The least a stroke is drawn wide, in screen pixels.
+    pub const INK_MIN: f32 = 2.;
 }
 
 /// Measures of the page list of a PDF.

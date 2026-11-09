@@ -71,6 +71,7 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Stift} | {key:penTool} |
 | {ui:Radierer} | {key:eraserTool} |
 | {ui:Notiz setzen} | {key:noteTool} |
+| {ui:Notiz zur Auswahl} | {key:noteOnSelection} |
 | {ui:Mit Markierungen exportieren} | {key:exportMarkedPdf} |
 
 ## Editor

@@ -1694,5 +1694,15 @@
   "Mit dem Stift oben zeichnest du.": "Use the pen above to draw.",
   "Mit %@ setzt du eine Notiz.": "Press %@ to place a note.",
   "Mit dem Notiz-Werkzeug oben setzt du eine Notiz.": "Use the note tool above to place a note.",
-  "Speichern": "Save"
+  "Speichern": "Save",
+  "Markiert mit Notiz": "Highlighted with note",
+  "Markierung löschen": "Delete highlight",
+  "%@ speichert · Esc verwirft": "%@ saves · Esc discards",
+  "Stiftfarbe: %@": "Pen color: %@",
+  "Notiz zur Auswahl": "Note on selection",
+  "zeichnen malen schreiben": "draw paint write",
+  "zeichnen malen schreiben stift": "draw paint write pen",
+  "löschen wegmachen": "delete wipe",
+  "kommentar anmerkung": "comment annotation",
+  "zeigen markieren zeiger werkzeug": "pointer select tool"
 }

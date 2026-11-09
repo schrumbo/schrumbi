@@ -69,6 +69,7 @@ pub enum ShortcutAction {
     NoteTool,
     ExportMarkedPdf,
     PageList,
+    NoteOnSelection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,7 +104,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 63] = [
+    pub const ALL: [ShortcutAction; 64] = [
         Self::GoToday,
         Self::GoGrid,
         Self::GoRecord,
@@ -167,6 +168,7 @@ impl ShortcutAction {
         Self::NoteTool,
         Self::ExportMarkedPdf,
         Self::PageList,
+        Self::NoteOnSelection,
     ];
 
     /// Storage key, matching the Swift app's raw values.
@@ -235,6 +237,7 @@ impl ShortcutAction {
             Self::NoteTool => "noteTool",
             Self::ExportMarkedPdf => "exportMarkedPdf",
             Self::PageList => "pageList",
+            Self::NoteOnSelection => "noteOnSelection",
         }
     }
 
@@ -251,7 +254,7 @@ impl ShortcutAction {
             Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::GoModule1 | Self::GoModule2 | Self::GoModule3 | Self::GoBack => Group::Navigation,
             Self::ShowGraph | Self::ToggleFullscreen => Group::View,
             Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::OpenOtherWorkspace | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::Refresh => Group::General,
-            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote | Self::ToggleLive | Self::MarkText | Self::RotatePagesLeft | Self::RotatePagesRight | Self::MovePagesUp | Self::MovePagesDown | Self::DeletePages | Self::InsertPdf | Self::PenTool | Self::EraserTool | Self::NoteTool | Self::ExportMarkedPdf | Self::PageList => Group::Documents,
+            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote | Self::ToggleLive | Self::MarkText | Self::RotatePagesLeft | Self::RotatePagesRight | Self::MovePagesUp | Self::MovePagesDown | Self::DeletePages | Self::InsertPdf | Self::PenTool | Self::EraserTool | Self::NoteTool | Self::ExportMarkedPdf | Self::PageList | Self::NoteOnSelection => Group::Documents,
             _ => Group::Editor,
         }
     }
@@ -334,6 +337,7 @@ impl ShortcutAction {
             Self::NoteTool => "Notiz setzen",
             Self::ExportMarkedPdf => "Mit Markierungen exportieren",
             Self::PageList => "Seitenliste ein-/ausblenden",
+            Self::NoteOnSelection => "Notiz zur Auswahl",
         })
     }
 
@@ -420,6 +424,7 @@ impl ShortcutAction {
             Self::NoteTool => s("n", false, false, false, false),
             Self::ExportMarkedPdf => s("m", true, true, false, false),
             Self::PageList => s("b", true, true, false, false),
+            Self::NoteOnSelection => s("n", false, true, false, false),
         })
     }
 

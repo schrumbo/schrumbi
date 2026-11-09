@@ -71,6 +71,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Stift} | {key:penTool} |
 | {ui:Radierer} | {key:eraserTool} |
 | {ui:Notiz setzen} | {key:noteTool} |
+| {ui:Notiz zur Auswahl} | {key:noteOnSelection} |
 | {ui:Mit Markierungen exportieren} | {key:exportMarkedPdf} |
 
 ## Editor

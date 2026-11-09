@@ -33,6 +33,7 @@ struct Command {
     icon: &'static str,
     keys: Option<String>,
     run: Run,
+    aliases: String,
 }
 
 /// A command waiting for the open note to get the keyboard back.
@@ -66,7 +67,8 @@ fn keys(action: S) -> Option<String> {
 /// Everything the app can do right now.
 fn commands(cx: &App) -> Vec<Command> {
     let mut list = Vec::new();
-    let mut add = |group: &str, label: String, icon: &'static str, keys: Option<String>, run: Run| list.push(Command { label, group: group.to_string(), icon, keys, run });
+    let mut extra: Vec<Command> = Vec::new();
+    let mut add = |group: &str, label: String, icon: &'static str, keys: Option<String>, run: Run| list.push(Command { label, group: group.to_string(), icon, keys, run, aliases: String::new() });
     let (go, new, file, view, edit, general, cards) = (tr("Gehe zu"), tr("Neu"), tr("Ablage"), tr("Darstellung"), tr("Bearbeiten"), tr("Schrumbi"), tr("Karten"));
     let (git, conflicts) = (super::sync::enabled_here(cx), !super::sync::get(cx).conflicts.is_empty());
     let in_document = state::read(cx, |l| matches!(l.route(), Route::Doc(_)));
@@ -215,9 +217,17 @@ fn commands(cx: &App) -> Vec<Command> {
         for (action, icon_name, run) in pages {
             add(&edit, action.label(), icon_name, keys(action), Run::NoteAction(run));
         }
-        let tools: [(S, &'static str, Box<dyn Action>); 3] = [(S::PenTool, "pencil", Box::new(p::PenTool)), (S::EraserTool, "eraser", Box::new(p::EraserTool)), (S::NoteTool, "sticky-note", Box::new(p::NoteTool))];
-        for (action, icon_name, run) in tools {
-            add(&edit, action.label(), icon_name, keys(action), Run::NoteAction(run));
+        add(&edit, S::NoteOnSelection.label(), "sticky-note", keys(S::NoteOnSelection), Run::NoteAction(Box::new(p::NoteOnSelection)));
+        let tools: [(S, &'static str, Box<dyn Action>, String); 3] = [
+            (S::PenTool, "pencil", Box::new(p::PenTool), tr("zeichnen malen schreiben")),
+            (S::EraserTool, "eraser", Box::new(p::EraserTool), tr("löschen wegmachen")),
+            (S::NoteTool, "sticky-note", Box::new(p::NoteTool), tr("kommentar anmerkung")),
+        ];
+        for (action, icon_name, run, aliases) in tools {
+            extra.push(Command { label: action.label(), group: edit.clone(), icon: icon_name, keys: keys(action), run: Run::NoteAction(run), aliases });
+        }
+        for (label, aliases, run) in p::pen_commands() {
+            extra.push(Command { label, group: edit.clone(), icon: "pencil", keys: None, run: Run::NoteAction(run), aliases });
         }
         add(&file, S::ExportMarkedPdf.label(), "download", keys(S::ExportMarkedPdf), Run::NoteAction(Box::new(p::ExportMarkedPdf)));
         add(&view, S::PageList.label(), "gallery-vertical-end", keys(S::PageList), Run::NoteAction(Box::new(p::TogglePageList)));
@@ -318,6 +328,7 @@ fn commands(cx: &App) -> Vec<Command> {
     add(&general, tr("Tastenkürzel anzeigen"), "keyboard", Some(fixed_keys("/")), Run::Action(Box::new(app::ShowShortcuts)));
     add(&general, tr("Nach Updates suchen…"), "download", None, Run::Action(Box::new(app::CheckForUpdates)));
     add(&general, tr("Über Schrumbi"), "info", None, Run::Action(Box::new(app::About)));
+    list.extend(extra);
     list
 }
 
@@ -326,15 +337,15 @@ fn fold(s: &str) -> String {
 }
 
 /// How well `query` fits `label`: whole prefix first, then a word start, then anywhere. All words must occur.
-fn score(label: &str, group: &str, query: &str) -> Option<u32> {
-    let (label, group, query) = (fold(label), fold(group), fold(query));
+fn score(label: &str, group: &str, aliases: &str, query: &str) -> Option<u32> {
+    let (label, group, aliases, query) = (fold(label), fold(group), fold(aliases), fold(query));
     let mut total = 0;
     for term in query.split_whitespace() {
         total += if label.starts_with(term) {
             3
         } else if label.split([' ', '/', '-', '(']).any(|w| w.starts_with(term)) {
             2
-        } else if label.contains(term) || group.starts_with(term) {
+        } else if label.contains(term) || group.starts_with(term) || aliases.split_whitespace().any(|w| w.starts_with(term)) {
             1
         } else {
             return None;
@@ -372,7 +383,7 @@ impl Palette {
 
     fn matches(&self, cx: &App) -> Vec<usize> {
         let q = self.query.read(cx).value().to_string();
-        let mut found: Vec<(usize, u32)> = self.commands.iter().enumerate().filter_map(|(i, c)| score(&c.label, &c.group, &q).map(|s| (i, s))).collect();
+        let mut found: Vec<(usize, u32)> = self.commands.iter().enumerate().filter_map(|(i, c)| score(&c.label, &c.group, &c.aliases, &q).map(|s| (i, s))).collect();
         if q.trim().is_empty() {
             if let Some(recent) = cx.try_global::<Recent>() {
                 found.sort_by_key(|(i, _)| recent.0.iter().position(|l| *l == self.commands[*i].label).unwrap_or(usize::MAX));
