@@ -79,7 +79,7 @@ Dieselbe Stelle noch einmal markieren färbt sie um, statt sie zu doppeln.
 - Der Radierer löscht nur Zeichnungen, nie Markierungen oder Notizen.
 - Eine Zeichnung anklicken, {key:delete} entfernt sie.
 - Ein Strich, der die Seite verlässt, endet am Rand. Dünne Striche und Punkte sind mindestens zwei Pixel breit.
-- Farben, Dicke und {ui:Auswahl} stehen auch in der Befehlspalette, das Suchwort zeichnen findet sie.
+- Farben, Dicke und {ui:Auswahl} stehen auch in der Befehlspalette, das Suchwort zeichnen findet sie. Ein Kürzel dafür legst du in den Einstellungen fest, ab Werk haben sie keins.
 
 ### Notizen
 
@@ -95,7 +95,7 @@ Dieselbe Stelle noch einmal markieren färbt sie um, statt sie zu doppeln.
 
 - Eine leere Notiz setzt nichts. Leerst du eine vorhandene Notiz, ist sie gelöscht, die Markierung bleibt. {ui:Notiz löschen} gibt es nur bei gespeicherten Notizen.
 - Beim neuen Pin zeigt ein blasser Pin die Stelle, solange die Notiz offen ist. Unter dem Feld steht, wie du speicherst oder verwirfst.
-- Eine Notiz, die beim Schließen noch offen ist, wird gespeichert.
+- Eine Notiz, die noch offen ist, wird gespeichert: beim Schließen der PDF, vor einer Seitenänderung, beim Ordnerwechsel und beim Beenden.
 - Eine Notiz an Text steht als kleines Symbol links neben der ersten Zeile, nie auf dem Text.
 - Alles steht auch im Reiter {ui:Marker}, ein Klick springt dorthin. {key:up} und {key:down} wechseln die Zeile, {key:return} springt, {key:delete} entfernt.
 

@@ -70,6 +70,13 @@ pub enum ShortcutAction {
     ExportMarkedPdf,
     PageList,
     NoteOnSelection,
+    SelectTool,
+    InkBlack,
+    InkRed,
+    InkBlue,
+    InkGreen,
+    InkThin,
+    InkThick,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,7 +111,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 64] = [
+    pub const ALL: [ShortcutAction; 71] = [
         Self::GoToday,
         Self::GoGrid,
         Self::GoRecord,
@@ -169,6 +176,13 @@ impl ShortcutAction {
         Self::ExportMarkedPdf,
         Self::PageList,
         Self::NoteOnSelection,
+        Self::SelectTool,
+        Self::InkBlack,
+        Self::InkRed,
+        Self::InkBlue,
+        Self::InkGreen,
+        Self::InkThin,
+        Self::InkThick,
     ];
 
     /// Storage key, matching the Swift app's raw values.
@@ -238,6 +252,13 @@ impl ShortcutAction {
             Self::ExportMarkedPdf => "exportMarkedPdf",
             Self::PageList => "pageList",
             Self::NoteOnSelection => "noteOnSelection",
+            Self::SelectTool => "selectTool",
+            Self::InkBlack => "inkBlack",
+            Self::InkRed => "inkRed",
+            Self::InkBlue => "inkBlue",
+            Self::InkGreen => "inkGreen",
+            Self::InkThin => "inkThin",
+            Self::InkThick => "inkThick",
         }
     }
 
@@ -254,7 +275,7 @@ impl ShortcutAction {
             Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::GoModule1 | Self::GoModule2 | Self::GoModule3 | Self::GoBack => Group::Navigation,
             Self::ShowGraph | Self::ToggleFullscreen => Group::View,
             Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::OpenOtherWorkspace | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::Refresh => Group::General,
-            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote | Self::ToggleLive | Self::MarkText | Self::RotatePagesLeft | Self::RotatePagesRight | Self::MovePagesUp | Self::MovePagesDown | Self::DeletePages | Self::InsertPdf | Self::PenTool | Self::EraserTool | Self::NoteTool | Self::ExportMarkedPdf | Self::PageList | Self::NoteOnSelection => Group::Documents,
+            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote | Self::ToggleLive | Self::MarkText | Self::RotatePagesLeft | Self::RotatePagesRight | Self::MovePagesUp | Self::MovePagesDown | Self::DeletePages | Self::InsertPdf | Self::PenTool | Self::EraserTool | Self::NoteTool | Self::ExportMarkedPdf | Self::PageList | Self::NoteOnSelection | Self::SelectTool | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick => Group::Documents,
             _ => Group::Editor,
         }
     }
@@ -336,8 +357,15 @@ impl ShortcutAction {
             Self::EraserTool => "Radierer",
             Self::NoteTool => "Notiz setzen",
             Self::ExportMarkedPdf => "Mit Markierungen exportieren",
-            Self::PageList => "Seitenliste ein-/ausblenden",
+            Self::PageList => "PDF-Seiten ein-/ausblenden",
             Self::NoteOnSelection => "Notiz zur Auswahl",
+            Self::SelectTool => "Auswahl",
+            Self::InkBlack => "Stiftfarbe: Schwarz",
+            Self::InkRed => "Stiftfarbe: Rot",
+            Self::InkBlue => "Stiftfarbe: Blau",
+            Self::InkGreen => "Stiftfarbe: Grün",
+            Self::InkThin => "Strichstärke: Dünn",
+            Self::InkThick => "Strichstärke: Dick",
         })
     }
 
@@ -347,7 +375,7 @@ impl ShortcutAction {
     }
 
     fn default_on(self, os: Os) -> Option<Shortcut> {
-        if self == Self::ToggleComment {
+        if matches!(self, Self::ToggleComment | Self::SelectTool | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick) {
             return None;
         }
         if os != Os::Mac {
@@ -425,6 +453,7 @@ impl ShortcutAction {
             Self::ExportMarkedPdf => s("m", true, true, false, false),
             Self::PageList => s("b", true, true, false, false),
             Self::NoteOnSelection => s("n", false, true, false, false),
+            Self::SelectTool | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick => return None,
         })
     }
 

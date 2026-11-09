@@ -67,11 +67,18 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Seiten nach unten verschieben} | {key:movePagesDown} |
 | {ui:Seiten löschen} | {key:deletePages} |
 | {ui:Seiten aus PDF einfügen …} | {key:insertPdf} |
-| {ui:Seitenliste ein-/ausblenden} | {key:pageList} |
+| {ui:PDF-Seiten ein-/ausblenden} | {key:pageList} |
 | {ui:Stift} | {key:penTool} |
 | {ui:Radierer} | {key:eraserTool} |
 | {ui:Notiz setzen} | {key:noteTool} |
 | {ui:Notiz zur Auswahl} | {key:noteOnSelection} |
+| {ui:Auswahl} | {key:selectTool} |
+| {ui:Stiftfarbe: Schwarz} | {key:inkBlack} |
+| {ui:Stiftfarbe: Rot} | {key:inkRed} |
+| {ui:Stiftfarbe: Blau} | {key:inkBlue} |
+| {ui:Stiftfarbe: Grün} | {key:inkGreen} |
+| {ui:Strichstärke: Dünn} | {key:inkThin} |
+| {ui:Strichstärke: Dick} | {key:inkThick} |
 | {ui:Mit Markierungen exportieren} | {key:exportMarkedPdf} |
 
 ## Editor

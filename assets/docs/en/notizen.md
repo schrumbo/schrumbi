@@ -79,7 +79,7 @@ Highlighting the same passage again recolors it instead of doubling it.
 - The eraser deletes only drawings, never highlights or notes.
 - Click a drawing, {key:delete} removes it.
 - A stroke that leaves the page ends at the edge. Thin strokes and dots are at least two pixels wide.
-- Colors, width and {ui:Auswahl} are also in the command palette, the search word draw finds them.
+- Colors, width and {ui:Auswahl} are also in the command palette, the search word draw finds them. You set a shortcut for them in Settings, they ship without one.
 
 ### Notes
 
@@ -95,7 +95,7 @@ Highlighting the same passage again recolors it instead of doubling it.
 
 - An empty note places nothing. Emptying an existing note deletes it, the highlight stays. {ui:Notiz löschen} only exists for stored notes.
 - With a new pin, a pale pin shows the spot while the note is open. Under the field it says how to save or discard.
-- A note that is still open when you close the PDF is saved.
+- A note that is still open is saved: when you close the PDF, before a page change, when you switch folders and when you quit.
 - A note on text shows as a small symbol left of the first line, never on the text.
 - Everything is also listed in the {ui:Marker} tab, a click jumps there. {key:up} and {key:down} change the row, {key:return} jumps, {key:delete} removes.
 

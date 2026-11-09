@@ -226,8 +226,8 @@ fn commands(cx: &App) -> Vec<Command> {
         for (action, icon_name, run, aliases) in tools {
             extra.push(Command { label: action.label(), group: edit.clone(), icon: icon_name, keys: keys(action), run: Run::NoteAction(run), aliases });
         }
-        for (label, aliases, run) in p::pen_commands() {
-            extra.push(Command { label, group: edit.clone(), icon: "pencil", keys: None, run: Run::NoteAction(run), aliases });
+        for (action, aliases, run) in p::pen_commands() {
+            extra.push(Command { label: action.label(), group: edit.clone(), icon: "pencil", keys: keys(action), run: Run::NoteAction(run), aliases });
         }
         add(&file, S::ExportMarkedPdf.label(), "download", keys(S::ExportMarkedPdf), Run::NoteAction(Box::new(p::ExportMarkedPdf)));
         add(&view, S::PageList.label(), "gallery-vertical-end", keys(S::PageList), Run::NoteAction(Box::new(p::TogglePageList)));

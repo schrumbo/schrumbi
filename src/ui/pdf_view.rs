@@ -101,7 +101,7 @@ fn tool_button(id: &'static str, icon_name: &'static str, help: String, selected
         .justify_center()
         .rounded(px(radius::SMALL))
         .when(selected, |d| d.bg(t.accent.opacity(tint::SELECTED)))
-        .when(disabled, |d| d.opacity(tint::DISABLED))
+        .when(disabled, |d| d.opacity(tint::DISABLED).cursor(CursorStyle::OperationNotAllowed))
         .when(!disabled, |d| d.cursor_pointer().key_nav().soft(t.ink.opacity(tint::HOVER), radius::SMALL))
         .tooltip(tip(help))
         .child(icon(icon_name, iconsize::S, ink))
@@ -126,6 +126,11 @@ fn badge_face(size: f32, glyph: f32, active: bool, t: &Theme) -> Div {
 fn badge_x(rect: &[f32; 4], scale: f32, size: f32, room: f32) -> f32 {
     let left = rect[0] * scale - size - annot::BADGE_GAP;
     if left >= -room { left } else { (rect[0] + rect[2]) * scale + annot::BADGE_GAP }
+}
+
+/// Where the area that answers to the pointer starts across, for a badge at `x`: grown evenly, or only away from the text on the side `lean` names.
+fn frame_left(x: f32, size: f32, frame: f32, lean: f32) -> f32 {
+    x + (size - frame) * (1. - lean) / 2.
 }
 
 /// The point where a segment from a point on the page to one outside it crosses the page edge.
@@ -187,6 +192,15 @@ impl Tool {
         if self == pressed { Tool::Select } else { pressed }
     }
 }
+
+const PEN_KEYS: [(ShortcutAction, Option<usize>, Option<usize>); 6] = [
+    (ShortcutAction::InkBlack, Some(0), None),
+    (ShortcutAction::InkRed, Some(1), None),
+    (ShortcutAction::InkBlue, Some(2), None),
+    (ShortcutAction::InkGreen, Some(3), None),
+    (ShortcutAction::InkThin, None, Some(0)),
+    (ShortcutAction::InkThick, None, Some(1)),
+];
 
 const TOOLS: [(ShortcutAction, Tool); 3] = [(ShortcutAction::PenTool, Tool::Pen), (ShortcutAction::EraserTool, Tool::Eraser), (ShortcutAction::NoteTool, Tool::Note)];
 
@@ -1432,6 +1446,13 @@ impl PdfView {
         }
     }
 
+    /// Tells why marks cannot be written now: the notice, in the words of `marks_off`.
+    fn show_blocked(&mut self, cx: &mut Context<Self>) {
+        if let Some(why) = self.marks_off(cx) {
+            self.show_notice(tr("Das geht hier nicht"), why, cx);
+        }
+    }
+
     fn cancel_gesture(&mut self) {
         self.stroke = None;
         self.erasing = false;
@@ -1519,13 +1540,16 @@ impl PdfView {
     fn finish_stroke(&mut self, cx: &mut Context<Self>) {
         let Some(key) = self.marks_key.clone().filter(|_| self.stroke.is_some()) else { return };
         let Some(stroke) = self.stroke.take() else { return };
+        if super::state::read(cx, |l| l.pdf_blocked()) {
+            self.show_blocked(cx);
+            cx.notify();
+            return;
+        }
         let mut list = super::state::read(cx, |l| l.highlights_of(&key));
         let id = super::state::read(cx, |l| l.next_mark_id(&key, false));
         let line = InkLine { page: stroke.page, width: INK_WIDTHS[self.ink_width], points: stroke.points };
         list.push(Highlight { id, color: INK_COLORS[self.ink_color].0.to_string(), ink: vec![line], ..Default::default() });
-        if super::state::act(cx, |l| l.can_edit_pdf()) {
-            super::state::act(cx, |l| l.set_highlights_quiet(&key, list, tr("Gezeichnet")));
-        }
+        super::state::act(cx, |l| l.set_highlights_quiet(&key, list, tr("Gezeichnet")));
         cx.notify();
     }
 
@@ -1542,10 +1566,14 @@ impl PdfView {
         self.erasing = false;
         let gone = std::mem::take(&mut self.erased);
         let Some(key) = self.marks_key.clone().filter(|_| !gone.is_empty()) else { return };
-        let list: Vec<Highlight> = super::state::read(cx, |l| l.highlights_of(&key)).into_iter().filter(|h| !gone.contains(&h.id)).collect();
-        if super::state::act(cx, |l| l.can_edit_pdf()) {
-            super::state::act(cx, |l| l.set_highlights_quiet(&key, list, tr("Radiert")));
+        if super::state::read(cx, |l| l.pdf_blocked()) {
+            self.build_ink();
+            self.show_blocked(cx);
+            cx.notify();
+            return;
         }
+        let list: Vec<Highlight> = super::state::read(cx, |l| l.highlights_of(&key)).into_iter().filter(|h| !gone.contains(&h.id)).collect();
+        super::state::act(cx, |l| l.set_highlights_quiet(&key, list, tr("Radiert")));
         self.build_ink();
         cx.notify();
     }
@@ -1692,7 +1720,8 @@ impl PdfView {
             self.close_note(window, cx);
             return true;
         };
-        if !super::state::act(cx, |l| l.can_edit_pdf()) {
+        if super::state::read(cx, |l| l.pdf_blocked()) {
+            self.show_blocked(cx);
             return false;
         }
         self.close_note(window, cx);
@@ -1971,15 +2000,15 @@ impl PdfView {
     fn marks_panel(&mut self, cx: &mut Context<Self>, t: &Theme) -> AnyElement {
         if self.marks.is_empty() {
             let mark = match ShortcutAction::MarkText.active_shortcut() {
-                Some(k) => trf("Text auswählen und %@ drücken, um ihn zu markieren.", &[&k.display()]),
+                Some(k) => trf("Text auswählen und %@ drücken oder in der Leiste eine Farbe wählen, um ihn zu markieren.", &[&k.display()]),
                 None => tr("Text auswählen und eine Farbe in der Leiste wählen, um ihn zu markieren."),
             };
             let pen = match ShortcutAction::PenTool.active_shortcut() {
-                Some(k) => trf("Mit %@ zeichnest du.", &[&k.display()]),
+                Some(k) => trf("Mit %@ oder dem Stift oben zeichnest du.", &[&k.display()]),
                 None => tr("Mit dem Stift oben zeichnest du."),
             };
             let note = match ShortcutAction::NoteTool.active_shortcut() {
-                Some(k) => trf("Mit %@ setzt du eine Notiz.", &[&k.display()]),
+                Some(k) => trf("Mit %@ oder dem Notiz-Werkzeug oben setzt du eine Notiz.", &[&k.display()]),
                 None => tr("Mit dem Notiz-Werkzeug oben setzt du eine Notiz."),
             };
             return div().p(px(space::L)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(format!("{mark} {pen} {note}")).into_any_element();
@@ -2023,7 +2052,7 @@ impl PdfView {
                             div().text_size(px(font::CALLOUT)).line_clamp(2).text_ellipsis().child(h.text.clone()).into_any_element()
                         };
                         let note = (!pin && !h.note.is_empty()).then(|| div().text_size(px(font::CAPTION)).text_color(t.secondary).line_clamp(1).text_ellipsis().child(h.note.clone()));
-                        let remove_label = if pin { tr("Notiz löschen") } else if drawing { tr("Zeichnung entfernen") } else { tr("Markierung löschen") };
+                        let remove_label = if pin { tr("Notiz löschen") } else if drawing { tr("Zeichnung löschen") } else { tr("Markierung löschen") };
                         let row = div()
                             .id(("pdf-mark-row", id as usize))
                             .group("pdf-mark-row")
@@ -2321,6 +2350,7 @@ impl PdfView {
         let page_step = (self.geo.view.1 - LINE_STEP).max(LINE_STEP);
         let page_command = PAGE_COMMANDS.into_iter().find(|a| is_shortcut(*a, k)).filter(|a| listed || !is_plain(*a));
         let tool_key = TOOLS.into_iter().find(|(a, _)| is_shortcut(*a, k)).map(|(_, tool)| tool);
+        let pen_key = PEN_KEYS.into_iter().find(|(a, ..)| is_shortcut(*a, k));
         match key {
             "f" if command && !m.shift => self.open_search(window, cx),
             "g" if command => self.step_hit(if m.shift { -1 } else { 1 }, cx),
@@ -2329,6 +2359,16 @@ impl PdfView {
             _ if tool_key.is_some() => {
                 if let Some(tool) = tool_key.filter(|_| !e.is_held) {
                     self.press_tool(tool, window, cx);
+                }
+            }
+            _ if pen_key.is_some() => {
+                if let Some((_, color, width)) = pen_key.filter(|_| !e.is_held) {
+                    self.pick_pen(color, width, window, cx);
+                }
+            }
+            _ if is_shortcut(ShortcutAction::SelectTool, k) => {
+                if !e.is_held {
+                    self.set_tool(Tool::Select, window, cx);
                 }
             }
             _ if is_shortcut(ShortcutAction::ExportMarkedPdf, k) => {
@@ -2481,7 +2521,7 @@ impl PdfView {
             let Some(pin) = h.pin.filter(|p| p.x.is_finite() && p.y.is_finite()) else { continue };
             let (id, view) = (h.id, me.clone());
             let size = annot::PIN * scale;
-            el = el.child(self.note_badge(("pdf-pin", id as usize), pin.x * scale, pin.y * scale, size, annot::PIN_ICON * scale, &h.note, self.active_mark == Some(id), NoteTarget::Pin(id), view, t));
+            el = el.child(self.note_badge(("pdf-pin", id as usize), pin.x * scale, pin.y * scale, size, annot::PIN_ICON * scale, 0., &h.note, self.active_mark == Some(id), NoteTarget::Pin(id), view, t));
         }
         if let Some(NoteEditor { target: NoteTarget::NewPin { page: at, x, y }, .. }) = self.note.as_ref()
             && *at == page
@@ -2495,7 +2535,8 @@ impl PdfView {
             let (id, view) = (h.id, me.clone());
             let size = (annot::NOTE_BADGE * scale).max(annot::NOTE_BADGE * annot::NOTE_BADGE_MIN);
             let x = badge_x(r, scale, size, PADDING - space::XXS);
-            el = el.child(self.note_badge(("pdf-note-badge", id as usize), x, r[1] * scale, size, size * annot::BADGE_GLYPH, &h.note, self.active_mark == Some(id), NoteTarget::Passage(id), view, t));
+            let lean = if x < r[0] * scale { -1. } else { 1. };
+            el = el.child(self.note_badge(("pdf-note-badge", id as usize), x, r[1] * scale, size, size * annot::BADGE_GLYPH, lean, &h.note, self.active_mark == Some(id), NoteTarget::Passage(id), view, t));
         }
         if self.flash_level > 0.
             && let Some(h) = self.flash.and_then(|(id, _)| self.marks.iter().find(|h| h.id == id))
@@ -2523,8 +2564,8 @@ impl PdfView {
         el.into_any_element()
     }
 
-    /// A small yellow note icon on the page; a click opens the note it stands for. The icon grows with the zoom, the area that answers to the pointer never gets smaller than `annot::HIT`.
-    fn note_badge(&self, id: (&'static str, usize), x: f32, y: f32, size: f32, glyph: f32, note: &str, active: bool, target: NoteTarget, view: Entity<PdfView>, t: &Theme) -> Stateful<Div> {
+    /// A small yellow note icon on the page; a click opens the note it stands for. The icon grows with the zoom, the area that answers to the pointer never gets smaller than `annot::HIT`; `lean` is -1 or 1 when the text lies on one side and the area grows only the other way, 0 to grow evenly.
+    fn note_badge(&self, id: (&'static str, usize), x: f32, y: f32, size: f32, glyph: f32, lean: f32, note: &str, active: bool, target: NoteTarget, view: Entity<PdfView>, t: &Theme) -> Stateful<Div> {
         let ink = Theme::document(INK_COLORS[0].1);
         let select = self.tool == Tool::Select;
         let frame = size.max(annot::HIT);
@@ -2534,12 +2575,12 @@ impl PdfView {
         div()
             .id(id)
             .absolute()
-            .left(px(x + (size - frame) / 2.))
+            .left(px(frame_left(x, size, frame, lean)))
             .top(px(y + (size - frame) / 2.))
             .size(px(frame))
             .flex()
             .items_center()
-            .justify_center()
+            .map(|d| if lean < 0. { d.justify_end() } else if lean > 0. { d.justify_start() } else { d.justify_center() })
             .rounded(px(radius::SMALL))
             .when(select, |d| {
                 d.cursor_pointer().soft(ink.opacity(tint::HOVER), radius::SMALL).when(describe, |d| d.tooltip(tip(help))).on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -2684,7 +2725,7 @@ impl PdfView {
                     .soft(t.ink.opacity(tint::HOVER), control::S / 2.),
                 self.ink_color == i,
             )
-            .tooltip(tip(ink_name(name)))
+            .tooltip(tip(format!("{}{}", ink_name(name), PEN_KEYS[i].0.hint())))
             .on_key_down(arrow_keys(i == 0, false))
             .on_click(move |_, _, cx| {
                 pause_tooltips(cx);
@@ -2712,7 +2753,7 @@ impl PdfView {
                     .soft(t.ink.opacity(tint::HOVER), control::S / 2.),
                 self.ink_width == i,
             )
-            .tooltip(tip(trf("Strichstärke: %@", &[&label])))
+            .tooltip(tip(format!("{}{}", trf("Strichstärke: %@", &[&label]), PEN_KEYS[INK_COLORS.len() + i].0.hint())))
             .on_key_down(arrow_keys(false, slot == last))
             .on_click(move |_, _, cx| {
                 pause_tooltips(cx);
@@ -2785,7 +2826,7 @@ impl PdfView {
         let shown = self.panel_tab;
         let picks = self.navigator_picks();
         let icon_name = picks.iter().find(|(v, ..)| open && *v == shown).map_or("gallery-vertical-end", |(_, _, i)| *i);
-        Button::new("pdf-navigator").ghost().small().icon(menu_icon(icon_name)).selected(open).tooltip(format!("{}{}", tr("Seitenliste"), ShortcutAction::PageList.hint())).dropdown_menu(move |mut menu, _, _| {
+        Button::new("pdf-navigator").ghost().small().icon(menu_icon(icon_name)).selected(open).tooltip(format!("{}{}", tr("PDF-Seiten"), ShortcutAction::PageList.hint())).dropdown_menu(move |mut menu, _, _| {
             for (value, label, icon_name) in picks.iter().cloned() {
                 let v = view.clone();
                 menu = menu.item(PopupMenuItem::new(label).icon(menu_icon(icon_name)).checked(open && value == shown).on_click(move |_, window, cx| v.update(cx, |v, cx| v.navigate(value, window, cx))));
@@ -3758,6 +3799,8 @@ impl PdfView {
             self.status_label = if self.working.is_some() {
                 let progress = self.inserting.as_ref().and_then(|p| progress_label(p.total, p.total.saturating_sub(p.done.load(Ordering::Relaxed) + 1)));
                 progress.unwrap_or_else(|| tr("Wird gespeichert …"))
+            } else if super::state::read(cx, |l| l.pdf_blocked()) {
+                tr("Änderungen werden gerade nicht gespeichert.")
             } else {
                 tr("Einen Moment, die PDF wird geladen.")
             };
@@ -3917,9 +3960,28 @@ impl PdfView {
                                 .on_click(move |_, window, cx| delete.update(cx, |v, cx| v.delete_note(window, cx)))
                         }))
                         .child(div().flex_1().min_w_0().truncate().child(caption(trf("%@ speichert · Esc verwirft", &[&send]), t)))
-                        .child(Button::new("pdf-note-save").primary().small().label(tr("Speichern")).on_click(move |_, window, cx| {
-                            save.update(cx, |v, cx| v.save_note(window, cx));
-                        })),
+                        .child(
+                            div()
+                                .id("pdf-note-save")
+                                .h(px(control::S))
+                                .px(px(space::M))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(radius::CONTROL))
+                                .bg(t.accent)
+                                .text_color(t.on_accent)
+                                .text_size(px(font::CALLOUT))
+                                .font_weight(FontWeight::MEDIUM)
+                                .cursor_pointer()
+                                .key_nav()
+                                .soft(t.on_accent.opacity(tint::HOVER), radius::CONTROL)
+                                .on_key_down(arrow_keys(!stored, true))
+                                .on_click(move |_, window, cx| {
+                                    save.update(cx, |v, cx| v.save_note(window, cx));
+                                })
+                                .child(tr("Speichern")),
+                        ),
                 )
                 .into_any_element(),
         )
@@ -4271,13 +4333,17 @@ impl Render for PdfView {
 }
 
 /// What the palette offers for pens beyond the tool keys: a color, a width, and putting the pen down. Each with the words a user may search for.
-pub fn pen_commands() -> Vec<(String, String, Box<dyn Action>)> {
+pub fn pen_commands() -> Vec<(ShortcutAction, String, Box<dyn Action>)> {
     let words = tr("zeichnen malen schreiben stift");
-    let colors: [Box<dyn Action>; 4] = [Box::new(InkBlack), Box::new(InkRed), Box::new(InkBlue), Box::new(InkGreen)];
-    let mut list: Vec<(String, String, Box<dyn Action>)> = INK_COLORS.iter().zip(colors).map(|((name, _), action)| (trf("Stiftfarbe: %@", &[&ink_name(name)]), words.clone(), action)).collect();
-    list.push((trf("Strichstärke: %@", &[&tr("Dünn")]), words.clone(), Box::new(InkThin)));
-    list.push((trf("Strichstärke: %@", &[&tr("Dick")]), words, Box::new(InkThick)));
-    list.push((tr("Auswahl"), tr("zeigen markieren zeiger werkzeug"), Box::new(SelectTool)));
+    let mut list: Vec<(ShortcutAction, String, Box<dyn Action>)> = vec![
+        (ShortcutAction::InkBlack, words.clone(), Box::new(InkBlack)),
+        (ShortcutAction::InkRed, words.clone(), Box::new(InkRed)),
+        (ShortcutAction::InkBlue, words.clone(), Box::new(InkBlue)),
+        (ShortcutAction::InkGreen, words.clone(), Box::new(InkGreen)),
+        (ShortcutAction::InkThin, words.clone(), Box::new(InkThin)),
+        (ShortcutAction::InkThick, words, Box::new(InkThick)),
+    ];
+    list.push((ShortcutAction::SelectTool, tr("zeigen markieren zeiger werkzeug"), Box::new(SelectTool)));
     list
 }
 
@@ -4539,7 +4605,7 @@ fn stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PADDING, content_width_for, page_left, ink_width, Draft, InkPaint, NoteTarget, badge_x, edge_crossing, ShortcutAction, TOOLS, Tool, clamp_to_page, edit_label, erasable, first_line, follow_edit, gap_after, commit_note, is_drawing, is_mark_key, is_pin, is_plain, is_shortcut, left_out_title, new_index, note_change, page_extent, progress_label, push_point, tint_map};
+    use super::{PADDING, content_width_for, page_left, ink_width, Draft, InkPaint, NoteTarget, badge_x, edge_crossing, ShortcutAction, TOOLS, Tool, clamp_to_page, edit_label, erasable, first_line, follow_edit, frame_left, gap_after, commit_note, is_drawing, is_mark_key, is_pin, is_plain, is_shortcut, left_out_title, new_index, note_change, page_extent, progress_label, push_point, tint_map};
     use crate::core::highlights::{Highlight, HighlightPart, InkLine, Pin};
     use crate::core::pdf_edit::PageOp;
     use crate::ui::theme::annot;
@@ -4662,6 +4728,14 @@ mod tests {
         assert!(commit_note(&mut lib, "k", &root, target, "", None));
         assert!(lib.highlights_of("k").is_empty());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_badge_area_grows_away_from_the_text() {
+        assert_eq!(frame_left(100., 12., 24., 0.), 94.);
+        assert_eq!(frame_left(100., 12., 24., -1.), 88.);
+        assert_eq!(frame_left(100., 12., 24., 1.), 100.);
+        assert_eq!(frame_left(100., 30., 30., -1.), 100.);
     }
 
     #[test]
