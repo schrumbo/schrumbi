@@ -656,8 +656,18 @@ impl Library {
         }
         let replaced = Change::Replaced { path: written.path, backup };
         let orphans = self.highlights_orphans.get(&written.new_key).cloned().unwrap_or_default();
+        let mut changes = Vec::new();
+        if !written.copy_elsewhere && let Some(old) = self.highlights.remove(&written.old_key) {
+            if self.sync_gate {
+                self.deferred_marks.entry(written.old_key.clone()).or_insert_with(|| old.clone());
+            }
+            let old_orphans = self.highlights_orphans.get(&written.old_key).cloned().unwrap_or_default();
+            changes.push(Change::Highlights { orphans: old_orphans, key: written.old_key.clone(), list: old });
+        }
         let before = self.store_highlights(&written.new_key, list).unwrap_or_default();
-        self.commit(label, "file-text", vec![Change::Highlights { orphans, key: written.new_key, list: before }, replaced]);
+        changes.insert(0, Change::Highlights { orphans, key: written.new_key, list: before });
+        changes.push(replaced);
+        self.commit(label, "file-text", changes);
     }
 
     #[cfg(test)]
@@ -4205,6 +4215,7 @@ pub struct WrittenPdf {
     old_key: String,
     new_key: String,
     backup: Option<PathBuf>,
+    copy_elsewhere: bool,
 }
 
 impl WrittenPdf {
@@ -4219,23 +4230,37 @@ impl WrittenPdf {
     }
 }
 
-/// Keeps the original for undo, checks it is still the version the edit was made from and writes the edited bytes in place. Safe off the UI thread. `root` is the folder open when the edit started; `Library::finish_pdf_edit` puts the original back when another folder is open by then.
+/// Keeps the original for undo, checks it is still the version the edit was made from and writes the edited bytes in place. Safe off the UI thread. The marks of the old content stay only when another file in `root` still has that content. `root` is the folder open when the edit started; `Library::finish_pdf_edit` puts the original back when another folder is open by then.
 pub fn write_edited_pdf(root: Option<PathBuf>, path: &Path, bytes: &[u8], old_key: &str) -> std::result::Result<WrittenPdf, PdfWriteError> {
     let new_key = highlights::document_key(bytes);
-    let written = |backup| WrittenPdf { root: root.clone(), path: path.to_path_buf(), old_key: old_key.to_string(), new_key: new_key.clone(), backup };
+    let written = |backup, copy_elsewhere| WrittenPdf { root: root.clone(), path: path.to_path_buf(), old_key: old_key.to_string(), new_key: new_key.clone(), backup, copy_elsewhere };
     if new_key == old_key {
-        return Ok(written(None));
+        return Ok(written(None, true));
     }
     let backup = path.exists().then(|| stash(path).ok()).flatten().ok_or(PdfWriteError::Backup)?;
     if std::fs::read(&backup).ok().map(|kept| highlights::document_key(&kept)).as_deref() != Some(old_key) {
         let _ = backup.parent().map(std::fs::remove_dir_all);
         return Err(PdfWriteError::Changed);
     }
+    let copy_elsewhere = root.as_deref().is_some_and(|root| same_content_elsewhere(root, path, &backup, old_key));
     if let Err(e) = super::note_buffer::write_atomic(path, bytes) {
         let _ = backup.parent().map(std::fs::remove_dir_all);
         return Err(PdfWriteError::Write(e));
     }
-    Ok(written(Some(backup)))
+    Ok(written(Some(backup), copy_elsewhere))
+}
+
+fn same_content_elsewhere(root: &Path, path: &Path, original: &Path, key: &str) -> bool {
+    let Some(size) = std::fs::metadata(original).ok().map(|m| m.len()) else { return true };
+    let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    walkdir::WalkDir::new(root)
+        .min_depth(1)
+        .into_iter()
+        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file() && e.metadata().is_ok_and(|m| m.len() == size))
+        .filter(|e| dunce::canonicalize(e.path()).unwrap_or_else(|_| e.path().to_path_buf()) != path)
+        .any(|e| std::fs::read(e.path()).is_ok_and(|bytes| highlights::document_key(&bytes) == key))
 }
 
 fn stash(path: &Path) -> Result<PathBuf> {

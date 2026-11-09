@@ -1952,10 +1952,10 @@ fn replacing_a_pdf_moves_its_marks_and_undo_and_redo_bring_everything_back() {
     lib.set_highlights(&old_key, vec![pdf_mark(1, 0), pdf_mark(2, 2)], "markiert".into());
     lib.replace_pdf(&path, new.clone(), &old_key, vec![pdf_mark(2, 1)], "Seite gelöscht".into());
     assert_eq!(std::fs::read(&path).unwrap(), new);
-    assert_eq!(lib.highlights_of(&old_key), vec![pdf_mark(1, 0), pdf_mark(2, 2)], "identical copies of the old file keep their marks");
+    assert!(lib.highlights_of(&old_key).is_empty(), "no other file has the old content, so its marks are not kept twice");
     assert_eq!(lib.highlights_of(&new_key), vec![pdf_mark(2, 1)]);
     let stored: Highlights = crate::core::workspace::load(&root.join(FILE_NAME)).unwrap().unwrap();
-    assert!(stored.contains_key(&old_key) && stored[&new_key] == vec![pdf_mark(2, 1)]);
+    assert!(!stored.contains_key(&old_key) && stored[&new_key] == vec![pdf_mark(2, 1)]);
     assert!(lib.toast.as_ref().is_some_and(|t| t.message == "Seite gelöscht"));
     lib.undo();
     assert_eq!(std::fs::read(&path).unwrap(), old, "the file is byte-identical again");
@@ -1965,7 +1965,7 @@ fn replacing_a_pdf_moves_its_marks_and_undo_and_redo_bring_everything_back() {
     assert!(stored.contains_key(&old_key) && !stored.contains_key(&new_key));
     lib.redo();
     assert_eq!(std::fs::read(&path).unwrap(), new);
-    assert_eq!(lib.highlights_of(&old_key), vec![pdf_mark(1, 0), pdf_mark(2, 2)]);
+    assert!(lib.highlights_of(&old_key).is_empty());
     assert_eq!(lib.highlights_of(&new_key), vec![pdf_mark(2, 1)]);
     let _ = std::fs::remove_dir_all(root);
 }
@@ -2392,8 +2392,8 @@ fn replacing_a_pdf_moves_notes_and_drawings_in_both_files_and_undo_restores_them
     let moved = vec![pdf_noted(1, 1, "Merken"), pdf_pin(SIDECAR_ID_BASE)];
     lib.replace_pdf(&path, new, &old_key, moved.clone(), "Seite eingefügt".into());
     let side: Annotations = crate::core::workspace::load(&root.join(ANNOTATIONS_NAME)).unwrap().unwrap();
-    assert!(side.documents.contains_key(&old_key) && side.documents[&new_key].items.len() == 1);
-    assert_eq!((lib.highlights_of(&old_key), lib.highlights_of(&new_key)), (marks.clone(), moved.clone()));
+    assert!(!side.documents.contains_key(&old_key) && side.documents[&new_key].items.len() == 1);
+    assert_eq!((lib.highlights_of(&old_key), lib.highlights_of(&new_key)), (Vec::new(), moved.clone()));
     lib.undo();
     let side: Annotations = crate::core::workspace::load(&root.join(ANNOTATIONS_NAME)).unwrap().unwrap();
     assert!(side.documents.contains_key(&old_key) && !side.documents.contains_key(&new_key));
