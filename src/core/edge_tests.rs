@@ -1879,6 +1879,33 @@ fn pdf_mark(id: u64, page: usize) -> crate::core::highlights::Highlight {
 }
 
 #[test]
+fn a_page_edit_that_cannot_be_recorded_puts_the_original_back() {
+    use crate::core::highlights::document_key;
+    use crate::core::library::write_edited_pdf;
+    use crate::core::pdf_edit::PageOp;
+    let (root, mut lib) = workspace("finish-pdf-edit-lost", &config(1, 0));
+    let path = root.join("Skript.pdf");
+    let old = b"%PDF-1.4 alt".to_vec();
+    std::fs::write(&path, &old).unwrap();
+    let old_key = document_key(&old);
+    lib.set_highlights(&old_key, vec![pdf_mark(1, 0)], "markiert".into());
+    let written = write_edited_pdf(lib.root.clone(), &path, b"%PDF-1.4 neu", &old_key).ok().unwrap();
+    std::fs::write(root.join(crate::core::highlights::ANNOTATIONS_NAME), "{kaputt").unwrap();
+    lib.reload_external();
+    lib.finish_pdf_edit(written, &PageOp::Delete(vec![1]), &[(612., 792.); 2], 0, "Seite gelöscht".into());
+    assert_eq!(std::fs::read(&path).unwrap(), old, "locked marks: the file is put back");
+    assert!(lib.last_error.is_some());
+    std::fs::remove_file(root.join(crate::core::highlights::ANNOTATIONS_NAME)).unwrap();
+    lib.reload_external();
+    let written = write_edited_pdf(Some(root.join("anderswo")), &path, b"%PDF-1.4 neu", &old_key).ok().unwrap();
+    lib.finish_pdf_edit(written, &PageOp::Delete(vec![1]), &[(612., 792.); 2], 0, "Seite gelöscht".into());
+    assert_eq!(std::fs::read(&path).unwrap(), old, "another folder open by now: the file is put back");
+    assert_eq!(lib.highlights_of(&old_key), vec![pdf_mark(1, 0)]);
+    assert!(!lib.can_undo() || { lib.undo(); std::fs::read(&path).unwrap() == old });
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_mark_made_while_a_page_edit_is_written_moves_with_the_others() {
     use crate::core::highlights::document_key;
     use crate::core::library::write_edited_pdf;
@@ -1890,7 +1917,7 @@ fn a_mark_made_while_a_page_edit_is_written_moves_with_the_others() {
     let (old_key, new_key) = (document_key(&old), document_key(&new));
     lib.set_highlights(&old_key, vec![pdf_mark(1, 0), pdf_mark(2, 2)], "markiert".into());
     assert!(lib.can_edit_pdf());
-    let written = write_edited_pdf(&path, &new, &old_key).ok().unwrap();
+    let written = write_edited_pdf(lib.root.clone(), &path, &new, &old_key).ok().unwrap();
     lib.set_highlights(&old_key, vec![pdf_mark(1, 0), pdf_mark(2, 2), pdf_mark(3, 1)], "markiert".into());
     lib.finish_pdf_edit(written, &PageOp::Delete(vec![0]), &[(612., 792.); 3], 0, "Seite gelöscht".into());
     assert_eq!(std::fs::read(&path).unwrap(), new);

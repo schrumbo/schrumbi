@@ -614,7 +614,7 @@ impl Library {
         true
     }
 
-    /// Turns a PDF written by `write_edited_pdf` into one undo step and moves the marks the PDF has now through `op` to its new content.
+    /// Turns a PDF written by `write_edited_pdf` into one undo step and moves the marks the PDF has now through `op` to its new content. Call it even when the view is gone. When the step cannot be recorded, the original bytes go back in place.
     pub fn finish_pdf_edit(&mut self, written: WrittenPdf, op: &super::pdf_edit::PageOp, sizes: &[(f32, f32)], inserted: usize, label: String) {
         let list = super::pdf_edit::remap(&self.highlights_of(&written.old_key), op, sizes, inserted);
         self.commit_pdf_edit(written, list, label);
@@ -631,27 +631,36 @@ impl Library {
     }
 
     fn commit_pdf_edit(&mut self, written: WrittenPdf, list: Vec<Highlight>, label: String) {
+        let here = self.root.is_some() && written.root == self.root;
         let Some(backup) = written.backup else {
-            self.set_highlights(&written.old_key, list, label);
+            if here {
+                self.set_highlights(&written.old_key, list, label);
+            }
             return;
         };
-        let replaced = Change::Replaced { path: written.path, backup };
-        if self.highlights_lock.is_some() {
-            self.last_error = self.highlights_lock.clone();
-            self.commit(label, "file-text", vec![replaced]);
+        if !here || self.read_only || self.highlights_lock.is_some() {
+            let restored = std::fs::read(&backup).is_ok_and(|old| super::note_buffer::write_atomic(&written.path, &old).is_ok());
+            self.last_error = Some(if restored {
+                let _ = backup.parent().map(std::fs::remove_dir_all);
+                self.highlights_lock.clone().unwrap_or_else(|| tr("Änderungen werden gerade nicht gespeichert. Die PDF bleibt, wie sie ist."))
+            } else {
+                trf("Die Änderung ließ sich nicht abschließen. Das Original liegt unter %@", &[&backup.display().to_string()])
+            });
+            self.changed();
             return;
         }
+        let replaced = Change::Replaced { path: written.path, backup };
         let orphans = self.highlights_orphans.get(&written.new_key).cloned().unwrap_or_default();
         let before = self.store_highlights(&written.new_key, list).unwrap_or_default();
         self.commit(label, "file-text", vec![Change::Highlights { orphans, key: written.new_key, list: before }, replaced]);
     }
 
-    /// Replaces a PDF with an edited version and moves its marks to the new content key, as one step. Undo brings back the exact old file and the old marks.
+    #[cfg(test)]
     pub fn replace_pdf(&mut self, path: &Path, bytes: Vec<u8>, old_key: &str, list: Vec<Highlight>, label: String) {
         if !self.can_edit_pdf() {
             return;
         }
-        match write_edited_pdf(path, &bytes, old_key) {
+        match write_edited_pdf(self.root.clone(), path, &bytes, old_key) {
             Ok(written) => self.commit_pdf_edit(written, list, label),
             Err(e) => self.pdf_edit_failed(e),
         }
@@ -4161,16 +4170,17 @@ pub enum PdfWriteError {
 
 /// An edited PDF already written in place, waiting for `Library::finish_pdf_edit`.
 pub struct WrittenPdf {
+    root: Option<PathBuf>,
     path: PathBuf,
     old_key: String,
     new_key: String,
     backup: Option<PathBuf>,
 }
 
-/// Keeps the original for undo, checks it is still the version the edit was made from and writes the edited bytes in place. Safe off the UI thread.
-pub fn write_edited_pdf(path: &Path, bytes: &[u8], old_key: &str) -> std::result::Result<WrittenPdf, PdfWriteError> {
+/// Keeps the original for undo, checks it is still the version the edit was made from and writes the edited bytes in place. Safe off the UI thread. `root` is the folder open when the edit started; `Library::finish_pdf_edit` puts the original back when another folder is open by then.
+pub fn write_edited_pdf(root: Option<PathBuf>, path: &Path, bytes: &[u8], old_key: &str) -> std::result::Result<WrittenPdf, PdfWriteError> {
     let new_key = highlights::document_key(bytes);
-    let written = |backup| WrittenPdf { path: path.to_path_buf(), old_key: old_key.to_string(), new_key: new_key.clone(), backup };
+    let written = |backup| WrittenPdf { root: root.clone(), path: path.to_path_buf(), old_key: old_key.to_string(), new_key: new_key.clone(), backup };
     if new_key == old_key {
         return Ok(written(None));
     }

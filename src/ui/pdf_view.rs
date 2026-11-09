@@ -2055,6 +2055,7 @@ impl PdfView {
         };
         let started = Started { sizes: self.sizes.clone(), anchor: self.anchor_at(0., 0.), current: self.current_page(), pages, label };
         let path = self.path.clone();
+        let root = super::state::read(cx, |l| l.root.clone());
         let task = cx.background_spawn(async move {
             let data = std::fs::read(&path).map_err(|_| Failure::Edit(EditError::Broken))?;
             let (op, inserted) = match edit {
@@ -2069,7 +2070,7 @@ impl PdfView {
                 }
             };
             let bytes = pdf_edit::apply(&data, &op).map_err(Failure::Edit)?;
-            let written = crate::core::library::write_edited_pdf(&path, &bytes, &old_key).map_err(Failure::Write)?;
+            let written = crate::core::library::write_edited_pdf(root, &path, &bytes, &old_key).map_err(Failure::Write)?;
             Ok(Edited { op, written, inserted })
         });
         self.working = Some(Instant::now());
