@@ -73,8 +73,9 @@ Highlighting the same passage again recolors it instead of doubling it.
 | Drag on the page | Draw; with the eraser, touching a stroke deletes it |
 | {key:escape} | Put the tool down |
 
-- With the pen you choose color and width ({ui:Dünn} or {ui:Dick}) next to the tools.
-- Every stroke and every sweep of the eraser is one step for {key:Undo}.
+- With the pen in hand, color and width ({ui:Dünn} or {ui:Dick}) appear in a strip at the bottom of the page.
+- Every stroke and every sweep of the eraser is one step for {key:Undo}, with no message.
+- While the PDF loads or saves, and when the folder cannot be written, the tools are grey. The tooltip says why.
 - The eraser deletes only drawings, never highlights or notes.
 - Click a drawing, {key:delete} removes it.
 
@@ -83,13 +84,15 @@ Highlighting the same passage again recolors it instead of doubling it.
 | Shortcut | Effect |
 |---|---|
 | {key:noteTool}, click on the page | {ui:Notiz setzen}: a note at that spot |
-| Click a highlight, {ui:Notiz} in the bar | A note on the highlight |
+| {key:noteTool}, then {key:return} | A note in the middle of the visible page |
+| Click a highlight, {ui:Notiz hinzufügen} in the bar | A note on the highlight |
 | Click a note | Edit |
-| {key:cmd-return} | Save. A click outside saves too |
+| {ui:Speichern} or {key:cmd-return} | Save. A click outside saves too |
 | {key:escape} | Discard |
 
-- An empty note places nothing. {ui:Notiz löschen} removes it, the highlight stays.
-- Everything is also listed in the {ui:Marker} tab, a click jumps there.
+- An empty note places nothing. Emptying an existing note deletes it, the highlight stays. {ui:Notiz löschen} only exists for stored notes.
+- A note that is still open when you close the PDF is saved.
+- Everything is also listed in the {ui:Marker} tab, a click jumps there. {key:up} and {key:down} change the row, {key:return} jumps, {key:delete} removes.
 
 ### Export with marks
 
@@ -99,11 +102,12 @@ Highlighting the same passage again recolors it instead of doubling it.
 
 - Writes a copy next to the PDF. Highlights, notes and drawings are real annotations that other programs show too.
 - The original PDF stays as it is. {key:Undo} removes the copy again.
-- Without marks the button is grey.
+- Without marks, in a read-only folder and while the PDF loads or saves, the button is grey. The tooltip says why.
+- A message names the copy, {ui:Öffnen} shows it.
 
 ### Pages
 
-On the left in {ui:Seiten}. A click selects and jumps, Ctrl plus click (Mac: ⌘) adds, Shift plus click selects a range. With nothing selected, every command acts on the page you see.
+On the left in {ui:Seiten}, the page list. {key:pageList} shows and hides it. A click selects and jumps, Ctrl plus click (Mac: ⌘) adds, Shift plus click selects a range. With nothing selected, every command acts on the page you see.
 
 | Command | Shortcut |
 |---|---|
@@ -111,14 +115,16 @@ On the left in {ui:Seiten}. A click selects and jumps, Ctrl plus click (Mac: ⌘
 | {ui:Seiten rechts drehen} | {key:rotatePagesRight} |
 | {ui:Seiten nach oben verschieben} | {key:movePagesUp} |
 | {ui:Seiten nach unten verschieben} | {key:movePagesDown} |
-| {ui:Seiten löschen} | {key:deletePages} or {key:delete} in the sidebar |
+| {ui:Seiten löschen} | {key:deletePages} or {key:delete} in the page list |
 | {ui:Seiten aus PDF einfügen …} | {key:insertPdf} |
 
-- The commands name the page or say how many pages they act on. From two selected pages on, the bar under the list counts along, the cross clears the selection.
-- {key:rotatePagesLeft}, {key:rotatePagesRight} and {key:insertPdf} only work in the sidebar, the other shortcuts and the command palette everywhere.
-- In the sidebar: {key:up} and {key:down} change the page, {key:home} and {key:end} go to the first and last, {key:pageup} and {key:pagedown} page through, {key:shift-up}, {key:shift-down}, {key:shift-home}, {key:shift-end}, {key:shift-pageup} and {key:shift-pagedown} extend the selection, {key:cmd-a} selects all, {key:shift-f10} opens the menu.
+- The commands name the page or say how many pages they act on. The bar under the list counts from two selected pages on, the cross clears the selection from one. Deleting all pages says that one stays.
+- {key:rotatePagesLeft}, {key:rotatePagesRight} and {key:insertPdf} only work in the page list, the other shortcuts and the command palette everywhere.
+- In the page list: {key:up} and {key:down} change the page, {key:home} and {key:end} go to the first and last, {key:pageup} and {key:pagedown} page through, {key:shift-up}, {key:shift-down}, {key:shift-home}, {key:shift-end}, {key:shift-pageup} and {key:shift-pagedown} extend the selection, {key:cmd-a} selects all, {key:shift-f10} opens the menu.
 - Drag pages, the line shows where they land. {key:escape} cancels the drag.
-- Drag PDFs from the file manager onto the sidebar to insert them one after another at the line, each as its own step for {key:Undo}. While a PDF is being saved, more wait; {key:escape} drops the rest.
+- Drag PDFs from the file manager onto the page list to insert them together at the line, as one step for {key:Undo} with one message. While a PDF is being saved, more wait. {key:escape} stops the rest, those already in stay.
+- After a delete, the page at the deleted spot is selected, so the keyboard can carry on.
+- For Word and PowerPoint files, a note under the list says why pages cannot be changed there.
 - Right-clicking a page shows the same commands.
 - A notice goes away with {key:escape}.
 - The file really changes. {key:Undo} and {key:Redo} restore it byte for byte, and the highlights stay with their text.

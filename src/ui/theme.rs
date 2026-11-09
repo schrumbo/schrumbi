@@ -138,6 +138,55 @@ pub mod tint {
     pub const DISABLED: f32 = 0.4;
     /// The opacity of a page while it is being dragged.
     pub const DRAGGED: f32 = 0.4;
+    /// What the pointer adds over a small control.
+    pub const HOVER: f32 = 0.08;
+    /// What the pointer adds over a row of a list.
+    pub const HOVER_ROW: f32 = 0.05;
+    /// What the pointer adds over a field that shows a value.
+    pub const HOVER_FIELD: f32 = 0.06;
+    /// The selected button of a segmented control in the dark theme.
+    pub const NAV_DARK: f32 = 0.16;
+    /// The ground the pages of a document lie on.
+    pub const CANVAS: f32 = 0.04;
+}
+
+/// Pins, note badges, the note popover and the pen controls over a PDF page.
+pub mod annot {
+    /// A pin at zoom 100 %, in page points.
+    pub const PIN: f32 = 20.;
+    pub const PIN_ICON: f32 = 14.;
+    /// The badge of a note on a passage at zoom 100 %.
+    pub const NOTE_BADGE: f32 = 12.;
+    /// The smallest a passage badge gets, as a share of its size.
+    pub const NOTE_BADGE_MIN: f32 = 0.75;
+    /// The icon in a passage badge, as a share of the badge.
+    pub const BADGE_GLYPH: f32 = 0.75;
+    /// The edge of a badge that is not selected.
+    pub const BADGE_EDGE: f32 = 0.3;
+    /// The area a badge answers to, in screen pixels whatever the zoom.
+    pub const HIT: f32 = 24.;
+    pub const NOTE_WIDTH: f32 = 272.;
+    pub const NOTE_HEIGHT: f32 = 150.;
+    /// The length of the line that shows a pen width.
+    pub const WIDTH_SAMPLE: f32 = 14.;
+    /// How much thicker the sample of a width is drawn than the stroke, so the thin one can be told from the thick one.
+    pub const WIDTH_SAMPLE_GROW: f32 = 1.5;
+    /// The edge of a pen color swatch.
+    pub const SWATCH_EDGE: f32 = 0.25;
+    /// A search match.
+    pub const MATCH: f32 = 0.45;
+    /// The match the view stands on.
+    pub const MATCH_CURRENT: f32 = 0.6;
+    /// The text a drag has selected.
+    pub const SELECTED_TEXT: f32 = 0.3;
+    /// The glow around a stroke that was clicked.
+    pub const HALO: f32 = 0.35;
+    /// The row of a list entry that was revealed.
+    pub const ROW_ACTIVE: f32 = 0.08;
+    /// The row of a search match the view stands on.
+    pub const HIT_ROW: f32 = 0.15;
+    /// A row of the marker list, with its slot.
+    pub const MARK_ROW: f32 = 88.;
 }
 
 /// Measures of the page list of a PDF.

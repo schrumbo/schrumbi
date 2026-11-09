@@ -1879,6 +1879,21 @@ fn pdf_mark(id: u64, page: usize) -> crate::core::highlights::Highlight {
 }
 
 #[test]
+fn a_quiet_mark_change_is_one_undo_step_without_a_toast() {
+    let (root, mut lib) = workspace("marks-quiet", &config(1, 0));
+    assert!(!lib.pdf_blocked());
+    lib.set_highlights_quiet("k", vec![pdf_mark(1, 0)], "Gezeichnet".into());
+    assert!(lib.toast.is_none());
+    assert!(lib.can_undo());
+    assert_eq!(lib.highlights_of("k"), vec![pdf_mark(1, 0)]);
+    lib.undo();
+    assert!(lib.highlights_of("k").is_empty());
+    lib.set_highlights("k", vec![pdf_mark(2, 0)], "Markiert".into());
+    assert!(lib.toast.is_some());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn marks_the_app_wrote_itself_are_not_read_again_but_a_change_from_outside_is() {
     use crate::core::highlights::{FILE_NAME, Highlights};
     let (root, mut lib) = workspace("marks-stamp", &config(1, 0));

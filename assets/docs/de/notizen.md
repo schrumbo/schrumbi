@@ -73,8 +73,9 @@ Dieselbe Stelle noch einmal markieren färbt sie um, statt sie zu doppeln.
 | Ziehen auf der Seite | Zeichnen, mit dem Radierer einen Strich berühren löscht ihn |
 | {key:escape} | Werkzeug weglegen |
 
-- Beim Stift wählst du Farbe und Dicke ({ui:Dünn} oder {ui:Dick}) neben den Werkzeugen.
-- Jeder Strich und jeder Zug mit dem Radierer ist ein Schritt für {key:Undo}.
+- Mit dem Stift in der Hand erscheinen Farbe und Dicke ({ui:Dünn} oder {ui:Dick}) in einer Leiste unten auf der Seite.
+- Jeder Strich und jeder Zug mit dem Radierer ist ein Schritt für {key:Undo}, ohne Meldung dazu.
+- Während die PDF lädt oder speichert und wenn der Ordner nicht beschreibbar ist, sind die Werkzeuge grau. Der Tooltip nennt den Grund.
 - Der Radierer löscht nur Zeichnungen, nie Markierungen oder Notizen.
 - Eine Zeichnung anklicken, {key:delete} entfernt sie.
 
@@ -83,13 +84,15 @@ Dieselbe Stelle noch einmal markieren färbt sie um, statt sie zu doppeln.
 | Kürzel | Wirkung |
 |---|---|
 | {key:noteTool}, auf die Seite klicken | {ui:Notiz setzen}: Notiz an dieser Stelle |
-| Markierung anklicken, {ui:Notiz} in der Leiste | Notiz an der Markierung |
+| {key:noteTool}, dann {key:return} | Notiz in der Mitte der sichtbaren Seite |
+| Markierung anklicken, {ui:Notiz hinzufügen} in der Leiste | Notiz an der Markierung |
 | Notiz anklicken | Bearbeiten |
-| {key:cmd-return} | Speichern. Ein Klick daneben speichert auch |
+| {ui:Speichern} oder {key:cmd-return} | Speichern. Ein Klick daneben speichert auch |
 | {key:escape} | Verwerfen |
 
-- Eine leere Notiz setzt nichts. {ui:Notiz löschen} entfernt sie, die Markierung bleibt.
-- Alles steht auch im Reiter {ui:Marker}, ein Klick springt dorthin.
+- Eine leere Notiz setzt nichts. Leerst du eine vorhandene Notiz, ist sie gelöscht, die Markierung bleibt. {ui:Notiz löschen} gibt es nur bei gespeicherten Notizen.
+- Eine Notiz, die beim Schließen noch offen ist, wird gespeichert.
+- Alles steht auch im Reiter {ui:Marker}, ein Klick springt dorthin. {key:up} und {key:down} wechseln die Zeile, {key:return} springt, {key:delete} entfernt.
 
 ### Mit Markierungen exportieren
 
@@ -99,11 +102,12 @@ Dieselbe Stelle noch einmal markieren färbt sie um, statt sie zu doppeln.
 
 - Schreibt eine Kopie neben die PDF. Markierungen, Notizen und Zeichnungen sind echte Anmerkungen, die auch andere Programme zeigen.
 - Die Original-PDF bleibt, wie sie ist. {key:Undo} entfernt die Kopie wieder.
-- Ohne Markierungen ist der Knopf grau.
+- Ohne Markierungen, bei schreibgeschütztem Ordner und während die PDF lädt oder speichert ist der Knopf grau. Der Tooltip nennt den Grund.
+- Eine Meldung nennt die Kopie, {ui:Öffnen} zeigt sie.
 
 ### Seiten
 
-Links in {ui:Seiten}. Ein Klick wählt und springt, Strg plus Klick (Mac: ⌘) fügt hinzu, Umschalt plus Klick wählt einen Bereich. Ohne Auswahl wirkt jeder Befehl auf die Seite, die du siehst.
+Links in {ui:Seiten}, der Seitenliste. {key:pageList} blendet sie ein und aus. Ein Klick wählt und springt, Strg plus Klick (Mac: ⌘) fügt hinzu, Umschalt plus Klick wählt einen Bereich. Ohne Auswahl wirkt jeder Befehl auf die Seite, die du siehst.
 
 | Befehl | Kürzel |
 |---|---|
@@ -111,14 +115,16 @@ Links in {ui:Seiten}. Ein Klick wählt und springt, Strg plus Klick (Mac: ⌘) f
 | {ui:Seiten rechts drehen} | {key:rotatePagesRight} |
 | {ui:Seiten nach oben verschieben} | {key:movePagesUp} |
 | {ui:Seiten nach unten verschieben} | {key:movePagesDown} |
-| {ui:Seiten löschen} | {key:deletePages} oder {key:delete} in der Seitenleiste |
+| {ui:Seiten löschen} | {key:deletePages} oder {key:delete} in der Seitenliste |
 | {ui:Seiten aus PDF einfügen …} | {key:insertPdf} |
 
-- Die Befehle nennen die Seite oder wie viele Seiten sie wirken. Ab zwei gewählten Seiten zählt die Leiste unter der Liste mit, das Kreuz hebt die Auswahl auf.
-- {key:rotatePagesLeft}, {key:rotatePagesRight} und {key:insertPdf} wirken nur in der Seitenleiste, die anderen Kürzel und die Befehlspalette überall.
-- In der Seitenleiste: {key:up} und {key:down} wechseln die Seite, {key:home} und {key:end} gehen zur ersten und letzten, {key:pageup} und {key:pagedown} blättern, {key:shift-up}, {key:shift-down}, {key:shift-home}, {key:shift-end}, {key:shift-pageup} und {key:shift-pagedown} erweitern die Auswahl, {key:cmd-a} wählt alle, {key:shift-f10} öffnet das Menü.
+- Die Befehle nennen die Seite oder wie viele Seiten sie wirken. Die Leiste unter der Liste zählt ab zwei gewählten Seiten mit, das Kreuz hebt schon ab einer die Auswahl auf. Das Löschen aller Seiten sagt, dass eine bleibt.
+- {key:rotatePagesLeft}, {key:rotatePagesRight} und {key:insertPdf} wirken nur in der Seitenliste, die anderen Kürzel und die Befehlspalette überall.
+- In der Seitenliste: {key:up} und {key:down} wechseln die Seite, {key:home} und {key:end} gehen zur ersten und letzten, {key:pageup} und {key:pagedown} blättern, {key:shift-up}, {key:shift-down}, {key:shift-home}, {key:shift-end}, {key:shift-pageup} und {key:shift-pagedown} erweitern die Auswahl, {key:cmd-a} wählt alle, {key:shift-f10} öffnet das Menü.
 - Seiten ziehen, die Linie zeigt, wohin sie kommen. {key:escape} bricht das Ziehen ab.
-- PDFs aus dem Dateimanager auf die Seitenleiste ziehen fügt sie nacheinander an der Linie ein, jede als eigener Schritt für {key:Undo}. Während eine PDF gespeichert wird, warten weitere; {key:escape} verwirft die übrigen.
+- PDFs aus dem Dateimanager auf die Seitenliste ziehen fügt sie zusammen an der Linie ein, als ein Schritt für {key:Undo} mit einer Meldung. Während eine PDF gespeichert wird, warten weitere. {key:escape} hält die übrigen an, schon eingefügte bleiben.
+- Nach dem Löschen ist die Seite an der Stelle der gelöschten gewählt, so geht es mit der Tastatur weiter.
+- Bei Word- und PowerPoint-Dateien steht unter der Liste, warum sich Seiten dort nicht ändern lassen.
 - Rechtsklick auf eine Seite zeigt dieselben Befehle.
 - Ein Hinweis verschwindet mit {key:escape}.
 - Die Datei ändert sich wirklich. {key:Undo} und {key:Redo} stellen sie Byte für Byte wieder her, die Markierungen bleiben an ihrem Text.

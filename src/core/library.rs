@@ -611,7 +611,7 @@ impl Library {
 
     /// Whether an edited PDF may be written now; sets the reason when not.
     pub fn can_edit_pdf(&mut self) -> bool {
-        if self.read_only || self.highlights_lock.is_some() {
+        if self.pdf_blocked() {
             self.last_error = Some(tr("Änderungen werden gerade nicht gespeichert. Die PDF bleibt, wie sie ist."));
             self.changed();
             return false;
@@ -777,6 +777,20 @@ impl Library {
 
     /// Replaces a document's highlights as one step of the undo history. Refused while the files cannot be written, so nothing is lost silently.
     pub fn set_highlights(&mut self, key: &str, list: Vec<Highlight>, message: String) {
+        self.put_highlights(key, list, message, true);
+    }
+
+    /// Like `set_highlights`, without a toast: for strokes and erasing, which happen many times in a row and are undone from the menu or the keyboard.
+    pub fn set_highlights_quiet(&mut self, key: &str, list: Vec<Highlight>, message: String) {
+        self.put_highlights(key, list, message, false);
+    }
+
+    /// Whether marks and edited PDFs cannot be written now: the folder is read-only or its marks file is locked.
+    pub fn pdf_blocked(&self) -> bool {
+        self.read_only || self.highlights_lock.is_some()
+    }
+
+    fn put_highlights(&mut self, key: &str, list: Vec<Highlight>, message: String, announce: bool) {
         if let Some(lock) = self.highlights_lock.clone() {
             self.last_error = Some(lock);
             self.changed();
@@ -785,7 +799,13 @@ impl Library {
         let orphans = self.highlights_orphans.get(key).cloned().unwrap_or_default();
         let list = self.adopt_orphans(key, list);
         let Some(before) = self.store_highlights(key, list) else { return };
-        self.commit(message, "highlighter", vec![Change::Highlights { key: key.to_string(), list: before, orphans }]);
+        let changes = vec![Change::Highlights { key: key.to_string(), list: before, orphans }];
+        if announce {
+            self.commit(message, "highlighter", changes);
+        } else {
+            self.record(message, changes);
+            self.changed();
+        }
     }
 
     fn store_highlights(&mut self, key: &str, list: Vec<Highlight>) -> Option<Vec<Highlight>> {
