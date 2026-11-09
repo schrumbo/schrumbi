@@ -4,6 +4,7 @@ Standing instruction from the owner: use the agents below without being asked. D
 
 - Any change beyond a few lines follows the `ship` skill. Questions, reading and one-line fixes do not.
 - A Stop hook runs `.claude/bin/gate` and asks for missing reviews. Treat its message as a task. If a finding is a false positive or a review does not apply, say why in one line and stop again; it does not repeat for an unchanged tree.
+- At most two review rounds per feature. Round one reviews and fixes; round two only checks those fixes. New findings in round two go to a backlog for the next release, except data loss. The gate stops asking after two rounds per session.
 
 | Work | Who | Model |
 |---|---|---|

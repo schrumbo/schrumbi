@@ -19,6 +19,7 @@ LINTS = [
 REVIEW_LINES = 30
 AUDIT_LINES = 15
 PERF_LINES = 100
+MAX_ROUNDS = 2
 MAX_OUTPUT = 40
 
 os.environ["PATH"] = os.pathsep.join(["/opt/homebrew/bin", str(Path.home() / ".cargo" / "bin"), os.environ.get("PATH", "")])
@@ -255,6 +256,7 @@ def cap(lines):
 
 def needed_reviews(state, tree):
     reviewed = state.setdefault("reviewed", {})
+    rounds = state.setdefault("rounds", {})
     base = state["base"]
     need = []
     if churn(reviewed.get("rust-reviewer", base), tree, "*.rs") >= REVIEW_LINES:
@@ -265,7 +267,7 @@ def needed_reviews(state, tree):
         need.append("ux-tester")
     if churn(reviewed.get("perf-tester", base), tree, "src") >= PERF_LINES:
         need.append("perf-tester")
-    return need
+    return [a for a in need if rounds.get(a, 0) < MAX_ROUNDS]
 
 
 def hook(data):
@@ -294,7 +296,12 @@ def hook(data):
         return
     state["asked"] = tree
     need = needed_reviews(state, tree)
+    final = any(state["rounds"].get(a, 0) for a in need)
+    for a in need:
+        state["rounds"][a] = state["rounds"].get(a, 0) + 1
     save(session, state)
+    if need and final:
+        emit(decision="block", reason="Last review round for this session: " + ", ".join(need) + ". Check only that the fixes from the first round hold. Fix only data loss; everything else goes to the backlog, not into this change. If one does not apply, say why in one line and stop.")
     if need:
         emit(decision="block", reason="Reviews due for this change: " + ", ".join(need) + ". Run them in parallel now and act on the findings. If one does not apply, say why in one line and stop.")
 
