@@ -741,12 +741,26 @@ impl Library {
         if self.highlights_lock.is_some() {
             return None;
         }
+        let list = self.adopt_orphans(key, list);
         let before = if list.is_empty() { self.highlights.remove(key) } else { self.highlights.insert(key.to_string(), list) };
         if self.sync_gate {
             self.deferred_marks.entry(key.to_string()).or_insert_with(|| before.clone().unwrap_or_default());
         }
         self.write_highlights();
         Some(before.unwrap_or_default())
+    }
+
+    fn adopt_orphans(&self, key: &str, mut list: Vec<Highlight>) -> Vec<Highlight> {
+        let Some(lost) = self.highlights_orphans.get(key) else { return list };
+        let known: HashSet<u64> = self.highlights.get(key).into_iter().flatten().map(|h| h.id).collect();
+        for h in list.iter_mut().filter(|h| !known.contains(&h.id) && !h.parts.is_empty() && h.note.is_empty() && h.pin.is_none() && h.ink.is_empty()) {
+            if let Some(a) = lost.get(&highlights::fingerprint(h)) {
+                h.note = a.note.clone();
+                h.pin = a.pin;
+                h.ink = a.ink.clone();
+            }
+        }
+        list
     }
 
     fn write_highlights(&mut self) {

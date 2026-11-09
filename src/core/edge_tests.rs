@@ -2186,6 +2186,30 @@ fn a_passage_that_reuses_an_id_in_the_first_release_gets_no_foreign_note() {
 }
 
 #[test]
+fn marking_a_passage_again_brings_back_its_orphaned_note_and_undo_keeps_it() {
+    use crate::core::highlights::{ANNOTATIONS_NAME, Annotations, fingerprint};
+    let (root, mut lib) = workspace("highlights-remark", &config(1, 0));
+    lib.set_highlights("k", vec![pdf_noted(1, 0, "Formel merken"), pdf_mark(2, 1)], "markiert".into());
+    rewrite_like_the_first_release(&root, |list| list.retain(|h| h.id != 1));
+    lib.open(&root);
+    assert!(lib.highlights_of("k").iter().all(|h| h.note.is_empty()));
+    let mut again = lib.highlights_of("k");
+    again.push(pdf_mark(3, 0));
+    lib.set_highlights("k", again, "markiert".into());
+    assert_eq!(lib.highlights_of("k").iter().find(|h| h.id == 3).unwrap().note, "Formel merken");
+    let note_on_disk = || -> Option<String> {
+        let side: Annotations = crate::core::workspace::load(&root.join(ANNOTATIONS_NAME)).unwrap()?;
+        side.documents.get("k")?.notes.get(&fingerprint(&pdf_mark(1, 0))).map(|a| a.note.clone())
+    };
+    assert_eq!(note_on_disk().as_deref(), Some("Formel merken"));
+    lib.undo();
+    assert_eq!(note_on_disk().as_deref(), Some("Formel merken"));
+    lib.open(&root);
+    assert_eq!(note_on_disk().as_deref(), Some("Formel merken"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_sidecar_from_a_newer_version_locks_the_marks_and_stays_as_it_is() {
     use crate::core::highlights::{ANNOTATIONS_NAME, ANNOTATIONS_VERSION, FILE_NAME, document_key};
     let (root, mut lib) = workspace("highlights-newer", &config(1, 0));

@@ -231,7 +231,25 @@ pub fn split(marks: &Highlights, orphans: &Orphans) -> (Highlights, Annotations)
                 continue;
             }
             if !h.note.is_empty() || h.pin.is_some() || !h.ink.is_empty() {
-                extra.notes.insert(fingerprint(h), Attached { note: h.note.clone(), pin: h.pin, ink: h.ink.clone() });
+                let entry = extra.notes.entry(fingerprint(h)).or_default();
+                if entry.note.is_empty() {
+                    entry.note = h.note.clone();
+                } else if entry.note != h.note {
+                    let have: Vec<String> = entry.note.split("
+
+").map(str::to_string).collect();
+                    for part in h.note.split("
+
+").filter(|p| !p.is_empty() && !have.iter().any(|n| n == p)) {
+                        entry.note = format!("{}
+
+{part}", entry.note);
+                    }
+                }
+                entry.pin = entry.pin.or(h.pin);
+                if entry.ink.is_empty() {
+                    entry.ink = h.ink.clone();
+                }
             }
             plain.push(Highlight { id: h.id, color: h.color.clone(), text: h.text.clone(), parts: h.parts.clone(), ..Default::default() });
         }
@@ -696,4 +714,17 @@ meins");
         crate::core::workspace::save(&store, &path).unwrap();
         assert_eq!(crate::core::workspace::load::<Highlights>(&path).unwrap(), Some(store));
     }
+
+    #[test]
+    fn identical_passages_with_different_notes_keep_both() {
+        let passage = |id: u64, note: &str| Highlight { id, color: "yellow".into(), text: "Wort".into(), parts: vec![HighlightPart { page: 0, rects: vec![[1., 2., 3., 4.]] }], note: note.into(), ..Default::default() };
+        let marks = Highlights::from([("k".to_string(), vec![passage(1, "a"), passage(2, "b")])]);
+        let (main, side) = split(&marks, &Orphans::new());
+        let (back, _) = merge(&main, &side);
+        assert!(back["k"].iter().all(|h| h.note == "a
+
+b"), "{back:?}");
+        assert_eq!(split(&back, &Orphans::new()).1, side);
+    }
+
 }
