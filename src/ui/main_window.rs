@@ -549,6 +549,7 @@ impl Render for MainWindow {
         } else {
             0.
         };
+        let bar_room = if matches!(l.route(), Route::Doc(_)) && l.page_bars.values().any(|p| l.active_document.as_ref() == Some(p) || l.split_document.as_ref() == Some(p)) { control::SUBBAR } else { 0. };
         let working = (!l.exporting_pdfs.is_empty() && l.toast.is_none()).then(|| toast_view(tr("PDF wird erstellt …"), "loader", None, &t));
         let error = l.last_error.clone();
         let broken = l.config_broken;
@@ -604,7 +605,7 @@ impl Render for MainWindow {
                     .flex()
                     .justify_center()
                     .child(v)
-                    .with_animation(("toast", toast_id), Animation::new(toast_motion).with_easing(ease_out_quint()), move |d, p| d.bottom(px(10. + notice_room + 12. * p)).opacity(p))
+                    .with_animation(("toast", toast_id), Animation::new(toast_motion).with_easing(ease_out_quint()), move |d, p| d.bottom(px(10. + notice_room + bar_room + 12. * p)).opacity(p))
             }));
         if let Some(message) = error {
             root = root.child(error_alert(message, broken, config_path, &t));

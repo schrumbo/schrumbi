@@ -66,7 +66,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Seiten nach oben schieben} | {key:movePagesUp} |
 | {ui:Seiten nach unten schieben} | {key:movePagesDown} |
 | {ui:Seiten löschen} | {key:deletePages} |
-| {ui:PDF einfügen…} | {key:insertPdf} |
+| {ui:Seiten aus PDF einfügen …} | {key:insertPdf} |
 
 ## Editor
 

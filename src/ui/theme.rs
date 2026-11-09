@@ -130,8 +130,20 @@ pub mod tint {
     pub const SAVE_FLASH: f32 = 0.16;
     /// The fill of a selected row in a list of pages.
     pub const SELECTED: f32 = 0.14;
-    /// The edge of a selected row in a list of pages.
-    pub const SELECTED_EDGE: f32 = 0.5;
+    /// The edge of a selected row in a list of pages, drawn in the readable accent.
+    pub const SELECTED_EDGE: f32 = 0.7;
+    /// What the pointer adds over a selected row of the page list.
+    pub const SELECTED_HOVER: f32 = 0.14;
+    /// The opacity of a control that waits for something.
+    pub const DISABLED: f32 = 0.4;
+    /// The opacity of a page while it is being dragged.
+    pub const DRAGGED: f32 = 0.4;
+}
+
+/// Measures of the page list of a PDF.
+pub mod pages {
+    /// The line that shows where dragged pages land.
+    pub const DROP_LINE: f32 = 2.;
 }
 
 /// The fill a control gets while the keyboard has the focus.
@@ -610,6 +622,19 @@ mod tests {
             let t = Theme::new(kind);
             for color in [t.red, t.accent] {
                 assert!(contrast(white(), t.badge_fill(color)) >= 4.5, "{kind:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_selected_page_shows_against_every_panel() {
+        for kind in [Kind::Light, Kind::Dark, Kind::Nord, Kind::Dracula] {
+            let t = Theme::new(kind);
+            for background in [t.content, t.sidebar, t.secondary_bg] {
+                let row = background.blend(t.accent.opacity(tint::SELECTED));
+                assert!(contrast(t.accent_text.opacity(tint::SELECTED_EDGE), background) >= 3., "edge on the panel, {kind:?}: {}", contrast(t.accent_text.opacity(tint::SELECTED_EDGE), background));
+                assert!(contrast(row, background) >= 1.1, "fill on the panel, {kind:?}: {}", contrast(row, background));
+                assert!(contrast(row.blend(t.accent.opacity(tint::SELECTED_HOVER)), row) >= 1.1, "hover on a selected row, {kind:?}");
             }
         }
     }

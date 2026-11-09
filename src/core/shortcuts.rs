@@ -313,7 +313,7 @@ impl ShortcutAction {
             Self::MovePagesUp => "Seiten nach oben schieben",
             Self::MovePagesDown => "Seiten nach unten schieben",
             Self::DeletePages => "Seiten löschen",
-            Self::InsertPdf => "PDF einfügen…",
+            Self::InsertPdf => "Seiten aus PDF einfügen …",
         })
     }
 
@@ -389,12 +389,12 @@ impl ShortcutAction {
             Self::ToggleWrap => s("z", true, false, true, false),
             Self::ToggleLive => s("l", true, false, true, false),
             Self::MarkText => s("h", false, false, false, false),
-            Self::RotatePagesLeft => s("left", true, false, true, false),
-            Self::RotatePagesRight => s("right", true, false, true, false),
+            Self::RotatePagesLeft => s("r", false, true, false, false),
+            Self::RotatePagesRight => s("r", false, false, false, false),
             Self::MovePagesUp => s("up", false, false, true, false),
             Self::MovePagesDown => s("down", false, false, true, false),
             Self::DeletePages => s("delete", true, true, false, false),
-            Self::InsertPdf => s("p", true, false, true, false),
+            Self::InsertPdf => s("i", false, false, false, false),
         })
     }
 

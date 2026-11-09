@@ -70,16 +70,19 @@ Links in {ui:Seiten}. Ein Klick wählt und springt, Strg plus Klick (Mac: ⌘) f
 
 | Befehl | Kürzel |
 |---|---|
-| {ui:Links drehen} | {key:rotatePagesLeft} |
-| {ui:Rechts drehen} | {key:rotatePagesRight} |
-| {ui:Nach oben} | {key:movePagesUp} |
-| {ui:Nach unten} | {key:movePagesDown} |
-| {ui:Löschen} | {key:deletePages} oder {key:delete} in der Seitenliste |
-| {ui:PDF einfügen…} | {key:insertPdf} |
+| {ui:Seite links drehen} | {key:rotatePagesLeft} |
+| {ui:Seite rechts drehen} | {key:rotatePagesRight} |
+| {ui:Seite nach oben} | {key:movePagesUp} |
+| {ui:Seite nach unten} | {key:movePagesDown} |
+| {ui:Seite löschen} | {key:deletePages} oder {key:delete} in der Seitenliste |
+| {ui:Seiten aus PDF einfügen …} | {key:insertPdf} |
 
-- Seiten ziehen, die Linie zeigt, wohin sie kommen.
-- Eine PDF aus dem Dateimanager auf die Liste ziehen fügt sie an der Linie ein.
-- Rechtsklick auf eine Seite zeigt dieselben Befehle, dazu {ui:PDF hier einfügen…}.
+- Die Befehle nennen, auf wie viele Seiten sie wirken. Die Leiste unter der Liste zählt die Auswahl, das Kreuz hebt sie auf.
+- In der Liste: {key:up} und {key:down} wechseln die Seite, {key:shift-up} und {key:shift-down} erweitern die Auswahl, {key:cmd-a} wählt alle, {key:shift-f10} öffnet das Menü.
+- Seiten ziehen, die Linie zeigt, wohin sie kommen. {key:escape} bricht das Ziehen ab.
+- PDFs aus dem Dateimanager auf die Liste ziehen fügt sie nacheinander an der Linie ein, jede als eigener Schritt für {key:Undo}.
+- Rechtsklick auf eine Seite zeigt dieselben Befehle.
+- Ein Hinweis verschwindet mit {key:escape}.
 - Die Datei ändert sich wirklich. {key:Undo} und {key:Redo} stellen sie Byte für Byte wieder her, die Markierungen bleiben an ihrem Text.
 - Die letzte Seite lässt sich nicht löschen.
 

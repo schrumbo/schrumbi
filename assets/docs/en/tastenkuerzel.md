@@ -66,7 +66,7 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Seiten nach oben schieben} | {key:movePagesUp} |
 | {ui:Seiten nach unten schieben} | {key:movePagesDown} |
 | {ui:Seiten löschen} | {key:deletePages} |
-| {ui:PDF einfügen…} | {key:insertPdf} |
+| {ui:Seiten aus PDF einfügen …} | {key:insertPdf} |
 
 ## Editor
 

@@ -629,6 +629,7 @@ impl DropPanes {
 
 impl Render for Pages {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        cx.default_global::<super::pdf_view::PagePanels>().clear();
         if !cx.has_active_drag() {
             self.doc_dragging = false;
             self.doc_drop = None;
