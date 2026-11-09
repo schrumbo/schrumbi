@@ -664,6 +664,7 @@ impl Library {
             let old_orphans = self.highlights_orphans.get(&written.old_key).cloned().unwrap_or_default();
             changes.push(Change::Highlights { orphans: old_orphans, key: written.old_key.clone(), list: old });
         }
+        let list = joined(self.highlights_of(&written.new_key), list);
         let before = self.store_highlights(&written.new_key, list).unwrap_or_default();
         changes.insert(0, Change::Highlights { orphans, key: written.new_key, list: before });
         changes.push(replaced);
@@ -4199,8 +4200,6 @@ fn file_hash(path: &Path) -> Option<u64> {
     std::fs::read(path).ok().map(|bytes| content_hash(&bytes))
 }
 
-/// Keeps a copy of a file for undo; on APFS the copy takes no extra space.
-
 /// Why an edited PDF was not written.
 pub enum PdfWriteError {
     Backup,
@@ -4250,19 +4249,37 @@ pub fn write_edited_pdf(root: Option<PathBuf>, path: &Path, bytes: &[u8], old_ke
     Ok(written(Some(backup), copy_elsewhere))
 }
 
+fn joined(mut have: Vec<Highlight>, incoming: Vec<Highlight>) -> Vec<Highlight> {
+    if have.is_empty() {
+        return incoming;
+    }
+    let known: HashSet<String> = have.iter().filter(|h| !h.parts.is_empty()).map(highlights::fingerprint).collect();
+    for mut h in incoming {
+        if !h.parts.is_empty() && known.contains(&highlights::fingerprint(&h)) {
+            continue;
+        }
+        if have.iter().any(|o| o.id == h.id) {
+            h.id = highlights::next_id(&have, !h.parts.is_empty());
+        }
+        have.push(h);
+    }
+    have
+}
+
 fn same_content_elsewhere(root: &Path, path: &Path, original: &Path, key: &str) -> bool {
     let Some(size) = std::fs::metadata(original).ok().map(|m| m.len()) else { return true };
     let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     walkdir::WalkDir::new(root)
         .min_depth(1)
         .into_iter()
-        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .filter_entry(|e| e.file_name() != ".git")
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file() && e.metadata().is_ok_and(|m| m.len() == size))
         .filter(|e| dunce::canonicalize(e.path()).unwrap_or_else(|_| e.path().to_path_buf()) != path)
         .any(|e| std::fs::read(e.path()).is_ok_and(|bytes| highlights::document_key(&bytes) == key))
 }
 
+/// Keeps a copy of a file for undo; on APFS the copy takes no extra space.
 fn stash(path: &Path) -> Result<PathBuf> {
     let dir = undo_folder().ok_or_else(|| anyhow::anyhow!("no data folder"))?.join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir_all(&dir)?;

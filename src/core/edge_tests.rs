@@ -1893,6 +1893,28 @@ fn marks_the_app_wrote_itself_are_not_read_again_but_a_change_from_outside_is() 
 }
 
 #[test]
+fn a_page_edit_that_gives_content_with_marks_already_joins_them() {
+    use crate::core::highlights::document_key;
+    let (root, mut lib) = workspace("replace-pdf-join", &config(1, 0));
+    let path = root.join("Skript.pdf");
+    let (old, new) = (b"%PDF-1.4 alt".to_vec(), b"%PDF-1.4 neu".to_vec());
+    std::fs::write(&path, &old).unwrap();
+    std::fs::create_dir_all(root.join(".trash")).unwrap();
+    std::fs::write(root.join(".trash").join("Kopie.pdf"), &old).unwrap();
+    let (old_key, new_key) = (document_key(&old), document_key(&new));
+    lib.set_highlights(&old_key, vec![pdf_mark(1, 0)], "markiert".into());
+    lib.set_highlights(&new_key, vec![pdf_mark(1, 2)], "markiert".into());
+    lib.replace_pdf(&path, new, &old_key, vec![pdf_mark(1, 1)], "Seite gedreht".into());
+    let joined = lib.highlights_of(&new_key);
+    assert_eq!(joined.len(), 2, "{joined:?}");
+    assert_eq!(joined[0], pdf_mark(1, 2));
+    assert_eq!(lib.highlights_of(&old_key), vec![pdf_mark(1, 0)], "a copy in the trash folder keeps the old marks");
+    lib.undo();
+    assert_eq!(lib.highlights_of(&new_key), vec![pdf_mark(1, 2)]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_page_edit_that_cannot_be_recorded_puts_the_original_back() {
     use crate::core::highlights::document_key;
     use crate::core::library::write_edited_pdf;
