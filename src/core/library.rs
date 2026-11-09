@@ -262,7 +262,7 @@ pub struct Library {
     highlights_lock: Option<String>,
     highlights_orphans: highlights::Orphans,
     highlights_disk: (Highlights, highlights::Annotations),
-    highlights_stamp: [Option<Stamp>; 2],
+    highlights_stamp: [Option<Option<u64>>; 2],
     deferred_marks: BTreeMap<String, Vec<Highlight>>,
     naming_cache: std::sync::Mutex<Option<(String, Arc<Vec<Naming>>)>>,
     pub now: DateTime<Local>,
@@ -813,19 +813,19 @@ impl Library {
         let (main, annotations) = highlights::split(&self.highlights, &self.highlights_orphans);
         let mut failed = None;
         if annotations != self.highlights_disk.1 {
-            match workspace::save(&annotations, &root.join(highlights::ANNOTATIONS_NAME)) {
-                Ok(()) => {
+            match workspace::save_bytes(&annotations, &root.join(highlights::ANNOTATIONS_NAME)) {
+                Ok(bytes) => {
                     self.highlights_disk.1 = annotations;
-                    self.highlights_stamp[1] = Some(stamp(&root.join(highlights::ANNOTATIONS_NAME)));
+                    self.highlights_stamp[1] = Some(Some(content_hash(&bytes)));
                 }
                 Err(e) => failed = Some(e),
             }
         }
         if failed.is_none() && main != self.highlights_disk.0 {
-            match workspace::save(&main, &root.join(highlights::FILE_NAME)) {
-                Ok(()) => {
+            match workspace::save_bytes(&main, &root.join(highlights::FILE_NAME)) {
+                Ok(bytes) => {
                     self.highlights_disk.0 = main;
-                    self.highlights_stamp[0] = Some(stamp(&root.join(highlights::FILE_NAME)));
+                    self.highlights_stamp[0] = Some(Some(content_hash(&bytes)));
                 }
                 Err(e) => failed = Some(e),
             }
@@ -850,7 +850,7 @@ impl Library {
 
     fn reload_highlights(&mut self) -> bool {
         let Some(root) = self.root.clone() else { return false };
-        let now = [highlights::FILE_NAME, highlights::ANNOTATIONS_NAME].map(|name| stamp(&root.join(name)));
+        let now = [highlights::FILE_NAME, highlights::ANNOTATIONS_NAME].map(|name| file_hash(&root.join(name)));
         if self.highlights_stamp == now.map(Some) {
             return false;
         }
@@ -4178,12 +4178,18 @@ fn undo_folder() -> Option<PathBuf> {
     super::prefs::data_dir().map(|d| d.join("undo"))
 }
 
-/// Keeps a copy of a file for undo; on APFS the copy takes no extra space.
-type Stamp = Option<(u64, std::time::SystemTime)>;
-
-fn stamp(path: &Path) -> Stamp {
-    std::fs::metadata(path).ok().and_then(|m| Some((m.len(), m.modified().ok()?)))
+fn content_hash(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
 }
+
+fn file_hash(path: &Path) -> Option<u64> {
+    std::fs::read(path).ok().map(|bytes| content_hash(&bytes))
+}
+
+/// Keeps a copy of a file for undo; on APFS the copy takes no extra space.
 
 /// Why an edited PDF was not written.
 pub enum PdfWriteError {

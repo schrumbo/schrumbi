@@ -35,12 +35,17 @@ pub fn load<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
 
 /// Writes atomically after taking a rolling backup.
 pub fn save<T: Serialize>(value: &T, path: &Path) -> Result<()> {
+    save_bytes(value, path).map(|_| ())
+}
+
+/// Like `save`, and returns the bytes written.
+pub fn save_bytes<T: Serialize>(value: &T, path: &Path) -> Result<Vec<u8>> {
     backup(path);
     let json = to_swift_json(value)?;
     let tmp = path.with_file_name(format!(".{}.tmp", path.file_name().unwrap_or_default().to_string_lossy()));
-    std::fs::write(&tmp, json)?;
+    std::fs::write(&tmp, &json)?;
     std::fs::rename(&tmp, path)?;
-    Ok(())
+    Ok(json.into())
 }
 
 /// Renames files written by earlier versions (studium.json, .studium-state.json, .studium-backup).
