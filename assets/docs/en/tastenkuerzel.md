@@ -73,6 +73,7 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Notiz setzen} | {key:noteTool} |
 | {ui:Notiz zur Auswahl} | {key:noteOnSelection} |
 | {ui:Auswahl} | {key:selectTool} |
+| {ui:Markierungen anzeigen} | {key:markList} |
 | {ui:Stiftfarbe: Schwarz} | {key:inkBlack} |
 | {ui:Stiftfarbe: Rot} | {key:inkRed} |
 | {ui:Stiftfarbe: Blau} | {key:inkBlue} |

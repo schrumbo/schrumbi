@@ -97,7 +97,7 @@ Highlighting the same passage again recolors it instead of doubling it.
 - With a new pin, a pale pin shows the spot while the note is open. Under the field it says how to save or discard.
 - A note that is still open is saved: when you close the PDF, before a page change, when you switch folders and when you quit.
 - A note on text shows as a small symbol left of the first line, never on the text.
-- Everything is also listed in the {ui:Marker} tab, a click jumps there. {key:up} and {key:down} change the row, {key:return} jumps, {key:delete} removes.
+- Everything is also listed in the {ui:Marker} tab, a click jumps there. {key:up} and {key:down} change the row, {key:return} jumps, {key:delete} removes. Without a mouse: {ui:Markierungen anzeigen} in the palette or {key:markList}.
 
 ### Export with marks
 

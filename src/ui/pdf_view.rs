@@ -28,7 +28,7 @@ use crate::core::pdf_render::{LinkTarget, MARK_OPACITY, MarkPaint, PageRect, Pag
 use crate::core::prefs::{self, PdfPosition};
 use crate::core::shortcuts::ShortcutAction;
 
-actions!(schrumbi_pdf, [Escape, MarkSelection, RotatePagesLeft, RotatePagesRight, MovePagesUp, MovePagesDown, DeletePages, InsertPdf, PenTool, EraserTool, NoteTool, ExportMarkedPdf, TogglePageList, SelectTool, NoteOnSelection, InkBlack, InkRed, InkBlue, InkGreen, InkThin, InkThick]);
+actions!(schrumbi_pdf, [Escape, MarkSelection, RotatePagesLeft, RotatePagesRight, MovePagesUp, MovePagesDown, DeletePages, InsertPdf, PenTool, EraserTool, NoteTool, ExportMarkedPdf, TogglePageList, SelectTool, ShowMarks, NoteOnSelection, InkBlack, InkRed, InkBlue, InkGreen, InkThin, InkThick]);
 
 /// Key bindings of the viewer; Escape must reach it before text fields and the main window take it. The page commands read their keys in `on_key`, so plain letters never reach a text field.
 pub fn key_bindings() -> Vec<KeyBinding> {
@@ -44,6 +44,7 @@ const MARK_BAR_WIDTH: f32 = 148.;
 const INK_COLORS: [(&str, u32); 4] = [("ink-black", 0x1C1C1E), ("ink-red", 0xD70015), ("ink-blue", 0x0040DD), ("ink-green", 0x248A3D)];
 const INK_WIDTHS: [f32; 2] = [1.5, 4.];
 const INK_STEP: f32 = 0.5;
+const INK_SIMPLIFY: f32 = 0.25;
 const INK_HALO: f32 = 6.;
 const TOOL_GAP: f32 = space::XXS;
 const MARK_UNDERLINE: f32 = 2.;
@@ -280,6 +281,7 @@ struct Progress {
 enum Failure {
     Edit(EditError),
     Write(PdfWriteError),
+    Unreadable(Vec<String>),
 }
 
 struct Edited {
@@ -288,6 +290,7 @@ struct Edited {
     inserted: usize,
     files: usize,
     skipped: usize,
+    unreadable: Vec<String>,
 }
 
 /// What the view held when an edit started.
@@ -1104,11 +1107,13 @@ impl PdfView {
             let changed = fresh != self.marks;
             self.marks = fresh;
             self.marks_dirty = false;
+            let mut restored = None;
             if let Some(id) = self.removed_mark
                 && self.marks.iter().any(|h| h.id == id)
             {
                 self.removed_mark = None;
                 self.active_mark = Some(id);
+                restored = Some(id);
             }
             let now = print_of(&self.marks, self.active_mark);
             if self.active_mark.is_some() {
@@ -1122,6 +1127,12 @@ impl PdfView {
             if changed {
                 self.build_ink();
                 self.build_order();
+            }
+            if let Some(id) = restored.filter(|_| self.panel_open && self.panel_tab == PanelTab::Marks)
+                && let Some(at) = self.mark_order.iter().position(|m| *m == id)
+            {
+                self.mark_focus = Some(id);
+                self.mark_scroll.scroll_to_item(at, ScrollStrategy::Nearest);
             }
         }
         self.marks_theme = Some(t.kind);
@@ -1547,7 +1558,7 @@ impl PdfView {
         }
         let mut list = super::state::read(cx, |l| l.highlights_of(&key));
         let id = super::state::read(cx, |l| l.next_mark_id(&key, false));
-        let line = InkLine { page: stroke.page, width: INK_WIDTHS[self.ink_width], points: stroke.points };
+        let line = InkLine { page: stroke.page, width: INK_WIDTHS[self.ink_width], points: highlights::simplify(&stroke.points, INK_SIMPLIFY) };
         list.push(Highlight { id, color: INK_COLORS[self.ink_color].0.to_string(), ink: vec![line], ..Default::default() });
         super::state::act(cx, |l| l.set_highlights_quiet(&key, list, tr("Gezeichnet")));
         cx.notify();
@@ -1583,7 +1594,7 @@ impl PdfView {
         let mut layer: HashMap<usize, Vec<InkPaint>> = HashMap::new();
         for h in self.marks.iter().filter(|h| !self.erased.contains(&h.id)) {
             for line in &h.ink {
-                if let Some(paint) = InkPaint::new(h.id, &h.color, line.width, &line.points) {
+                if let Some(paint) = InkPaint::new(h.id, &h.color, line.width, &highlights::simplify(&line.points, INK_SIMPLIFY)) {
                     layer.entry(line.page).or_default().push(paint);
                 }
             }
@@ -2872,10 +2883,41 @@ impl PdfView {
         }
     }
 
+    /// Like `list_focus`, and again on the next frame: a command from the palette runs while the palette is still closing and takes the focus back.
+    fn list_focus_soon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.list_focus(window, cx);
+        let me = cx.entity();
+        window.on_next_frame(move |window, cx| {
+            me.update(cx, |v, cx| v.list_focus(window, cx));
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(400)).await;
+            let _ = this.update_in(cx, |v, window, cx| if v.focus.is_focused(window) { v.list_focus(window, cx) });
+        })
+        .detach();
+    }
+
     /// Puts the keyboard in the page list when it is open, so a page command can be repeated.
     fn list_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.panel_open && self.panel_tab == PanelTab::Thumbnails && self.editable() {
             window.focus(&self.pages_focus, cx);
+        }
+    }
+
+    /// Opens the Marker list and puts the keyboard on the row of the mark in hand, or on the first row.
+    fn show_marks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !(self.panel_open && self.panel_tab == PanelTab::Marks) {
+            self.navigate(PanelTab::Marks, window, cx);
+        }
+        self.focus_marks();
+        cx.notify();
+    }
+
+    fn focus_marks(&mut self) {
+        let at = self.active_mark.and_then(|id| self.mark_order.iter().position(|m| *m == id)).or((!self.mark_order.is_empty()).then_some(0));
+        if let Some(at) = at {
+            self.mark_focus = self.mark_order.get(at).copied();
+            self.mark_scroll.scroll_to_item(at, ScrollStrategy::Nearest);
         }
     }
 
@@ -2894,6 +2936,9 @@ impl PdfView {
                 }
                 self.panel_open = true;
                 self.panel_tab = value;
+                if value == PanelTab::Marks && window.last_input_was_keyboard() {
+                    self.focus_marks();
+                }
             }
         }
         if self.panel_open && self.panel_tab == PanelTab::Thumbnails {
@@ -3451,33 +3496,45 @@ impl PdfView {
         let root = super::state::read(cx, |l| l.root.clone());
         let task = cx.background_spawn(async move {
             let data = std::fs::read(&path).map_err(|_| Failure::Edit(EditError::Broken))?;
-            let (op, bytes, inserted, files, skipped) = match edit {
+            let (op, bytes, inserted, files, skipped, unreadable) = match edit {
                 Edit::Op(op) => {
                     let bytes = pdf_edit::apply(&data, &op).map_err(Failure::Edit)?;
-                    (op, bytes, 0, 0, 0)
+                    (op, bytes, 0, 0, 0, Vec::new())
                 }
                 Edit::Insert { at, files, progress } => {
-                    let (mut bytes, mut gap, mut inserted, mut done) = (data, at, 0, 0);
+                    let (mut bytes, mut gap, mut inserted, mut done, mut seen) = (data, at, 0, 0, 0);
+                    let mut unreadable = Vec::new();
                     for file in &files {
-                        if done > 0 && progress.cancel.load(Ordering::Relaxed) {
+                        if seen > 0 && progress.cancel.load(Ordering::Relaxed) {
                             break;
                         }
-                        let pdf = std::fs::read(file).map_err(|_| Failure::Edit(EditError::Broken))?;
-                        let count = PdfDoc::from_data(Arc::new(pdf.clone())).map_or(0, |d| d.page_count());
-                        if count == 0 {
-                            return Err(Failure::Edit(EditError::Broken));
+                        let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                        let pdf = std::fs::read(file).ok();
+                        let count = pdf.as_ref().map_or(0, |p| PdfDoc::from_data(Arc::new(p.clone())).map_or(0, |d| d.page_count()));
+                        match pdf.filter(|_| count > 0) {
+                            Some(pdf) => match pdf_edit::apply(&bytes, &PageOp::Insert { at: gap, pdf: pdf.clone() }) {
+                                Ok(next) => {
+                                    bytes = next;
+                                    gap += count;
+                                    inserted += count;
+                                    done += 1;
+                                }
+                                Err(e) if pdf_edit::insertable(&pdf).is_ok() => return Err(Failure::Edit(e)),
+                                Err(_) => unreadable.push(name),
+                            },
+                            None => unreadable.push(name),
                         }
-                        bytes = pdf_edit::apply(&bytes, &PageOp::Insert { at: gap, pdf }).map_err(Failure::Edit)?;
-                        gap += count;
-                        inserted += count;
-                        done += 1;
-                        progress.done.store(done, Ordering::Relaxed);
+                        seen += 1;
+                        progress.done.store(seen, Ordering::Relaxed);
                     }
-                    (PageOp::Insert { at, pdf: Vec::new() }, bytes, inserted, done, files.len() - done)
+                    if done == 0 && !unreadable.is_empty() {
+                        return Err(Failure::Unreadable(unreadable));
+                    }
+                    (PageOp::Insert { at, pdf: Vec::new() }, bytes, inserted, done, files.len() - seen, unreadable)
                 }
             };
             let written = crate::core::library::write_edited_pdf(root, &path, &bytes, &old_key).map_err(Failure::Write)?;
-            Ok(Edited { op, written, inserted, files, skipped })
+            Ok(Edited { op, written, inserted, files, skipped, unreadable })
         });
         self.working = Some(Instant::now());
         self.page_notice = None;
@@ -3531,6 +3588,13 @@ impl PdfView {
                 cx.notify();
                 return;
             }
+            Err(Failure::Unreadable(names)) => {
+                self.queued.clear();
+                self.dropped = 0;
+                let (title, body) = unreadable_notice(&names);
+                self.show_notice(title, body, cx);
+                return;
+            }
         };
         let count = started.sizes.len();
         for waiting in &mut self.queued {
@@ -3556,7 +3620,10 @@ impl PdfView {
             self.landed = Some((done.op, count, done.inserted));
             self.reload_if_changed(cx);
         }
-        if left_out > 0 {
+        if !done.unreadable.is_empty() {
+            let (title, body) = unreadable_notice(&done.unreadable);
+            self.show_notice(title, if left_out > 0 { left_out_title(left_out) } else { body }, cx);
+        } else if left_out > 0 {
             self.show_notice(left_out_title(left_out), String::new(), cx);
         }
         cx.notify();
@@ -3782,7 +3849,7 @@ impl PdfView {
         bar.child(on(self.page_button("pdf-pages-left", "rotate-ccw", help(ShortcutAction::RotatePagesLeft, labels.left), t), |v, cx| v.rotate_pages(None, false, cx)))
             .child(on(self.page_button("pdf-pages-right", "rotate-cw", help(ShortcutAction::RotatePagesRight, labels.right), t), |v, cx| v.rotate_pages(None, true, cx)))
             .child(on(self.page_button("pdf-pages-delete", "trash-2", help(ShortcutAction::DeletePages, labels.delete), t), |v, cx| v.delete_pages(None, cx)))
-            .child(on(self.page_button("pdf-pages-insert", "file-plus", help(ShortcutAction::InsertPdf, labels.insert), t), |v, cx| v.choose_pdf(None, cx)))
+            .child(on(self.page_button("pdf-pages-insert", "file-plus", help(ShortcutAction::InsertPdf, tr("Seiten aus PDF einfügen …")), t), |v, cx| v.choose_pdf(None, cx)))
             .child(div().flex_1())
             .when(chosen > 1, |d| d.child(div().min_w_0().truncate().font_features(tabular()).text_size(px(font::CAPTION)).text_color(t.secondary).child(trf("%lld ausgewählt", &[&chosen]))))
             .when(chosen > 0, |d| d.child(clear))
@@ -3959,7 +4026,7 @@ impl PdfView {
                                 .on_key_down(arrow_keys(true, false))
                                 .on_click(move |_, window, cx| delete.update(cx, |v, cx| v.delete_note(window, cx)))
                         }))
-                        .child(div().flex_1().min_w_0().truncate().child(caption(trf("%@ speichert · Esc verwirft", &[&send]), t)))
+                        .child(div().flex_1().min_w_0().child(caption(trf("%@ speichert · Esc verwirft", &[&send]), t)))
                         .child(
                             div()
                                 .id("pdf-note-save")
@@ -4072,6 +4139,18 @@ fn settle_without_view(result: Result<Edited, Failure>, started: Started, cx: &m
             super::state::act(cx, |l| l.last_error = Some(format!("{title}: {body}")));
         }
         Err(Failure::Write(e)) => super::state::act(cx, |l| l.pdf_edit_failed(e)),
+        Err(Failure::Unreadable(names)) => {
+            let (title, _) = unreadable_notice(&names);
+            super::state::act(cx, |l| l.last_error = Some(title));
+        }
+    }
+}
+
+/// What is said about PDFs that could not be read and were left out of an insert: the file by name, or how many with their names.
+fn unreadable_notice(names: &[String]) -> (String, String) {
+    match names {
+        [one] => (trf("„%@“ ließ sich nicht lesen und wurde übersprungen", &[one]), String::new()),
+        _ => (trf("%@ Dateien ließen sich nicht lesen und wurden übersprungen", &[&names.len()]), names.join(", ")),
     }
 }
 
@@ -4230,13 +4309,14 @@ impl Render for PdfView {
                     v.add_mark(v.last_color, cx);
                 }
             }))
-            .on_action(cx.listener(|v, _: &RotatePagesLeft, window, cx| if in_field(window) { cx.propagate() } else { v.rotate_pages(None, false, cx); v.list_focus(window, cx); }))
-            .on_action(cx.listener(|v, _: &RotatePagesRight, window, cx| if in_field(window) { cx.propagate() } else { v.rotate_pages(None, true, cx); v.list_focus(window, cx); }))
-            .on_action(cx.listener(|v, _: &MovePagesUp, window, cx| if in_field(window) { cx.propagate() } else { v.move_pages(None, false, cx); v.list_focus(window, cx); }))
-            .on_action(cx.listener(|v, _: &MovePagesDown, window, cx| if in_field(window) { cx.propagate() } else { v.move_pages(None, true, cx); v.list_focus(window, cx); }))
-            .on_action(cx.listener(|v, _: &DeletePages, window, cx| if in_field(window) { cx.propagate() } else { v.delete_pages(None, cx); v.list_focus(window, cx); }))
+            .on_action(cx.listener(|v, _: &RotatePagesLeft, window, cx| if in_field(window) { cx.propagate() } else { v.rotate_pages(None, false, cx); v.list_focus_soon(window, cx); }))
+            .on_action(cx.listener(|v, _: &RotatePagesRight, window, cx| if in_field(window) { cx.propagate() } else { v.rotate_pages(None, true, cx); v.list_focus_soon(window, cx); }))
+            .on_action(cx.listener(|v, _: &MovePagesUp, window, cx| if in_field(window) { cx.propagate() } else { v.move_pages(None, false, cx); v.list_focus_soon(window, cx); }))
+            .on_action(cx.listener(|v, _: &MovePagesDown, window, cx| if in_field(window) { cx.propagate() } else { v.move_pages(None, true, cx); v.list_focus_soon(window, cx); }))
+            .on_action(cx.listener(|v, _: &DeletePages, window, cx| if in_field(window) { cx.propagate() } else { v.delete_pages(None, cx); v.list_focus_soon(window, cx); }))
             .on_action(cx.listener(|v, _: &InsertPdf, window, cx| if in_field(window) { cx.propagate() } else { v.choose_pdf(None, cx) }))
             .on_action(cx.listener(|v, _: &TogglePageList, window, cx| if in_field(window) { cx.propagate() } else { v.toggle_page_list(window, cx) }))
+            .on_action(cx.listener(|v, _: &ShowMarks, window, cx| if in_field(window) { cx.propagate() } else { v.show_marks(window, cx) }))
             .on_action(cx.listener(|v, _: &SelectTool, window, cx| if in_field(window) { cx.propagate() } else { v.set_tool(Tool::Select, window, cx) }))
             .on_action(cx.listener(|v, _: &NoteOnSelection, window, cx| if in_field(window) { cx.propagate() } else { v.note_on_selection(window, cx) }))
             .on_action(cx.listener(|v, _: &InkBlack, window, cx| if in_field(window) { cx.propagate() } else { v.pick_pen(Some(0), None, window, cx) }))
@@ -4557,27 +4637,31 @@ fn paint_ink(origin: Point<Pixels>, scale: f32, lines: &[InkPaint], live: Option
             continue;
         }
         if active == Some(line.id)
-            && let Some(path) = ink_path(scale, line, INK_HALO)
+            && let Some(mut path) = ink_path(scale, line, INK_HALO)
         {
-            window.paint_path(moved(&path, origin), halo.opacity(annot::HALO));
+            window.paint_path(moved(&mut path, origin), halo.opacity(annot::HALO));
         }
         let mut shape = line.shape.borrow_mut();
         if shape.as_ref().is_none_or(|(at, _)| *at != scale.to_bits()) {
             *shape = Some((scale.to_bits(), ink_path(scale, line, 0.)));
         }
-        if let Some((_, Some(path))) = shape.as_ref() {
+        if let Some((_, Some(path))) = shape.as_mut() {
             window.paint_path(moved(path, origin), line.color);
         }
     }
 }
 
-fn moved(path: &gpui_kit::Path<Pixels>, by: Point<Pixels>) -> gpui_kit::Path<Pixels> {
-    let mut path = path.clone();
-    path.bounds.origin += by;
-    for vertex in &mut path.vertices {
-        vertex.xy_position += by;
-    }
-    path
+fn moved(path: &mut gpui_kit::Path<Pixels>, by: Point<Pixels>) -> gpui_kit::Path<Pixels> {
+    let vertices = std::mem::take(&mut path.vertices);
+    let mut out = path.clone();
+    out.bounds.origin += by;
+    out.vertices = vertices.iter().map(|v| {
+        let mut v = v.clone();
+        v.xy_position += by;
+        v
+    }).collect();
+    path.vertices = vertices;
+    out
 }
 
 fn print_of(marks: &[Highlight], id: Option<u64>) -> Option<(u64, String)> {

@@ -97,7 +97,7 @@ Dieselbe Stelle noch einmal markieren färbt sie um, statt sie zu doppeln.
 - Beim neuen Pin zeigt ein blasser Pin die Stelle, solange die Notiz offen ist. Unter dem Feld steht, wie du speicherst oder verwirfst.
 - Eine Notiz, die noch offen ist, wird gespeichert: beim Schließen der PDF, vor einer Seitenänderung, beim Ordnerwechsel und beim Beenden.
 - Eine Notiz an Text steht als kleines Symbol links neben der ersten Zeile, nie auf dem Text.
-- Alles steht auch im Reiter {ui:Marker}, ein Klick springt dorthin. {key:up} und {key:down} wechseln die Zeile, {key:return} springt, {key:delete} entfernt.
+- Alles steht auch im Reiter {ui:Marker}, ein Klick springt dorthin. {key:up} und {key:down} wechseln die Zeile, {key:return} springt, {key:delete} entfernt. Ohne Maus: {ui:Markierungen anzeigen} im Befehlsfeld oder {key:markList}.
 
 ### Mit Markierungen exportieren
 

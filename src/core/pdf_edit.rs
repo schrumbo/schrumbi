@@ -555,6 +555,15 @@ fn finish(mut doc: Document, expected: usize) -> Result<Vec<u8>, EditError> {
     check(out, expected)
 }
 
+/// Whether a file can be inserted into another: the number of its pages, or why not.
+pub fn insertable(pdf: &[u8]) -> Result<usize, EditError> {
+    let doc = read(pdf)?;
+    match shown_leaves(&doc, pdf)?.len() {
+        0 => Err(EditError::Empty),
+        n => Ok(n),
+    }
+}
+
 /// Applies a page change and returns the new file. Pages that are deleted leave the file completely. The result is only returned when it opens and has exactly the expected number of pages.
 pub fn apply(data: &[u8], op: &PageOp) -> Result<Vec<u8>, EditError> {
     let mut doc = read(data)?;
@@ -1049,6 +1058,13 @@ pub mod tests {
         assert_eq!(sizes(&out), [(612., 792.), (792., 612.), (792., 612.), (612., 792.)]);
         let meta = open(&out).meta(&out);
         assert!(meta.outline.iter().any(|e| e.title == "Kapitel Drei" && e.page == 1) && meta.outline.iter().any(|e| e.title == "Kapitel Eins" && e.page == 2), "{:?}", meta.outline);
+    }
+
+    #[test]
+    fn a_file_tells_whether_it_can_be_inserted() {
+        assert!(insertable(&fixture()).is_ok_and(|n| n > 0));
+        assert_eq!(insertable(b"kein pdf"), Err(EditError::Broken));
+        assert_eq!(insertable(&encrypted(&fixture(), "geheim")), Err(EditError::Protected));
     }
 
     #[test]

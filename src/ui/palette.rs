@@ -230,6 +230,7 @@ fn commands(cx: &App) -> Vec<Command> {
             extra.push(Command { label: action.label(), group: edit.clone(), icon: "pencil", keys: keys(action), run: Run::NoteAction(run), aliases });
         }
         add(&file, S::ExportMarkedPdf.label(), "download", keys(S::ExportMarkedPdf), Run::NoteAction(Box::new(p::ExportMarkedPdf)));
+        add(&view, S::MarkList.label(), "highlighter", keys(S::MarkList), Run::NoteAction(Box::new(p::ShowMarks)));
         add(&view, S::PageList.label(), "gallery-vertical-end", keys(S::PageList), Run::NoteAction(Box::new(p::TogglePageList)));
     }
     if in_document {

@@ -370,6 +370,35 @@ pub fn document_key(data: &[u8]) -> String {
     Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Thins a stroke with Ramer-Douglas-Peucker: no dropped point lies farther than `tolerance` from the line left; the first and last point stay.
+pub fn simplify(points: &[[f32; 2]], tolerance: f32) -> Vec<[f32; 2]> {
+    if points.len() < 3 || !tolerance.is_finite() || tolerance < 0. {
+        return points.to_vec();
+    }
+    let mut keep = vec![false; points.len()];
+    keep[0] = true;
+    keep[points.len() - 1] = true;
+    let mut spans = vec![(0, points.len() - 1)];
+    while let Some((first, last)) = spans.pop() {
+        let (a, b) = (points[first], points[last]);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let length = dx.hypot(dy);
+        let mut far = (first, 0f32);
+        for (i, p) in points.iter().enumerate().take(last).skip(first + 1) {
+            let gap = if length > 0. { ((p[0] - a[0]) * dy - (p[1] - a[1]) * dx).abs() / length } else { (p[0] - a[0]).hypot(p[1] - a[1]) };
+            if gap > far.1 {
+                far = (i, gap);
+            }
+        }
+        if far.1 > tolerance {
+            keep[far.0] = true;
+            spans.push((first, far.0));
+            spans.push((far.0, last));
+        }
+    }
+    points.iter().zip(keep).filter(|(_, k)| *k).map(|(p, _)| *p).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,6 +413,38 @@ mod tests {
 
     fn ink() -> Highlight {
         Highlight { id: 3, color: "red".into(), ink: vec![InkLine { page: 0, width: 2., points: vec![[10., 10.], [50., 10.], [50., 50.]] }], ..Default::default() }
+    }
+
+    #[test]
+    fn a_straight_line_of_300_points_becomes_two() {
+        let line: Vec<[f32; 2]> = (0..300).map(|i| [i as f32 * 0.7, 10. + i as f32 * 0.2]).collect();
+        assert_eq!(simplify(&line, 0.25), vec![line[0], line[299]]);
+    }
+
+    #[test]
+    fn a_curve_keeps_its_shape_within_the_tolerance() {
+        let curve: Vec<[f32; 2]> = (0..400).map(|i| { let t = i as f32 / 399. * std::f32::consts::PI; [t * 60., t.sin() * 80.] }).collect();
+        let thin = simplify(&curve, 0.25);
+        assert!(thin.len() < curve.len() / 4 && thin.len() > 10);
+        assert_eq!(thin.first(), curve.first());
+        assert_eq!(thin.last(), curve.last());
+        for p in &curve {
+            let near = thin.windows(2).map(|w| {
+                let (dx, dy) = (w[1][0] - w[0][0], w[1][1] - w[0][1]);
+                let t = (((p[0] - w[0][0]) * dx + (p[1] - w[0][1]) * dy) / (dx * dx + dy * dy)).clamp(0., 1.);
+                (p[0] - (w[0][0] + t * dx)).hypot(p[1] - (w[0][1] + t * dy))
+            }).fold(f32::MAX, f32::min);
+            assert!(near <= 0.26, "{near}");
+        }
+    }
+
+    #[test]
+    fn short_and_odd_strokes_are_left_alone() {
+        assert_eq!(simplify(&[], 0.25), Vec::<[f32; 2]>::new());
+        assert_eq!(simplify(&[[1., 1.]], 0.25), vec![[1., 1.]]);
+        assert_eq!(simplify(&[[1., 1.], [1., 1.], [1., 1.]], 0.25), vec![[1., 1.], [1., 1.]]);
+        let back = [[0., 0.], [10., 0.], [0., 0.]];
+        assert_eq!(simplify(&back, 0.25), back.to_vec());
     }
 
     #[test]
