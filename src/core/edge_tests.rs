@@ -2210,6 +2210,34 @@ fn marking_a_passage_again_brings_back_its_orphaned_note_and_undo_keeps_it() {
 }
 
 #[test]
+fn a_note_cleared_after_marking_again_stays_cleared_through_delete_and_undo() {
+    use crate::core::highlights::{ANNOTATIONS_NAME, Annotations, fingerprint};
+    let (root, mut lib) = workspace("highlights-remark-clear", &config(1, 0));
+    lib.set_highlights("k", vec![pdf_noted(1, 0, "Formel merken"), pdf_mark(2, 1)], "markiert".into());
+    rewrite_like_the_first_release(&root, |list| list.retain(|h| h.id != 1));
+    lib.open(&root);
+    let mut again = lib.highlights_of("k");
+    again.push(pdf_mark(3, 0));
+    lib.set_highlights("k", again, "markiert".into());
+    let cleared: Vec<_> = lib.highlights_of("k").into_iter().map(|h| if h.id == 3 { crate::core::highlights::Highlight { note: String::new(), ..h } } else { h }).collect();
+    lib.set_highlights("k", cleared, "Notiz entfernt".into());
+    let without: Vec<_> = lib.highlights_of("k").into_iter().filter(|h| h.id != 3).collect();
+    lib.set_highlights("k", without, "entfernt".into());
+    let note_on_disk = || -> Option<String> {
+        let side: Annotations = crate::core::workspace::load(&root.join(ANNOTATIONS_NAME)).unwrap()?;
+        side.documents.get("k")?.notes.get(&fingerprint(&pdf_mark(1, 0))).map(|a| a.note.clone())
+    };
+    assert_eq!(note_on_disk(), None);
+    lib.undo();
+    assert!(lib.highlights_of("k").iter().find(|h| h.id == 3).is_some_and(|h| h.note.is_empty()));
+    assert_eq!(note_on_disk(), None);
+    lib.undo();
+    lib.undo();
+    assert_eq!(note_on_disk().as_deref(), Some("Formel merken"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_sidecar_from_a_newer_version_locks_the_marks_and_stays_as_it_is() {
     use crate::core::highlights::{ANNOTATIONS_NAME, ANNOTATIONS_VERSION, FILE_NAME, document_key};
     let (root, mut lib) = workspace("highlights-newer", &config(1, 0));

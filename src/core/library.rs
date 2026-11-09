@@ -101,7 +101,7 @@ pub enum Change {
     Restore { path: PathBuf, backup: PathBuf },
     /// Puts back the version of a file from before it was replaced.
     Replaced { path: PathBuf, backup: PathBuf },
-    Highlights { key: String, list: Vec<Highlight> },
+    Highlights { key: String, list: Vec<Highlight>, orphans: BTreeMap<String, highlights::Attached> },
     /// Puts a note's text back, as chosen when another app changed the file.
     Note { path: PathBuf, text: String },
     /// Takes a note back to a decision still open: `theirs` on disk, `mine` kept in the note.
@@ -634,7 +634,7 @@ impl Library {
             return;
         }
         let before = self.store_highlights(&new_key, list).unwrap_or_default();
-        self.commit(label, "file-text", vec![Change::Highlights { key: new_key, list: before }, Change::Replaced { path: path.to_path_buf(), backup }]);
+        self.commit(label, "file-text", vec![Change::Highlights { orphans: self.highlights_orphans.get(&new_key).cloned().unwrap_or_default(), key: new_key, list: before }, Change::Replaced { path: path.to_path_buf(), backup }]);
     }
 
     /// Writes a PDF with the marks built in next to its source, under a name that is still free. Undo removes it.
@@ -733,15 +733,16 @@ impl Library {
             self.changed();
             return;
         }
+        let orphans = self.highlights_orphans.get(key).cloned().unwrap_or_default();
+        let list = self.adopt_orphans(key, list);
         let Some(before) = self.store_highlights(key, list) else { return };
-        self.commit(message, "highlighter", vec![Change::Highlights { key: key.to_string(), list: before }]);
+        self.commit(message, "highlighter", vec![Change::Highlights { key: key.to_string(), list: before, orphans }]);
     }
 
     fn store_highlights(&mut self, key: &str, list: Vec<Highlight>) -> Option<Vec<Highlight>> {
         if self.highlights_lock.is_some() {
             return None;
         }
-        let list = self.adopt_orphans(key, list);
         let before = if list.is_empty() { self.highlights.remove(key) } else { self.highlights.insert(key.to_string(), list) };
         if self.sync_gate {
             self.deferred_marks.entry(key.to_string()).or_insert_with(|| before.clone().unwrap_or_default());
@@ -750,15 +751,18 @@ impl Library {
         Some(before.unwrap_or_default())
     }
 
-    fn adopt_orphans(&self, key: &str, mut list: Vec<Highlight>) -> Vec<Highlight> {
-        let Some(lost) = self.highlights_orphans.get(key) else { return list };
+    fn adopt_orphans(&mut self, key: &str, mut list: Vec<Highlight>) -> Vec<Highlight> {
+        let Some(lost) = self.highlights_orphans.get_mut(key) else { return list };
         let known: HashSet<u64> = self.highlights.get(key).into_iter().flatten().map(|h| h.id).collect();
         for h in list.iter_mut().filter(|h| !known.contains(&h.id) && !h.parts.is_empty() && h.note.is_empty() && h.pin.is_none() && h.ink.is_empty()) {
-            if let Some(a) = lost.get(&highlights::fingerprint(h)) {
-                h.note = a.note.clone();
+            if let Some(a) = lost.remove(&highlights::fingerprint(h)) {
+                h.note = a.note;
                 h.pin = a.pin;
-                h.ink = a.ink.clone();
+                h.ink = a.ink;
             }
+        }
+        if lost.is_empty() {
+            self.highlights_orphans.remove(key);
         }
         list
     }
@@ -2635,9 +2639,13 @@ impl Library {
                     let _ = backup.parent().map(std::fs::remove_dir_all);
                     Change::Replaced { path, backup: current }
                 }
-                Change::Highlights { key, list } => {
+                Change::Highlights { key, list, orphans } => {
+                    if self.highlights_lock.is_some() {
+                        anyhow::bail!(self.highlights_lock.clone().unwrap_or_default());
+                    }
+                    let current = if orphans.is_empty() { self.highlights_orphans.remove(&key) } else { self.highlights_orphans.insert(key.clone(), orphans) };
                     let before = self.store_highlights(&key, list).ok_or_else(|| anyhow::anyhow!(self.highlights_lock.clone().unwrap_or_default()))?;
-                    Change::Highlights { key, list: before }
+                    Change::Highlights { key, list: before, orphans: current.unwrap_or_default() }
                 }
                 Change::Bytes { path, bytes } => {
                     let before = std::fs::read(&path)?;
