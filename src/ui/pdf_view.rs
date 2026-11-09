@@ -1691,10 +1691,13 @@ impl PdfView {
 
     /// Why the open note cannot be written now.
     fn note_blocked_reason(&self, cx: &App) -> String {
+        let orphaned = self.unsaved_note(cx).is_some_and(|n| super::state::read(cx, |l| note_orphaned(&l.highlights_of(&n.key), n.target, n.known && !l.has_highlights(&n.key))));
         if super::state::read(cx, |l| l.pdf_blocked()) {
             tr("Änderungen werden gerade nicht gespeichert. Die Notiz bleibt offen.")
-        } else {
+        } else if orphaned {
             tr("Die Stelle der Notiz gibt es in der PDF nicht mehr. Die Notiz bleibt offen.")
+        } else {
+            tr("Die Notiz ließ sich nicht speichern. Sie bleibt offen.")
         }
     }
 
@@ -1779,6 +1782,11 @@ impl PdfView {
             self.show_blocked(cx);
             return false;
         }
+        if !super::state::act(cx, |l| l.set_highlights(&key, list, label)) {
+            let why = self.note_blocked_reason(cx);
+            self.show_notice(tr("Notiz noch offen"), why, cx);
+            return false;
+        }
         self.close_note(window, cx);
         if matches!(target, NoteTarget::Pin(_)) && text.is_empty() {
             self.active_mark = None;
@@ -1788,7 +1796,6 @@ impl PdfView {
             self.last_color = draft.color;
             self.active_mark = Some(id);
         }
-        super::state::act(cx, |l| l.set_highlights(&key, list, label));
         true
     }
 
@@ -4628,8 +4635,7 @@ fn commit_note(l: &mut Library, key: &str, root: &Option<PathBuf>, target: NoteT
     if !l.can_edit_pdf() {
         return false;
     }
-    l.set_highlights(key, list, label);
-    true
+    l.set_highlights(key, list, label)
 }
 
 fn first_line(note: &str) -> String {
@@ -4888,6 +4894,20 @@ mod tests {
         assert!(!commit_note(&mut lib, "k", &root, pin, "Meine Frage", None, false));
         assert!(lib.highlights_of("k").is_empty());
         assert!(commit_note(&mut lib, "k", &root, pin, "", None, false));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_note_the_disk_refuses_is_neither_kept_in_the_marks_nor_announced() {
+        let (dir, mut lib) = scratch_library("note-write-fails");
+        std::fs::create_dir(dir.join(crate::core::highlights::ANNOTATIONS_NAME)).expect("blocker");
+        let root = lib.root.clone();
+        let pin = NoteTarget::NewPin { page: 0, x: 5., y: 5. };
+        assert!(!commit_note(&mut lib, "k", &root, pin, "Frage", None, false));
+        assert!(lib.highlights_of("k").is_empty());
+        assert!(!lib.has_highlights("k"));
+        assert!(lib.toast.is_none());
+        assert!(lib.last_error.is_some());
         let _ = std::fs::remove_dir_all(dir);
     }
 

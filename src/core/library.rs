@@ -780,14 +780,14 @@ impl Library {
         highlights::next_id(self.highlights.get(key).map_or(&[], Vec::as_slice), passage)
     }
 
-    /// Replaces a document's highlights as one step of the undo history. Refused while the files cannot be written, so nothing is lost silently.
-    pub fn set_highlights(&mut self, key: &str, list: Vec<Highlight>, message: String) {
-        self.put_highlights(key, list, message, true);
+    /// Replaces a document's highlights as one step of the undo history. Refused while the files cannot be written, so nothing is lost silently: `false` when nothing was stored, and the marks stay as they were.
+    pub fn set_highlights(&mut self, key: &str, list: Vec<Highlight>, message: String) -> bool {
+        self.put_highlights(key, list, message, true)
     }
 
     /// Like `set_highlights`, without a toast: for strokes and erasing, which happen many times in a row and are undone from the menu or the keyboard.
-    pub fn set_highlights_quiet(&mut self, key: &str, list: Vec<Highlight>, message: String) {
-        self.put_highlights(key, list, message, false);
+    pub fn set_highlights_quiet(&mut self, key: &str, list: Vec<Highlight>, message: String) -> bool {
+        self.put_highlights(key, list, message, false)
     }
 
     /// Whether marks and edited PDFs cannot be written now: the folder is read-only or its marks file is locked.
@@ -795,15 +795,29 @@ impl Library {
         self.read_only || self.highlights_lock.is_some()
     }
 
-    fn put_highlights(&mut self, key: &str, list: Vec<Highlight>, message: String, announce: bool) {
+    fn put_highlights(&mut self, key: &str, list: Vec<Highlight>, message: String, announce: bool) -> bool {
         if let Some(lock) = self.highlights_lock.clone() {
             self.last_error = Some(lock);
             self.changed();
-            return;
+            return false;
         }
         let orphans = self.highlights_orphans.get(key).cloned().unwrap_or_default();
         let list = self.adopt_orphans(key, list);
-        let Some(before) = self.store_highlights(key, list) else { return };
+        let Some((before, written)) = self.replace_highlights(key, list) else { return false };
+        if !written {
+            if before.is_empty() {
+                self.highlights.remove(key);
+            } else {
+                self.highlights.insert(key.to_string(), before);
+            }
+            if orphans.is_empty() {
+                self.highlights_orphans.remove(key);
+            } else {
+                self.highlights_orphans.insert(key.to_string(), orphans);
+            }
+            self.changed();
+            return false;
+        }
         let changes = vec![Change::Highlights { key: key.to_string(), list: before, orphans }];
         if announce {
             self.commit(message, "highlighter", changes);
@@ -811,9 +825,15 @@ impl Library {
             self.record(message, changes);
             self.changed();
         }
+        true
     }
 
     fn store_highlights(&mut self, key: &str, list: Vec<Highlight>) -> Option<Vec<Highlight>> {
+        self.replace_highlights(key, list).map(|(before, _)| before)
+    }
+
+    /// Puts a document's marks in place and writes the files; gives what was there before, and whether the files were written.
+    fn replace_highlights(&mut self, key: &str, list: Vec<Highlight>) -> Option<(Vec<Highlight>, bool)> {
         if self.highlights_lock.is_some() {
             return None;
         }
@@ -821,8 +841,8 @@ impl Library {
         if self.sync_gate {
             self.deferred_marks.entry(key.to_string()).or_insert_with(|| before.clone().unwrap_or_default());
         }
-        self.write_highlights();
-        Some(before.unwrap_or_default())
+        let written = self.write_highlights();
+        Some((before.unwrap_or_default(), written))
     }
 
     fn adopt_orphans(&mut self, key: &str, mut list: Vec<Highlight>) -> Vec<Highlight> {
@@ -841,11 +861,11 @@ impl Library {
         list
     }
 
-    fn write_highlights(&mut self) {
+    fn write_highlights(&mut self) -> bool {
         if self.sync_gate {
-            return;
+            return true;
         }
-        let Some(root) = self.root.clone().filter(|_| !self.read_only && self.highlights_lock.is_none()) else { return };
+        let Some(root) = self.root.clone().filter(|_| !self.read_only && self.highlights_lock.is_none()) else { return true };
         let (main, annotations) = highlights::split(&self.highlights, &self.highlights_orphans);
         let mut failed = None;
         if annotations != self.highlights_disk.1 {
@@ -866,9 +886,11 @@ impl Library {
                 Err(e) => failed = Some(e),
             }
         }
+        let written = failed.is_none();
         if let Some(e) = failed {
             self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&e]));
         }
+        written
     }
 
     fn adopt_highlights(&mut self, loaded: highlights::Loaded) {
