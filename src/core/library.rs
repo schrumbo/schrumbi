@@ -811,6 +811,7 @@ impl Library {
         }
         let was_locked = self.highlights_lock.take();
         let before = std::mem::take(&mut self.highlights);
+        let orphans_before = self.highlights_orphans.clone();
         self.adopt_highlights(loaded);
         if self.highlights_lock.is_none() {
             if was_locked.is_some() && self.last_error == was_locked {
@@ -836,7 +837,13 @@ impl Library {
                 };
             }
         }
-        let moved: BTreeSet<String> = before.keys().chain(self.highlights.keys()).filter(|key| before.get(*key) != self.highlights.get(*key)).cloned().collect();
+        for (key, lost) in &mut self.highlights_orphans {
+            let live: BTreeSet<String> = self.highlights.get(key).into_iter().flatten().filter(|h| !h.parts.is_empty()).map(highlights::fingerprint).collect();
+            lost.retain(|print, _| !live.contains(print));
+        }
+        self.highlights_orphans.retain(|_, lost| !lost.is_empty());
+        let orphans_moved = orphans_before.keys().chain(self.highlights_orphans.keys()).filter(|key| orphans_before.get(*key) != self.highlights_orphans.get(*key));
+        let moved: BTreeSet<String> = before.keys().chain(self.highlights.keys()).filter(|key| before.get(*key) != self.highlights.get(*key)).chain(orphans_moved).cloned().collect();
         if !moved.is_empty() {
             for steps in [&mut self.undo_steps, &mut self.redo_steps] {
                 for step in steps.iter_mut() {

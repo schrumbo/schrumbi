@@ -2238,6 +2238,29 @@ fn a_note_cleared_after_marking_again_stays_cleared_through_delete_and_undo() {
 }
 
 #[test]
+fn a_note_taken_over_during_a_sync_and_cleared_later_stays_cleared() {
+    use crate::core::highlights::{ANNOTATIONS_NAME, Annotations, FILE_NAME, fingerprint};
+    let (root, mut lib) = workspace("highlights-remark-sync", &config(1, 0));
+    lib.set_highlights("k", vec![pdf_noted(1, 0, "Formel merken"), pdf_mark(2, 1)], "markiert".into());
+    rewrite_like_the_first_release(&root, |list| list.retain(|h| h.id != 1));
+    lib.open(&root);
+    lib.begin_sync();
+    let mut again = lib.highlights_of("k");
+    again.push(pdf_mark(3, 0));
+    lib.set_highlights("k", again, "markiert".into());
+    let mut main: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join(FILE_NAME)).unwrap()).unwrap();
+    main["j"] = serde_json::to_value(vec![pdf_mark(1, 0)]).unwrap();
+    std::fs::write(root.join(FILE_NAME), main.to_string()).unwrap();
+    lib.finish_sync(&[root.join(FILE_NAME)]);
+    assert_eq!(lib.highlights_of("k").iter().find(|h| h.id == 3).unwrap().note, "Formel merken");
+    let without: Vec<_> = lib.highlights_of("k").into_iter().filter(|h| h.id != 3).collect();
+    lib.set_highlights("k", without, "entfernt".into());
+    let side: Option<Annotations> = crate::core::workspace::load(&root.join(ANNOTATIONS_NAME)).unwrap();
+    assert!(side.and_then(|s| s.documents.get("k").and_then(|d| d.notes.get(&fingerprint(&pdf_mark(1, 0))).cloned())).is_none());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_sidecar_from_a_newer_version_locks_the_marks_and_stays_as_it_is() {
     use crate::core::highlights::{ANNOTATIONS_NAME, ANNOTATIONS_VERSION, FILE_NAME, document_key};
     let (root, mut lib) = workspace("highlights-newer", &config(1, 0));
