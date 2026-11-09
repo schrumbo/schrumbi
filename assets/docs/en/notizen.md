@@ -64,6 +64,43 @@ Highlight and move pages, in the file itself and only for PDFs.
 
 Highlighting the same passage again recolors it instead of doubling it.
 
+### Drawing
+
+| Shortcut | Effect |
+|---|---|
+| {key:penTool} | Pick up or put down the {ui:Stift} |
+| {key:eraserTool} | Pick up or put down the {ui:Radierer} |
+| Drag on the page | Draw; with the eraser, touching a stroke deletes it |
+| {key:escape} | Put the tool down |
+
+- With the pen you choose color and width ({ui:Dünn} or {ui:Dick}) next to the tools.
+- Every stroke and every sweep of the eraser is one step for {key:Undo}.
+- The eraser deletes only drawings, never highlights or notes.
+- Click a drawing, {key:delete} removes it.
+
+### Notes
+
+| Shortcut | Effect |
+|---|---|
+| {key:noteTool}, click on the page | {ui:Notiz setzen}: a note at that spot |
+| Click a highlight, {ui:Notiz} in the bar | A note on the highlight |
+| Click a note | Edit |
+| {key:cmd-return} | Save. A click outside saves too |
+| {key:escape} | Discard |
+
+- An empty note places nothing. {ui:Notiz löschen} removes it, the highlight stays.
+- Everything is also listed in the {ui:Marker} tab, a click jumps there.
+
+### Export with marks
+
+| Shortcut | Effect |
+|---|---|
+| {key:exportMarkedPdf} | {ui:Mit Markierungen exportieren} |
+
+- Writes a copy next to the PDF. Highlights, notes and drawings are real annotations that other programs show too.
+- The original PDF stays as it is. {key:Undo} removes the copy again.
+- Without marks the button is grey.
+
 ### Pages
 
 On the left in {ui:Seiten}. A click selects and jumps, Ctrl plus click (Mac: ⌘) adds, Shift plus click selects a range. With nothing selected, every command acts on the page you see.

@@ -64,6 +64,43 @@ Markieren und Seiten verschieben, in der Datei selbst und nur bei PDFs.
 
 Dieselbe Stelle noch einmal markieren färbt sie um, statt sie zu doppeln.
 
+### Zeichnen
+
+| Kürzel | Wirkung |
+|---|---|
+| {key:penTool} | {ui:Stift} nehmen oder weglegen |
+| {key:eraserTool} | {ui:Radierer} nehmen oder weglegen |
+| Ziehen auf der Seite | Zeichnen, mit dem Radierer einen Strich berühren löscht ihn |
+| {key:escape} | Werkzeug weglegen |
+
+- Beim Stift wählst du Farbe und Dicke ({ui:Dünn} oder {ui:Dick}) neben den Werkzeugen.
+- Jeder Strich und jeder Zug mit dem Radierer ist ein Schritt für {key:Undo}.
+- Der Radierer löscht nur Zeichnungen, nie Markierungen oder Notizen.
+- Eine Zeichnung anklicken, {key:delete} entfernt sie.
+
+### Notizen
+
+| Kürzel | Wirkung |
+|---|---|
+| {key:noteTool}, auf die Seite klicken | {ui:Notiz setzen}: Notiz an dieser Stelle |
+| Markierung anklicken, {ui:Notiz} in der Leiste | Notiz an der Markierung |
+| Notiz anklicken | Bearbeiten |
+| {key:cmd-return} | Speichern. Ein Klick daneben speichert auch |
+| {key:escape} | Verwerfen |
+
+- Eine leere Notiz setzt nichts. {ui:Notiz löschen} entfernt sie, die Markierung bleibt.
+- Alles steht auch im Reiter {ui:Marker}, ein Klick springt dorthin.
+
+### Mit Markierungen exportieren
+
+| Kürzel | Wirkung |
+|---|---|
+| {key:exportMarkedPdf} | {ui:Mit Markierungen exportieren} |
+
+- Schreibt eine Kopie neben die PDF. Markierungen, Notizen und Zeichnungen sind echte Anmerkungen, die auch andere Programme zeigen.
+- Die Original-PDF bleibt, wie sie ist. {key:Undo} entfernt die Kopie wieder.
+- Ohne Markierungen ist der Knopf grau.
+
 ### Seiten
 
 Links in {ui:Seiten}. Ein Klick wählt und springt, Strg plus Klick (Mac: ⌘) fügt hinzu, Umschalt plus Klick wählt einen Bereich. Ohne Auswahl wirkt jeder Befehl auf die Seite, die du siehst.

@@ -215,6 +215,11 @@ fn commands(cx: &App) -> Vec<Command> {
         for (action, icon_name, run) in pages {
             add(&edit, action.label(), icon_name, keys(action), Run::NoteAction(run));
         }
+        let tools: [(S, &'static str, Box<dyn Action>); 3] = [(S::PenTool, "pencil", Box::new(p::PenTool)), (S::EraserTool, "eraser", Box::new(p::EraserTool)), (S::NoteTool, "sticky-note", Box::new(p::NoteTool))];
+        for (action, icon_name, run) in tools {
+            add(&edit, action.label(), icon_name, keys(action), Run::NoteAction(run));
+        }
+        add(&file, S::ExportMarkedPdf.label(), "download", keys(S::ExportMarkedPdf), Run::NoteAction(Box::new(p::ExportMarkedPdf)));
     }
     if in_document {
         add(&view, S::CloseTab.label(), "x", keys(S::CloseTab), Run::Action(Box::new(app::CloseTab)));

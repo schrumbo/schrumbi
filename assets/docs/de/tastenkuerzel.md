@@ -67,6 +67,10 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Seiten nach unten verschieben} | {key:movePagesDown} |
 | {ui:Seiten löschen} | {key:deletePages} |
 | {ui:Seiten aus PDF einfügen …} | {key:insertPdf} |
+| {ui:Stift} | {key:penTool} |
+| {ui:Radierer} | {key:eraserTool} |
+| {ui:Notiz setzen} | {key:noteTool} |
+| {ui:Mit Markierungen exportieren} | {key:exportMarkedPdf} |
 
 ## Editor
 
