@@ -61,6 +61,7 @@ fn merge(base: &Value, ours: &Value, theirs: &Value, policy: Policy, path: &[&st
         return Some(theirs.clone());
     }
     match (ours, theirs) {
+        (Value::Object(_), Value::Object(_)) if policy == Policy::State && path.first() == Some(&"documents") && path.last() == Some(&"pin") => contradiction(ours, theirs, policy, path),
         (Value::Object(o), Value::Object(t)) => merge_objects(base.as_object(), o, t, policy, path),
         (Value::Array(o), Value::Array(t)) if has_ids(o) && has_ids(t) => merge_lists(base.as_array(), o, t, policy, path),
         (Value::Array(o), Value::Array(t)) if policy == Policy::State && path.first() == Some(&"linkedFiles") => Some(merge_sets(base.as_array(), o, t)),
@@ -73,19 +74,7 @@ fn merge_objects(base: Option<&Map<String, Value>>, ours: &Map<String, Value>, t
     let null = Value::Null;
     let mut keys: Vec<&String> = ours.keys().collect();
     keys.extend(theirs.keys().filter(|k| !ours.contains_key(*k)));
-    let notes = policy == Policy::State && matches!(path, ["documents", _, "notes"]);
-    let fingerprint = |m: Option<&Map<String, Value>>, key: &String| m.and_then(|m| m.get(key)).map(|v| v.get("text_fingerprint").cloned());
-    let mut moved = Vec::new();
     for key in keys {
-        if notes {
-            let (b, o, t) = (fingerprint(base, key), fingerprint(Some(ours), key), fingerprint(Some(theirs), key));
-            if o.is_some() && t.is_some() && o != t {
-                let (stays, goes) = if b == o { (theirs, ours) } else { (ours, theirs) };
-                out.insert(key.clone(), stays[key].clone());
-                moved.push((key, goes));
-                continue;
-            }
-        }
         let b = base.and_then(|m| m.get(key)).unwrap_or(&null);
         let (o, t) = (ours.get(key).unwrap_or(&null), theirs.get(key).unwrap_or(&null));
         let mut inner: Vec<&str> = path.to_vec();
@@ -94,12 +83,6 @@ fn merge_objects(base: Option<&Map<String, Value>>, ours: &Map<String, Value>, t
         if !merged.is_null() || (ours.contains_key(key) && theirs.contains_key(key)) {
             out.insert(key.clone(), merged);
         }
-    }
-    let mut taken: HashSet<u64> = base.into_iter().flatten().chain(ours).chain(theirs).filter_map(|(k, _)| k.parse().ok()).collect();
-    for (key, goes) in moved {
-        let id = crate::core::highlights::derived_id(format!("{key}{}", goes[key]).as_bytes(), |id| taken.contains(&id));
-        taken.insert(id);
-        out.insert(id.to_string(), goes[key].clone());
     }
     Some(Value::Object(out))
 }
@@ -271,10 +254,10 @@ mod tests {
     #[test]
     fn annotations_from_two_devices_both_stay() {
         let name = crate::core::highlights::ANNOTATIONS_NAME;
-        let note = |text: &str| json!({"note": text, "text_fingerprint": "f"});
+        let note = |text: &str| json!({"note": text});
         let base = json!({"version": 1, "documents": {}}).to_string();
-        let ours = json!({"version": 1, "documents": {"k": {"notes": {"1": note("a")}, "items": []}}}).to_string();
-        let theirs = json!({"version": 1, "documents": {"k": {"notes": {"2": note("b")}, "items": []}}}).to_string();
+        let ours = json!({"version": 1, "documents": {"k": {"notes": {"f1": note("a")}, "items": []}}}).to_string();
+        let theirs = json!({"version": 1, "documents": {"k": {"notes": {"f2": note("b")}, "items": []}}}).to_string();
         let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &ours, &theirs).unwrap()).unwrap();
         assert_eq!(merged["documents"]["k"]["notes"].as_object().unwrap().len(), 2);
     }
@@ -282,10 +265,10 @@ mod tests {
     #[test]
     fn concurrent_edits_of_one_note_in_the_annotations_both_stay() {
         let name = crate::core::highlights::ANNOTATIONS_NAME;
-        let doc = |note: &str| json!({"version": 1, "documents": {"k": {"notes": {"1": {"note": note, "text_fingerprint": "f"}}, "items": [{"id": 5, "color": "blue", "text": "", "parts": [], "note": note}]}}}).to_string();
+        let doc = |note: &str| json!({"version": 1, "documents": {"k": {"notes": {"f": {"note": note}}, "items": [{"id": 5, "color": "blue", "text": "", "parts": [], "note": note}]}}}).to_string();
         let (base, ours, theirs) = (doc("alt"), doc("meins"), doc("fremd"));
         let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &ours, &theirs).unwrap()).unwrap();
-        assert_eq!(merged["documents"]["k"]["notes"]["1"]["note"], "meins
+        assert_eq!(merged["documents"]["k"]["notes"]["f"]["note"], "meins
 
 fremd");
         assert_eq!(merged["documents"]["k"]["items"][0]["note"], "meins
@@ -293,7 +276,7 @@ fremd");
 fremd");
         let removed = doc("");
         let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &removed, &theirs).unwrap()).unwrap();
-        assert_eq!(merged["documents"]["k"]["notes"]["1"]["note"], "fremd", "a deleted note does not hide the other text");
+        assert_eq!(merged["documents"]["k"]["notes"]["f"]["note"], "fremd", "a deleted note does not hide the other text");
     }
 
     #[test]
@@ -364,21 +347,64 @@ fremd");
         assert_eq!(back["k"][1].note, "Notiz Windows");
     }
 
+    fn saved(list: Vec<crate::core::highlights::Highlight>) -> (String, String) {
+        use crate::core::highlights::{Highlights, Orphans, split};
+        let (main, side) = split(&Highlights::from([("k".to_string(), list)]), &Orphans::new());
+        (serde_json::to_string(&main).unwrap(), serde_json::to_string(&side).unwrap())
+    }
+
+    fn loaded(main: &str, side: &str) -> Vec<(String, String)> {
+        use crate::core::highlights::{self, Annotations};
+        let (marks, orphans) = highlights::merge(&serde_json::from_str(main).unwrap(), &serde_json::from_str::<Annotations>(side).unwrap());
+        assert!(orphans.is_empty(), "{orphans:?}");
+        marks["k"].iter().map(|h| (h.text.clone(), h.note.clone())).collect()
+    }
+
+    fn texted(id: u64, text: &str, note: &str) -> crate::core::highlights::Highlight {
+        use crate::core::highlights::{Highlight, HighlightPart};
+        Highlight { id, color: "yellow".into(), text: text.into(), parts: vec![HighlightPart { page: 0, rects: vec![[1., 2., 3., 4.]] }], note: note.into(), ..Default::default() }
+    }
+
     #[test]
-    fn a_note_edited_here_is_never_glued_to_a_note_of_another_passage_there() {
+    fn a_note_edited_before_pulling_a_renumbered_passage_stays_with_its_passage() {
+        use crate::core::highlights::{ANNOTATIONS_NAME, FILE_NAME};
+        let (empty_main, empty_side) = (json!({}).to_string(), json!({"version": 1, "documents": {}}).to_string());
+        let (a_main, a_side) = saved(vec![texted(2, "Alt", "alt")]);
+        let (b_main, b_side) = saved(vec![texted(2, "Neu", "Mac")]);
+        let merged_main = merge_file(FILE_NAME, Some(&empty_main), &b_main, &a_main).unwrap();
+        let merged_side = merge_file(ANNOTATIONS_NAME, Some(&empty_side), &b_side, &a_side).unwrap();
+        assert_eq!(loaded(&merged_main, &merged_side), [("Neu".to_string(), "Mac".to_string()), ("Alt".to_string(), "alt".to_string())]);
+        let (edited_main, edited_side) = saved(vec![texted(2, "Alt", "alt bearbeitet")]);
+        let main = merge_file(FILE_NAME, Some(&a_main), &edited_main, &merged_main).unwrap();
+        let side = merge_file(ANNOTATIONS_NAME, Some(&a_side), &edited_side, &merged_side).unwrap();
+        let shown = loaded(&main, &side);
+        assert_eq!(shown.len(), 2);
+        assert!(shown.contains(&("Alt".to_string(), "alt bearbeitet".to_string())), "{shown:?}");
+        assert!(shown.contains(&("Neu".to_string(), "Mac".to_string())), "{shown:?}");
+        let again = merge_file(ANNOTATIONS_NAME, Some(&a_side), &edited_side, &merged_side).unwrap();
+        assert_eq!(again, side);
+    }
+
+    #[test]
+    fn the_same_passage_noted_on_both_sides_joins_the_notes() {
+        use crate::core::highlights::{ANNOTATIONS_NAME, FILE_NAME};
+        let (base_main, base_side) = saved(vec![texted(1, "Wort", "")]);
+        let (ours_main, ours_side) = saved(vec![texted(1, "Wort", "a")]);
+        let (theirs_main, theirs_side) = saved(vec![texted(1, "Wort", "b")]);
+        let main = merge_file(FILE_NAME, Some(&base_main), &ours_main, &theirs_main).unwrap();
+        let side = merge_file(ANNOTATIONS_NAME, Some(&base_side), &ours_side, &theirs_side).unwrap();
+        assert_eq!(loaded(&main, &side), [("Wort".to_string(), "a
+
+b".to_string())]);
+    }
+
+    #[test]
+    fn a_pin_changed_on_both_sides_is_never_mixed() {
         let name = crate::core::highlights::ANNOTATIONS_NAME;
-        let doc = |note: &str, print: &str| json!({"version": 1, "documents": {"k": {"notes": {"2": {"note": note, "text_fingerprint": print}}, "items": []}}}).to_string();
-        let (base, ours, theirs) = (doc("alt", "Win"), doc("alt bearbeitet", "Win"), doc("Mac", "Mac"));
-        let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &ours, &theirs).unwrap()).unwrap();
-        let notes = merged["documents"]["k"]["notes"].as_object().unwrap();
-        assert_eq!(notes.len(), 2);
-        assert_eq!(notes["2"]["note"], "Mac");
-        assert_eq!(notes["2"]["text_fingerprint"], "Mac");
-        let other = notes.iter().find(|(id, _)| id.as_str() != "2").unwrap().1;
-        assert_eq!(other["note"], "alt bearbeitet");
-        assert_eq!(other["text_fingerprint"], "Win");
-        let again: Value = serde_json::from_str(&merge_file(name, Some(&base), &ours, &theirs).unwrap()).unwrap();
-        assert_eq!(again, merged);
+        let doc = |x: f64, y: f64| json!({"version": 1, "documents": {"k": {"notes": {"f": {"note": "", "pin": {"page": 0, "x": x, "y": y}}}, "items": []}}}).to_string();
+        let merged: Value = serde_json::from_str(&merge_file(name, Some(&doc(1., 1.)), &doc(5., 1.), &doc(1., 9.)).unwrap()).unwrap();
+        let pin = &merged["documents"]["k"]["notes"]["f"]["pin"];
+        assert_eq!((pin["x"].as_f64(), pin["y"].as_f64()), (Some(5.), Some(1.)));
     }
 
     #[test]
@@ -397,17 +423,17 @@ fremd");
         let (marks, orphans) = highlights::merge(&serde_json::from_str(&main).unwrap(), &serde_json::from_str::<Annotations>(&side).unwrap());
         let shown: Vec<(&str, &str)> = marks["k"].iter().map(|h| (h.text.as_str(), h.note.as_str())).collect();
         assert_eq!(shown, [("Eins", "a bearbeitet"), ("Neu", "Mac")]);
-        assert!(orphans["k"].values().any(|a| a.note == "alt"), "{orphans:?}");
+        assert!(orphans.is_empty(), "{orphans:?}");
     }
 
     #[test]
     fn the_same_new_note_edited_on_both_sides_still_joins() {
         let name = crate::core::highlights::ANNOTATIONS_NAME;
-        let doc = |note: &str| json!({"version": 1, "documents": {"k": {"notes": {"2": {"note": note, "text_fingerprint": "f"}}, "items": []}}}).to_string();
+        let doc = |note: &str| json!({"version": 1, "documents": {"k": {"notes": {"f": {"note": note}}, "items": []}}}).to_string();
         let base = json!({"version": 1, "documents": {}}).to_string();
         let merged: Value = serde_json::from_str(&merge_file(name, Some(&base), &doc("a"), &doc("b")).unwrap()).unwrap();
         assert_eq!(merged["documents"]["k"]["notes"].as_object().unwrap().len(), 1);
-        assert_eq!(merged["documents"]["k"]["notes"]["2"]["note"], "a
+        assert_eq!(merged["documents"]["k"]["notes"]["f"]["note"], "a
 
 b");
     }

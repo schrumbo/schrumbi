@@ -97,23 +97,22 @@ pub const SIDECAR_ID_BASE: u64 = 1 << 52;
 /// Key of a version marker that an earlier build wrote into `FILE_NAME`; dropped on load.
 pub const VERSION_KEY: &str = "~version:";
 
-/// What the sidecar adds to one marked passage of `FILE_NAME`. It counts only while the passage still has the same text and parts.
+/// What the sidecar adds to a marked passage of `FILE_NAME`; it belongs to every passage with the same text and parts.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Attached {
     #[serde(default)]
     pub note: String,
-    pub text_fingerprint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin: Option<Pin>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ink: Vec<InkLine>,
 }
 
-/// The sidecar part of one document: additions to marked passages by their id, and the marks that have no passage.
+/// The sidecar part of one document: additions to marked passages by their fingerprint, and the marks that have no passage.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DocumentAnnotations {
     #[serde(default)]
-    pub notes: BTreeMap<u64, Attached>,
+    pub notes: BTreeMap<String, Attached>,
     #[serde(default)]
     pub items: Vec<Highlight>,
 }
@@ -132,8 +131,8 @@ impl Default for Annotations {
     }
 }
 
-/// Notes that found no passage, per document and id. They stay in the file and are not shown.
-pub type Orphans = BTreeMap<String, BTreeMap<u64, Attached>>;
+/// Notes that found no passage, per document and fingerprint. They stay in the file and are not shown.
+pub type Orphans = BTreeMap<String, BTreeMap<String, Attached>>;
 
 /// Why the marks files are not written.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -151,7 +150,7 @@ pub struct Loaded {
     pub lock: Option<Lock>,
 }
 
-/// Identifies a passage by its text and parts, so a note only follows the passage it was written on.
+/// Identifies a passage by its text and parts, never by its id, so a note follows the passage it was written on through renumbering and recoloring.
 pub fn fingerprint(h: &Highlight) -> String {
     let unsigned = |v: f32| if v == 0. { 0. } else { v };
     let parts: Vec<HighlightPart> = h.parts.iter().map(|p| HighlightPart { page: p.page, rects: p.rects.iter().map(|r| r.map(unsigned)).collect() }).collect();
@@ -183,28 +182,19 @@ pub fn merge(main: &Highlights, annotations: &Annotations) -> (Highlights, Orpha
     let keys: BTreeSet<&String> = main.keys().chain(annotations.documents.keys()).collect();
     for key in keys {
         let extra = annotations.documents.get(key);
-        let mut used = BTreeSet::new();
         let mut list: Vec<Highlight> = main.get(key).cloned().unwrap_or_default();
-        for h in &mut list {
-            if let Some(a) = extra.and_then(|e| e.notes.get(&h.id)).filter(|a| a.text_fingerprint == fingerprint(h)) {
-                used.insert(h.id);
-                h.note = a.note.clone();
-                h.pin = a.pin;
-                h.ink = a.ink.clone();
-            }
-        }
         if let Some(extra) = extra {
-            let mut lost: BTreeMap<u64, Attached> = extra.notes.iter().filter(|(id, _)| !used.contains(id)).map(|(id, a)| (*id, a.clone())).collect();
-            for h in list.iter_mut().filter(|h| !used.contains(&h.id)) {
+            let mut used = BTreeSet::new();
+            for h in &mut list {
                 let print = fingerprint(h);
-                if let Some(id) = lost.iter().find(|(_, a)| a.text_fingerprint == print).map(|(id, _)| *id)
-                    && let Some(a) = lost.remove(&id)
-                {
-                    h.note = a.note;
+                if let Some(a) = extra.notes.get(&print) {
+                    h.note = a.note.clone();
                     h.pin = a.pin;
-                    h.ink = a.ink;
+                    h.ink = a.ink.clone();
+                    used.insert(print);
                 }
             }
+            let lost: BTreeMap<String, Attached> = extra.notes.iter().filter(|(print, _)| !used.contains(*print)).map(|(print, a)| (print.clone(), a.clone())).collect();
             if !lost.is_empty() {
                 orphans.insert(key.clone(), lost);
             }
@@ -228,7 +218,7 @@ pub fn merge(main: &Highlights, annotations: &Annotations) -> (Highlights, Orpha
     (marks, orphans)
 }
 
-/// Splits the marks for saving: the main file gets the passages as the first release writes them, the sidecar everything else plus the orphaned notes.
+/// Splits the marks for saving: the main file gets the passages as the first release writes them, the sidecar everything else plus the orphaned notes. An orphan whose passage is shown again is replaced by that passage's data.
 pub fn split(marks: &Highlights, orphans: &Orphans) -> (Highlights, Annotations) {
     let mut main = Highlights::new();
     let mut annotations = Annotations::default();
@@ -241,7 +231,7 @@ pub fn split(marks: &Highlights, orphans: &Orphans) -> (Highlights, Annotations)
                 continue;
             }
             if !h.note.is_empty() || h.pin.is_some() || !h.ink.is_empty() {
-                extra.notes.insert(h.id, Attached { note: h.note.clone(), text_fingerprint: fingerprint(h), pin: h.pin, ink: h.ink.clone() });
+                extra.notes.insert(fingerprint(h), Attached { note: h.note.clone(), pin: h.pin, ink: h.ink.clone() });
             }
             plain.push(Highlight { id: h.id, color: h.color.clone(), text: h.text.clone(), parts: h.parts.clone(), ..Default::default() });
         }
@@ -253,27 +243,22 @@ pub fn split(marks: &Highlights, orphans: &Orphans) -> (Highlights, Annotations)
         }
     }
     for (key, lost) in orphans {
+        let live: BTreeSet<String> = marks.get(key).into_iter().flatten().filter(|h| !h.parts.is_empty()).map(fingerprint).collect();
+        let kept: Vec<(&String, &Attached)> = lost.iter().filter(|(print, _)| !live.contains(*print)).collect();
+        if kept.is_empty() {
+            continue;
+        }
         let extra = annotations.documents.entry(key.clone()).or_default();
-        let mut taken: BTreeSet<u64> = extra.notes.keys().copied().chain(extra.items.iter().map(|h| h.id)).chain(lost.keys().copied()).collect();
-        for (id, a) in lost {
-            if extra.notes.contains_key(id) {
-                let seed = format!("{key}
-{id}
-{}", a.text_fingerprint);
-                let moved = derived_id(seed.as_bytes(), |candidate| taken.contains(&candidate));
-                taken.insert(moved);
-                extra.notes.insert(moved, a.clone());
-            } else {
-                extra.notes.insert(*id, a.clone());
-            }
+        for (print, a) in kept {
+            extra.notes.insert(print.clone(), a.clone());
         }
     }
     (main, annotations)
 }
 
-/// A free id for a new mark: passages count up from the highest id below the reserved range, pins and drawings get a random one inside it. Ids of orphaned notes count as taken.
-pub fn next_id(list: &[Highlight], orphans: Option<&BTreeMap<u64, Attached>>, passage: bool) -> u64 {
-    let ids = list.iter().map(|h| h.id).chain(orphans.into_iter().flat_map(|o| o.keys().copied()));
+/// A free id for a new mark: passages count up from the highest id below the reserved range, pins and drawings get a random one inside it.
+pub fn next_id(list: &[Highlight], passage: bool) -> u64 {
+    let ids = list.iter().map(|h| h.id);
     if passage {
         ids.filter(|id| *id < SIDECAR_ID_BASE).max().map_or(1, |m| m + 1)
     } else {
@@ -310,7 +295,7 @@ fn combined(base: &Highlight, pulled: &Highlight, local: &Highlight) -> Highligh
 }
 
 /// Brings the edits made here since `base` onto the list that was pulled meanwhile: what was removed here stays removed unless the pull changed it, what was added or changed here is kept, the rest is as pulled. Where both sides changed one mark, the pulled one stays with the local color and note added; a local mark whose id is another passage in the pull gets a fresh id.
-pub fn rebase(base: &[Highlight], local: &[Highlight], pulled: Vec<Highlight>, orphans: Option<&BTreeMap<u64, Attached>>) -> Vec<Highlight> {
+pub fn rebase(base: &[Highlight], local: &[Highlight], pulled: Vec<Highlight>) -> Vec<Highlight> {
     let local_ids: BTreeSet<u64> = local.iter().map(|h| h.id).collect();
     let mut out = pulled;
     out.retain(|h| local_ids.contains(&h.id) || !base.contains(h));
@@ -325,7 +310,7 @@ pub fn rebase(base: &[Highlight], local: &[Highlight], pulled: Vec<Highlight>, o
             (Some(i), Some(b)) if out[i].text == h.text && out[i].parts == h.parts => out[i] = combined(b, &out[i], h),
             (Some(i), None) if out[i] == *h => {}
             (Some(_), _) => {
-                let id = next_id(&out, orphans, !h.parts.is_empty());
+                let id = next_id(&out, !h.parts.is_empty());
                 out.push(Highlight { id, ..h.clone() });
             }
         }
@@ -485,55 +470,97 @@ mod tests {
         let json = serde_json::to_string(&main).unwrap();
         assert!(!json.contains("note") && !json.contains("pin") && !json.contains("ink"), "{json}");
         assert_eq!(annotations.documents["k"].items.len(), 2);
-        assert_eq!(annotations.documents["k"].notes[&1].note, "Merken");
+        assert_eq!(annotations.documents["k"].notes[&fingerprint(&sample())].note, "Merken");
         let (back, orphans) = merge(&main, &annotations);
         assert_eq!((back, orphans), (marks, Orphans::new()));
     }
 
     #[test]
-    fn a_note_belongs_to_its_passage_only_and_is_kept_when_it_finds_none() {
+    fn a_passage_that_reuses_an_id_gets_no_foreign_note_and_the_note_stays_as_an_orphan() {
         let marks: Highlights = HashMap::from([("k".to_string(), rich())]);
         let (mut main, annotations) = split(&marks, &Orphans::new());
+        let old_print = fingerprint(&sample());
         main.get_mut("k").unwrap()[0].text = "anderes Wort".into();
         let (shown, orphans) = merge(&main, &annotations);
-        assert!(shown["k"][0].note.is_empty(), "a passage that reuses the id gets no foreign note");
-        assert_eq!(orphans["k"][&1].note, "Merken");
+        assert!(shown["k"][0].note.is_empty());
+        assert_eq!(orphans["k"][&old_print].note, "Merken");
         let (_, saved) = split(&shown, &orphans);
-        assert_eq!(saved.documents["k"].notes[&1].note, "Merken", "the orphan stays in the file");
+        assert_eq!(saved.documents["k"].notes[&old_print].note, "Merken", "the orphan stays in the file");
         main.remove("k");
         let (_, orphans) = merge(&main, &annotations);
         assert_eq!(orphans["k"].len(), 1);
     }
 
     #[test]
+    fn a_rewrite_of_the_main_file_by_the_first_release_keeps_the_notes() {
+        let marks: Highlights = HashMap::from([("k".to_string(), rich())]);
+        let (_, annotations) = split(&marks, &Orphans::new());
+        let rewritten: Highlights = serde_json::from_str(r#"{"k":[{"id":1,"color":"blue","text":"Wort","parts":[{"page":2,"rects":[[10.0,20.0,30.0,5.0]]}]}]}"#).unwrap();
+        let (shown, orphans) = merge(&rewritten, &annotations);
+        assert_eq!((shown["k"][0].note.as_str(), shown["k"][0].color.as_str()), ("Merken", "blue"));
+        assert!(orphans.is_empty());
+    }
+
+    #[test]
+    fn a_note_follows_its_passage_when_the_id_changes() {
+        let marks: Highlights = HashMap::from([("k".to_string(), vec![Highlight { note: "Merken".into(), ..sample() }])]);
+        let (mut main, annotations) = split(&marks, &Orphans::new());
+        main.get_mut("k").unwrap()[0].id = 7;
+        let (shown, orphans) = merge(&main, &annotations);
+        assert_eq!((shown["k"][0].id, shown["k"][0].note.as_str()), (7, "Merken"));
+        assert!(orphans.is_empty());
+    }
+
+    #[test]
     fn ids_of_new_marks_stay_apart_from_what_the_first_release_hands_out() {
         let list = rich();
-        let lost = BTreeMap::from([(7, Attached::default())]);
-        assert_eq!(next_id(&list, None, true), 2);
-        assert_eq!(next_id(&list, Some(&lost), true), 8);
-        assert_eq!(next_id(&[], None, true), 1);
+        assert_eq!(next_id(&list, true), 2);
+        assert_eq!(next_id(&[], true), 1);
         let free = |id: u64| (SIDECAR_ID_BASE..SIDECAR_ID_BASE + (1 << 40)).contains(&id);
-        let (a, b) = (next_id(&list, None, false), next_id(&list, None, false));
+        let (a, b) = (next_id(&list, false), next_id(&list, false));
         assert!(free(a) && free(b) && a != SIDECAR_ID_BASE && a != SIDECAR_ID_BASE + 1);
         assert_ne!(a, b, "two devices must not hand out the same id");
     }
 
     #[test]
-    fn an_orphaned_note_stays_when_a_live_passage_with_its_id_gets_a_note() {
-        let old = Attached { note: "alt".into(), text_fingerprint: "weg".into(), ..Default::default() };
-        let orphans = Orphans::from([("k".to_string(), BTreeMap::from([(1, old)]))]);
+    fn an_orphan_stays_and_one_at_the_fingerprint_of_a_live_passage_is_replaced_by_it() {
+        let old = Attached { note: "alt".into(), ..Default::default() };
+        let live_print = fingerprint(&sample());
+        let orphans = Orphans::from([("k".to_string(), BTreeMap::from([("weg".to_string(), old.clone()), (live_print.clone(), old)]))]);
         let mut noted = sample();
         noted.note = "neu".into();
         let marks: Highlights = HashMap::from([("k".to_string(), vec![noted])]);
         let (main, annotations) = split(&marks, &orphans);
-        let notes: Vec<&str> = annotations.documents["k"].notes.values().map(|a| a.note.as_str()).collect();
-        assert_eq!(notes.len(), 2, "{notes:?}");
-        assert!(notes.contains(&"alt") && notes.contains(&"neu"));
+        let notes: BTreeMap<&str, &str> = annotations.documents["k"].notes.iter().map(|(print, a)| (print.as_str(), a.note.as_str())).collect();
+        assert_eq!(notes, BTreeMap::from([("weg", "alt"), (live_print.as_str(), "neu")]));
         assert_eq!(split(&marks, &orphans).1, annotations, "saving twice writes the same file");
         let (shown, lost) = merge(&main, &annotations);
         assert_eq!(shown["k"][0].note, "neu");
-        assert_eq!(lost["k"].values().map(|a| a.note.as_str()).collect::<Vec<_>>(), ["alt"]);
+        assert_eq!(lost["k"].keys().collect::<Vec<_>>(), ["weg"]);
         assert_eq!(split(&shown, &lost).1, annotations, "and again after loading");
+        let cleared: Highlights = HashMap::from([("k".to_string(), vec![sample()])]);
+        let (_, annotations) = split(&cleared, &orphans);
+        assert_eq!(annotations.documents["k"].notes.keys().collect::<Vec<_>>(), ["weg"], "a cleared note does not come back from an orphan");
+    }
+
+    #[test]
+    fn a_deleted_passage_drops_its_note_and_the_rest_stays() {
+        let other = Highlight { id: 2, text: "Zweites".into(), note: "bleibt".into(), ..sample() };
+        let noted = Highlight { note: "weg".into(), ..sample() };
+        let marks: Highlights = HashMap::from([("k".to_string(), vec![noted, other.clone()])]);
+        let (main, annotations) = split(&marks, &Orphans::new());
+        let (shown, orphans) = merge(&main, &annotations);
+        let after: Highlights = HashMap::from([("k".to_string(), vec![shown["k"][1].clone()])]);
+        let (_, saved) = split(&after, &orphans);
+        assert_eq!(saved.documents["k"].notes.values().map(|a| a.note.as_str()).collect::<Vec<_>>(), ["bleibt"]);
+    }
+
+    #[test]
+    fn saving_and_loading_again_writes_the_same_sidecar() {
+        let marks: Highlights = HashMap::from([("k".to_string(), rich())]);
+        let (main, annotations) = split(&marks, &Orphans::new());
+        let (shown, orphans) = merge(&main, &annotations);
+        assert_eq!(split(&shown, &orphans), (main, annotations));
     }
 
     #[test]
@@ -549,6 +576,11 @@ mod tests {
         workspace::save(&HashMap::from([("k".to_string(), vec![h.clone()])]), &path).unwrap();
         let back: Highlights = workspace::load(&path).unwrap().unwrap();
         assert_eq!(fingerprint(&back["k"][0]), fingerprint(&h));
+        let noted = Highlight { note: "Merken".into(), ..zero.clone() };
+        let (_, annotations) = split(&HashMap::from([("k".to_string(), vec![noted])]), &Orphans::new());
+        let (shown, orphans) = merge(&back, &annotations);
+        assert_eq!(shown["k"][0].note, "Merken");
+        assert!(orphans.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -599,7 +631,7 @@ mod tests {
         let base = vec![passage(1, "a")];
         let local = vec![Highlight { color: "blue".into(), ..passage(1, "a") }];
         let pulled = vec![Highlight { note: "Gezogen".into(), ..passage(1, "a") }];
-        let out = rebase(&base, &local, pulled, None);
+        let out = rebase(&base, &local, pulled);
         assert_eq!(out.len(), 1);
         assert_eq!((out[0].color.as_str(), out[0].note.as_str()), ("blue", "Gezogen"));
     }
@@ -609,11 +641,11 @@ mod tests {
         let base = vec![Highlight { note: "alt".into(), ..passage(1, "a") }];
         let local = vec![Highlight { note: "meins".into(), ..passage(1, "a") }];
         let pulled = vec![Highlight { note: "fremd".into(), ..passage(1, "a") }];
-        assert_eq!(rebase(&base, &local, pulled, None)[0].note, "fremd
+        assert_eq!(rebase(&base, &local, pulled)[0].note, "fremd
 
 meins");
         let unchanged = base.clone();
-        assert_eq!(rebase(&base, &local, unchanged, None)[0].note, "meins");
+        assert_eq!(rebase(&base, &local, unchanged)[0].note, "meins");
     }
 
     #[test]
@@ -621,9 +653,9 @@ meins");
         let base = vec![passage(1, "a"), passage(2, "b")];
         let local = vec![passage(2, "b")];
         let pulled = vec![Highlight { note: "Gezogen".into(), ..passage(1, "a") }, passage(2, "b")];
-        let out = rebase(&base, &local, pulled, None);
+        let out = rebase(&base, &local, pulled);
         assert_eq!(out.iter().map(|h| (h.id, h.note.as_str())).collect::<Vec<_>>(), [(1, "Gezogen"), (2, "")]);
-        let out = rebase(&base, &local, base.clone(), None);
+        let out = rebase(&base, &local, base.clone());
         assert_eq!(out.iter().map(|h| h.id).collect::<Vec<_>>(), [2]);
     }
 
@@ -632,7 +664,7 @@ meins");
         let base = vec![passage(1, "alt")];
         let local = vec![Highlight { color: "blue".into(), ..passage(1, "alt") }];
         let pulled = vec![passage(1, "neu")];
-        let out = rebase(&base, &local, pulled, None);
+        let out = rebase(&base, &local, pulled);
         assert_eq!(out.len(), 2);
         assert!(out.iter().any(|h| h.id == 1 && h.text == "neu" && h.color == "yellow"));
         assert!(out.iter().any(|h| h.id != 1 && h.text == "alt" && h.color == "blue"));
@@ -644,9 +676,9 @@ meins");
         let base = vec![Highlight { pin: at(1.), ..pin() }];
         let local = vec![Highlight { pin: at(5.), ..pin() }];
         let recolored = vec![Highlight { color: "red".into(), ..base[0].clone() }];
-        assert_eq!(rebase(&base, &local, recolored, None)[0].pin, at(5.));
+        assert_eq!(rebase(&base, &local, recolored)[0].pin, at(5.));
         let moved = vec![Highlight { pin: at(9.), ..base[0].clone() }];
-        assert_eq!(rebase(&base, &local, moved, None)[0].pin, at(9.));
+        assert_eq!(rebase(&base, &local, moved)[0].pin, at(9.));
     }
 
     #[test]

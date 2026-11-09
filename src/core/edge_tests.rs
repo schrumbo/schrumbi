@@ -2165,7 +2165,7 @@ fn a_rewrite_by_the_first_release_keeps_notes_pins_and_drawings() {
 
 #[test]
 fn a_passage_that_reuses_an_id_in_the_first_release_gets_no_foreign_note() {
-    use crate::core::highlights::{ANNOTATIONS_NAME, Annotations};
+    use crate::core::highlights::{ANNOTATIONS_NAME, Annotations, fingerprint};
     let (root, mut lib) = workspace("highlights-id-reuse", &config(1, 0));
     lib.set_highlights("k", vec![pdf_noted(1, 0, "Gehört zum alten Wort"), pdf_mark(2, 1)], "markiert".into());
     rewrite_like_the_first_release(&root, |list| {
@@ -2177,11 +2177,11 @@ fn a_passage_that_reuses_an_id_in_the_first_release_gets_no_foreign_note() {
     assert!(shown.iter().all(|h| h.note.is_empty()), "{shown:?}");
     assert_eq!(lib.next_mark_id("k", true), 3);
     let mut again = shown.clone();
-    again.push(pdf_noted(3, 0, "Neu"));
+    again.push(pdf_noted(3, 5, "Neu"));
     lib.set_highlights("k", again, "markiert".into());
     let side: Annotations = crate::core::workspace::load(&root.join(ANNOTATIONS_NAME)).unwrap().unwrap();
-    assert_eq!(side.documents["k"].notes[&1].note, "Gehört zum alten Wort", "the orphaned note stays in the file");
-    assert_eq!(side.documents["k"].notes[&3].note, "Neu");
+    assert_eq!(side.documents["k"].notes[&fingerprint(&pdf_mark(1, 0))].note, "Gehört zum alten Wort", "the orphaned note stays in the file");
+    assert_eq!(side.documents["k"].notes[&fingerprint(&pdf_mark(3, 5))].note, "Neu");
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -2313,7 +2313,7 @@ fn notes_pulled_by_a_sync_are_loaded_and_a_later_note_keeps_both() {
     assert_eq!(lib.highlights_of("k"), vec![pdf_noted(1, 0, "Gezogen")]);
     assert_eq!(lib.highlights_of("j"), vec![pdf_mark(1, 0)]);
     let mut list = lib.highlights_of("k");
-    list.push(pdf_noted(2, 0, "Meins"));
+    list.push(pdf_noted(2, 1, "Meins"));
     lib.set_highlights("k", list, "Notiz".into());
     let loaded = highlights::load(&root);
     assert_eq!(loaded.lock, None);

@@ -723,7 +723,7 @@ impl Library {
 
     /// A free id for a new mark of a document: `passage` for marked text, otherwise for a pin or a drawing.
     pub fn next_mark_id(&self, key: &str, passage: bool) -> u64 {
-        highlights::next_id(self.highlights.get(key).map_or(&[], Vec::as_slice), self.highlights_orphans.get(key), passage)
+        highlights::next_id(self.highlights.get(key).map_or(&[], Vec::as_slice), passage)
     }
 
     /// Replaces a document's highlights as one step of the undo history. Refused while the files cannot be written, so nothing is lost silently.
@@ -801,7 +801,7 @@ impl Library {
             for (key, base) in &self.deferred_marks {
                 let local = before.get(key).map_or(&[][..], Vec::as_slice);
                 let pulled = self.highlights.remove(key).unwrap_or_default();
-                let merged = highlights::rebase(base, local, pulled, self.highlights_orphans.get(key));
+                let merged = highlights::rebase(base, local, pulled);
                 if !merged.is_empty() {
                     self.highlights.insert(key.clone(), merged);
                 }
