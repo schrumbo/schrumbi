@@ -1879,6 +1879,20 @@ fn pdf_mark(id: u64, page: usize) -> crate::core::highlights::Highlight {
 }
 
 #[test]
+fn marks_the_app_wrote_itself_are_not_read_again_but_a_change_from_outside_is() {
+    use crate::core::highlights::{FILE_NAME, Highlights};
+    let (root, mut lib) = workspace("marks-stamp", &config(1, 0));
+    lib.set_highlights("k", vec![pdf_mark(1, 0)], "markiert".into());
+    assert!(!lib.reload_external());
+    let mut outside: Highlights = crate::core::workspace::load(&root.join(FILE_NAME)).unwrap().unwrap();
+    outside.insert("k".into(), vec![pdf_mark(1, 0), pdf_mark(2, 1)]);
+    std::fs::write(root.join(FILE_NAME), serde_json::to_string(&outside).unwrap()).unwrap();
+    lib.reload_external();
+    assert_eq!(lib.highlights_of("k"), vec![pdf_mark(1, 0), pdf_mark(2, 1)]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_page_edit_that_cannot_be_recorded_puts_the_original_back() {
     use crate::core::highlights::document_key;
     use crate::core::library::write_edited_pdf;

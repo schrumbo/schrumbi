@@ -262,6 +262,7 @@ pub struct Library {
     highlights_lock: Option<String>,
     highlights_orphans: highlights::Orphans,
     highlights_disk: (Highlights, highlights::Annotations),
+    highlights_stamp: [Option<Stamp>; 2],
     deferred_marks: BTreeMap<String, Vec<Highlight>>,
     naming_cache: std::sync::Mutex<Option<(String, Arc<Vec<Naming>>)>>,
     pub now: DateTime<Local>,
@@ -321,6 +322,8 @@ pub struct Library {
     pub save_problems: Vec<PathBuf>,
     /// The height each save notice measured when drawn, so the toast stands above it.
     pub save_notice_height: HashMap<PathBuf, f32>,
+    /// The PDF each open viewer shows a page bar for, so the toast stands above it.
+    pub page_bars: HashMap<u64, PathBuf>,
     pub open_documents: Vec<PathBuf>,
     pub active_document: Option<PathBuf>,
     pub search_query: String,
@@ -452,6 +455,7 @@ impl Library {
             highlights_lock: None,
             highlights_orphans: highlights::Orphans::new(),
             highlights_disk: Default::default(),
+            highlights_stamp: [None, None],
             deferred_marks: BTreeMap::new(),
             naming_cache: Default::default(),
             now: Local::now(),
@@ -506,6 +510,7 @@ impl Library {
             unsaved_shown: Vec::new(),
             save_problems: Vec::new(),
             save_notice_height: HashMap::new(),
+            page_bars: HashMap::new(),
             open_documents: Vec::new(),
             active_document: None,
             search_query: String::new(),
@@ -809,13 +814,19 @@ impl Library {
         let mut failed = None;
         if annotations != self.highlights_disk.1 {
             match workspace::save(&annotations, &root.join(highlights::ANNOTATIONS_NAME)) {
-                Ok(()) => self.highlights_disk.1 = annotations,
+                Ok(()) => {
+                    self.highlights_disk.1 = annotations;
+                    self.highlights_stamp[1] = Some(stamp(&root.join(highlights::ANNOTATIONS_NAME)));
+                }
                 Err(e) => failed = Some(e),
             }
         }
         if failed.is_none() && main != self.highlights_disk.0 {
             match workspace::save(&main, &root.join(highlights::FILE_NAME)) {
-                Ok(()) => self.highlights_disk.0 = main,
+                Ok(()) => {
+                    self.highlights_disk.0 = main;
+                    self.highlights_stamp[0] = Some(stamp(&root.join(highlights::FILE_NAME)));
+                }
                 Err(e) => failed = Some(e),
             }
         }
@@ -838,7 +849,13 @@ impl Library {
     }
 
     fn reload_highlights(&mut self) -> bool {
-        let Some(loaded) = self.root.as_deref().map(highlights::load) else { return false };
+        let Some(root) = self.root.clone() else { return false };
+        let now = [highlights::FILE_NAME, highlights::ANNOTATIONS_NAME].map(|name| stamp(&root.join(name)));
+        if self.highlights_stamp == now.map(Some) {
+            return false;
+        }
+        self.highlights_stamp = now.map(Some);
+        let loaded = highlights::load(&root);
         if loaded.disk == self.highlights_disk && loaded.lock.is_some() == self.highlights_lock.is_some() {
             return false;
         }
@@ -890,6 +907,7 @@ impl Library {
 
     fn load_state(&mut self) {
         prune_undo_copies();
+        self.highlights_stamp = [None, None];
         let loaded = self.root.as_deref().map(highlights::load).unwrap_or_default();
         self.adopt_highlights(loaded);
         let Some(path) = self.state_path() else { return };
@@ -4161,6 +4179,12 @@ fn undo_folder() -> Option<PathBuf> {
 }
 
 /// Keeps a copy of a file for undo; on APFS the copy takes no extra space.
+type Stamp = Option<(u64, std::time::SystemTime)>;
+
+fn stamp(path: &Path) -> Stamp {
+    std::fs::metadata(path).ok().and_then(|m| Some((m.len(), m.modified().ok()?)))
+}
+
 /// Why an edited PDF was not written.
 pub enum PdfWriteError {
     Backup,
@@ -4175,6 +4199,18 @@ pub struct WrittenPdf {
     old_key: String,
     new_key: String,
     backup: Option<PathBuf>,
+}
+
+impl WrittenPdf {
+    /// The content key the PDF had before the edit.
+    pub fn old_key(&self) -> &str {
+        &self.old_key
+    }
+
+    /// The content key the PDF has now.
+    pub fn new_key(&self) -> &str {
+        &self.new_key
+    }
 }
 
 /// Keeps the original for undo, checks it is still the version the edit was made from and writes the edited bytes in place. Safe off the UI thread. `root` is the folder open when the edit started; `Library::finish_pdf_edit` puts the original back when another folder is open by then.
