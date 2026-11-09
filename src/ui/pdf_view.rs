@@ -373,6 +373,14 @@ fn gap_after(op: &PageOp, count: usize, inserted: usize, gap: usize) -> usize {
 }
 
 /// The widest page, and the page size a fit is measured against: the median, so one odd page does not rescale the document.
+fn content_width_for(fitted: bool, widest: f32, scale: f32, view: f32) -> f32 {
+    if fitted {
+        view
+    } else {
+        (widest * scale + PADDING * 2.).max(view)
+    }
+}
+
 fn page_extent(sizes: &[(f32, f32)]) -> ((f32, f32), (f32, f32)) {
     let median = |mut values: Vec<f32>| {
         let mid = values.len() / 2;
@@ -419,6 +427,7 @@ struct Geometry {
     total: f32,
     content_width: f32,
     view: (f32, f32),
+    fitted: bool,
 }
 
 struct Cached {
@@ -932,7 +941,8 @@ impl PdfView {
 
     fn update_geometry(&mut self, view: (f32, f32)) {
         let scale = self.scale_for(view).clamp(0.05, MAX_SCALE);
-        if !self.geo.tops.is_empty() && (self.geo.scale - scale).abs() < 0.0005 && self.geo.view == view {
+        let fitted = !matches!(self.fit, Fit::Scale(_));
+        if !self.geo.tops.is_empty() && (self.geo.scale - scale).abs() < 0.0005 && self.geo.view == view && self.geo.fitted == fitted {
             return;
         }
         let anchor = self.pending.take().or_else(|| {
@@ -945,7 +955,7 @@ impl PdfView {
             tops.push(top);
             top += h * scale + GAP;
         }
-        self.geo = Geometry { scale, tops, total: top - GAP + PADDING, content_width: (self.max_size.0 * scale + PADDING * 2.).max(view.0), view };
+        self.geo = Geometry { scale, tops, total: top - GAP + PADDING, content_width: content_width_for(fitted, self.max_size.0, scale, view.0), view, fitted };
         if let Some(a) = anchor {
             self.apply_anchor(a);
         }
@@ -2233,7 +2243,7 @@ impl PdfView {
         } else if self.active_mark.take().is_none() && self.selection.take().is_none() {
             let had_selection = !std::mem::take(&mut self.selected).is_empty();
             if !had_selection && self.list_cursor.is_none() {
-                cx.propagate();
+                super::state::act(cx, Library::dismiss_inspector);
             }
             self.select_anchor = None;
             self.list_cursor = None;
@@ -4376,9 +4386,13 @@ fn erasable(marks: &[Highlight], page: usize, x: f32, y: f32, gone: &BTreeSet<u6
     marks.iter().filter(|h| is_drawing(h) && !gone.contains(&h.id) && h.covers(page, x, y)).map(|h| h.id).collect()
 }
 
+fn ink_width(width: f32, scale: f32) -> f32 {
+    (width * scale).max(annot::INK_MIN)
+}
+
 fn ink_path(scale: f32, line: &InkPaint, extra: f32) -> Option<gpui_kit::Path<Pixels>> {
     let at = |p: &[f32; 2]| point(px(p[0] * scale), px(p[1] * scale));
-    let width = (line.width * scale).max(1.) + extra;
+    let width = ink_width(line.width, scale) + extra;
     match line.points.as_slice() {
         [] => None,
         [only] => {
@@ -4406,7 +4420,8 @@ fn paint_ink(origin: Point<Pixels>, scale: f32, lines: &[InkPaint], live: Option
     let view = window.content_mask().bounds;
     for line in lines.iter().chain(live) {
         let [x0, y0, x1, y1] = line.bounds;
-        let area = Bounds::from_corners(point(origin.x + px(x0 * scale), origin.y + px(y0 * scale)), point(origin.x + px(x1 * scale), origin.y + px(y1 * scale)));
+        let pad = px(annot::INK_MIN);
+        let area = Bounds::from_corners(point(origin.x + px(x0 * scale) - pad, origin.y + px(y0 * scale) - pad), point(origin.x + px(x1 * scale) + pad, origin.y + px(y1 * scale) + pad));
         if !view.intersects(&area) {
             continue;
         }
@@ -4459,9 +4474,10 @@ fn stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Draft, InkPaint, NoteTarget, badge_x, edge_crossing, ShortcutAction, TOOLS, Tool, clamp_to_page, edit_label, erasable, first_line, follow_edit, gap_after, is_drawing, is_mark_key, is_pin, is_plain, is_shortcut, left_out_title, new_index, note_change, page_extent, progress_label, push_point, tint_map};
+    use super::{PADDING, content_width_for, ink_width, Draft, InkPaint, NoteTarget, badge_x, edge_crossing, ShortcutAction, TOOLS, Tool, clamp_to_page, edit_label, erasable, first_line, follow_edit, gap_after, is_drawing, is_mark_key, is_pin, is_plain, is_shortcut, left_out_title, new_index, note_change, page_extent, progress_label, push_point, tint_map};
     use crate::core::highlights::{Highlight, HighlightPart, InkLine, Pin};
     use crate::core::pdf_edit::PageOp;
+    use crate::ui::theme::annot;
     use std::collections::BTreeSet;
     use gpui_kit::Keystroke;
 
@@ -4537,6 +4553,19 @@ mod tests {
         assert_eq!(gap_after(&moved, 6, 0, 4), 2);
         assert_eq!(gap_after(&moved, 6, 0, 6), 6);
         assert_eq!(gap_after(&PageOp::Rotate { pages: vec![0], clockwise: true }, 4, 0, 3), 3);
+    }
+
+    #[test]
+    fn a_fitted_view_centres_its_pages_and_a_fixed_zoom_scrolls_to_the_widest() {
+        assert_eq!(content_width_for(true, 842., 1., 635.), 635.);
+        assert_eq!(content_width_for(false, 842., 1., 635.), 842. + PADDING * 2.);
+        assert_eq!(content_width_for(false, 100., 1., 635.), 635.);
+    }
+
+    #[test]
+    fn a_thin_stroke_is_never_drawn_under_the_least_width() {
+        assert_eq!(ink_width(0.5, 1.), annot::INK_MIN);
+        assert_eq!(ink_width(4., 2.), 8.);
     }
 
     #[test]
