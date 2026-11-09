@@ -191,6 +191,7 @@ pub fn open_workspace(path: &Path, cx: &mut App) {
     if !path.is_dir() {
         return;
     }
+    super::pdf_view::flush_notes(cx);
     act(cx, |l| l.open(path));
     watch(path.to_path_buf(), cx);
     reindex(cx);
@@ -199,6 +200,7 @@ pub fn open_workspace(path: &Path, cx: &mut App) {
 }
 
 pub fn close_workspace(cx: &mut App) {
+    super::pdf_view::flush_notes(cx);
     flush_pending(cx);
     let store = cx.global_mut::<Store>();
     store.watcher = None;

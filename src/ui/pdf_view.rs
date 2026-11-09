@@ -322,6 +322,26 @@ impl PagePanels {
 
 impl Global for PagePanels {}
 
+/// Every open PDF view, so a note still being typed can be written before the folder changes or the app quits.
+#[derive(Default)]
+struct OpenViews(Vec<WeakEntity<PdfView>>);
+
+impl Global for OpenViews {}
+
+/// Writes every note still open in a PDF view and closes its editor. Call it while the folder the notes belong to is still the open one.
+pub fn flush_notes(cx: &mut App) {
+    let views: Vec<Entity<PdfView>> = {
+        let open = cx.default_global::<OpenViews>();
+        open.0.retain(|v| v.upgrade().is_some());
+        open.0.iter().filter_map(WeakEntity::upgrade).collect()
+    };
+    for view in views {
+        view.update(cx, |v, cx| {
+            v.flush_note(cx);
+        });
+    }
+}
+
 /// A page of the old file that is dragged, or the pages selected with it, and the view they belong to.
 #[derive(Clone)]
 struct DraggedPages {
@@ -603,6 +623,8 @@ impl PdfView {
         };
         let (queue, jobs, search_generation, load) = Self::connect(source.clone(), cx);
         let id = cx.entity_id();
+        let me = cx.weak_entity();
+        cx.default_global::<OpenViews>().0.push(me);
         let release = cx.on_release(move |this: &mut Self, cx| {
             cx.default_global::<PagePanels>().0.remove(&id);
             let lib = super::state::lib(cx);
@@ -754,6 +776,7 @@ impl PdfView {
         self.stamp = now;
         self.finish_stroke(cx);
         self.finish_erase(cx);
+        self.flush_note(cx);
         if let Some(key) = self.marks_key.take() {
             let state = ViewState { selected: self.selected.clone(), anchor: self.anchor_at(0., 0.), cursor: self.list_cursor };
             self.remember(key, state);
@@ -1560,7 +1583,13 @@ impl PdfView {
     }
 
     fn open_note_for(&mut self, target: NoteTarget, draft: Option<Draft>, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(target, NoteTarget::NewPin { .. } | NoteTarget::NewPassage) && !self.marks_ready(cx) {
+        if matches!(target, NoteTarget::NewPin { .. } | NoteTarget::NewPassage) {
+            if !self.marks_ready(cx) {
+                return;
+            }
+        } else if self.busy() {
+            self.hint = true;
+            cx.notify();
             return;
         }
         if !self.save_note(window, cx) {
@@ -1608,6 +1637,30 @@ impl PdfView {
         let editor = self.note.as_ref()?;
         let key = self.marks_key.clone()?;
         Some((key, editor.root.clone(), editor.target, editor.input.read(cx).value().trim().to_string(), editor.draft.clone()))
+    }
+
+    /// Writes the open note under the key it was opened on and closes its editor, without a window. Call it before the key can change. `false` when the folder takes no changes and the text is lost.
+    fn flush_note(&mut self, cx: &mut Context<Self>) -> bool {
+        let unsaved = self.unsaved_note(cx);
+        let Some(editor) = self.note.take() else { return true };
+        let own = editor.input.read(cx).focus_handle(cx);
+        drop(editor);
+        let written = match unsaved {
+            Some((key, root, target, text, draft)) => super::state::act(cx, |l| commit_note(l, &key, &root, target, &text, draft.as_ref())),
+            None => true,
+        };
+        let focus = self.focus.clone();
+        cx.defer(move |cx| {
+            if let Some(window) = cx.active_window() {
+                let _ = window.update(cx, |_, window, cx| {
+                    if window.focused(cx).is_none_or(|f| f == own) {
+                        window.focus(&focus, cx);
+                    }
+                });
+            }
+        });
+        cx.notify();
+        written
     }
 
     /// Whether the open note has been stored: only then there is something to delete.
@@ -3266,7 +3319,7 @@ impl PdfView {
         if !self.allowed(cx) {
             return;
         }
-        let at = self.targets(page).last().map_or(0, |p| p + 1);
+        let at = self.gap_now(self.targets(page).last().map_or(0, |p| p + 1));
         self.pending_gap = Some(at);
         let me = cx.entity().downgrade();
         super::platform::pick(PathPromptOptions { files: true, directories: false, multiple: true, prompt: None }, cx, move |paths, cx| {
@@ -3277,12 +3330,17 @@ impl PdfView {
         });
     }
 
-    /// Inserts PDFs that were dropped on the page list. While the view is still loading what an edit just wrote, the gap the pointer showed is counted in the pages it had before; it is moved to where it is now.
-    fn insert_pdfs(&mut self, paths: Vec<PathBuf>, at: usize, cx: &mut Context<Self>) {
-        let at = match &self.landed {
+    /// A gap counted in the pages the view showed before an edit that is still being loaded, moved to where it is now.
+    fn gap_now(&self, at: usize) -> usize {
+        match &self.landed {
             Some((op, count, inserted)) if self.reloading => gap_after(op, *count, *inserted, at),
             _ => at,
-        };
+        }
+    }
+
+    /// Inserts PDFs that were dropped on the page list. While the view is still loading what an edit just wrote, the gap the pointer showed is counted in the pages it had before.
+    fn insert_pdfs(&mut self, paths: Vec<PathBuf>, at: usize, cx: &mut Context<Self>) {
+        let at = self.gap_now(at);
         self.queue_pdfs(paths, at, cx);
     }
 
@@ -3336,10 +3394,13 @@ impl PdfView {
     }
 
     fn start_edit(&mut self, edit: Edit, cx: &mut Context<Self>) {
-        let Some(old_key) = self.marks_key.clone() else { return };
-        if !self.editable() || self.working.is_some() || self.reloading || !super::state::act(cx, |l| l.can_edit_pdf()) {
+        if self.marks_key.is_none() || !self.editable() || self.working.is_some() || self.reloading || !super::state::act(cx, |l| l.can_edit_pdf()) {
             return;
         }
+        self.finish_stroke(cx);
+        self.finish_erase(cx);
+        self.flush_note(cx);
+        let Some(old_key) = self.marks_key.clone() else { return };
         let pages = match &edit {
             Edit::Op(PageOp::Rotate { pages, .. } | PageOp::Move { pages, .. } | PageOp::Delete(pages)) => pages.clone(),
             Edit::Op(PageOp::Insert { .. }) | Edit::Insert { .. } => Vec::new(),
@@ -4350,18 +4411,19 @@ fn note_change(list: &mut Vec<Highlight>, target: NoteTarget, text: &str, new_id
     }
 }
 
-/// Writes a note that was still open when its viewer went away, unless another folder is open by now.
-fn commit_note(l: &mut Library, key: &str, root: &Option<PathBuf>, target: NoteTarget, text: &str, draft: Option<&Draft>) {
+/// Writes a note that was still open when its viewer went away or its document is about to change, unless another folder is open by now. `false` when it could not be written because the folder takes no changes.
+fn commit_note(l: &mut Library, key: &str, root: &Option<PathBuf>, target: NoteTarget, text: &str, draft: Option<&Draft>) -> bool {
     if l.root != *root {
-        return;
+        return true;
     }
     let mut list = l.highlights_of(key);
     let id = l.next_mark_id(key, matches!(target, NoteTarget::NewPassage));
-    if let Some(label) = note_change(&mut list, target, text, id, draft)
-        && l.can_edit_pdf()
-    {
-        l.set_highlights(key, list, label);
+    let Some(label) = note_change(&mut list, target, text, id, draft) else { return true };
+    if !l.can_edit_pdf() {
+        return false;
     }
+    l.set_highlights(key, list, label);
+    true
 }
 
 fn first_line(note: &str) -> String {
@@ -4477,7 +4539,7 @@ fn stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PADDING, content_width_for, page_left, ink_width, Draft, InkPaint, NoteTarget, badge_x, edge_crossing, ShortcutAction, TOOLS, Tool, clamp_to_page, edit_label, erasable, first_line, follow_edit, gap_after, is_drawing, is_mark_key, is_pin, is_plain, is_shortcut, left_out_title, new_index, note_change, page_extent, progress_label, push_point, tint_map};
+    use super::{PADDING, content_width_for, page_left, ink_width, Draft, InkPaint, NoteTarget, badge_x, edge_crossing, ShortcutAction, TOOLS, Tool, clamp_to_page, edit_label, erasable, first_line, follow_edit, gap_after, commit_note, is_drawing, is_mark_key, is_pin, is_plain, is_shortcut, left_out_title, new_index, note_change, page_extent, progress_label, push_point, tint_map};
     use crate::core::highlights::{Highlight, HighlightPart, InkLine, Pin};
     use crate::core::pdf_edit::PageOp;
     use crate::ui::theme::annot;
@@ -4556,6 +4618,50 @@ mod tests {
         assert_eq!(gap_after(&moved, 6, 0, 4), 2);
         assert_eq!(gap_after(&moved, 6, 0, 6), 6);
         assert_eq!(gap_after(&PageOp::Rotate { pages: vec![0], clockwise: true }, 4, 0, 3), 3);
+    }
+
+    fn scratch_library(name: &str) -> (std::path::PathBuf, crate::core::library::Library) {
+        let dir = std::env::temp_dir().join(format!("schrumbi-pdf-view-{}", std::process::id())).join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("folder");
+        let mut lib = crate::core::library::Library::new();
+        lib.open(&dir);
+        (dir, lib)
+    }
+
+    #[test]
+    fn a_note_written_before_an_edit_moves_with_the_marks_to_the_new_content() {
+        use crate::core::highlights::document_key;
+        use crate::core::library::write_edited_pdf;
+        let (dir, mut lib) = scratch_library("note-before-edit");
+        let path = dir.join("Skript.pdf");
+        let old = b"%PDF-1.4 alt".to_vec();
+        std::fs::write(&path, &old).expect("pdf");
+        let old_key = document_key(&old);
+        let target = NoteTarget::NewPin { page: 0, x: 10., y: 10. };
+        let root = lib.root.clone();
+        assert!(commit_note(&mut lib, &old_key, &root, target, "Prüfungsfrage", None));
+        assert_eq!(lib.highlights_of(&old_key).len(), 1);
+        let new = b"%PDF-1.4 neu".to_vec();
+        let written = write_edited_pdf(lib.root.clone(), &path, &new, &old_key).ok().expect("written");
+        let op = PageOp::Rotate { pages: vec![0], clockwise: true };
+        lib.finish_pdf_edit(written, &op, &[(100., 100.)], 0, "Seite gedreht".into());
+        let moved = lib.highlights_of(&document_key(&new));
+        assert_eq!(moved.len(), 1, "{moved:?}");
+        assert_eq!(moved[0].note, "Prüfungsfrage");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_note_of_another_folder_is_not_written_and_an_empty_new_pin_writes_nothing() {
+        let (dir, mut lib) = scratch_library("note-other-folder");
+        let target = NoteTarget::NewPin { page: 0, x: 1., y: 1. };
+        assert!(commit_note(&mut lib, "k", &Some(dir.join("anderer")), target, "Text", None));
+        assert!(lib.highlights_of("k").is_empty());
+        let root = lib.root.clone();
+        assert!(commit_note(&mut lib, "k", &root, target, "", None));
+        assert!(lib.highlights_of("k").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
