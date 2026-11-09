@@ -32,6 +32,102 @@ pub struct PagePixels {
     pub bgra: Vec<u8>,
 }
 
+/// One highlight on a page: its rectangles in page points, its color, and the tint multiplied into the paper under them.
+/// `sig` identifies exactly what a baked page shows of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkPaint {
+    pub id: u64,
+    pub rects: Vec<[f32; 4]>,
+    pub color: [u8; 3],
+    pub tint: [u8; 3],
+    pub sig: u64,
+}
+
+impl MarkPaint {
+    /// Keeps only finite rectangles and derives tint and signature.
+    pub fn new(id: u64, rects: &[[f32; 4]], color: [u8; 3]) -> Self {
+        use std::hash::{Hash, Hasher};
+        let rects: Vec<[f32; 4]> = rects.iter().filter(|r| r.iter().all(|v| v.is_finite())).copied().collect();
+        let tint = mark_tint(color);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        id.hash(&mut hasher);
+        tint.hash(&mut hasher);
+        rects.len().hash(&mut hasher);
+        for r in &rects {
+            r.map(f32::to_bits).hash(&mut hasher);
+        }
+        Self { id, rects, color, tint, sig: hasher.finish() }
+    }
+}
+
+/// How strongly a highlight color shows on white paper.
+pub const MARK_OPACITY: f32 = 0.38;
+
+/// The tint of a highlight color: on white paper it looks like the color at `MARK_OPACITY`.
+pub fn mark_tint(color: [u8; 3]) -> [u8; 3] {
+    color.map(|c| (255. - MARK_OPACITY * (255. - f32::from(c))).round() as u8)
+}
+
+/// Identifies a page's mark list, so a baked page knows whether it is current. Zero means no marks.
+pub fn marks_hash(marks: &[MarkPaint]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    if marks.is_empty() {
+        return 0;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for m in marks {
+        m.sig.hash(&mut hasher);
+    }
+    hasher.finish() | 1
+}
+
+fn pixel_span(from: f32, size: f32, scale: f32, limit: u32) -> (u32, u32) {
+    let start = (from * scale).floor().clamp(0., limit as f32) as u32;
+    let end = ((from + size) * scale).ceil().clamp(0., limit as f32) as u32;
+    (start, end)
+}
+
+/// Multiplies each mark's tint into the page, like a highlighter: white paper takes the tint, black text stays black.
+/// Rectangles of one mark that overlap darken once.
+pub fn multiply_marks(pixels: &mut PagePixels, scale: f32, marks: &[MarkPaint]) {
+    let (width, height) = (pixels.width, pixels.height);
+    if pixels.bgra.len() < width as usize * height as usize * 4 {
+        return;
+    }
+    for mark in marks {
+        let mut rows: Vec<Vec<(u32, u32)>> = vec![Vec::new(); height as usize];
+        for r in mark.rects.iter().filter(|r| r.iter().all(|v| v.is_finite())) {
+            let (x0, x1) = pixel_span(r[0], r[2], scale, width);
+            let (y0, y1) = pixel_span(r[1], r[3], scale, height);
+            if x0 >= x1 {
+                continue;
+            }
+            for row in &mut rows[y0 as usize..y1.max(y0) as usize] {
+                row.push((x0, x1));
+            }
+        }
+        let [r, g, b] = mark.tint.map(u32::from);
+        for (y, row) in rows.iter_mut().enumerate() {
+            row.sort_unstable();
+            let mut merged: Vec<(u32, u32)> = Vec::with_capacity(row.len());
+            for &(a, z) in row.iter() {
+                match merged.last_mut() {
+                    Some(last) if a <= last.1 => last.1 = last.1.max(z),
+                    _ => merged.push((a, z)),
+                }
+            }
+            for (a, z) in merged {
+                let line = y * width as usize * 4;
+                for px in pixels.bgra[line + a as usize * 4..line + z as usize * 4].chunks_exact_mut(4) {
+                    px[0] = ((u32::from(px[0]) * b + 127) / 255) as u8;
+                    px[1] = ((u32::from(px[1]) * g + 127) / 255) as u8;
+                    px[2] = ((u32::from(px[2]) * r + 127) / 255) as u8;
+                }
+            }
+        }
+    }
+}
+
 /// One entry of the document's table of contents.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutlineEntry {
@@ -562,6 +658,85 @@ mod tests {
         assert_eq!((p.width, p.height), (306, 396));
         assert_eq!(p.bgra.len(), 306 * 396 * 4);
         assert_eq!(&p.bgra[..4], &[255, 255, 255, 255]);
+    }
+
+    fn paint(rects: Vec<[f32; 4]>, tint: [u8; 3]) -> MarkPaint {
+        let base = MarkPaint::new(1, &rects, tint);
+        MarkPaint { tint, ..base }
+    }
+
+    fn canvas(w: u32, h: u32, px: [u8; 4]) -> PagePixels {
+        PagePixels { width: w, height: h, bgra: px.iter().copied().cycle().take(w as usize * h as usize * 4).collect() }
+    }
+
+    fn at(p: &PagePixels, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * p.width + x) * 4) as usize;
+        p.bgra[i..i + 4].try_into().unwrap()
+    }
+
+    #[test]
+    fn marks_tint_white_and_keep_black() {
+        let mut p = canvas(10, 10, [255, 255, 255, 255]);
+        p.bgra[..4].copy_from_slice(&[0, 0, 0, 255]);
+        let mark = paint(vec![[0., 0., 5., 5.]], [255, 230, 100]);
+        multiply_marks(&mut p, 1., &[mark]);
+        assert_eq!(at(&p, 0, 0), [0, 0, 0, 255]);
+        assert_eq!(at(&p, 1, 1), [100, 230, 255, 255]);
+        assert_eq!(at(&p, 5, 5), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn overlapping_rects_of_one_mark_multiply_once() {
+        let mut p = canvas(10, 4, [255, 255, 255, 255]);
+        let tint = [128, 128, 128];
+        let one = paint(vec![[0., 0., 6., 4.], [3., 0., 6., 4.]], tint);
+        multiply_marks(&mut p, 1., &[one]);
+        assert_eq!(at(&p, 4, 1), [128, 128, 128, 255]);
+        assert_eq!(at(&p, 8, 1), [128, 128, 128, 255]);
+        assert_eq!(at(&p, 9, 1), [255, 255, 255, 255]);
+        let mut q = canvas(10, 4, [255, 255, 255, 255]);
+        let (a, b) = (paint(vec![[0., 0., 6., 4.]], tint), paint(vec![[3., 0., 6., 4.]], tint));
+        multiply_marks(&mut q, 1., &[a, b]);
+        assert_eq!(at(&q, 4, 1), [64, 64, 64, 255]);
+    }
+
+    #[test]
+    fn rects_outside_the_image_do_not_panic() {
+        let mut p = canvas(8, 8, [255, 255, 255, 255]);
+        let rects = vec![[-50., -50., 10., 10.], [100., 100., 5., 5.], [2., 2., 500., 500.], [f32::NAN, 0., 1., 1.], [2., 2., -3., -3.], [f32::INFINITY, 0., 1., 1.]];
+        multiply_marks(&mut p, 2., &[paint(rects, [0, 0, 0])]);
+        assert_eq!(at(&p, 7, 7), [0, 0, 0, 255]);
+        assert_eq!(at(&p, 3, 3), [255, 255, 255, 255]);
+        let mut empty = PagePixels { width: 0, height: 0, bgra: Vec::new() };
+        multiply_marks(&mut empty, 1., &[paint(vec![[0., 0., 5., 5.]], [1, 2, 3])]);
+    }
+
+    #[test]
+    fn tint_matches_the_old_overlay_on_white() {
+        assert_eq!(mark_tint([255, 255, 255]), [255, 255, 255]);
+        assert_eq!(mark_tint([0, 0, 0]), [158, 158, 158]);
+        assert_eq!(mark_tint([255, 204, 0]), [255, 236, 158]);
+    }
+
+    #[test]
+    fn mark_hash_follows_the_list() {
+        let a = paint(vec![[0., 0., 5., 5.]], [1, 2, 3]);
+        let b = paint(vec![[0., 0., 5., 5.]], [1, 2, 4]);
+        assert_eq!(marks_hash(&[]), 0);
+        assert_ne!(marks_hash(std::slice::from_ref(&a)), 0);
+        assert_eq!(marks_hash(std::slice::from_ref(&a)), marks_hash(std::slice::from_ref(&a)));
+        assert_ne!(marks_hash(&[a]), marks_hash(&[b]));
+    }
+
+    #[test]
+    fn paint_keeps_finite_rects_and_signs_what_it_shows() {
+        let rects = [[0., 0., 5., 5.], [f32::NAN, 0., 1., 1.], [1., f32::INFINITY, 1., 1.]];
+        let a = MarkPaint::new(1, &rects, [255, 204, 0]);
+        assert_eq!(a.rects, vec![[0., 0., 5., 5.]]);
+        assert_eq!(a.sig, MarkPaint::new(1, &rects[..1], [255, 204, 0]).sig);
+        assert_ne!(a.sig, MarkPaint::new(2, &rects[..1], [255, 204, 0]).sig);
+        assert_ne!(a.sig, MarkPaint::new(1, &rects[..1], [52, 199, 89]).sig);
+        assert_ne!(a.sig, MarkPaint::new(1, &[[0., 0., 5., 6.]], [255, 204, 0]).sig);
     }
 
     #[test]

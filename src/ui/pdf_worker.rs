@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -6,7 +6,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use gpui_kit::RenderImage;
 
 use crate::core::office::{self, OpenError};
-use crate::core::pdf_render::{PageRect, PageText, PdfDoc, PdfMeta, fold_query};
+use crate::core::pdf_render::{MarkPaint, PagePixels, PageRect, PageText, PdfDoc, PdfMeta, fold_query, marks_hash, multiply_marks};
 
 /// A page at a resolution, in quarter pixels per point.
 pub type PageKey = (usize, u16);
@@ -46,7 +46,8 @@ pub enum Message {
     Opened(Vec<(f32, f32)>),
     Key(String),
     Failed(Option<OpenError>),
-    Page(PageKey, Arc<RenderImage>),
+    Page(PageKey, Arc<RenderImage>, u64, Vec<u64>),
+    PageFailed(PageKey, u64),
     Meta(PdfMeta),
     Text(usize, Arc<PageText>),
     Hits(u64, Vec<Hit>),
@@ -71,11 +72,12 @@ struct Queue {
 pub struct RenderQueue {
     state: Mutex<Queue>,
     ready: Condvar,
+    marks: Mutex<Arc<HashMap<usize, Vec<MarkPaint>>>>,
 }
 
 impl RenderQueue {
     fn new() -> Self {
-        Self { state: Mutex::new(Queue::default()), ready: Condvar::new() }
+        Self { state: Mutex::new(Queue::default()), ready: Condvar::new(), marks: Mutex::new(Arc::default()) }
     }
 
     pub fn replace(&self, wanted: Vec<PageKey>) {
@@ -84,6 +86,17 @@ impl RenderQueue {
             q.wanted.reverse();
             self.ready.notify_all();
         }
+    }
+
+    /// Replaces the highlights that render threads multiply into pages they render from now on.
+    pub fn set_marks(&self, marks: Arc<HashMap<usize, Vec<MarkPaint>>>) {
+        if let Ok(mut m) = self.marks.lock() {
+            *m = marks;
+        }
+    }
+
+    fn marks(&self) -> Arc<HashMap<usize, Vec<MarkPaint>>> {
+        self.marks.lock().map(|m| m.clone()).unwrap_or_default()
     }
 
     pub fn close(&self) {
@@ -109,14 +122,25 @@ impl RenderQueue {
         }
     }
 
-    fn finished(&self, key: PageKey) {
+    /// Frees a finished page. When the highlights changed since it was baked, the page is queued again at once,
+    /// so a request that arrived while it ran is not lost.
+    fn finished(&self, key: PageKey, baked: u64) {
         if let Ok(mut q) = self.state.lock() {
             q.running.remove(&key);
+            if self.page_hash(key.0) != baked {
+                q.wanted.retain(|k| *k != key);
+                q.wanted.push(key);
+                self.ready.notify_all();
+            }
         }
+    }
+
+    fn page_hash(&self, page: usize) -> u64 {
+        marks_hash(self.marks().get(&page).map(Vec::as_slice).unwrap_or_default())
     }
 }
 
-fn to_image(p: crate::core::pdf_render::PagePixels) -> Option<Arc<RenderImage>> {
+fn to_image(p: PagePixels) -> Option<Arc<RenderImage>> {
     let buffer = image::RgbaImage::from_raw(p.width, p.height, p.bgra)?;
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
 }
@@ -124,11 +148,22 @@ fn to_image(p: crate::core::pdf_render::PagePixels) -> Option<Arc<RenderImage>> 
 fn render_thread(data: Arc<Vec<u8>>, queue: Arc<RenderQueue>, results: async_channel::Sender<Message>) {
     let Some(doc) = PdfDoc::from_data(data) else { return };
     while let Some(key) = queue.next() {
-        let image = doc.render_pixels(key.0, f32::from(key.1) / 4.).and_then(to_image);
-        queue.finished(key);
-        if let Some(image) = image
-            && results.send_blocking(Message::Page(key, image)).is_err()
-        {
+        let scale = f32::from(key.1) / 4.;
+        let rendered = doc.render_pixels(key.0, scale);
+        let marks = queue.marks();
+        let page_marks = marks.get(&key.0).map(Vec::as_slice).unwrap_or_default();
+        let baked = marks_hash(page_marks);
+        let image = rendered.and_then(|mut pixels| {
+            multiply_marks(&mut pixels, scale, page_marks);
+            to_image(pixels)
+        });
+        let message = match image {
+            Some(image) => Message::Page(key, image, baked, page_marks.iter().map(|m| m.sig).collect()),
+            None => Message::PageFailed(key, baked),
+        };
+        let sent = results.send_blocking(message).is_ok();
+        queue.finished(key, baked);
+        if !sent {
             return;
         }
     }
@@ -217,4 +252,69 @@ pub fn start(source: Source, results: async_channel::Sender<Message>) -> (Arc<Re
         }
     });
     (queue, jobs_tx, latest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layer(page: usize, color: [u8; 3]) -> Arc<HashMap<usize, Vec<MarkPaint>>> {
+        Arc::new(HashMap::from([(page, vec![MarkPaint::new(1, &[[0., 0., 5., 5.]], color)])]))
+    }
+
+    fn baked(queue: &RenderQueue, page: usize) -> u64 {
+        queue.page_hash(page)
+    }
+
+    #[test]
+    fn finished_with_unchanged_marks_only_frees_the_page() {
+        let queue = RenderQueue::new();
+        queue.set_marks(layer(0, [1, 2, 3]));
+        queue.replace(vec![(0, 8)]);
+        assert_eq!(queue.next(), Some((0, 8)));
+        let hash = baked(&queue, 0);
+        queue.finished((0, 8), hash);
+        let q = queue.state.lock().unwrap();
+        assert!(q.running.is_empty());
+        assert!(q.wanted.is_empty());
+    }
+
+    #[test]
+    fn finished_after_marks_changed_queues_the_page_again_first() {
+        let queue = RenderQueue::new();
+        queue.set_marks(layer(0, [1, 2, 3]));
+        queue.replace(vec![(0, 8), (1, 8)]);
+        assert_eq!(queue.next(), Some((0, 8)));
+        let hash = baked(&queue, 0);
+        queue.set_marks(layer(0, [4, 5, 6]));
+        queue.replace(vec![(0, 8), (1, 8)]);
+        queue.finished((0, 8), hash);
+        assert_eq!(queue.next(), Some((0, 8)));
+        assert_eq!(queue.next(), Some((1, 8)));
+    }
+
+    #[test]
+    fn a_request_made_while_running_is_not_lost() {
+        let queue = RenderQueue::new();
+        queue.replace(vec![(0, 8)]);
+        assert_eq!(queue.next(), Some((0, 8)));
+        queue.set_marks(layer(0, [9, 9, 9]));
+        queue.replace(vec![(0, 8)]);
+        let discarded = queue.state.lock().unwrap().wanted.pop();
+        assert_eq!(discarded, Some((0, 8)));
+        queue.finished((0, 8), 0);
+        let q = queue.state.lock().unwrap();
+        assert_eq!(q.wanted, vec![(0, 8)]);
+        assert!(q.running.is_empty());
+    }
+
+    #[test]
+    fn marks_on_other_pages_do_not_requeue() {
+        let queue = RenderQueue::new();
+        queue.replace(vec![(0, 8)]);
+        assert_eq!(queue.next(), Some((0, 8)));
+        queue.set_marks(layer(3, [9, 9, 9]));
+        queue.finished((0, 8), 0);
+        assert!(queue.state.lock().unwrap().wanted.is_empty());
+    }
 }

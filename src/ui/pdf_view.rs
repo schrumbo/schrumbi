@@ -15,12 +15,12 @@ use gpui_kit::*;
 
 use super::motion::{self, Soft};
 use super::pdf_worker::{self, Hit, Message, PageKey, RenderQueue, TextJob};
-use super::theme::{Theme, control, font, iconsize, radius, space};
+use super::theme::{Kind, Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::highlights::{Highlight, HighlightPart};
 use crate::core::i18n::{tr, trf};
 use crate::core::office::{self, OpenError};
-use crate::core::pdf_render::{LinkTarget, PageRect, PageText, PdfMeta};
+use crate::core::pdf_render::{LinkTarget, MARK_OPACITY, MarkPaint, PageRect, PageText, PdfMeta, marks_hash};
 use crate::core::prefs::{self, PdfPosition};
 
 actions!(schrumbi_pdf, [Escape]);
@@ -36,6 +36,7 @@ const PANEL_WIDTH: f32 = 240.;
 const FLOAT_BELOW: f32 = 2. * PANEL_WIDTH;
 const MARK_COLORS: [&str; 4] = ["yellow", "green", "blue", "pink"];
 const MARK_BAR_WIDTH: f32 = 148.;
+const MARK_UNDERLINE: f32 = 2.;
 const PREVIEW: u16 = 2;
 const MAX_SHARP_WIDTH: f32 = 4096.;
 const SHARP_BUDGET: usize = 128 * 1024 * 1024;
@@ -89,6 +90,8 @@ struct Geometry {
 
 struct Cached {
     image: Arc<RenderImage>,
+    baked: u64,
+    baked_sigs: Vec<u64>,
     bytes: usize,
     used: u64,
 }
@@ -107,6 +110,13 @@ pub struct PdfView {
     max_size: (f32, f32),
     failed: Option<Option<OpenError>>,
     cache: HashMap<PageKey, Cached>,
+    page_marks: Arc<HashMap<usize, Vec<MarkPaint>>>,
+    marks_dirty: bool,
+    marks_theme: Option<Kind>,
+    underlines: HashMap<u64, Hsla>,
+    removed_mark: Option<u64>,
+    failed_pages: HashMap<PageKey, u64>,
+    page_arrived: bool,
     tick: u64,
     queue: Arc<RenderQueue>,
     jobs: async_channel::Sender<TextJob>,
@@ -213,6 +223,7 @@ impl PdfView {
             }
         });
         let library = cx.observe(&super::state::lib(cx), |v: &mut Self, _, cx| {
+            v.marks_dirty = true;
             v.reload_if_changed(cx);
             cx.notify();
         });
@@ -225,6 +236,13 @@ impl PdfView {
             max_size: (1., 1.),
             failed: None,
             cache: HashMap::new(),
+            page_marks: Arc::default(),
+            marks_dirty: true,
+            marks_theme: None,
+            underlines: HashMap::new(),
+            removed_mark: None,
+            failed_pages: HashMap::new(),
+            page_arrived: false,
             tick: 0,
             queue,
             jobs,
@@ -292,6 +310,7 @@ impl PdfView {
         self.queue.close();
         self.search_generation.fetch_add(1, Ordering::Relaxed);
         let (queue, jobs, search_generation, load) = Self::connect(self.source.clone(), cx);
+        queue.set_marks(self.page_marks.clone());
         self.queue = queue;
         self.jobs = jobs;
         self.search_generation = search_generation;
@@ -305,6 +324,7 @@ impl PdfView {
                 for (_, c) in self.cache.drain() {
                     let _ = cx.drop_image(c.image, None);
                 }
+                self.failed_pages.clear();
                 self.texts.clear();
                 self.text_requested.clear();
                 self.last_wanted.clear();
@@ -320,16 +340,29 @@ impl PdfView {
                 self.max_size = sizes.iter().fold((1., 1.), |m, s| (f32::max(m.0, s.0), f32::max(m.1, s.1)));
                 self.sizes = sizes;
             }
-            Message::Key(key) => self.marks_key = Some(key),
+            Message::Key(key) => {
+                self.marks_key = Some(key);
+                self.marks_dirty = true;
+            }
             Message::Failed(why) => {
                 self.reloading = false;
                 self.failed = Some(why);
             }
-            Message::Page(key, image) => {
+            Message::Page(key, image, baked, baked_sigs) => {
                 let size = image.size(0);
                 let bytes = size.width.0 as usize * size.height.0 as usize * 4;
                 self.tick += 1;
-                self.cache.insert(key, Cached { image, bytes, used: self.tick });
+                self.page_arrived = true;
+                if self.page_hash(key.0) != baked {
+                    self.last_wanted.clear();
+                }
+                self.failed_pages.remove(&key);
+                if let Some(old) = self.cache.insert(key, Cached { image, baked, baked_sigs, bytes, used: self.tick }) {
+                    let _ = cx.drop_image(old.image, None);
+                }
+            }
+            Message::PageFailed(key, hash) => {
+                self.failed_pages.insert(key, hash);
             }
             Message::Meta(meta) => self.meta = meta,
             Message::Text(page, text) => {
@@ -463,17 +496,51 @@ impl PdfView {
         ((pixels_per_point * 4.).ceil() as u16).max(1)
     }
 
+    fn page_hash(&self, page: usize) -> u64 {
+        marks_hash(self.page_marks.get(&page).map(Vec::as_slice).unwrap_or_default())
+    }
+
+    /// The cached page that `page_element` shows: the sharp one, else the largest older one, else the preview.
+    fn displayed_key(&self, page: usize, window: &Window) -> Option<PageKey> {
+        let sharp = (page, self.sharp_quarters(page, window));
+        if self.cache.contains_key(&sharp) {
+            return Some(sharp);
+        }
+        let largest = self.cache.keys().filter(|k| k.0 == page && k.1 != PREVIEW).max_by_key(|k| k.1).copied();
+        largest.or_else(|| self.cache.contains_key(&(page, PREVIEW)).then_some((page, PREVIEW)))
+    }
+
+    fn is_stale(&self, key: PageKey) -> bool {
+        let hash = self.page_hash(key.0);
+        self.cache.get(&key).is_some_and(|c| c.baked != hash) && self.failed_pages.get(&key) != Some(&hash)
+    }
+
     fn request_pages(&mut self, visible: Range<usize>, window: &Window) {
         let mut wanted: Vec<PageKey> = Vec::new();
         let count = self.page_count();
         let sharp_ready = Instant::now() >= self.sharp_after;
+        let mut stale: Vec<PageKey> = Vec::new();
+        for page in visible.clone() {
+            for key in [self.displayed_key(page, window), Some((page, PREVIEW))].into_iter().flatten() {
+                if self.is_stale(key) && !stale.contains(&key) {
+                    stale.push(key);
+                }
+            }
+        }
+        if self.panel_open && self.panel_tab == PanelTab::Thumbnails {
+            let thumbs: Vec<PageKey> = self.thumb_range.clone().map(|page| (page, PREVIEW)).filter(|k| self.is_stale(*k)).collect();
+            stale.extend(thumbs);
+        }
         let mut add = |key: PageKey, cache: &HashMap<PageKey, Cached>| {
-            if !cache.contains_key(&key) && !wanted.contains(&key) {
+            if (!cache.contains_key(&key) || stale.contains(&key)) && !wanted.contains(&key) {
                 wanted.push(key);
             }
         };
         for page in visible.clone() {
             add((page, PREVIEW), &self.cache);
+        }
+        for key in stale.iter() {
+            add(*key, &self.cache);
         }
         if sharp_ready {
             for page in visible.clone() {
@@ -499,6 +566,43 @@ impl PdfView {
         }
     }
 
+    /// Re-reads the highlights when the library or the document changed and hands the render threads their paint.
+    fn sync_marks(&mut self, cx: &mut Context<Self>, t: &Theme) {
+        if !self.marks_dirty && self.marks_theme == Some(t.kind) {
+            return;
+        }
+        if self.marks_dirty
+            && let Some(key) = self.marks_key.clone()
+        {
+            self.marks = super::state::read(cx, |l| l.highlights_of(&key));
+            self.marks_dirty = false;
+            if let Some(id) = self.removed_mark
+                && self.marks.iter().any(|h| h.id == id)
+            {
+                self.removed_mark = None;
+                self.active_mark = Some(id);
+            }
+            if self.active_mark.is_some_and(|id| !self.marks.iter().any(|h| h.id == id)) {
+                self.active_mark = None;
+            }
+        }
+        self.marks_theme = Some(t.kind);
+        self.underlines = self.marks.iter().map(|h| (h.id, t.mark_underline(&h.color))).collect();
+        let mut layer: HashMap<usize, Vec<MarkPaint>> = HashMap::new();
+        for h in &self.marks {
+            let color = Rgba::from(t.palette(&h.color));
+            let color = [color.r, color.g, color.b].map(|c| (c * 255.).round().clamp(0., 255.) as u8);
+            for part in &h.parts {
+                layer.entry(part.page).or_default().push(MarkPaint::new(h.id, &part.rects, color));
+            }
+        }
+        if layer != *self.page_marks {
+            self.page_marks = Arc::new(layer);
+            self.queue.set_marks(self.page_marks.clone());
+            self.last_wanted.clear();
+        }
+    }
+
     fn request_text(&mut self, visible: Range<usize>) {
         for page in visible {
             if !self.texts.contains_key(&page) && !self.text_requested.contains(&page) {
@@ -514,13 +618,19 @@ impl PdfView {
         let previews = visible.start.saturating_sub(3)..visible.end + 3;
         let sharp = visible.start.saturating_sub(1)..visible.end + 1;
         let needed: Vec<PageKey> = self.cache.keys().filter(|k| if k.1 == PREVIEW { previews.contains(&k.0) || self.thumb_range.contains(&k.0) } else { sharp.contains(&k.0) && k.1 == self.sharp_quarters(k.0, window) }).copied().collect();
+        let mut spared = std::mem::take(&mut self.page_arrived);
         for (is_preview, budget) in [(true, PREVIEW_BUDGET), (false, SHARP_BUDGET)] {
             let mut used: usize = self.cache.iter().filter(|(k, _)| (k.1 == PREVIEW) == is_preview).map(|(_, c)| c.bytes).sum();
             while used > budget {
                 let oldest = self.cache.iter().filter(|(k, _)| (k.1 == PREVIEW) == is_preview && !needed.contains(k)).min_by_key(|(_, c)| c.used).map(|(k, _)| *k);
                 let Some(key) = oldest else { break };
+                if spared {
+                    window.request_animation_frame();
+                    return;
+                }
                 if let Some(c) = self.cache.remove(&key) {
                     used -= c.bytes;
+                    spared = true;
                     let _ = cx.drop_image(c.image, Some(window));
                 }
             }
@@ -750,6 +860,8 @@ impl PdfView {
         self.last_color = color;
         let mut list = self.marks.clone();
         let id = list.iter().map(|h| h.id).max().map_or(1, |m| m + 1);
+        self.active_mark = Some(id);
+        self.removed_mark = None;
         list.push(Highlight { id, color: color.to_string(), text, parts });
         super::state::act(cx, |l| l.set_highlights(&key, list, tr("Markiert")));
     }
@@ -767,6 +879,7 @@ impl PdfView {
     fn remove_mark(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(key) = self.marks_key.clone() else { return };
         self.active_mark = None;
+        self.removed_mark = Some(id);
         let list = self.marks.iter().filter(|h| h.id != id).cloned().collect();
         super::state::act(cx, |l| l.set_highlights(&key, list, tr("Markierung entfernt")));
     }
@@ -794,12 +907,22 @@ impl PdfView {
         let r = *part.rects.last()?;
         let (left, top, _, _) = self.page_rect(part.page);
         let scale = self.geo.scale;
-        let x = (left + r[0] * scale).min(self.geo.content_width - MARK_BAR_WIDTH).max(0.);
-        let y = top + (r[1] + r[3]) * scale + space::XS;
+        let (ox, oy) = self.offset();
+        let (x_min, x_max) = (-ox + space::XS, -ox + self.geo.view.0 - space::L);
+        let covered = self.floating() && self.panel_open;
+        let beside_panel = x_min + PANEL_WIDTH;
+        if covered && x_max - beside_panel < MARK_BAR_WIDTH {
+            return None;
+        }
+        let right = (x_max - MARK_BAR_WIDTH).max(x_min);
+        let (y_min, y_max) = (-oy + space::XS, -oy + self.geo.view.1 - space::XS);
+        let x = (left + r[0] * scale).min(right).max(if covered { beside_panel } else { x_min });
+        let below = top + (r[1] + r[3]) * scale + space::XS;
+        let above = top + r[1] * scale - control::M - space::XS;
+        let y = if below + control::M <= y_max { below } else { above }.min(y_max - control::M).max(y_min);
         let me = cx.entity();
         let current = editing.map(|h| h.color.clone());
         let editing_id = editing.map(|h| h.id);
-        let ring = t.secondary;
         let action: Stateful<Div> = match editing_id {
             Some(id) => {
                 let e = me.clone();
@@ -829,24 +952,50 @@ impl PdfView {
                 .shadow_md()
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .children(MARK_COLORS.into_iter().map(|color| {
+                .children(MARK_COLORS.into_iter().enumerate().map(|(i, color)| {
                     let e = me.clone();
                     let selected = current.as_deref() == Some(color);
+                    let label = match editing_id {
+                        Some(_) => color_name(color),
+                        None if color == self.last_color => trf("%@ markieren (H)", &[&color_name(color)]),
+                        None => trf("%@ markieren", &[&color_name(color)]),
+                    };
                     div()
                         .id(SharedString::from(format!("pdf-mark-{color}")))
-                        .size(px(iconsize::M))
+                        .size(px(control::S))
+                        .flex()
+                        .items_center()
+                        .justify_center()
                         .rounded_full()
-                        .bg(t.palette(color))
                         .cursor_pointer()
+                        .key_nav()
+                        .soft(t.ink.opacity(0.08), control::S / 2.)
                         .when(selected, |d| d.border_2().border_color(t.primary))
-                        .when(!selected, |d| d.hover(move |s| s.border_2().border_color(ring)))
-                        .tooltip(tip(tr("Markieren (H)")))
+                        .tooltip(tip(label))
+                        .on_key_down(move |ev, window, cx| match ev.keystroke.key.as_str() {
+                            "left" => {
+                                if i > 0 {
+                                    window.focus_prev(cx);
+                                }
+                                cx.stop_propagation();
+                            }
+                            "right" => {
+                                if i + 1 < MARK_COLORS.len() {
+                                    window.focus_next(cx);
+                                }
+                                cx.stop_propagation();
+                            }
+                            "space" => cx.stop_propagation(),
+                            _ => {}
+                        })
                         .on_click(move |_, _, cx| {
+                            pause_tooltips(cx);
                             e.update(cx, |v, cx| match editing_id {
                                 Some(id) => v.recolor_mark(id, color, cx),
                                 None => v.add_mark(color, cx),
                             })
                         })
+                        .child(div().size(px(iconsize::M)).rounded_full().bg(t.palette(color)))
                 }))
                 .child(action)
                 .into_any_element(),
@@ -1145,15 +1294,22 @@ impl PdfView {
     fn page_element(&self, page: usize, window: &Window, t: &Theme) -> AnyElement {
         let (left, top, w, h) = self.page_rect(page);
         let scale = self.geo.scale;
-        let sharp = self.cache.get(&(page, self.sharp_quarters(page, window))).or_else(|| self.cache.iter().filter(|(k, _)| k.0 == page && k.1 != PREVIEW).max_by_key(|(k, _)| k.1).map(|(_, c)| c));
-        let image = sharp.or_else(|| self.cache.get(&(page, PREVIEW))).map(|c| c.image.clone());
+        let shown = self.displayed_key(page, window).and_then(|k| self.cache.get(&k));
+        let image = shown.map(|c| c.image.clone());
         let mark = |r: PageRect, color: Hsla| div().absolute().left(px(r.x * scale)).top(px(r.y * scale)).w(px(r.w * scale)).h(px(r.h * scale)).bg(color);
         let mut el = div().absolute().left(px(left)).top(px(top)).w(px(w)).h(px(h)).bg(white()).shadow_md().children(image.map(|i| img(i).size_full()));
         let (yellow, orange) = (t.palette("yellow").opacity(0.45), t.orange.opacity(0.6));
-        for h in &self.marks {
-            let opacity = if self.active_mark == Some(h.id) { 0.6 } else { 0.38 };
-            for r in h.parts.iter().filter(|p| p.page == page).flat_map(|p| &p.rects) {
-                el = el.child(mark(PageRect { x: r[0], y: r[1], w: r[2], h: r[3] }, t.palette(&h.color).opacity(opacity)));
+        for m in self.page_marks.get(&page).into_iter().flatten().filter(|m| !shown.is_some_and(|c| c.baked_sigs.contains(&m.sig))) {
+            let color = Theme::document(u32::from_be_bytes([0, m.color[0], m.color[1], m.color[2]])).opacity(MARK_OPACITY);
+            for r in &m.rects {
+                el = el.child(mark(PageRect { x: r[0], y: r[1], w: r[2], h: r[3] }, color));
+            }
+        }
+        if let Some(h) = self.active_mark.and_then(|id| self.marks.iter().find(|h| h.id == id))
+            && let Some(line) = self.underlines.get(&h.id).copied()
+        {
+            for r in h.parts.iter().filter(|p| p.page == page).flat_map(|p| &p.rects).filter(|r| r.iter().all(|v| v.is_finite())) {
+                el = el.child(div().absolute().left(px(r[0] * scale)).top(px((r[1] + r[3]) * scale - MARK_UNDERLINE)).w(px(r[2] * scale)).h(px(MARK_UNDERLINE)).bg(line));
             }
         }
         for (i, hit) in self.hits.iter().enumerate().filter(|(_, h)| h.page == page) {
@@ -1568,6 +1724,7 @@ impl Render for PdfView {
             self.refresh_after(Duration::from_millis(920), cx);
             self.schedule_after_scroll(cx);
         }
+        self.sync_marks(cx, &t);
         let visible = self.visible_pages();
         self.request_pages(visible.clone(), window);
         self.request_text(visible.clone());
@@ -1589,9 +1746,6 @@ impl Render for PdfView {
         let floating = self.floating();
         let panel = (panel_width > 0.).then(|| self.panel(panel_width, window, cx, &t));
         let (docked, floated) = if floating { (None, panel.map(|p| p.absolute().top_0().left_0().bottom_0().bg(t.material).shadow_lg().occlude())) } else { (panel, None) };
-        if let Some(key) = self.marks_key.clone() {
-            self.marks = super::state::read(cx, |l| l.highlights_of(&key));
-        }
         let pages: Vec<AnyElement> = visible.clone().map(|page| self.page_element(page, window, &t)).collect();
         let mark_bar = self.mark_bar(&t, cx);
         let (total, content_width) = (self.geo.total, self.geo.content_width);
@@ -1698,6 +1852,15 @@ impl Render for PdfView {
                 ).children(floated),
             )
             .into_any_element()
+    }
+}
+
+fn color_name(color: &str) -> String {
+    match color {
+        "yellow" => tr("Gelb"),
+        "green" => tr("Grün"),
+        "blue" => tr("Blau"),
+        _ => tr("Rosa"),
     }
 }
 

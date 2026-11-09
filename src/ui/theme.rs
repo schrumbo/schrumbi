@@ -362,6 +362,19 @@ impl Theme {
         if luminance(over(color, color)) > 0.4 { black() } else { white() }
     }
 
+    /// A highlight color deepened until it reads at 3:1 on the white page, for the line under the selected highlight.
+    pub fn mark_underline(&self, name: &str) -> Hsla {
+        let color = self.palette(name);
+        let mut line = color;
+        for step in 1..=20 {
+            if contrast(line, white()) >= 3. {
+                break;
+            }
+            line = color.blend(black().opacity(step as f32 * 0.05));
+        }
+        line
+    }
+
     /// A count badge's fill, deepened until white digits on it read.
     pub fn badge_fill(&self, color: Hsla) -> Hsla {
         let mut fill = color;
@@ -593,6 +606,16 @@ mod tests {
             let t = Theme::new(kind);
             for color in [t.red, t.accent] {
                 assert!(contrast(white(), t.badge_fill(color)) >= 4.5, "{kind:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn selected_highlight_underline_shows_on_white_paper() {
+        for kind in [Kind::Light, Kind::Dark, Kind::Nord, Kind::Dracula] {
+            let t = Theme::new(kind);
+            for name in ["yellow", "green", "blue", "pink"] {
+                assert!(contrast(t.mark_underline(name), white()) >= 3., "{name}, {kind:?}: {}", contrast(t.mark_underline(name), white()));
             }
         }
     }
