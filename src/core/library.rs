@@ -651,6 +651,7 @@ impl Library {
     }
 
     pub fn close(&mut self) {
+        self.deferred_marks.clear();
         self.undo_steps.clear();
         self.redo_steps.clear();
         self.coalescing = None;
