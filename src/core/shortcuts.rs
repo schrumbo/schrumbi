@@ -57,6 +57,13 @@ pub enum ShortcutAction {
     ZoomReset,
     ToggleWrap,
     ToggleLive,
+    MarkText,
+    RotatePagesLeft,
+    RotatePagesRight,
+    MovePagesUp,
+    MovePagesDown,
+    DeletePages,
+    InsertPdf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +98,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 51] = [
+    pub const ALL: [ShortcutAction; 58] = [
         Self::GoToday,
         Self::GoGrid,
         Self::GoRecord,
@@ -143,6 +150,13 @@ impl ShortcutAction {
         Self::ZoomReset,
         Self::ToggleWrap,
         Self::ToggleLive,
+        Self::MarkText,
+        Self::RotatePagesLeft,
+        Self::RotatePagesRight,
+        Self::MovePagesUp,
+        Self::MovePagesDown,
+        Self::DeletePages,
+        Self::InsertPdf,
     ];
 
     /// Storage key, matching the Swift app's raw values.
@@ -199,6 +213,13 @@ impl ShortcutAction {
             Self::ZoomReset => "zoomReset",
             Self::ToggleWrap => "toggleWrap",
             Self::ToggleLive => "toggleLive",
+            Self::MarkText => "markText",
+            Self::RotatePagesLeft => "rotatePagesLeft",
+            Self::RotatePagesRight => "rotatePagesRight",
+            Self::MovePagesUp => "movePagesUp",
+            Self::MovePagesDown => "movePagesDown",
+            Self::DeletePages => "deletePages",
+            Self::InsertPdf => "insertPdf",
         }
     }
 
@@ -215,7 +236,7 @@ impl ShortcutAction {
             Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::GoModule1 | Self::GoModule2 | Self::GoModule3 | Self::GoBack => Group::Navigation,
             Self::ShowGraph | Self::ToggleFullscreen => Group::View,
             Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::OpenOtherWorkspace | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::Refresh => Group::General,
-            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote | Self::ToggleLive => Group::Documents,
+            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote | Self::ToggleLive | Self::MarkText | Self::RotatePagesLeft | Self::RotatePagesRight | Self::MovePagesUp | Self::MovePagesDown | Self::DeletePages | Self::InsertPdf => Group::Documents,
             _ => Group::Editor,
         }
     }
@@ -286,6 +307,13 @@ impl ShortcutAction {
             Self::ZoomReset => "Schriftgröße zurücksetzen",
             Self::ToggleWrap => "Zeilenumbruch ein-/ausschalten",
             Self::ToggleLive => "Live-Ansicht ein-/ausschalten",
+            Self::MarkText => "Markieren",
+            Self::RotatePagesLeft => "Seiten links drehen",
+            Self::RotatePagesRight => "Seiten rechts drehen",
+            Self::MovePagesUp => "Seiten nach oben schieben",
+            Self::MovePagesDown => "Seiten nach unten schieben",
+            Self::DeletePages => "Seiten löschen",
+            Self::InsertPdf => "PDF einfügen…",
         })
     }
 
@@ -360,6 +388,13 @@ impl ShortcutAction {
             Self::ZoomReset => s("0", true, false, false, false),
             Self::ToggleWrap => s("z", true, false, true, false),
             Self::ToggleLive => s("l", true, false, true, false),
+            Self::MarkText => s("h", false, false, false, false),
+            Self::RotatePagesLeft => s("left", true, false, true, false),
+            Self::RotatePagesRight => s("right", true, false, true, false),
+            Self::MovePagesUp => s("up", false, false, true, false),
+            Self::MovePagesDown => s("down", false, false, true, false),
+            Self::DeletePages => s("delete", true, true, false, false),
+            Self::InsertPdf => s("p", true, false, true, false),
         })
     }
 

@@ -128,6 +128,10 @@ pub mod hover {
 pub mod tint {
     pub const SAVE_NOTICE: f32 = 0.08;
     pub const SAVE_FLASH: f32 = 0.16;
+    /// The fill of a selected row in a list of pages.
+    pub const SELECTED: f32 = 0.14;
+    /// The edge of a selected row in a list of pages.
+    pub const SELECTED_EDGE: f32 = 0.5;
 }
 
 /// The fill a control gets while the keyboard has the focus.

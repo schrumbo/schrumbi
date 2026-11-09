@@ -42,7 +42,7 @@ impl EditError {
             Self::Protected => (tr("Die PDF ist geschützt"), tr("Sie ist mit einem Passwort gesichert. Schrumbi ändert sie nicht, damit nichts kaputtgeht.")),
             Self::Signed => (tr("Die PDF ist unterschrieben"), tr("Jede Änderung würde die Unterschrift ungültig machen. Die Datei bleibt, wie sie ist.")),
             Self::Broken => (tr("Das hat nicht geklappt"), tr("Die PDF ließ sich nicht sicher ändern. Die Datei bleibt, wie sie ist.")),
-            Self::Empty => (tr("Das geht so nicht"), tr("Es müssen Seiten ausgewählt sein, und eine PDF braucht mindestens eine Seite.")),
+            Self::Empty => (tr("Eine Seite bleibt"), tr("Eine PDF braucht mindestens eine Seite. Die Datei bleibt, wie sie ist.")),
         }
     }
 }
@@ -141,15 +141,21 @@ fn walk(doc: &Document, id: ObjectId, inherited: &Dictionary, out: &mut Vec<Entr
         Ok(kids) => {
             let kids = doc.dereference(kids).and_then(|(_, o)| o.as_array()).map_err(|_| EditError::Broken)?;
             for kid in kids {
-                if let Ok(kid) = kid.as_reference() {
-                    walk(doc, kid, &here, out, path)?;
-                }
+                walk(doc, kid.as_reference().map_err(|_| EditError::Broken)?, &here, out, path)?;
             }
         }
         Err(_) => out.push((id, here)),
     }
     path.remove(&id);
     Ok(())
+}
+
+fn shown_leaves(doc: &Document, data: &[u8]) -> Result<Vec<Entry>, EditError> {
+    let out = leaves(doc)?;
+    if Pdf::new(Arc::new(data.to_vec())).map(|p| p.pages().len()).ok() != Some(out.len()) {
+        return Err(EditError::Broken);
+    }
+    Ok(out)
 }
 
 fn leaves(doc: &Document) -> Result<Vec<Entry>, EditError> {
@@ -170,7 +176,7 @@ fn valid_set(pages: &[usize], count: usize) -> Result<HashSet<usize>, EditError>
 }
 
 /// The old index of every page of the result, for moving `pages` (duplicates and indexes past `count` ignored) to `to`.
-fn move_order(count: usize, pages: &[usize], to: usize) -> Vec<usize> {
+pub fn move_order(count: usize, pages: &[usize], to: usize) -> Vec<usize> {
     let mut seen = HashSet::new();
     let moving: Vec<usize> = pages.iter().copied().filter(|&p| p < count && seen.insert(p)).collect();
     let rest: Vec<usize> = (0..count).filter(|p| !seen.contains(p)).collect();
@@ -498,7 +504,7 @@ fn install(doc: &mut Document, before: HashSet<ObjectId>, entries: Vec<Entry>, t
             id
         } else {
             let copy = originals.get(&id).cloned().ok_or(EditError::Broken)?;
-            doc.add_object(copy)
+            doc.try_add_object(copy).map_err(|_| EditError::Broken)?
         };
         let current = number(doc, doc.get_dictionary(id).ok().and_then(|p| p.get(b"Rotate").ok())).or_else(|| number(doc, inherited.get(b"Rotate").ok()));
         let page = doc.get_dictionary_mut(id).map_err(|_| EditError::Broken)?;
@@ -552,7 +558,7 @@ fn finish(mut doc: Document, expected: usize) -> Result<Vec<u8>, EditError> {
 /// Applies a page change and returns the new file. Pages that are deleted leave the file completely. The result is only returned when it opens and has exactly the expected number of pages.
 pub fn apply(data: &[u8], op: &PageOp) -> Result<Vec<u8>, EditError> {
     let mut doc = read(data)?;
-    let mut entries = leaves(&doc)?;
+    let mut entries = shown_leaves(&doc, data)?;
     let count = entries.len();
     let before: HashSet<ObjectId> = entries.iter().map(|(id, _)| *id).collect();
     let mut turn = None;
@@ -580,7 +586,7 @@ pub fn apply(data: &[u8], op: &PageOp) -> Result<Vec<u8>, EditError> {
         }
         PageOp::Insert { at, pdf } => {
             let mut other = read(pdf)?;
-            let extra = leaves(&other)?;
+            let extra = shown_leaves(&other, pdf)?;
             if extra.is_empty() {
                 return Err(EditError::Empty);
             }
@@ -608,7 +614,7 @@ fn reshape(list: &[Highlight], page: &dyn Fn(usize) -> Option<usize>, point: &dy
             let mut out = h.clone();
             out.parts = h.parts.iter().filter_map(|p| Some(HighlightPart { page: page(p.page)?, rects: p.rects.iter().map(|r| rect(p.page, *r)).collect() })).collect();
             out.pin = h.pin.and_then(|p| {
-                let [x, y] = point(p.page, [p.x, p.y]);
+                let [x, y, _, _] = rect(p.page, [p.x, p.y, PIN_SIZE, PIN_SIZE]);
                 Some(Pin { page: page(p.page)?, x, y })
             });
             out.ink = h.ink.iter().filter_map(|l| Some(InkLine { page: page(l.page)?, width: l.width, points: l.points.iter().map(|q| point(l.page, *q)).collect() })).collect();
@@ -688,12 +694,12 @@ fn reals(values: &[f32]) -> Object {
     Object::Array(values.iter().map(|&v| Object::Real(v)).collect())
 }
 
-fn appearance(doc: &mut Document, rect: [f32; 4], blend: bool, content: String) -> ObjectId {
+fn appearance(doc: &mut Document, rect: [f32; 4], blend: bool, content: String) -> Option<ObjectId> {
     let mut dict = dictionary! { "Type" => "XObject", "Subtype" => "Form", "BBox" => reals(&rect) };
     if blend {
         dict.set("Resources", dictionary! { "ExtGState" => dictionary! { "GS0" => dictionary! { "Type" => "ExtGState", "BM" => "Multiply" } } });
     }
-    doc.add_object(Stream::new(dict, content.into_bytes()))
+    doc.try_add_object(Stream::new(dict, content.into_bytes())).ok()
 }
 
 struct Marker<'a> {
@@ -734,7 +740,7 @@ impl Marker<'_> {
         for q in &quads {
             content += &format!("{} {} m {} {} l {} {} l {} {} l h f\n", num(q[0][0]), num(q[0][1]), num(q[1][0]), num(q[1][1]), num(q[3][0]), num(q[3][1]), num(q[2][0]), num(q[2][1]));
         }
-        let ap = appearance(doc, rect, true, content);
+        let ap = appearance(doc, rect, true, content)?;
         let mut dict = self.annotation("Highlight", rect, 4, Some(ap));
         dict.set("QuadPoints", reals(&all.iter().flatten().copied().collect::<Vec<f32>>()));
         Some(dict)
@@ -762,7 +768,7 @@ impl Marker<'_> {
             content += &format!("{} {} l\n", num(p[0]), num(p[1]));
         }
         content += "S\n";
-        let ap = appearance(doc, rect, false, content);
+        let ap = appearance(doc, rect, false, content)?;
         let mut dict = self.annotation("Ink", rect, 4, Some(ap));
         dict.set("InkList", Object::Array(vec![reals(&points.iter().flatten().copied().collect::<Vec<f32>>())]));
         dict.set("BS", dictionary! { "W" => line.width, "S" => "S" });
@@ -807,7 +813,7 @@ pub fn with_annotations(data: &[u8], list: &[Highlight], tint: &dyn Fn(&str) -> 
             }
         }
         for (page, dict) in made {
-            let id = doc.add_object(dict);
+            let id = doc.try_add_object(dict).map_err(|_| EditError::Broken)?;
             added.entry(page).or_default().push(Object::Reference(id));
         }
     }
@@ -1060,7 +1066,7 @@ pub mod tests {
     }
 
     #[test]
-    fn a_page_listed_twice_is_edited_only_where_asked() {
+    fn a_page_listed_twice_is_refused_because_the_viewer_shows_it_once() {
         let mut doc = Document::with_version("1.5");
         let root = doc.new_object_id();
         let font = font(&mut doc);
@@ -1068,11 +1074,23 @@ pub mod tests {
         let b = leaf(&mut doc, root, "Zwei");
         doc.objects.insert(root, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![a.into(), b.into(), a.into()], "Count" => 3, "MediaBox" => media(612, 792), "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } } }));
         let bytes = finish_doc(doc, root, &[("A", a)]);
-        let out = apply(&bytes, &PageOp::Rotate { pages: vec![2], clockwise: true }).unwrap();
-        assert_eq!(rotations(&out), [None, None, Some(90)]);
-        assert_eq!(texts(&out), ["Eins", "Zwei", "Eins"]);
-        let out = apply(&bytes, &PageOp::Delete(vec![0])).unwrap();
-        assert_eq!(texts(&out), ["Zwei", "Eins"]);
+        assert_eq!(PdfDoc::from_data(Arc::new(bytes.clone())).map(|d| d.page_count()), Some(2));
+        assert_eq!(apply(&bytes, &PageOp::Delete(vec![1])), Err(EditError::Broken));
+        assert_eq!(apply(&bytes, &PageOp::Rotate { pages: vec![0], clockwise: true }), Err(EditError::Broken));
+        let host = fixture();
+        assert_eq!(apply(&host, &PageOp::Insert { at: 1, pdf: bytes.clone() }), Err(EditError::Broken));
+    }
+
+    #[test]
+    fn a_page_written_inline_in_the_page_list_is_refused() {
+        let mut doc = Document::with_version("1.5");
+        let root = doc.new_object_id();
+        let font = font(&mut doc);
+        let a = leaf(&mut doc, root, "Eins");
+        let inline = Object::Dictionary(dictionary! { "Type" => "Page", "Parent" => root });
+        doc.objects.insert(root, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![a.into(), inline], "Count" => 2, "MediaBox" => media(612, 792), "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } } }));
+        let bytes = finish_doc(doc, root, &[("A", a)]);
+        assert_eq!(apply(&bytes, &PageOp::Delete(vec![0])), Err(EditError::Broken));
     }
 
     fn nested(levels: usize, cyclic: bool) -> Vec<u8> {
@@ -1244,12 +1262,12 @@ pub mod tests {
         let list = vec![Highlight { id: 1, parts: vec![HighlightPart { page: 0, rects: vec![[100., 200., 30., 10.]] }], pin: Some(Pin { page: 0, x: 100., y: 200. }), ink: vec![InkLine { page: 0, width: 2., points: vec![[100., 200.]] }], ..Default::default() }, mark(2, 1)];
         let cw = remap(&list, &PageOp::Rotate { pages: vec![0], clockwise: true }, &[(612., 792.), (612., 792.)], 0);
         near(&cw[0].parts[0].rects[0], &[792. - 200. - 10., 100., 10., 30.]);
-        assert_eq!((cw[0].pin.unwrap().x, cw[0].pin.unwrap().y), (592., 100.));
+        assert_eq!((cw[0].pin.unwrap().x, cw[0].pin.unwrap().y), (572., 100.));
         assert_eq!(cw[0].ink[0].points[0], [592., 100.]);
         assert_eq!(cw[1], list[1], "other pages stay");
         let ccw = remap(&list, &PageOp::Rotate { pages: vec![0], clockwise: false }, &[(612., 792.), (612., 792.)], 0);
         near(&ccw[0].parts[0].rects[0], &[200., 612. - 100. - 30., 10., 30.]);
-        assert_eq!((ccw[0].pin.unwrap().x, ccw[0].pin.unwrap().y), (200., 512.));
+        assert_eq!((ccw[0].pin.unwrap().x, ccw[0].pin.unwrap().y), (200., 492.));
         assert_eq!(ccw[0].ink[0].points[0], [200., 512.]);
         let unknown = remap(&list, &PageOp::Rotate { pages: vec![0], clockwise: true }, &[], 0);
         assert_eq!(unknown, list, "without a size nothing can be turned");
@@ -1522,21 +1540,6 @@ pub mod tests {
         let doc = Document::load_mem(&out).unwrap();
         let root = doc.get_dictionary(pages_root(&doc).unwrap()).unwrap();
         assert!(INHERITED.iter().all(|k| !root.has(k)), "{root:?}");
-    }
-
-    #[test]
-    fn a_page_listed_twice_is_cloned_from_its_original_state() {
-        let mut doc = Document::with_version("1.5");
-        let root = doc.new_object_id();
-        let font = font(&mut doc);
-        let a = leaf(&mut doc, root, "Eins");
-        let b = leaf(&mut doc, root, "Zwei");
-        doc.objects.insert(root, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![a.into(), b.into(), a.into()], "Count" => 3, "MediaBox" => media(612, 792), "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } } }));
-        let bytes = finish_doc(doc, root, &[("A", a)]);
-        let out = apply(&bytes, &PageOp::Rotate { pages: vec![0], clockwise: true }).unwrap();
-        assert_eq!(rotations(&out), [Some(90), None, None]);
-        let out = apply(&bytes, &PageOp::Rotate { pages: vec![0, 2], clockwise: false }).unwrap();
-        assert_eq!(rotations(&out), [Some(270), None, Some(270)]);
     }
 
     #[test]

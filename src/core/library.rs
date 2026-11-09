@@ -604,43 +604,67 @@ impl Library {
         self.record(trf("PDF erstellt: %@", &[&name_of(target)]), changes);
     }
 
-    /// Replaces a PDF with an edited version and moves its marks to the new content key, as one step. Undo brings back the exact old file and the old marks.
-    pub fn replace_pdf(&mut self, path: &Path, bytes: Vec<u8>, old_key: &str, list: Vec<Highlight>, label: String) {
+    /// Whether an edited PDF may be written now; sets the reason when not.
+    pub fn can_edit_pdf(&mut self) -> bool {
         if self.read_only || self.highlights_lock.is_some() {
             self.last_error = Some(tr("Änderungen werden gerade nicht gespeichert. Die PDF bleibt, wie sie ist."));
             self.changed();
-            return;
+            return false;
         }
-        let new_key = highlights::document_key(&bytes);
-        if new_key == old_key {
-            self.set_highlights(old_key, list, label);
-            return;
-        }
-        let Some(backup) = self.keep_for_undo(path) else {
-            self.last_error = Some(tr("Vom Original ließ sich keine Sicherung anlegen. Die PDF bleibt, wie sie ist."));
-            self.changed();
+        true
+    }
+
+    /// Turns a PDF written by `write_edited_pdf` into one undo step and moves the marks the PDF has now through `op` to its new content.
+    pub fn finish_pdf_edit(&mut self, written: WrittenPdf, op: &super::pdf_edit::PageOp, sizes: &[(f32, f32)], inserted: usize, label: String) {
+        let list = super::pdf_edit::remap(&self.highlights_of(&written.old_key), op, sizes, inserted);
+        self.commit_pdf_edit(written, list, label);
+    }
+
+    /// Shows why an edited PDF was not written.
+    pub fn pdf_edit_failed(&mut self, error: PdfWriteError) {
+        self.last_error = Some(match error {
+            PdfWriteError::Backup => tr("Vom Original ließ sich keine Sicherung anlegen. Die PDF bleibt, wie sie ist."),
+            PdfWriteError::Changed => tr("Die Datei wurde inzwischen geändert. Bitte noch einmal versuchen."),
+            PdfWriteError::Write(e) => trf("Speichern fehlgeschlagen: %@", &[&explain(&e.into())]),
+        });
+        self.changed();
+    }
+
+    fn commit_pdf_edit(&mut self, written: WrittenPdf, list: Vec<Highlight>, label: String) {
+        let Some(backup) = written.backup else {
+            self.set_highlights(&written.old_key, list, label);
             return;
         };
-        if std::fs::read(&backup).ok().map(|kept| highlights::document_key(&kept)).as_deref() != Some(old_key) {
-            let _ = backup.parent().map(std::fs::remove_dir_all);
-            self.last_error = Some(tr("Die Datei wurde inzwischen geändert. Bitte noch einmal versuchen."));
-            self.changed();
+        let replaced = Change::Replaced { path: written.path, backup };
+        if self.highlights_lock.is_some() {
+            self.last_error = self.highlights_lock.clone();
+            self.commit(label, "file-text", vec![replaced]);
             return;
         }
-        if let Err(e) = super::note_buffer::write_atomic(path, &bytes) {
-            let _ = backup.parent().map(std::fs::remove_dir_all);
-            self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&explain(&e.into())]));
-            self.changed();
+        let orphans = self.highlights_orphans.get(&written.new_key).cloned().unwrap_or_default();
+        let before = self.store_highlights(&written.new_key, list).unwrap_or_default();
+        self.commit(label, "file-text", vec![Change::Highlights { orphans, key: written.new_key, list: before }, replaced]);
+    }
+
+    /// Replaces a PDF with an edited version and moves its marks to the new content key, as one step. Undo brings back the exact old file and the old marks.
+    pub fn replace_pdf(&mut self, path: &Path, bytes: Vec<u8>, old_key: &str, list: Vec<Highlight>, label: String) {
+        if !self.can_edit_pdf() {
             return;
         }
-        let before = self.store_highlights(&new_key, list).unwrap_or_default();
-        self.commit(label, "file-text", vec![Change::Highlights { orphans: self.highlights_orphans.get(&new_key).cloned().unwrap_or_default(), key: new_key, list: before }, Change::Replaced { path: path.to_path_buf(), backup }]);
+        match write_edited_pdf(path, &bytes, old_key) {
+            Ok(written) => self.commit_pdf_edit(written, list, label),
+            Err(e) => self.pdf_edit_failed(e),
+        }
+    }
+
+    /// Where `export_marked_pdf` would write next to `source`: a name that is still free.
+    pub fn marked_pdf_target(source: &Path) -> PathBuf {
+        unique_path(&source.with_file_name(format!("{} {}.pdf", super::naming::stem(&name_of(source)), tr("mit Markierungen"))))
     }
 
     /// Writes a PDF with the marks built in next to its source, under a name that is still free. Undo removes it.
     pub fn export_marked_pdf(&mut self, source: &Path, bytes: Vec<u8>) -> Option<PathBuf> {
-        let name = name_of(source);
-        let target = unique_path(&source.with_file_name(format!("{} {}.pdf", super::naming::stem(&name), tr("mit Markierungen"))));
+        let target = Self::marked_pdf_target(source);
         if let Err(e) = super::note_buffer::write_atomic(&target, &bytes) {
             self.last_error = Some(trf("PDF-Export fehlgeschlagen: %@", &[&explain(&e.into())]));
             self.changed();
@@ -4128,6 +4152,40 @@ fn undo_folder() -> Option<PathBuf> {
 }
 
 /// Keeps a copy of a file for undo; on APFS the copy takes no extra space.
+/// Why an edited PDF was not written.
+pub enum PdfWriteError {
+    Backup,
+    Changed,
+    Write(std::io::Error),
+}
+
+/// An edited PDF already written in place, waiting for `Library::finish_pdf_edit`.
+pub struct WrittenPdf {
+    path: PathBuf,
+    old_key: String,
+    new_key: String,
+    backup: Option<PathBuf>,
+}
+
+/// Keeps the original for undo, checks it is still the version the edit was made from and writes the edited bytes in place. Safe off the UI thread.
+pub fn write_edited_pdf(path: &Path, bytes: &[u8], old_key: &str) -> std::result::Result<WrittenPdf, PdfWriteError> {
+    let new_key = highlights::document_key(bytes);
+    let written = |backup| WrittenPdf { path: path.to_path_buf(), old_key: old_key.to_string(), new_key: new_key.clone(), backup };
+    if new_key == old_key {
+        return Ok(written(None));
+    }
+    let backup = path.exists().then(|| stash(path).ok()).flatten().ok_or(PdfWriteError::Backup)?;
+    if std::fs::read(&backup).ok().map(|kept| highlights::document_key(&kept)).as_deref() != Some(old_key) {
+        let _ = backup.parent().map(std::fs::remove_dir_all);
+        return Err(PdfWriteError::Changed);
+    }
+    if let Err(e) = super::note_buffer::write_atomic(path, bytes) {
+        let _ = backup.parent().map(std::fs::remove_dir_all);
+        return Err(PdfWriteError::Write(e));
+    }
+    Ok(written(Some(backup)))
+}
+
 fn stash(path: &Path) -> Result<PathBuf> {
     let dir = undo_folder().ok_or_else(|| anyhow::anyhow!("no data folder"))?.join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir_all(&dir)?;

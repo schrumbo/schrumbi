@@ -571,7 +571,8 @@ impl Pages {
         }
         let top = bounds.top() + px(control::SUBBAR);
         let x = if bounds.size.width > px(0.) { f32::from(at.x - bounds.left()) / f32::from(bounds.size.width) } else { 0. };
-        let zone = (bounds.contains(&at) && at.y >= top).then(|| panes.zone(x, file)).flatten();
+        let over_pages = cx.try_global::<super::pdf_view::PagePanels>().is_some_and(|p| p.contains(at));
+        let zone = (bounds.contains(&at) && at.y >= top && !over_pages).then(|| panes.zone(x, file)).flatten();
         let hover = zone.and_then(|(to, band)| {
             let fallback = panes.fallback.clone();
             let ok = match &self.doc_drop {

@@ -1879,6 +1879,28 @@ fn pdf_mark(id: u64, page: usize) -> crate::core::highlights::Highlight {
 }
 
 #[test]
+fn a_mark_made_while_a_page_edit_is_written_moves_with_the_others() {
+    use crate::core::highlights::document_key;
+    use crate::core::library::write_edited_pdf;
+    use crate::core::pdf_edit::PageOp;
+    let (root, mut lib) = workspace("finish-pdf-edit", &config(1, 0));
+    let path = root.join("Skript.pdf");
+    let (old, new) = (b"%PDF-1.4 alt".to_vec(), b"%PDF-1.4 neu".to_vec());
+    std::fs::write(&path, &old).unwrap();
+    let (old_key, new_key) = (document_key(&old), document_key(&new));
+    lib.set_highlights(&old_key, vec![pdf_mark(1, 0), pdf_mark(2, 2)], "markiert".into());
+    assert!(lib.can_edit_pdf());
+    let written = write_edited_pdf(&path, &new, &old_key).ok().unwrap();
+    lib.set_highlights(&old_key, vec![pdf_mark(1, 0), pdf_mark(2, 2), pdf_mark(3, 1)], "markiert".into());
+    lib.finish_pdf_edit(written, &PageOp::Delete(vec![0]), &[(612., 792.); 3], 0, "Seite gelöscht".into());
+    assert_eq!(std::fs::read(&path).unwrap(), new);
+    assert_eq!(lib.highlights_of(&new_key), vec![pdf_mark(2, 1), pdf_mark(3, 0)]);
+    lib.undo();
+    assert_eq!(std::fs::read(&path).unwrap(), old);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn replacing_a_pdf_moves_its_marks_and_undo_and_redo_bring_everything_back() {
     use crate::core::highlights::{FILE_NAME, Highlights, document_key};
     let (root, mut lib) = workspace("replace-pdf", &config(1, 0));

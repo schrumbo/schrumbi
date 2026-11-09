@@ -51,6 +51,42 @@ In einer Tabelle:
 
 Bearbeiten geht in der Standard-App: ⋯ → {ui:Mit Standard-App öffnen}. Sichert sie, zeigt Schrumbi die neue Version. Mit Passwort geschützte Dateien öffnet nur die Standard-App. Lässt sich ein Blatt nicht lesen, bleiben die anderen Blätter offen.
 
+## PDFs
+
+Markieren und Seiten ordnen, in der Datei selbst und nur bei PDFs.
+
+| Kürzel | Wirkung |
+|---|---|
+| Text wählen, {key:markText} | Markieren in der zuletzt gewählten Farbe |
+| Farbe in der Leiste | Färbt die Markierung, auch eine vorhandene |
+| Markierung anklicken, {key:delete} | Entfernen. {ui:Markierung entfernen} geht auch mit der Maus |
+| {key:Undo} | Nimmt Markieren und Entfernen zurück |
+
+Dieselbe Stelle noch einmal markieren färbt sie um, statt sie zu doppeln.
+
+### Seiten
+
+Links in {ui:Seiten}. Ein Klick wählt und springt, Strg plus Klick (Mac: ⌘) fügt hinzu, Umschalt plus Klick wählt einen Bereich. Ohne Auswahl wirkt jeder Befehl auf die Seite, die du siehst.
+
+| Befehl | Kürzel |
+|---|---|
+| {ui:Links drehen} | {key:rotatePagesLeft} |
+| {ui:Rechts drehen} | {key:rotatePagesRight} |
+| {ui:Nach oben} | {key:movePagesUp} |
+| {ui:Nach unten} | {key:movePagesDown} |
+| {ui:Löschen} | {key:deletePages} oder {key:delete} in der Seitenliste |
+| {ui:PDF einfügen…} | {key:insertPdf} |
+
+- Seiten ziehen, die Linie zeigt, wohin sie kommen.
+- Eine PDF aus dem Dateimanager auf die Liste ziehen fügt sie an der Linie ein.
+- Rechtsklick auf eine Seite zeigt dieselben Befehle, dazu {ui:PDF hier einfügen…}.
+- Die Datei ändert sich wirklich. {key:Undo} und {key:Redo} stellen sie Byte für Byte wieder her, die Markierungen bleiben an ihrem Text.
+- Die letzte Seite lässt sich nicht löschen.
+
+````example Seite verlinken
+![[Skript.pdf#page=3]]
+````
+
 ## Lesen und Bearbeiten
 
 | Modus | Kürzel |

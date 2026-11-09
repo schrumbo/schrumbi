@@ -201,6 +201,21 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&view, if full { tr("Text in voller Breite ausschalten") } else { tr("Text in voller Breite einschalten") }, "move-horizontal", None, Run::Call(Rc::new(move |cx| super::documents::set_reader_full_width(!full, cx))));
         add(&file, tr("Sichern"), "save", Some(fixed_keys("S")), Run::NoteAction(Box::new(app::Save)));
     }
+    if focused.as_deref().is_some_and(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"))) {
+        use super::pdf_view as p;
+        add(&edit, S::MarkText.label(), "highlighter", keys(S::MarkText), Run::NoteAction(Box::new(p::MarkSelection)));
+        let pages: [(S, &'static str, Box<dyn Action>); 6] = [
+            (S::RotatePagesLeft, "rotate-ccw", Box::new(p::RotatePagesLeft)),
+            (S::RotatePagesRight, "rotate-cw", Box::new(p::RotatePagesRight)),
+            (S::MovePagesUp, "arrow-up", Box::new(p::MovePagesUp)),
+            (S::MovePagesDown, "arrow-down", Box::new(p::MovePagesDown)),
+            (S::DeletePages, "trash-2", Box::new(p::DeletePages)),
+            (S::InsertPdf, "file-plus", Box::new(p::InsertPdf)),
+        ];
+        for (action, icon_name, run) in pages {
+            add(&edit, action.label(), icon_name, keys(action), Run::NoteAction(run));
+        }
+    }
     if in_document {
         add(&view, S::CloseTab.label(), "x", keys(S::CloseTab), Run::Action(Box::new(app::CloseTab)));
     }

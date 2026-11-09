@@ -51,6 +51,42 @@ In a spreadsheet:
 
 Edit in the default app: ⋯ → {ui:Mit Standard-App öffnen}. When it saves, Schrumbi shows the new version. Password-protected files open only in the default app. When one sheet can't be read, the other sheets stay open.
 
+## PDFs
+
+Highlight and arrange pages, in the file itself and only for PDFs.
+
+| Shortcut | Effect |
+|---|---|
+| Select text, {key:markText} | Highlight in the color you chose last |
+| Color in the bar | Colors the highlight, an existing one too |
+| Click a highlight, {key:delete} | Remove. {ui:Markierung entfernen} works with the mouse too |
+| {key:Undo} | Takes back highlighting and removing |
+
+Highlighting the same passage again recolors it instead of doubling it.
+
+### Pages
+
+On the left in {ui:Seiten}. A click selects and jumps, Ctrl plus click (Mac: ⌘) adds, Shift plus click selects a range. With nothing selected, every command acts on the page you see.
+
+| Command | Shortcut |
+|---|---|
+| {ui:Links drehen} | {key:rotatePagesLeft} |
+| {ui:Rechts drehen} | {key:rotatePagesRight} |
+| {ui:Nach oben} | {key:movePagesUp} |
+| {ui:Nach unten} | {key:movePagesDown} |
+| {ui:Löschen} | {key:deletePages} or {key:delete} in the page list |
+| {ui:PDF einfügen…} | {key:insertPdf} |
+
+- Drag pages, the line shows where they land.
+- Drag a PDF from the explorer or from the file manager onto the list to insert it at the line.
+- Right-click a page shows the same commands, plus {ui:PDF hier einfügen…}.
+- The file really changes. {key:Undo} and {key:Redo} restore it byte for byte, and the highlights stay with their text.
+- The last page cannot be deleted.
+
+````example Link a page
+![[Skript.pdf#page=3]]
+````
+
 ## Reading and Editing
 
 | Mode | Shortcut |
