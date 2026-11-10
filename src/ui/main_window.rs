@@ -322,13 +322,14 @@ impl MainWindow {
         row
     }
 
-    fn toolbar(&self, lib: &Library, left: f32, page_width: f32, total: f32, window: &Window, t: &Theme) -> Div {
+    fn toolbar(&self, lib: &Library, left: f32, page_width: f32, total: f32, search_open: bool, window: &Window, t: &Theme) -> Div {
         let show = lib.show_inspector() && !super::ai::column_open();
         let offered = lib.inspector_kind().is_some();
         let module = if let Route::Module(id) = lib.route() { Some(id.clone()) } else { None };
         let module2 = module.clone();
         let toolbar_padding = (if super::chrome::CUSTOM { space::M } else { (92. - left).max(space::M) }) + space::M;
-        let search_width = if page_width < 760. { 200. } else { 325. };
+        let folded = total < control::SEARCH_FOLD && !search_open;
+        let search_width = if folded { control::M } else if page_width < 760. { 200. } else { 325. };
         let ai_room = if super::ai::toolbar_button_shown() { control::M + space::S } else { 0. };
         div()
             .h(px(control::BAR))
@@ -367,7 +368,11 @@ impl MainWindow {
                     .tooltip(if offered { format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()) } else { tr("Diese Seite hat keine Details") })
                     .on_click(|_, _, cx| super::ai::toggle_details(cx)),
             )
-            .child(super::coach::anchor(div().id("coach-search")).w(px(search_width)).flex_none().key_context("SearchField").child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true)))
+            .child(super::coach::anchor(div().id("coach-search")).w(px(search_width)).flex_none().key_context("SearchField").map(|d| if folded {
+                d.child(Button::new("search-fold").ghost().size(px(control::M)).rounded_full().icon(menu_icon("search")).tooltip(format!("{} (/)", self.search_placeholder)).on_click(|_, window, cx| window.dispatch_action(Box::new(FocusSearch), cx)))
+            } else {
+                d.child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true))
+            }))
     }
 }
 
@@ -407,6 +412,7 @@ impl Render for MainWindow {
         }
         let l = lib.read(cx);
         let width = f32::from(window.viewport_size().width);
+        let search_open = self.search.read(cx).focus_handle(cx).is_focused(window) || !self.search.read(cx).value().is_empty();
         let column = super::ai::column_open() && super::ai::active();
         let inspector_open = l.show_inspector() && !column;
 
@@ -603,7 +609,7 @@ impl Render for MainWindow {
                     .border_color(t.separator)
                     .flex()
                     .flex_col()
-                    .child(self.toolbar(l, left, page_width + inspector_target, width - left - crumb::BORDER, window, &t))
+                    .child(self.toolbar(l, left, page_width + inspector_target, width - left - crumb::BORDER, search_open, window, &t))
                     .child(div().id("page-area").flex_1().min_h_0().mr(px(inspector_target))
                         .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, window, cx| {
                             this.press_stamp = (!window.default_prevented()).then(|| (state::read(cx, Library::selection_stamp), e.position));
@@ -757,7 +763,7 @@ pub fn open(cx: &mut App) {
     let bounds = saved.unwrap_or_else(|| Bounds::centered(None, size(px(1360.), px(860.)), cx));
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        window_min_size: Some(size(px(1000.), px(620.))),
+        window_min_size: Some(size(px(640.), px(500.))),
         titlebar: Some(TitlebarOptions { title: Some("Schrumbi".into()), appears_transparent: true, traffic_light_position: Some(point(px(19.), px(19.))) }),
         app_id: Some("io.github.schrumbo.schrumbi".into()),
         ..Default::default()

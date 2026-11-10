@@ -64,6 +64,8 @@ pub mod control {
     pub const CLASH: f32 = 240.;
     /// A small icon button, like the reset button at the end of a shortcut row.
     pub const ICON_BUTTON: f32 = M;
+    /// Below this toolbar width the empty search field folds to its icon.
+    pub const SEARCH_FOLD: f32 = 700.;
     /// The height of a one-line save notice, used until the real one is measured; toasts stand above it.
     pub const SAVE_NOTICE: f32 = 64.;
 }
@@ -147,6 +149,14 @@ pub mod calendar {
     pub const MORE: f32 = 300.;
     /// The most that list grows before it scrolls.
     pub const MORE_HEIGHT: f32 = 440.;
+}
+
+/// The notes explorer beside the open note.
+pub mod explorer {
+    pub const MIN: f32 = 180.;
+    pub const MAX: f32 = 420.;
+    /// The room the explorer leaves for the note when the window is narrow.
+    pub const NOTE_MIN: f32 = 360.;
 }
 
 /// The ink opacity the small controls floating over a note light up with under the pointer.
