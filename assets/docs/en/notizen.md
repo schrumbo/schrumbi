@@ -13,14 +13,14 @@ Notes are Markdown files in your folder. Obsidian reads them the same way.
 
 | Key | Effect |
 |---|---|
-| {key:up} {key:down} | Choose a file, with preview |
+| {key:up} {key:down} | Choose a file |
 | {key:right} {key:left} | Expand and collapse folders |
-| {key:return} | Jump into the note |
+| {key:return} | Open and jump into the note |
 | {key:renameNote} | Rename |
 | {key:/} | Filter |
 
 - {key:renameNote} also renames the open note, as does a click on its title at the top.
-- A single click opens a preview, a double click keeps the tab.
+- A click opens the file in its own tab. If it is already open, its tab comes to the front.
 - Dragging a file onto a folder moves it.
 - Right-click → {ui:Abgabe zuordnen} makes the file count for a submission. The pill at the top of the note shows what it belongs to.
 - {ui:In den Papierkorb} does not ask. {key:Undo} brings the file back.
@@ -206,9 +206,9 @@ If another app changed the file, you see a notice. Nothing is lost until you cho
 | {key:nextTab} / {key:previousTab} | Next / previous tab |
 
 - A tab only closes when you close it: ×, middle click or {key:closeTab}.
-- A click on a file opens it as a preview with a slanted title. The next file replaces it.
-- Double-click, start writing or right-click → {ui:Tab behalten} to turn the preview into a kept tab.
-- A link opens its target as a preview; the note with the link stays open.
+- Every file gets its own tab. An open file is never opened twice: its tab comes to the front.
+- A link opens its target in a new tab; the note with the link stays open.
+- Right-click a tab: {ui:Andere Tabs schließen}, {ui:Tabs rechts schließen}, {ui:Alle Tabs schließen}.
 - Drag a tab to change the order. {key:reopenTab} brings a tab back to its old place.
 
 ### Side by side

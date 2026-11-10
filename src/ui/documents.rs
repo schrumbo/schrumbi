@@ -362,9 +362,6 @@ impl NoteView {
                     }
                     let written = state::lib(cx).update(cx, |l, cx| {
                         let written = l.buffers.get_mut(&path).map(|b| (b.edited_on(seen, text), b.version()));
-                        if written.is_some_and(|(accepted, _)| accepted) {
-                            l.pin_document(&path);
-                        }
                         cx.notify();
                         written
                     });
@@ -1045,7 +1042,6 @@ impl NoteView {
                 b.edited(text);
                 b.version()
             });
-            l.pin_document(&path);
             cx.notify();
             version
         });
@@ -3887,6 +3883,23 @@ fn close_other_tabs(path: &Path, cx: &mut App) {
     });
 }
 
+fn close_tabs_right(path: &Path, cx: &mut App) {
+    let keep = path.to_path_buf();
+    let right: Vec<PathBuf> = state::read(cx, |l| l.open_documents.iter().skip_while(|d| **d != keep).skip(1).filter(|d| l.split_document.as_ref() != Some(*d)).cloned().collect());
+    let failed = save_unsaved(&right, cx);
+    act(cx, |l| {
+        if failed.is_empty() {
+            l.close_documents_right(&keep);
+            return;
+        }
+        let closing: Vec<&PathBuf> = right.iter().filter(|p| !failed.contains(&l.buffer_key(p))).collect();
+        for tab in closing {
+            l.close_document(tab);
+        }
+        l.open_document(&keep);
+    });
+}
+
 pub fn close_all_tabs(cx: &mut App) {
     let all = state::read(cx, |l| l.open_documents.clone());
     let failed = save_unsaved(&all, cx);
@@ -3992,7 +4005,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
     let split = is_split(current, cx);
     let fit = bar_fit::slot(split);
     if split {
-        let (title, is_preview, focused) = state::read(cx, |l| (l.note_title(current), l.is_preview(current), l.beside_active));
+        let (title, focused) = state::read(cx, |l| (l.note_title(current), l.beside_active));
         let close = current.to_path_buf();
         return div()
             .relative()
@@ -4015,20 +4028,19 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                     .whitespace_nowrap()
                     .text_ellipsis_middle()
                     .text_size(px(font::CALLOUT))
-                    .tooltip(tip(if is_preview { format!("{title}\n{}", tr("Vorschau: Die nächste Datei, die du öffnest, ersetzt diesen Tab. Doppelklick oder Schreiben behält ihn.")) } else { title.clone() }))
+                    .tooltip(tip(title.clone()))
                     .context_menu(move |m, _, _| {
-                        let (pin, shut) = (close.clone(), close.clone());
-                        m.when(is_preview, |m| m.item(PopupMenuItem::new(tr("Tab behalten")).icon(menu_icon("bookmark")).on_click(move |_, _, cx| act(cx, |l| l.pin_document(&pin)))))
-                            .item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).on_click(move |_, _, cx| close_tab(&shut, cx)))
+                        let shut = close.clone();
+                        m.item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).on_click(move |_, _, cx| close_tab(&shut, cx)))
                             .separator()
                             .item(PopupMenuItem::new(tr("Geteilte Ansicht schließen")).icon(menu_icon("columns-2")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))))
                     })
-                    .child(div().when(is_preview, Styled::italic).child(title)),
+                    .child(div().child(title)),
             )
             .child(div().flex_none().child(actions))
             .child(Button::new("split-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Geteilte Ansicht schließen")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))));
     }
-    let (preview, beside, focused, can_beside) = state::read(cx, |l| (l.preview_document.clone(), l.split_document.clone(), l.split_document.is_some() && !l.beside_active, l.can_drop_document(current, library::DocDrop::Beside, None)));
+    let (beside, focused, can_beside) = state::read(cx, |l| (l.split_document.clone(), l.split_document.is_some() && !l.beside_active, l.can_drop_document(current, library::DocDrop::Beside, None)));
     let TabPlan { docs, titles, dirty, natural, widths, active: shown_index, show_files, list_all, .. } = tab_plan(current, &fit, window, cx);
     let list_all = fit.decided().unwrap_or(list_all);
     let overflow = list_all.then(|| {
@@ -4069,15 +4081,9 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
         let is_dirty = dirty[i];
         let hover = t.ink.opacity(0.04);
         let rel = state::read(cx, |l| l.relative_path(doc));
-        let is_preview = preview.as_ref() == Some(doc) && state::read(cx, |l| l.is_preview(doc));
         let is_beside = beside.as_ref() == Some(doc);
-        let hint = if is_preview {
-            format!("{rel}\n{}", tr("Vorschau: Die nächste Datei, die du öffnest, ersetzt diesen Tab. Doppelklick oder Schreiben behält ihn."))
-        } else if is_beside {
-            format!("{rel}\n{}", tr("Rechts geöffnet"))
-        } else {
-            rel
-        };
+        let hint = if is_beside { format!("{rel}\n{}", tr("Rechts geöffnet")) } else { rel };
+        let (others, rightwards) = (docs.len() > 1, docs.len() > i + 1);
         let squeezed = widths[i] + 0.5 < natural[i] && !is_dirty;
         let close_button = div()
             .id(SharedString::from(format!("tab-close-{}", doc.display())))
@@ -4119,14 +4125,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                 .when(is_beside, |d| d.bg(t.ink.opacity(0.04)).soft(t.ink.opacity(0.02), radius::INNER))
                 .when(!active && !is_beside, |d| d.soft(hover, radius::INNER))
                 .tooltip(tip(hint))
-                .on_click(move |e, _, cx| {
-                    act(cx, |l| {
-                        l.open_document(&open);
-                        if e.click_count() >= 2 {
-                            l.pin_document(&open);
-                        }
-                    })
-                })
+                .on_click(move |_, _, cx| act(cx, |l| l.open_document(&open)))
                 .on_mouse_down(MouseButton::Middle, move |_, _, cx| close_tab(&middle, cx))
                 .on_drag(DraggedTab { path: doc.clone(), title: titles[i].clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
                 .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(accent.opacity(0.15)))
@@ -4135,19 +4134,19 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                     act(cx, |l| l.move_document(&path, &target));
                 })
                 .child(div().flex_none().child(if is_beside { icon("split-right", iconsize::M, t.secondary).into_any_element() } else { file_icon(doc, iconsize::M).into_any_element() }))
-                .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis_middle().when(is_preview, Styled::italic).text_size(px(font::CALLOUT)).text_color(if active || is_beside { t.primary } else { t.secondary }).child(titles[i].clone()))
+                .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(px(font::CALLOUT)).text_color(if active || is_beside { t.primary } else { t.secondary }).child(titles[i].clone()))
                 .child(if squeezed {
                     div().absolute().top_0().bottom_0().right_0().pl(px(space::XS)).pr(px(space::S)).rounded_r(px(radius::INNER)).flex().items_center().bg(under).when(!active, |d| d.invisible().group_hover("doc-tab", Styled::visible)).child(close_button).into_any_element()
                 } else {
                     close_button.when(!active && !is_dirty, |d| d.invisible().group_hover("doc-tab", Styled::visible)).into_any_element()
                 })
                 .context_menu(move |m, _, _| {
-                    let (a, b, c, d, beside, keep, shown) = (menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone());
-                    m.when(is_preview, |m| m.item(PopupMenuItem::new(tr("Tab behalten")).icon(menu_icon("bookmark")).on_click(move |_, _, cx| act(cx, |l| l.pin_document(&keep)))))
-                        .when(!active && !is_beside, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.set_split(Some(beside.clone()))))))
+                    let (a, b, c, d, beside, right, shown) = (menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone());
+                    m.when(!active && !is_beside, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.set_split(Some(beside.clone()))))))
                         .when(active && can_beside, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.drop_document(&shown, library::DocDrop::Beside, None)))))
                         .item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).on_click(move |_, _, cx| close_tab(&a, cx)))
-                        .item(PopupMenuItem::new(tr("Andere Tabs schließen")).on_click(move |_, _, cx| close_other_tabs(&b, cx)))
+                        .item(PopupMenuItem::new(tr("Andere Tabs schließen")).disabled(!others).on_click(move |_, _, cx| close_other_tabs(&b, cx)))
+                        .item(PopupMenuItem::new(tr("Tabs rechts schließen")).disabled(!rightwards).on_click(move |_, _, cx| close_tabs_right(&right, cx)))
                         .item(PopupMenuItem::new(tr("Alle Tabs schließen")).on_click(|_, _, cx| close_all_tabs(cx)))
                         .separator()
                         .item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&c)))

@@ -793,7 +793,7 @@ impl NotesPage {
         cx.notify();
     }
 
-    fn activate_row(&mut self, row: &Row, double: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn activate_row(&mut self, row: &Row, window: &mut Window, cx: &mut Context<Self>) {
         self.selected = Some(row.clone());
         window.focus(&self.focus, cx);
         match row {
@@ -808,12 +808,7 @@ impl NotesPage {
                 let p = path.clone();
                 act(cx, |l| {
                     l.quiet_open = true;
-                    if double {
-                        l.open_file(&p);
-                        l.pin_document(&p);
-                    } else {
-                        l.open_preview(&p);
-                    }
+                    l.open_file(&p);
                 });
             }
             Row::Tag { tag, .. } => {
@@ -843,7 +838,7 @@ impl NotesPage {
         cx.notify();
     }
 
-    fn step(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
+    fn step(&mut self, by: isize, cx: &mut Context<Self>) {
         let rows = self.rows();
         if rows.is_empty() {
             return;
@@ -853,12 +848,8 @@ impl NotesPage {
             Some(i) => i.saturating_add_signed(by).min(rows.len() - 1),
             None => 0,
         };
-        let row = rows[next].clone();
-        self.selected = Some(row.clone());
+        self.selected = Some(rows[next].clone());
         self.list_scroll.scroll_to_item(next, ScrollStrategy::Center);
-        if matches!(row, Row::File { .. }) {
-            self.activate_row(&row, false, window, cx);
-        }
         cx.notify();
     }
 
@@ -868,8 +859,8 @@ impl NotesPage {
         }
         let selected = self.selected.clone();
         match e.keystroke.key.as_str() {
-            "down" => self.step(1, window, cx),
-            "up" => self.step(-1, window, cx),
+            "down" => self.step(1, cx),
+            "up" => self.step(-1, cx),
             "right" => {
                 if let Some(Row::Folder { rel, open: false, .. }) = &selected {
                     self.open_folders.insert(rel.clone());
@@ -887,8 +878,11 @@ impl NotesPage {
                 _ => {}
             },
             "enter" => match selected {
-                Some(Row::File { .. }) => act(cx, |l| l.focus_document = true),
-                Some(row) => self.activate_row(&row, false, window, cx),
+                Some(Row::File { path, .. }) => act(cx, |l| {
+                    l.open_file(&path);
+                    l.focus_document = true;
+                }),
+                Some(row) => self.activate_row(&row, window, cx),
                 None => {}
             },
             "space" => {
@@ -957,9 +951,8 @@ impl NotesPage {
         };
         let click = |row: &Row, me: &Entity<Self>| {
             let (row, me) = (row.clone(), me.clone());
-            move |e: &ClickEvent, window: &mut Window, cx: &mut App| {
-                let double = e.click_count() >= 2;
-                me.update(cx, |s, cx| s.activate_row(&row, double, window, cx));
+            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                me.update(cx, |s, cx| s.activate_row(&row, window, cx));
             }
         };
         match row {

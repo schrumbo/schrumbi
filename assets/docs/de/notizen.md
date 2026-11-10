@@ -13,14 +13,14 @@ Notizen sind Markdown-Dateien in deinem Ordner. Obsidian liest sie genauso.
 
 | Taste | Wirkung |
 |---|---|
-| {key:up} {key:down} | Datei wählen, mit Vorschau |
+| {key:up} {key:down} | Datei wählen |
 | {key:right} {key:left} | Ordner auf- und zuklappen |
-| {key:return} | In die Notiz springen |
+| {key:return} | Öffnen und in die Notiz springen |
 | {key:renameNote} | Umbenennen |
 | {key:/} | Filtern |
 
 - {key:renameNote} benennt auch die offene Notiz um, ebenso ein Klick auf ihren Titel oben.
-- Einfacher Klick öffnet eine Vorschau, Doppelklick behält den Tab.
+- Ein Klick öffnet die Datei in einem eigenen Tab. Ist sie schon offen, kommt ihr Tab nach vorn.
 - Datei auf einen Ordner ziehen verschiebt sie.
 - Rechtsklick → {ui:Abgabe zuordnen} zählt die Datei für eine Abgabe. Die Pille oben in der Notiz zeigt, wozu sie gehört.
 - {ui:In den Papierkorb} fragt nicht nach. {key:Undo} holt die Datei zurück.
@@ -206,9 +206,9 @@ Hat eine andere App die Datei geändert, siehst du einen Hinweis. Nichts geht ve
 | {key:nextTab} / {key:previousTab} | Nächster / vorheriger Tab |
 
 - Ein Tab geht nur zu, wenn du ihn schließt: ×, Mittelklick oder {key:closeTab}.
-- Ein Klick auf eine Datei öffnet sie als Vorschau mit schrägem Titel. Die nächste Datei ersetzt sie.
-- Doppelklick, Schreiben oder Rechtsklick → {ui:Tab behalten} macht aus der Vorschau einen festen Tab.
-- Ein Link öffnet sein Ziel als Vorschau, die Notiz mit dem Link bleibt offen.
+- Jede Datei bekommt ihren eigenen Tab. Eine offene Datei wird nie doppelt geöffnet: ihr Tab kommt nach vorn.
+- Ein Link öffnet sein Ziel in einem neuen Tab, die Notiz mit dem Link bleibt offen.
+- Rechtsklick auf einen Tab: {ui:Andere Tabs schließen}, {ui:Tabs rechts schließen}, {ui:Alle Tabs schließen}.
 - Tab ziehen ändert die Reihenfolge. {key:reopenTab} bringt den Tab an seinen alten Platz zurück.
 
 ### Nebeneinander

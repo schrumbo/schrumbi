@@ -236,9 +236,6 @@ fn commands(cx: &App) -> Vec<Command> {
     if in_document {
         add(&view, S::CloseTab.label(), "x", keys(S::CloseTab), Run::Action(Box::new(app::CloseTab)));
     }
-    if let Some(doc) = state::read(cx, |l| l.preview_document.clone().filter(|p| *l.route() == Route::Doc(p.clone()) && l.is_preview(p))) {
-        add(&view, tr("Tab behalten"), "bookmark", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.pin_document(&doc)))));
-    }
     if let Some(doc) = focused.clone().filter(|p| super::convention_rename::available(p, cx)) {
         add(&file, tr("Nach Muster benennen…"), "wand-sparkles", None, Run::WindowCall(Rc::new(move |window, cx| super::convention_rename::open(doc.clone(), window, cx))));
     }

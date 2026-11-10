@@ -23,47 +23,52 @@ fn opened(paths: &[PathBuf]) -> Library {
 }
 
 #[test]
-fn an_edited_preview_stays_after_it_was_saved() {
-    let (_, p) = notes("edited-preview", &["a.md", "b.md"]);
+fn every_opened_file_gets_its_own_tab_and_none_twice() {
+    let (_, p) = notes("own-tabs", &["a.md", "b.md", "c.md"]);
     let mut lib = Library::new();
-    lib.open_preview(&p[0]);
-    lib.buffer(&p[0]).edited("neu".into());
-    lib.buffer(&p[0]).save().unwrap();
-    lib.open_preview(&p[1]);
-    assert_eq!(lib.open_documents, vec![p[0].clone(), p[1].clone()], "a note the user wrote in is never swapped out");
+    for d in &p {
+        lib.open_file(d);
+    }
+    assert_eq!(lib.open_documents, p, "each file opened from the tree is a tab of its own");
+    lib.open_file(&p[0]);
+    assert_eq!(lib.open_documents, p, "an open file is shown, not opened again");
+    assert_eq!((lib.route().clone(), lib.active_document.clone()), (Route::Doc(p[0].clone()), Some(p[0].clone())));
 }
 
 #[test]
-fn a_link_opens_beside_and_never_replaces_a_kept_tab() {
-    let (_, p) = notes("link-kept", &["a.md", "b.md"]);
+fn a_followed_link_opens_its_own_tab_and_the_note_with_the_link_stays() {
+    let (_, p) = notes("link-tab", &["a.md", "b.md", "c.md"]);
     let mut lib = opened(&p[..1]);
     lib.follow_path(&p[1], None);
     assert_eq!(lib.open_documents, vec![p[0].clone(), p[1].clone()]);
-    assert_eq!(lib.preview_document, Some(p[1].clone()), "a followed link is a preview");
     assert_eq!(*lib.route(), Route::Doc(p[1].clone()));
-}
-
-#[test]
-fn links_walk_inside_a_preview_and_back() {
-    let (_, p) = notes("link-preview", &["a.md", "b.md", "c.md"]);
-    let mut lib = opened(&p[..1]);
-    lib.open_preview(&p[1]);
     lib.follow_path(&p[2], None);
-    assert_eq!(lib.open_documents, vec![p[0].clone(), p[2].clone()], "the preview walks on");
+    assert_eq!(lib.open_documents, p, "the next link adds a tab instead of swapping one out");
     lib.go_back();
-    assert_eq!(lib.open_documents, vec![p[0].clone(), p[1].clone()]);
+    assert_eq!(lib.open_documents, p, "Back changes the shown tab, never the open ones");
     assert_eq!(*lib.route(), Route::Doc(p[1].clone()));
+    lib.follow_path(&p[0], None);
+    assert_eq!(lib.open_documents, p, "a link to an open note shows its tab");
+    assert_eq!(*lib.route(), Route::Doc(p[0].clone()));
 }
 
 #[test]
-fn back_never_swaps_out_a_tab_that_was_kept() {
-    let (_, p) = notes("link-pinned", &["a.md", "b.md"]);
-    let mut lib = Library::new();
-    lib.open_preview(&p[0]);
-    lib.follow_path(&p[1], None);
-    lib.pin_document(&p[1]);
-    lib.go_back();
-    assert!(lib.open_documents.contains(&p[1]), "kept tabs stay");
+fn closing_the_tabs_to_the_right_keeps_the_note_on_the_right() {
+    let (_, p) = notes("close-right", &["a.md", "b.md", "c.md", "d.md"]);
+    let mut lib = opened(&p);
+    lib.close_documents_right(&p[3]);
+    assert_eq!(lib.open_documents, p, "nothing to the right of the last tab");
+    lib.close_documents_right(&p[1]);
+    assert_eq!(lib.open_documents, vec![p[0].clone(), p[1].clone()]);
+    assert_eq!(lib.active_document, Some(p[1].clone()));
+    lib.reopen_document();
+    lib.reopen_document();
+    assert_eq!(lib.open_documents, p, "the closed tabs come back in order");
+    lib.open_document(&p[0]);
+    lib.set_split(Some(p[3].clone()));
+    lib.close_documents_right(&p[0]);
+    assert_eq!(lib.open_documents, vec![p[0].clone(), p[3].clone()]);
+    assert_eq!(lib.split_document, Some(p[3].clone()), "the note on the right stays on screen");
 }
 
 #[test]
@@ -84,6 +89,22 @@ fn a_link_in_the_right_pane_opens_on_the_right() {
 }
 
 #[test]
+fn a_link_in_the_right_pane_to_an_open_note_shows_it_there_without_a_second_tab() {
+    let (_, p) = notes("link-right-open", &["a.md", "b.md", "c.md"]);
+    let mut lib = opened(&p);
+    lib.open_document(&p[0]);
+    lib.set_split(Some(p[1].clone()));
+    lib.beside_active = true;
+    let folder = p[1].parent().unwrap().join(".");
+    lib.follow_path(&p[2], Some(&folder));
+    assert_eq!(lib.open_documents, p, "no second tab for an open note");
+    assert_eq!((lib.active_document.clone(), lib.split_document.clone()), (Some(p[0].clone()), Some(p[2].clone())));
+    lib.follow_path(&p[0], Some(&folder));
+    assert_eq!(*lib.route(), Route::Doc(p[0].clone()), "a link to the note on the left shows the left pane");
+    assert_eq!(lib.open_documents, p);
+}
+
+#[test]
 fn links_from_the_details_open_on_the_left() {
     let (_, p) = notes("link-details", &["a.md", "b.md", "c.md"]);
     let mut lib = opened(&p[..2]);
@@ -92,17 +113,6 @@ fn links_from_the_details_open_on_the_left() {
     lib.beside_active = true;
     lib.follow_path(&p[2], Some(&p[0]));
     assert_eq!((lib.active_document.clone(), lib.split_document.clone()), (Some(p[2].clone()), Some(p[1].clone())));
-}
-
-#[test]
-fn back_never_swaps_out_a_preview_that_was_written_in() {
-    let (_, p) = notes("back-touched", &["a.md", "b.md"]);
-    let mut lib = Library::new();
-    lib.open_preview(&p[0]);
-    lib.follow_path(&p[1], None);
-    lib.buffer(&p[1]).replace("neu".into());
-    lib.go_back();
-    assert!(lib.open_documents.contains(&p[1]));
 }
 
 #[test]
@@ -198,15 +208,14 @@ fn a_reopened_tab_comes_back_where_it_was() {
 }
 
 #[test]
-fn a_preview_shown_on_the_right_is_kept() {
-    let (_, p) = notes("split-preview", &["a.md", "b.md", "c.md"]);
-    let mut lib = opened(&p[..1]);
-    lib.open_preview(&p[1]);
+fn a_file_opened_beside_a_split_keeps_the_note_on_the_right() {
+    let (_, p) = notes("split-open-file", &["a.md", "b.md", "c.md"]);
+    let mut lib = opened(&p[..2]);
     lib.open_document(&p[0]);
     lib.set_split(Some(p[1].clone()));
-    lib.open_preview(&p[2]);
-    assert!(lib.open_documents.contains(&p[1]), "the note on the right keeps its tab");
-    assert_eq!(lib.split_document, Some(p[1].clone()));
+    lib.open_file(&p[2]);
+    assert_eq!(lib.open_documents, vec![p[0].clone(), p[2].clone(), p[1].clone()], "the new tab sits after the shown one");
+    assert_eq!((lib.active_document.clone(), lib.split_document.clone()), (Some(p[2].clone()), Some(p[1].clone())));
 }
 
 #[test]
@@ -219,19 +228,6 @@ fn cycling_tabs_skips_the_right_note() {
     assert_eq!((lib.active_document.clone(), lib.split_document.clone()), (Some(p[2].clone()), Some(p[1].clone())));
     lib.cycle_document(1);
     assert_eq!(lib.active_document, Some(p[0].clone()));
-}
-
-#[test]
-fn a_preview_changed_from_outside_is_kept_and_offers_no_dead_steps() {
-    let (_, p) = notes("touched-steps", &["a.md", "b.md"]);
-    let mut lib = Library::new();
-    lib.open_preview(&p[0]);
-    lib.follow_path(&p[1], None);
-    lib.go_back();
-    assert!(lib.can_go_forward());
-    lib.buffer(&p[0]).restore("neu".into()).unwrap();
-    assert!(!lib.is_preview(&p[0]), "a changed note no longer looks like a preview");
-    assert!(!lib.can_go_forward(), "Forward is off when it would do nothing");
 }
 
 #[test]
@@ -267,7 +263,7 @@ fn a_note_in_its_own_window_is_raised_and_never_opened_as_a_second_editor() {
     lib.note_windows.insert(p[0].clone());
     lib.close_document(&p[0]);
     assert_eq!(lib.open_documents, vec![p[1].clone()]);
-    lib.open_preview(&p[0]);
+    lib.follow_path(&p[0], None);
     assert_eq!(lib.raise_note_window.take(), Some(p[0].clone()));
     lib.open_document(&p[0]);
     assert_eq!(lib.raise_note_window.take(), Some(p[0].clone()));
@@ -423,21 +419,6 @@ fn renaming_a_folder_carries_every_tab_and_remembered_position_inside() {
     lib.rename(&target, "e.md");
     assert!(moved(&d).with_file_name("e.md").exists() && lib.last_error.is_none(), "{:?}", lib.last_error);
     assert_eq!(lib.active_document, Some(moved(&d).with_file_name("e.md")), "renaming the shown note after its folder changed targets the new path");
-}
-
-#[test]
-fn a_preview_trail_follows_a_renamed_folder() {
-    let (root, dir, [c, a, b, _]) = folder_with_notes("rename-folder-trail");
-    let mut lib = opened(&[c.clone()]);
-    lib.open_preview(&a);
-    lib.follow_path(&b, None);
-    assert_eq!(lib.preview_document, Some(b.clone()));
-    lib.rename(&dir, "neu");
-    let (new_a, new_b) = (root.join("neu").join("a.md"), root.join("neu").join("tief").join("b.md"));
-    assert_eq!(lib.preview_document, Some(new_b));
-    lib.go_back();
-    assert_eq!(lib.open_documents, vec![c, new_a.clone()], "Back leads to the preview's earlier note at its new path");
-    assert_eq!(*lib.route(), Route::Doc(new_a));
 }
 
 #[test]
