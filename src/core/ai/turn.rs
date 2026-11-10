@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::tools;
+use super::tools::{self, Outcome};
 use crate::core::i18n::trf;
 use crate::core::library::Library;
 
@@ -23,6 +23,8 @@ struct Turn {
 #[derive(Default)]
 pub struct Turns {
     open: HashMap<String, Turn>,
+    /// Sessions whose turns have real boundaries: `begin` and `end` replace the time gap.
+    bounded: HashSet<String>,
 }
 
 impl Turns {
@@ -31,9 +33,15 @@ impl Turns {
         if tools::is_write(name) && lib.busy() {
             return Err(BUSY.into());
         }
+        self.run(lib, session, |lib| tools::call(lib, name, args))
+    }
+
+    /// Runs any change for `session` and folds the steps it records into the turn.
+    pub fn run(&mut self, lib: &mut Library, session: &str, change: impl FnOnce(&mut Library) -> Result<Outcome, String>) -> Result<Value, String> {
         let before = lib.recorded_steps();
-        let joins = self.open.get(session).is_some_and(|t| t.at.elapsed() < GAP && t.recorded == before && lib.undo_label() == Some(t.top.as_str()));
-        let result = tools::call(lib, name, args);
+        let fresh = |t: &Turn| self.bounded.contains(session) || t.at.elapsed() < GAP;
+        let joins = self.open.get(session).is_some_and(|t| fresh(t) && t.recorded == before && lib.undo_label() == Some(t.top.as_str()));
+        let result = change(lib);
         let added = usize::try_from(lib.recorded_steps() - before).unwrap_or(usize::MAX);
         if added > 0 {
             let changed = result.as_ref().ok().and_then(|o| o.changed.clone()).or_else(|| lib.undo_label().map(String::from)).unwrap_or_default();
@@ -46,8 +54,20 @@ impl Turns {
         result.map(|o| o.value)
     }
 
+    /// Starts a turn of `session` with a real boundary: its writes join until `end`, however long it takes.
+    pub fn begin(&mut self, session: &str) {
+        self.open.remove(session);
+        self.bounded.insert(session.to_string());
+    }
+
     /// Ends the turn of `session`: its next write starts a new undo step.
     pub fn end(&mut self, session: &str) {
         self.open.remove(session);
+    }
+
+    /// Forgets `session`, e.g. when its agent ended.
+    pub fn close(&mut self, session: &str) {
+        self.open.remove(session);
+        self.bounded.remove(session);
     }
 }

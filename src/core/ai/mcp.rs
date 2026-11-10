@@ -95,7 +95,8 @@ pub fn main(args: Vec<String>) -> i32 {
             return 1;
         }
     };
-    let bridge = Bridge { session: uuid::Uuid::new_v4().simple().to_string(), forced };
+    let session = std::env::var("SCHRUMBI_AI_SESSION").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+    let bridge = Bridge { session, forced };
     runtime.block_on(async move {
         match bridge.serve(rmcp::transport::stdio()).await {
             Ok(running) => {

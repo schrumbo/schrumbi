@@ -28,6 +28,7 @@ const CARD_LIMIT: usize = 200;
 
 const STALE: &str = "The note changed since you read it (version mismatch). Call read_note again and retry with the new version.";
 const NO_ROOT: &str = "No study folder is open in Schrumbi.";
+const STALE_FILE: &str = "The file changed since you last read it, or you have not read it yet. Read it again and retry.";
 const OUTSIDE: &str = "Paths are relative to the study folder and may not leave it.";
 
 /// One tool as the agent sees it.
@@ -448,6 +449,92 @@ fn appended(before: &str, lines: &[String]) -> String {
     out.push_str(&lines.join("\n\n"));
     out.push('\n');
     out
+}
+
+/// A path the agent names in full, checked to lie inside the study folder.
+pub fn inside_root(lib: &Library, path: &Path) -> Result<PathBuf, String> {
+    let root = lib.root.as_ref().ok_or(NO_ROOT)?;
+    if !path.is_absolute() {
+        return resolve(lib, &path.to_string_lossy());
+    }
+    if !super::acp::inside(root, path) {
+        return Err(OUTSIDE.to_string());
+    }
+    Ok(path.to_path_buf())
+}
+
+/// A text file as the user sees it, unsaved edits included; `line` counts from 1.
+pub fn read_file(lib: &Library, path: &Path, line: Option<u32>, limit: Option<u32>) -> Result<String, String> {
+    let path = inside_root(lib, path)?;
+    if !is_text(&path) {
+        return Err("Only text files can be read this way; use the schrumbi tools (read_pdf_text for PDFs).".into());
+    }
+    let text = current_text(lib, &path)?;
+    if line.is_none() && limit.is_none() {
+        return Ok(text);
+    }
+    let from = line.map_or(0, |l| usize::try_from(l).unwrap_or(usize::MAX).saturating_sub(1));
+    let count = limit.map_or(usize::MAX, |l| usize::try_from(l).unwrap_or(usize::MAX));
+    Ok(text.split_inclusive('\n').skip(from).take(count).collect())
+}
+
+/// The text of a file now, for showing a change; `None` when it is no text file or unreadable.
+pub fn text_now(lib: &Library, path: &Path) -> Option<String> {
+    is_text(path).then(|| current_text(lib, path).ok()).flatten()
+}
+
+/// The file a write tool changes, before it runs.
+pub fn target(lib: &Library, name: &str, args: &Value) -> Option<PathBuf> {
+    match name {
+        "write_note" => resolve(lib, arg_str(args, "path")?).ok(),
+        "add_cards" => resolve(lib, arg_str(args, "note")?).ok(),
+        _ => None,
+    }
+}
+
+/// What writing `content` over a whole file would change, for the permission card.
+pub fn write_preview(lib: &Library, path: &Path, content: &str) -> Result<Preview, String> {
+    let path = inside_root(lib, path)?;
+    if !is_text(&path) {
+        return Err("Only text files can be written this way; use the schrumbi tools.".into());
+    }
+    let before = if path.exists() { current_text(lib, &path)? } else { String::new() };
+    let (added, removed, lines) = diff_lines(&before, content);
+    Ok(Preview { title: trf("%@ ändern (+%lld −%lld Zeilen)", &[&name_of(&path), &added, &removed]), lines })
+}
+
+/// Writes a whole text file through the library: one undoable step, conflict-checked, never outside the folder.
+/// An existing file is only replaced when `seen` is the version of the text the agent read, so typing since then is never lost.
+pub fn write_file(lib: &mut Library, path: &Path, content: &str, seen: Option<&str>) -> Result<Outcome, String> {
+    if lib.busy() {
+        return Err("Schrumbi is syncing or moving files right now. Try again in a moment.".into());
+    }
+    let path = inside_root(lib, path)?;
+    if !is_text(&path) {
+        return Err("Only text files can be written this way; use the schrumbi tools.".into());
+    }
+    let created = (!path.exists()).then_some(());
+    let target = if created.is_none() {
+        path
+    } else {
+        let folder = path.parent().filter(|p| p.is_dir()).ok_or("The folder does not exist.")?.to_path_buf();
+        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_else(|| "md".into());
+        lib.create_note(&stem, &folder, &ext).ok_or_else(|| lib.last_error.take().unwrap_or_else(|| "The file could not be created.".into()))?
+    };
+    let key = lib.buffer_key(&target);
+    if created.is_none() && current_text(lib, &key).map(|t| version_of(&t)).ok().as_deref() != seen {
+        return Err(STALE_FILE.into());
+    }
+    let label = trf("%@ geändert", &[&name_of(&target)]);
+    let body = content.to_string();
+    if current_text(lib, &key).is_ok_and(|t| t == body) {
+        return Ok(Outcome { value: json!({ "path": rel(lib, &target) }), changed: None });
+    }
+    if !lib.edit_note(&key, "ai", label.clone(), |_| body) {
+        return Err(lib.last_error.take().unwrap_or_else(|| "The file could not be written.".into()));
+    }
+    Ok(Outcome { value: json!({ "path": rel(lib, &target) }), changed: Some(label) })
 }
 
 /// What a write tool would do, for the permission card. Reads are never previewed.

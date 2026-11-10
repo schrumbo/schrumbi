@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+agent-client-protocol = { version = "5.1", features = ["process"] }
 anyhow = "1"
 async-channel = "2.5.0"
 auto-launch = "0.6.0"
@@ -25,6 +26,7 @@ lopdf = "0.46.0"
 notify = "8.2.1"
 notify-rust = "4.18.2"
 dunce = "1"
+futures = "0.3"
 rayon = "1"
 rmcp = { version = "3.9", default-features = false, features = ["server", "transport-io"] }
 semver = "1"

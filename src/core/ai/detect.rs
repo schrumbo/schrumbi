@@ -51,24 +51,21 @@ pub struct Cli {
 
 static FOUND: RwLock<Option<Vec<Cli>>> = RwLock::new(None);
 
+/// The program `name` on `PATH`; on Windows also its `.exe`, `.cmd` or `.bat`.
+pub fn which(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find_map(|dir| {
+        if cfg!(windows) {
+            ["exe", "cmd", "bat"].iter().map(|ext| dir.join(format!("{name}.{ext}"))).find(|p| p.is_file())
+        } else {
+            Some(dir.join(name)).filter(|p| p.is_file())
+        }
+    })
+}
+
 /// Looks for the programs on `PATH`; a few file checks, no process starts.
 pub fn scan() -> Vec<Cli> {
-    let Some(path) = std::env::var_os("PATH") else { return Vec::new() };
-    let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
-    let mut out = Vec::new();
-    for agent in Agent::ALL {
-        let found = dirs.iter().find_map(|dir| {
-            if cfg!(windows) {
-                ["exe", "cmd", "bat"].iter().map(|ext| dir.join(format!("{}.{ext}", agent.command()))).find(|p| p.is_file())
-            } else {
-                Some(dir.join(agent.command())).filter(|p| p.is_file())
-            }
-        });
-        if let Some(path) = found {
-            out.push(Cli { agent, path });
-        }
-    }
-    out
+    Agent::ALL.into_iter().filter_map(|agent| which(agent.command()).map(|path| Cli { agent, path })).collect()
 }
 
 /// Scans again and remembers the result.
@@ -83,9 +80,9 @@ pub fn found() -> Vec<Cli> {
     FOUND.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone().unwrap_or_default()
 }
 
-/// Whether the assistant is on: switched on and at least one program installed.
+/// Whether the assistant is on: switched on and at least one program installed or an own command set.
 pub fn active() -> bool {
-    prefs::with(|p| p.ai.enabled) && !found().is_empty()
+    prefs::with(|p| p.ai.enabled && (!p.ai.custom_command.trim().is_empty() || !found().is_empty()))
 }
 
 /// A command for `cli` with the given arguments; `.cmd` shims on Windows run through `cmd`.

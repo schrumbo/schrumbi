@@ -222,3 +222,80 @@ fn search_stays_fast_at_twenty_thousand_notes() {
     assert!(!out["hits"].as_array().unwrap().is_empty());
     assert!(took.as_millis() < 100, "{took:?}");
 }
+
+#[test]
+fn a_bounded_turn_joins_every_write_until_it_ends() {
+    let root = folder("bounded");
+    let mut lib = open(&root);
+    let mut turns = Turns::default();
+    std::fs::write(root.join("A.md"), "# A
+").unwrap();
+    turns.begin("c");
+    turns.call(&mut lib, "c", "add_cards", &json!({ "note": "A.md", "cards": [{ "front": "F1", "back": "A1" }] })).unwrap();
+    let seen = version_of(&tools::read_file(&lib, &root.join("A.md"), None, None).unwrap());
+    let text = format!("{}Mehr
+", lib.buffer(&root.join("A.md")).text);
+    turns.run(&mut lib, "c", |l| tools::write_file(l, &root.join("A.md"), &text, Some(&seen))).unwrap();
+    assert_eq!(lib.undo_label(), Some("KI: 2 Änderungen"));
+    turns.end("c");
+    turns.call(&mut lib, "c", "add_cards", &json!({ "note": "A.md", "cards": [{ "front": "F2", "back": "A2" }] })).unwrap();
+    lib.undo();
+    assert!(lib.buffer(&root.join("A.md")).text.contains("Mehr"), "the ended turn stays");
+    lib.undo();
+    assert_eq!(lib.buffer(&root.join("A.md")).text, "# A
+");
+}
+
+#[test]
+fn whole_file_writes_need_a_fresh_read_and_never_leave_the_folder() {
+    let root = folder("fswrite");
+    let mut lib = open(&root);
+    let note = root.join("N.md");
+    std::fs::write(&note, "Eins
+").unwrap();
+    assert!(tools::write_file(&mut lib, &note, "KI
+", None).is_err(), "unread files are not replaced");
+    let seen = version_of(&tools::read_file(&lib, &note, None, None).unwrap());
+    lib.buffer(&note).edited("Eins
+Getippt
+".into());
+    assert!(tools::write_file(&mut lib, &note, "KI
+", Some(&seen)).is_err(), "typing since the read is kept");
+    assert_eq!(lib.buffer(&note).text, "Eins
+Getippt
+");
+    let seen = version_of(&tools::read_file(&lib, &note, None, None).unwrap());
+    assert!(tools::write_file(&mut lib, &note, "Eins
+Getippt
+KI
+", Some(&seen)).is_ok());
+    assert_eq!(lib.buffer(&note).text, "Eins
+Getippt
+KI
+");
+    assert!(tools::write_file(&mut lib, &root.join("..").join("x.md"), "x", None).is_err());
+    assert!(tools::write_file(&mut lib, &root.join("a.pdf"), "x", None).is_err());
+    let made = tools::write_file(&mut lib, &root.join("Neu.md"), "Hallo
+", None).unwrap();
+    assert_eq!(made.value["path"], "Neu.md");
+    assert_eq!(lib.buffer(&root.join("Neu.md")).text, "Hallo
+");
+    assert_eq!(tools::read_file(&lib, &note, Some(2), Some(1)).unwrap(), "Getippt
+");
+}
+
+#[test]
+fn a_session_saved_as_note_quotes_the_user_and_lists_the_steps() {
+    use super::transcript::{Entry, Role, markdown};
+    let e = |role, text: &str| Entry { role, text: text.into(), at: 0 };
+    let md = markdown("KI-Sitzung", &[e(Role::User, "Mach Karten"), e(Role::Tool, "Liest VL3.pdf"), e(Role::Tool, "Ergänzt 2 Karten"), e(Role::Agent, "Fertig.")]);
+    assert_eq!(md, "# KI-Sitzung
+
+> Mach Karten
+
+- Liest VL3.pdf
+- Ergänzt 2 Karten
+
+Fertig.
+");
+}
