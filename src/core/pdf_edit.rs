@@ -564,6 +564,20 @@ pub fn insertable(pdf: &[u8]) -> Result<usize, EditError> {
     }
 }
 
+/// A file holding only `pages`, in the order they have in `data`: what a page dragged into another PDF brings along. Protected, signed and broken files are refused like every other change.
+pub fn extract(data: &[u8], pages: &[usize]) -> Result<Vec<u8>, EditError> {
+    let count = insertable(data)?;
+    let keep = valid_set(pages, count)?;
+    if keep.is_empty() {
+        return Err(EditError::Empty);
+    }
+    let gone: Vec<usize> = (0..count).filter(|p| !keep.contains(p)).collect();
+    if gone.is_empty() {
+        return Ok(data.to_vec());
+    }
+    apply(data, &PageOp::Delete(gone))
+}
+
 /// Applies a page change and returns the new file. Pages that are deleted leave the file completely. The result is only returned when it opens and has exactly the expected number of pages.
 pub fn apply(data: &[u8], op: &PageOp) -> Result<Vec<u8>, EditError> {
     let mut doc = read(data)?;
@@ -1753,5 +1767,36 @@ pub mod tests {
         assert_eq!(layers(&out), (vec!["Host".into(), "Quelle an".into(), "Quelle aus".into()], vec!["Host".into(), "Quelle aus".into()], vec![]));
         let out = apply(&with_layers(&fixture(), &[("Host", true)], true), &PageOp::Insert { at: 0, pdf: off_source }).unwrap();
         assert_eq!(layers(&out).2, ["Host", "Quelle an"]);
+    }
+
+    #[test]
+    fn extracting_keeps_only_the_chosen_pages_in_file_order() {
+        let one = extract(&fixture(), &[2]).unwrap();
+        assert_eq!(texts(&one), ["Dritte GEHEIM Seite"]);
+        assert_eq!(sizes(&one), [(792., 612.)], "the page keeps the rotation it inherited");
+        let two = extract(&fixture(), &[3, 0]).unwrap();
+        assert_eq!(texts(&two), ["Erste Seite", "Vierte Regenbogen Seite"]);
+        let all = extract(&fixture(), &[0, 1, 2, 3]).unwrap();
+        assert_eq!(texts(&all), texts(&fixture()));
+        assert_eq!(extract(&fixture(), &[]), Err(EditError::Empty));
+        assert_eq!(extract(&fixture(), &[4]), Err(EditError::Broken));
+        assert_eq!(extract(&encrypted(&fixture(), "geheim"), &[0]), Err(EditError::Protected));
+        assert_eq!(extract(&with_field(&fixture(), true), &[0]), Err(EditError::Signed));
+        assert_eq!(extract(b"kein pdf", &[0]), Err(EditError::Broken));
+    }
+
+    #[test]
+    fn a_page_copied_into_another_file_lands_at_the_gap_and_its_marks_move_aside() {
+        let page = extract(&fixture(), &[2]).unwrap();
+        assert_eq!(insertable(&page), Ok(1));
+        let out = apply(&appendix(), &PageOp::Insert { at: 1, pdf: page }).unwrap();
+        assert_eq!(texts(&out), ["Anhang A", "Dritte GEHEIM Seite", "Anhang B"]);
+        assert_eq!(sizes(&out), [(300., 400.), (792., 612.), (300., 400.)]);
+        assert_eq!(texts(&appendix()), ["Anhang A", "Anhang B"], "the source is untouched");
+        let marks = vec![mark(1, 0), mark(2, 1)];
+        let moved = remap(&marks, &PageOp::Insert { at: 1, pdf: Vec::new() }, &[(300., 400.); 2], 1);
+        assert_eq!(moved[0].parts[0].page, 0);
+        assert_eq!(moved[1].parts[0].page, 2);
+        assert_eq!(moved[1].parts[0].rects, marks[1].parts[0].rects);
     }
 }

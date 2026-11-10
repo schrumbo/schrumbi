@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::path::Path;
 use std::sync::LazyLock;
 
 use pulldown_cmark::{Event, Parser};
@@ -817,6 +818,61 @@ pub fn image_markdown(file_name: &str) -> String {
     format!("![{stem}]({target})")
 }
 
+/// `![[a.pdf#page=3]]` for every page, one paragraph each, or the whole file when `pages` is empty. `link` writes the link for a subpath such as `#page=3`, the way the vault writes links.
+pub fn pdf_embeds(pages: &[usize], link: impl Fn(&str) -> String) -> String {
+    if pages.is_empty() {
+        return format!("!{}", link(""));
+    }
+    pages.iter().map(|p| format!("!{}", link(&format!("#page={}", p + 1)))).collect::<Vec<_>>().join("\n\n")
+}
+
+/// `[[…]]` from a note outside a vault to a file nearby: the path relative to the note's folder, spaces and umlauts kept. A file on another drive keeps its full path.
+pub fn folder_link(note: &Path, target: &Path, subpath: &str) -> String {
+    let slashes = |p: &Path| p.to_string_lossy().replace('\\', "/");
+    let folder = note.parent().map(slashes).unwrap_or_default();
+    let full = slashes(target);
+    let from: Vec<&str> = folder.split('/').filter(|p| !p.is_empty()).collect();
+    let to: Vec<&str> = full.split('/').filter(|p| !p.is_empty()).collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let path = if common == 0 && !from.is_empty() {
+        full
+    } else {
+        let mut parts = vec![".."; from.len() - common];
+        parts.extend(&to[common..]);
+        parts.join("/")
+    };
+    format!("[[{path}{subpath}]]")
+}
+
+/// Puts `block` into `s` as a paragraph of its own at `at`, with the blank lines it needs around it; the caret lands behind the block.
+pub fn insert_paragraph(s: &str, at: usize, block: &str) -> Edit {
+    let mut at = at.min(s.len());
+    while !s.is_char_boundary(at) {
+        at -= 1;
+    }
+    let (before, after) = (&s[..at], &s[at..]);
+    let nl = if s.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut trailing = 0;
+    let mut rest = before;
+    while trailing < 2
+        && let Some(r) = rest.strip_suffix('\n')
+    {
+        trailing += 1;
+        rest = r.strip_suffix('\r').unwrap_or(r);
+    }
+    let prefix = if before.is_empty() { String::new() } else { nl.repeat(2 - trailing) };
+    let suffix = if after.is_empty() {
+        String::new()
+    } else if after.starts_with('\n') || after.starts_with("\r\n") {
+        nl.to_string()
+    } else {
+        nl.repeat(2)
+    };
+    let block = if nl == "\n" { block.to_string() } else { block.replace('\n', nl) };
+    let end = at + prefix.len() + block.len();
+    Edit { range: at..at, text: format!("{prefix}{block}{suffix}"), select: end..end }
+}
+
 /// The smallest edit that turns `old` into `new`: the changed range of `old` and what replaces it.
 pub fn minimal_change<'a>(old: &str, new: &'a str) -> (Range<usize>, &'a str) {
     let prefix: usize = old.chars().zip(new.chars()).take_while(|(a, b)| a == b).map(|(a, _)| a.len_utf8()).sum();
@@ -1344,5 +1400,49 @@ world");
         assert_eq!(apply("()", &typed_pair("()", 1, ")").unwrap()), "()");
         assert_eq!(apply("()", &empty_pair("()", 1).unwrap()), "");
         assert_eq!(typed_pair("5", 1, "$"), None);
+    }
+
+    #[test]
+    fn pdf_pages_become_one_embed_each() {
+        let link = |sub: &str| format!("[[Skript Ü.pdf{sub}]]");
+        assert_eq!(pdf_embeds(&[2], link), "![[Skript Ü.pdf#page=3]]");
+        assert_eq!(pdf_embeds(&[0, 4], link), "![[Skript Ü.pdf#page=1]]\n\n![[Skript Ü.pdf#page=5]]");
+        assert_eq!(pdf_embeds(&[], link), "![[Skript Ü.pdf]]");
+        let markdown = |sub: &str| format!("[Skript.pdf](Skript.pdf{sub})");
+        assert_eq!(pdf_embeds(&[1], markdown), "![Skript.pdf](Skript.pdf#page=2)");
+    }
+
+    #[test]
+    fn a_link_outside_a_vault_is_relative_to_the_note() {
+        let note = Path::new("/home/x/Uni/Mathe/Notiz.md");
+        assert_eq!(folder_link(note, Path::new("/home/x/Uni/Mathe/Skript 1.pdf"), "#page=2"), "[[Skript 1.pdf#page=2]]");
+        assert_eq!(folder_link(note, Path::new("/home/x/Uni/Physik/Übung.pdf"), ""), "[[../Physik/Übung.pdf]]");
+        assert_eq!(folder_link(note, Path::new("/home/x/Uni/Mathe/PDFs/a.pdf"), ""), "[[PDFs/a.pdf]]");
+        assert_eq!(folder_link(Path::new("C:\\Uni\\Notiz.md"), Path::new("C:\\Uni\\Skripte\\a.pdf"), ""), "[[Skripte/a.pdf]]");
+        assert_eq!(folder_link(Path::new("C:\\Uni\\Notiz.md"), Path::new("D:\\a.pdf"), ""), "[[D:/a.pdf]]");
+    }
+
+    #[test]
+    fn a_paragraph_dropped_into_text_stands_on_its_own() {
+        let block = "![[a.pdf#page=1]]";
+        let after = |s: &str, at: usize| {
+            let e = insert_paragraph(s, at, block);
+            let out = apply(s, &e);
+            assert_eq!(&out[e.select.start - block.len()..e.select.start], block, "the caret follows the block");
+            out
+        };
+        assert_eq!(after("", 0), block);
+        assert_eq!(after("eins\nzwei", 5), format!("eins\n\n{block}\n\nzwei"));
+        assert_eq!(after("eins\n\nzwei", 6), format!("eins\n\n{block}\n\nzwei"));
+        assert_eq!(after("eins\n\n\nzwei", 6), format!("eins\n\n{block}\n\nzwei"), "an empty line at the drop point is used, not doubled");
+        assert_eq!(after("eins\nzwei", 0), format!("{block}\n\neins\nzwei"));
+        assert_eq!(after("eins\nzwei", 9), format!("eins\nzwei\n\n{block}"));
+        assert_eq!(after("eins\n", 5), format!("eins\n\n{block}"));
+        assert_eq!(after("eins zwei", 3), format!("ein\n\n{block}\n\ns zwei"));
+        assert_eq!(after("äöü", 1), format!("{block}\n\näöü"), "an offset inside a character moves to its start");
+        assert_eq!(after("eins\r\n\r\nzwei", 8), format!("eins\r\n\r\n{block}\r\n\r\nzwei"), "Windows line ends stay Windows line ends");
+        assert_eq!(after("eins\r\nzwei", 6), format!("eins\r\n\r\n{block}\r\n\r\nzwei"));
+        let two = insert_paragraph("a\r\n", 3, "x\n\ny");
+        assert_eq!(apply("a\r\n", &two), "a\r\n\r\nx\r\n\r\ny");
     }
 }
