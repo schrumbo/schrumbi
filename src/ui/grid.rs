@@ -408,6 +408,6 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
                 .child(div().text_size(px(font::CAPTION)).truncate().text_color(if attention { if e.status == Status::Ready { t.blue } else { t.red } } else { t.secondary }).child(subtitle)),
         )
         .when(tracks, |c| file_target(c, a, t))
-        .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx));
+        .context_menu(move |menu, window, cx| super::ai::deadline_submenu(status_menu(menu, &menu_id, cx), &menu_id, window, cx));
     motion::flip(format!("chip-{}", a.id), chip).into_any_element()
 }

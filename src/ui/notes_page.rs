@@ -1078,7 +1078,10 @@ impl NotesPage {
                     .child(div().flex_1().min_w_0().truncate().child(text.clone()))
                     .child(caption(note.clone(), t).flex_none().max_w(px(90.)).truncate())
                     .on_click(click(row, me))
-                    .context_menu(move |m, _, cx| file_menu(m, menu.clone()).when_some(super::convention_rename::menu_item(&menu, cx), |m, item| m.item(item)))
+                    .context_menu(move |m, window, cx| {
+                        let m = file_menu(m, menu.clone()).when_some(super::convention_rename::menu_item(&menu, cx), |m, item| m.item(item));
+                        super::ai::file_submenu(m, &menu, window, cx)
+                    })
                     .into_any_element()
             }
         }

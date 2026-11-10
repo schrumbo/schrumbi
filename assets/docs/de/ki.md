@@ -6,6 +6,26 @@ Schrumbi arbeitet mit Claude Code, Codex oder OpenCode zusammen, wenn eins davon
 
 Ist ein Programm installiert, ist die KI an. {ui:KI-Assistent verwenden} in {key:OpenSettings} → {ui:KI} schaltet sie aus, {ui:Knopf in der Werkzeugleiste} blendet den Knopf aus.
 
+## Die Spalte
+
+{key:toggleAi} oder der Knopf {ui:KI einblenden} öffnet rechts die Spalte {ui:KI}. Sie teilt sich den Platz mit den Details; {key:toggleInspector} holt die Details zurück.
+
+1. Öffne eine Notiz oder ein PDF.
+2. {key:toggleAi}
+3. Klick auf {ui:Karten aus dieser Seite} oder schreib selbst und drück {key:return}.
+
+Unten stehen Kärtchen mit dem, was die KI mitbekommt: offene Notiz, PDF-Seite, Auswahl, Modul. Das × nimmt eins raus, {ui:Kontext} holt es oder einen anderen Tab dazu.
+
+| Knopf | Was passiert |
+|---|---|
+| {ui:Folgen} | Geänderte Dateien öffnen sich und zeigen die Stelle |
+| {ui:Ansehen} | Vorher und nachher nebeneinander |
+| {ui:Rückgängig} | Nur diese eine Änderung zurück |
+| {ui:Stopp} | Bricht den Auftrag ab |
+| {ui:Als Notiz speichern} | Die Unterhaltung als Notiz in deinem Ordner |
+
+Rechtsklick auf eine Datei, eine Abgabe oder markierten Text zeigt {ui:KI} mit passenden Aufträgen. Nach {ui:Sitzung beenden nach} ohne Nachricht endet das Programm; die nächste Nachricht startet es neu. Unterhaltungen liegen in den App-Daten, nicht in deinem Ordner.
+
 ## Im Terminal
 
 1. {key:OpenSettings} → {ui:KI} → {ui:Für die Kommandozeile}
@@ -16,7 +36,7 @@ Solange Schrumbi läuft, liest es deine Notizen, PDFs, Fristen und Karten. Frag 
 
 ## Änderungen
 
-Vor jeder Änderung fragt Schrumbi unten rechts im Fenster.
+Vor jeder Änderung fragt Schrumbi in der Spalte, bei geschlossener Spalte unten rechts im Fenster.
 
 | Knopf | Was passiert |
 |---|---|
@@ -28,4 +48,4 @@ Die Änderungen eines Auftrags sind ein Schritt: {key:Undo} nimmt sie zusammen z
 
 ## Was die KI nie tut
 
-Sie löscht nichts, benennt nichts um und bewertet keine Karten. Ungesicherten Text überschreibt sie nicht.
+Sie löscht nichts, benennt nichts um und bewertet keine Karten. Ungesicherten Text überschreibt sie nicht. Befehle startet sie nur, wenn du {ui:Befehle ausführen erlauben} einschaltest.

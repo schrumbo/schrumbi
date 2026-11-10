@@ -4267,6 +4267,9 @@ fn edit_label(op: &PageOp, pages: &[usize], inserted: usize, count: usize, files
 impl Render for PdfView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
+        if super::ai::column_open() && super::ai::note_pdf(&self.path, self.sizes.len(), self.current_page(), self.ordered_selection(), || self.selected_parts().map(|(_, text)| text).unwrap_or_default()) {
+            cx.defer(super::ai::refresh_panel);
+        }
         let bar_shown = self.failed.is_none() && !self.sizes.is_empty() && self.panel_open && self.panel_tab == PanelTab::Thumbnails;
         if bar_shown != self.bar_listed {
             self.bar_listed = bar_shown;

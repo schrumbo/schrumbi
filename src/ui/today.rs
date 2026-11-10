@@ -75,7 +75,10 @@ fn recent_notes(t: &Theme) -> Option<Div> {
         inset_file_row(("recent-note", i), &path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t)
             .child(caption(super::notes_page::changed_ago(now - modified), t).flex_none())
             .on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
-            .context_menu(move |m, window, cx| deadline_submenu(file_menu(m, menu.clone()).when_some(super::convention_rename::menu_item_or_hint(&menu, cx), |m, item| m.item(item)).separator(), &menu, window, cx))
+            .context_menu(move |m, window, cx| {
+                let m = deadline_submenu(file_menu(m, menu.clone()).when_some(super::convention_rename::menu_item_or_hint(&menu, cx), |m, item| m.item(item)).separator(), &menu, window, cx);
+                super::ai::file_submenu(m, &menu, window, cx)
+            })
     });
     Some(div().flex().flex_col().gap(px(space::S)).child(section_title(tr("Zuletzt geschrieben"))).child(inset_list(t).children(rows)))
 }
@@ -234,7 +237,7 @@ fn chips(lib: &Library, items: &[&Assignment], t: &Theme) -> Div {
             .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).child(module_tag(&m.map_or("?".to_string(), |m| m.badge()), tint)))
             .child(div().text_size(px(font::CALLOUT)).child(a.title.clone()))
             .child(caption(day::day_label(a.due, lib.now), t))
-            .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx));
+            .context_menu(move |menu, window, cx| super::ai::deadline_submenu(status_menu(menu, &menu_id, cx), &menu_id, window, cx));
         super::motion::flip(format!("chip-{}", a.id), chip)
     }))
 }

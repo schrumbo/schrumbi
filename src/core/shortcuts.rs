@@ -34,6 +34,7 @@ pub enum ShortcutAction {
     FindInNote,
     RenameNote,
     ToggleInspector,
+    ToggleAi,
     Refresh,
     Sync,
     DailyNote,
@@ -112,7 +113,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 72] = [
+    pub const ALL: [ShortcutAction; 73] = [
         Self::GoToday,
         Self::GoGrid,
         Self::GoRecord,
@@ -141,6 +142,7 @@ impl ShortcutAction {
         Self::FindInNote,
         Self::RenameNote,
         Self::ToggleInspector,
+        Self::ToggleAi,
         Self::Refresh,
         Self::Sync,
         Self::DailyNote,
@@ -218,6 +220,7 @@ impl ShortcutAction {
             Self::FindInNote => "findInNote",
             Self::RenameNote => "renameNote",
             Self::ToggleInspector => "toggleInspector",
+            Self::ToggleAi => "toggleAi",
             Self::Refresh => "refresh",
             Self::Sync => "syncNow",
             Self::DailyNote => "dailyNote",
@@ -277,7 +280,7 @@ impl ShortcutAction {
         match self {
             Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::GoModule1 | Self::GoModule2 | Self::GoModule3 | Self::GoBack => Group::Navigation,
             Self::ShowGraph | Self::ToggleFullscreen => Group::View,
-            Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::OpenOtherWorkspace | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::Refresh => Group::General,
+            Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::OpenOtherWorkspace | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::ToggleAi | Self::Refresh => Group::General,
             Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote | Self::ToggleLive | Self::MarkText | Self::RotatePagesLeft | Self::RotatePagesRight | Self::MovePagesUp | Self::MovePagesDown | Self::DeletePages | Self::InsertPdf | Self::PenTool | Self::EraserTool | Self::NoteTool | Self::ExportMarkedPdf | Self::PageList | Self::NoteOnSelection | Self::SelectTool | Self::MarkList | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick => Group::Documents,
             _ => Group::Editor,
         }
@@ -318,6 +321,7 @@ impl ShortcutAction {
             Self::NewFile => "Neue Notiz, Datei oder Ordner",
             Self::GoBack => "Zurück",
             Self::ToggleInspector => "Details ein-/ausblenden",
+            Self::ToggleAi => "KI ein-/ausblenden",
             Self::Refresh => "Aktualisieren",
             Self::Sync => "Jetzt synchronisieren",
             Self::DailyNote => "Tagesnotiz öffnen",
@@ -413,6 +417,7 @@ impl ShortcutAction {
             Self::NewFile => s("n", true, false, false, false),
             Self::GoBack => s("-", false, false, false, true),
             Self::ToggleInspector => s("i", true, false, true, false),
+            Self::ToggleAi => s("a", true, true, false, false),
             Self::Refresh => s("r", true, false, false, false),
             Self::Sync => s("s", true, true, false, false),
             Self::DailyNote => s("t", true, false, true, false),

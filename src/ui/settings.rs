@@ -212,6 +212,11 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Für die Kommandozeile", Tab::Ai),
     ("Befehl", Tab::Ai),
     ("Im Terminal öffnen", Tab::Ai),
+    ("Spalte öffnen", Tab::Ai),
+    ("Bei Änderungen zur Datei springen", Tab::Ai),
+    ("Sitzung beenden nach", Tab::Ai),
+    ("Eigener Befehl", Tab::Ai),
+    ("Befehle ausführen erlauben", Tab::Ai),
     ("Lernen", Tab::Cards),
     ("Erinnerungsziel", Tab::Cards),
     ("Neue Karten pro Tag", Tab::Cards),
@@ -647,7 +652,7 @@ impl Settings {
             cx.notify();
         })];
         let (semester, module) = state::read(cx, |l| (l.config.as_ref().and_then(|c| c.current_semester(l.now)).map(|s| s.id.clone()), l.config.as_ref().and_then(|c| c.modules.first()).map(|m| m.id.clone())));
-        super::ai::rescan(cx);
+        super::ai::recheck(cx);
         Self {
             tab: Tab::General,
             fields: Fields::default(),
@@ -713,7 +718,7 @@ impl Settings {
             }
         });
         let modules = module_names(cx);
-        for action in ShortcutAction::ALL {
+        for action in ShortcutAction::ALL.into_iter().filter(|a| *a != ShortcutAction::ToggleAi || super::ai::active()) {
             let label = action.named(&modules);
             if fold(&label).contains(&query) || fold(&action.label()).contains(&query) {
                 scored.push((3, Hit { label: label.clone(), place: tr("Tastenkürzel"), to: HitTarget::Shortcut(label) }));
@@ -2177,13 +2182,15 @@ impl Settings {
         section(Some(tr("Eigenes Wörterbuch")), Some(tr("Diese Wörter markiert die Rechtschreibung nicht. Hinzufügen: in einer Notiz auf ein unterstrichenes Wort zeigen.")), rows, t)
     }
 
-    fn ai_tab(&mut self, cx: &mut Context<Self>, t: &Theme) -> Div {
-        use super::ai::{self, Registration};
+    fn ai_tab(&mut self, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
+        use super::ai::{self, Download, Registration};
+        use crate::core::ai::agents::{self, Runner};
         use crate::core::ai::detect::{self, Agent};
+        use crate::core::ai::install;
         let prefs = prefs::with(|p| p.ai.clone());
         let found = detect::found();
         let names = found.iter().map(|c| c.agent.label()).collect::<Vec<_>>().join(", ");
-        let rescan = Button::new("ai-rescan").label(tr("Erneut suchen")).on_click(|_, _, cx| ai::rescan(cx));
+        let rescan = Button::new("ai-rescan").label(tr("Erneut suchen")).on_click(|_, _, cx| ai::recheck(cx));
         let programs = div().flex().items_center().gap(px(space::M)).child(caption(if found.is_empty() { tr("Keins gefunden") } else { names }, t)).child(rescan);
         let mut sections = div().w_full().flex().flex_col().gap(px(space::L)).child(section(
             None,
@@ -2206,6 +2213,62 @@ impl Settings {
         if !ai::active() {
             return sections;
         }
+        let mut column = Vec::new();
+        let runners = agents::runners(&prefs);
+        let chosen = agents::chosen(&prefs);
+        if runners.len() > 1 {
+            let label = chosen.map(|r| tr(r.label())).unwrap_or_default();
+            let menu_runners = runners.clone();
+            column.push(row(tr("Programm in der Spalte"), Button::new("ai-runner").label(label).dropdown_menu(move |mut menu, _, _| {
+                for r in menu_runners.clone() {
+                    menu = menu.item(PopupMenuItem::new(tr(r.label())).checked(Some(r) == chosen).on_click(move |_, _, cx| {
+                        prefs::update(|p| p.ai.agent = r.key().to_string());
+                        cx.refresh_windows();
+                    }));
+                }
+                menu
+            }), t));
+        }
+        if chosen == Some(Runner::Known(Agent::Claude)) {
+            let ready = install::claude_adapter().is_some() || detect::which("npx").is_some();
+            let control: AnyElement = match ai::download(cx) {
+                Some(Download::Running(p)) => caption(trf("Lädt … %@", &[&format!("{} %", (p * 100.).round() as i64)]), t).into_any_element(),
+                Some(Download::Failed(e)) => div().flex().items_center().gap(px(space::S)).child(caption(e, t).max_w(px(control::ROW_CONTROL / 2.)).truncate()).child(Button::new("ai-fetch").label(tr("Erneut versuchen")).on_click(|_, _, cx| ai::install_claude(cx))).into_any_element(),
+                None if ready => caption(tr("Bereit"), t).into_any_element(),
+                None if install::downloadable() => Button::new("ai-fetch").label(tr("Holen")).on_click(|_, _, cx| ai::install_claude(cx)).into_any_element(),
+                None => caption(tr("Braucht Node.js"), t).into_any_element(),
+            };
+            column.push(detail_row(tr("Verbindung zu Claude"), tr("Ein kleines Zusatzprogramm, das Claude Code mit Schrumbi sprechen lässt"), control, t));
+        }
+        for cli in found.iter().filter(|c| Some(Runner::Known(c.agent)) == chosen && c.agent != Agent::OpenCode) {
+            let agent = cli.agent;
+            let control: AnyElement = match ai::login_state(agent, cx) {
+                Some(true) => caption(tr("Angemeldet"), t).into_any_element(),
+                Some(false) => Button::new("ai-login").label(if agent == Agent::Claude { tr("Bei Claude anmelden") } else { tr("Bei ChatGPT anmelden") }).on_click(move |_, _, cx| ai::login(agent, cx)).into_any_element(),
+                None => caption(tr("Prüft …"), t).into_any_element(),
+            };
+            column.push(row(tr("Anmeldung"), control, t));
+        }
+        column.push(row(tr("Spalte öffnen"), Button::new("ai-open").label(format!("{}{}", tr("Öffnen"), crate::core::shortcuts::ShortcutAction::ToggleAi.hint())).on_click(|_, _, cx| {
+            ai::open_column(cx);
+            super::main_window::show(cx);
+        }), t));
+        column.push(row(tr("Bei Änderungen zur Datei springen"), Switch::new("ai-follow").checked(prefs.follow_edits).on_click(|v, _, cx| {
+            let v = *v;
+            prefs::update(|p| p.ai.follow_edits = v);
+            cx.refresh_windows();
+        }), t));
+        let idle = prefs.idle_minutes;
+        column.push(row(tr("Sitzung beenden nach"), Button::new("ai-idle").label(trf("%lld Minuten", &[&idle])).dropdown_menu(move |mut menu, _, _| {
+            for m in [10u32, 30, 60, 120] {
+                menu = menu.item(PopupMenuItem::new(trf("%lld Minuten", &[&m])).checked(m == idle).on_click(move |_, _, cx| {
+                    prefs::update(|p| p.ai.idle_minutes = m);
+                    cx.refresh_windows();
+                }));
+            }
+            menu
+        }), t));
+        sections = sections.child(section(Some(tr("Spalte")), Some(tr("Die Spalte rechts teilt sich den Platz mit Details. Pause beendet das Programm, die nächste Nachricht startet es neu.")), column, t));
         let Some(exe) = detect::exe() else { return sections };
         let mut rows = Vec::new();
         for cli in found {
@@ -2243,6 +2306,16 @@ impl Settings {
             {
                 let _ = detect::open_terminal(&root);
             }
+        }), t));
+        let command = self.fields.input("ai-command", &prefs.custom_command, &tr("z. B. opencode acp"), window, cx, |v, cx| {
+            prefs::update(|p| p.ai.custom_command = v);
+            ai::rescan(cx);
+        });
+        rows.push(detail_row(tr("Eigener Befehl"), tr("Startet ein anderes Programm, das ACP spricht, in der Spalte"), div().w(px(control::ROW_CONTROL)).child(Input::new(&command)), t));
+        rows.push(detail_row(tr("Befehle ausführen erlauben"), tr("Die KI darf nach Rückfrage Befehle in deinem Studienordner starten"), Switch::new("ai-execute").checked(prefs.allow_execute).on_click(|v, _, cx| {
+            let v = *v;
+            prefs::update(|p| p.ai.allow_execute = v);
+            cx.refresh_windows();
         }), t));
         sections = sections.child(section(Some(tr("Für die Kommandozeile")), Some(tr("Danach kann dein Programm im Terminal deine Notizen, PDFs und Fristen nutzen, solange Schrumbi läuft. Jede Änderung fragt hier zuerst.")), rows, t));
         sections
@@ -2401,7 +2474,7 @@ impl Settings {
         let all_clashes = ShortcutAction::all_conflicts();
         let mut shown = false;
         for g in Group::ALL {
-            let actions: Vec<ShortcutAction> = ShortcutAction::ALL.into_iter().filter(|a| a.group() == g && (filter.is_empty() || shortcut_fits(*a, &modules, &filter))).collect();
+            let actions: Vec<ShortcutAction> = ShortcutAction::ALL.into_iter().filter(|a| a.group() == g && (*a != ShortcutAction::ToggleAi || super::ai::active()) && (filter.is_empty() || shortcut_fits(*a, &modules, &filter))).collect();
             if actions.is_empty() {
                 continue;
             }
@@ -2628,7 +2701,7 @@ impl Render for Settings {
             (_, Tab::Notes) => div().id("notes-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.notes(window, cx, &t)).into_any_element(),
             (_, Tab::Cards) => div().id("cards-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.cards_tab(&t)).into_any_element(),
             (_, Tab::Sync) => div().id("sync-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.sync_tab(cx, &t)).into_any_element(),
-            (_, Tab::Ai) => div().id("ai-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.ai_tab(cx, &t)).into_any_element(),
+            (_, Tab::Ai) => div().id("ai-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.ai_tab(window, cx, &t)).into_any_element(),
             (_, Tab::Shortcuts) => self.shortcuts(&t, window, cx).into_any_element(),
             (None, _) => unavailable("folder", tr("Kein Ordner gewählt"), tr("Wähle zuerst im Hauptfenster deinen Studienordner."), &t).into_any_element(),
             (Some(c), Tab::General) => div().id("general-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.general(&c, window, cx, &t)).into_any_element(),

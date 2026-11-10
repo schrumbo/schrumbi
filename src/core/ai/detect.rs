@@ -140,6 +140,53 @@ pub fn exe() -> Option<PathBuf> {
     std::env::current_exe().ok().map(|p| dunce::canonicalize(&p).unwrap_or(p))
 }
 
+fn status_args(agent: Agent) -> Option<&'static [&'static str]> {
+    match agent {
+        Agent::Claude => Some(&["auth", "status"]),
+        Agent::Codex => Some(&["login", "status"]),
+        Agent::OpenCode => None,
+    }
+}
+
+fn login_args(agent: Agent) -> &'static [&'static str] {
+    match agent {
+        Agent::Claude => &["auth", "login"],
+        Agent::Codex => &["login"],
+        Agent::OpenCode => &["auth", "login"],
+    }
+}
+
+/// Whether the user is signed in to the program; `None` when it cannot tell.
+pub fn logged_in(cli: &Cli) -> Option<bool> {
+    let args = status_args(cli.agent)?;
+    let out = spawn(command(cli, args), None, Duration::from_secs(8)).ok()?;
+    Some(out.code == 0)
+}
+
+/// Opens the system terminal with the program's sign-in command.
+pub fn open_login(cli: &Cli, root: &Path) -> std::io::Result<()> {
+    let line = std::iter::once(quoted(&cli.path.to_string_lossy())).chain(login_args(cli.agent).iter().map(|a| (*a).to_string())).collect::<Vec<_>>().join(" ");
+    let mut c = if cfg!(target_os = "macos") {
+        let mut c = Command::new("osascript");
+        c.arg("-e").arg(format!("tell application \"Terminal\" to do script \"{}\"", line.replace('\\', "\\\\").replace('"', "\\\"")));
+        c
+    } else if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg("start").arg("").arg("/D").arg(root).arg("cmd").arg("/K").arg(&line);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x0800_0000);
+        }
+        c
+    } else {
+        let mut c = Command::new("x-terminal-emulator");
+        c.arg("-e").arg(&line).current_dir(root);
+        c
+    };
+    c.spawn().map(drop)
+}
+
 /// Opens the system terminal in `root`.
 pub fn open_terminal(root: &Path) -> std::io::Result<()> {
     let mut c = if cfg!(target_os = "macos") {

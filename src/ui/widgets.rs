@@ -587,7 +587,7 @@ pub fn assignment_row_with(lib: &Library, a: &Assignment, show_module: bool, sho
         .child(due_label(lib, a, t))
         .children(trailing.map(|e| div().id(SharedString::from(format!("trail-{}", a.id))).on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).flex().items_center().gap(px(space::S)).on_click(|_, _, cx| cx.stop_propagation()).child(e)))
         .when(tracks, |c| file_target(c, a, t))
-        .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx))
+        .context_menu(move |menu, window, cx| super::ai::deadline_submenu(status_menu(menu, &menu_id, cx), &menu_id, window, cx))
 }
 
 /// Lets an assignment take files: from outside they are filed, from the file list they are linked where they are. Call it after the last child, the element must be relative.

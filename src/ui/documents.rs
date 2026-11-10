@@ -40,7 +40,7 @@ actions!(
     schrumbi_editor,
     [
         Bold, Italic, InsertLink, InlineCode, ToggleTask, ToggleComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine, SelectLine, IndentLines, OutdentLines, ZoomIn, ZoomOut, ZoomReset,
-        ListNewline, ListTab, ListBacktab, ExtractSelection, CardFromSelection, PlainNewline, Strike, Mark, InlineMath, Quote, BulletList, NumberedList, Heading1, Heading2, Heading3, ToggleWrap
+        ListNewline, ListTab, ListBacktab, ExtractSelection, CardFromSelection, AskAiSelection, CardsAiSelection, PlainNewline, Strike, Mark, InlineMath, Quote, BulletList, NumberedList, Heading1, Heading2, Heading3, ToggleWrap
     ]
 );
 
@@ -3345,6 +3345,21 @@ impl NoteView {
                     n.apply(edit_ops::link(&s, r), w, cx)
                 }
             }))
+            .on_action(cx.listener(|n, _: &AskAiSelection, _, cx| {
+                let (text, range) = n.with_text(cx);
+                let chosen = text.get(range).unwrap_or_default().trim().to_string();
+                if chosen.is_empty() {
+                    super::ai::request(super::ai::Request::Chip(super::ai_panel::Chip::Note(n.path.clone())), cx);
+                } else {
+                    super::ai::request(super::ai::Request::Chip(super::ai_panel::Chip::Selection(chosen)), cx);
+                }
+            }))
+            .on_action(cx.listener(|n, _: &CardsAiSelection, _, cx| {
+                let (text, range) = n.with_text(cx);
+                let chosen = text.get(range).unwrap_or_default().trim().to_string();
+                let chip = if chosen.is_empty() { super::ai_panel::Chip::Note(n.path.clone()) } else { super::ai_panel::Chip::Selection(chosen) };
+                super::ai::ask_with(tr("Mach Karteikarten aus dieser Auswahl und ergänze sie in dieser Notiz."), Some(chip), cx);
+            }))
             .on_action(cx.listener(|n, _: &CardFromSelection, w, cx| {
                 let (text, range) = n.with_text(cx);
                 let chosen = text.get(range).unwrap_or_default().trim().to_string();
@@ -4550,7 +4565,7 @@ fn writing_menu(field: Editor) -> Editor {
             Some(_) => menu.menu(tr("Zum Wörterbuch hinzufügen"), Box::new(AddWordUnderPointer)).separator(),
             None => menu,
         };
-        menu.menu(tr("Ausschneiden"), Box::new(Cut))
+        let menu = menu.menu(tr("Ausschneiden"), Box::new(Cut))
             .menu(tr("Kopieren"), Box::new(Copy))
             .menu(tr("Einfügen"), Box::new(Paste))
             .separator()
@@ -4570,7 +4585,12 @@ fn writing_menu(field: Editor) -> Editor {
             .menu(tr("Aufgabe"), Box::new(ToggleTask))
             .menu(tr("Link"), Box::new(InsertLink))
             .separator()
-            .menu(tr("Karte aus Auswahl…"), Box::new(CardFromSelection))
+            .menu(tr("Karte aus Auswahl…"), Box::new(CardFromSelection));
+        if super::ai::active() {
+            menu.separator().submenu(tr("KI"), gpui_kit::component::native_menu::NativeMenu::new().menu(tr("Frag die KI zu dieser Auswahl"), Box::new(AskAiSelection)).menu(tr("Karten aus Auswahl"), Box::new(CardsAiSelection)))
+        } else {
+            menu
+        }
     })
 }
 

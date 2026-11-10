@@ -21,6 +21,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Rückgängig} | {key:Undo} |
 | {ui:Anderen Ordner öffnen…} | {key:openOtherWorkspace} |
 | {ui:Details ein-/ausblenden} | {key:toggleInspector} |
+| {ui:KI ein-/ausblenden} | {key:toggleAi} |
 
 ## Navigation
 

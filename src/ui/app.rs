@@ -40,6 +40,7 @@ actions!(
         ToggleLive,
         ExportPdf,
         ToggleInspector,
+        ToggleAi,
         Refresh,
         SyncNow,
         DailyNote,
@@ -188,7 +189,8 @@ pub fn init(cx: &mut App) {
             }
         }
     });
-    cx.on_action(|_: &ToggleInspector, cx| act(cx, |l| l.toggle_inspector()));
+    cx.on_action(|_: &ToggleInspector, cx| super::ai::toggle_details(cx));
+    cx.on_action(|_: &ToggleAi, cx| super::ai::toggle_column(cx));
     cx.on_action(|_: &Refresh, cx| {
         act(cx, |l| l.refresh());
         state::reindex(cx);
@@ -495,6 +497,7 @@ pub fn bind_keys(cx: &mut App) {
             binding(ShortcutAction::NewFile, NewFile, None),
             binding(ShortcutAction::GoBack, GoBack, None),
             binding(ShortcutAction::ToggleInspector, ToggleInspector, None),
+            super::ai::active().then(|| binding(ShortcutAction::ToggleAi, ToggleAi, None)).flatten(),
             binding(ShortcutAction::Refresh, Refresh, None),
             binding(ShortcutAction::Sync, SyncNow, None),
             binding(ShortcutAction::DailyNote, DailyNote, None),

@@ -470,7 +470,10 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     let now = chrono::Local::now().timestamp() as f64;
     let hover_rows = recent.into_iter().enumerate().map(|(i, (path, at))| {
         let (open, menu) = (path.clone(), path.clone());
-        inset_file_row(("module-recent", i), &path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t).child(caption(super::notes_page::changed_ago(now - at), t).flex_none()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).context_menu(move |menu_box, _, cx| file_menu(menu_box, menu.clone()).when_some(super::convention_rename::menu_item(&menu, cx), |m, item| m.item(item)))
+        inset_file_row(("module-recent", i), &path, path.file_stem().unwrap_or_default().to_string_lossy().to_string(), t).child(caption(super::notes_page::changed_ago(now - at), t).flex_none()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).context_menu(move |menu_box, window, cx| {
+            let m = file_menu(menu_box, menu.clone()).when_some(super::convention_rename::menu_item(&menu, cx), |m, item| m.item(item));
+            super::ai::file_submenu(m, &menu, window, cx)
+        })
     });
     let new_id = m.id.clone();
     let module_folder = m.folder.clone();

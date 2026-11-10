@@ -407,7 +407,7 @@ fn chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .child(div().absolute().top(px(space::XS)).bottom(px(space::XS)).left(px(space::XS)).w(px(cal::EDGE)).rounded_full().bg(edge))
         .when(exam, |c| c.child(icon("graduation-cap", iconsize::XS, t.readable(tint))))
         .child(if e.status == Status::Skipped { title.line_through() } else { title })
-        .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx));
+        .context_menu(move |menu, window, cx| super::ai::deadline_submenu(status_menu(menu, &menu_id, cx), &menu_id, window, cx));
     motion::flip(format!("mchip-{}", a.id), chip).into_any_element()
 }
 
@@ -677,5 +677,5 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
     if tracks {
         card = file_target(card, a, t);
     }
-    super::motion::flip(format!("card-{}", a.id), card.context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx))).into_any_element()
+    super::motion::flip(format!("card-{}", a.id), card.context_menu(move |menu, window, cx| super::ai::deadline_submenu(status_menu(menu, &menu_id, cx), &menu_id, window, cx))).into_any_element()
 }

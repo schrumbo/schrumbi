@@ -21,6 +21,7 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Rückgängig} | {key:Undo} |
 | {ui:Anderen Ordner öffnen…} | {key:openOtherWorkspace} |
 | {ui:Details ein-/ausblenden} | {key:toggleInspector} |
+| {ui:KI ein-/ausblenden} | {key:toggleAi} |
 
 ## Navigation
 

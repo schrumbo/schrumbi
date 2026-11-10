@@ -332,6 +332,13 @@ fn commands(cx: &App) -> Vec<Command> {
     add(&general, tr("Tastenkürzel anzeigen"), "keyboard", Some(fixed_keys("/")), Run::Action(Box::new(app::ShowShortcuts)));
     add(&general, tr("Nach Updates suchen…"), "download", None, Run::Action(Box::new(app::CheckForUpdates)));
     add(&general, tr("Über Schrumbi"), "info", None, Run::Action(Box::new(app::About)));
+    if super::ai::active() {
+        let ki = tr("KI");
+        add(&ki, tr("Frag die KI…"), "bot", keys(S::ToggleAi), Run::Call(Rc::new(super::ai::open_column)));
+        for (label, icon_name, prompt) in super::ai_panel::suggestions(cx).into_iter().take(3) {
+            add(&ki, label, icon_name, None, Run::Call(Rc::new(move |cx| super::ai::ask_with(prompt.clone(), None, cx))));
+        }
+    }
     list.extend(extra);
     list
 }
@@ -518,7 +525,7 @@ impl Render for ShortcutSheet {
         let t = Theme::get(cx);
         let section = |title: String, rows: Vec<Div>| div().flex().flex_col().gap(px(space::XS)).child(div().pb(px(space::XS)).font_weight(FontWeight::SEMIBOLD).child(title)).children(rows);
         let modules = state::read(cx, |l| l.semester_modules().iter().take(S::MODULES.len()).map(|m| m.display_name()).collect::<Vec<_>>());
-        let group = |g: Group| -> Vec<Div> { S::ALL.into_iter().filter(|a| a.group() == g && a.module_index().is_none_or(|i| i < modules.len())).filter_map(|a| a.active_shortcut().map(|s| shortcut_row(a.named(&modules), s.parts(), &t))).collect() };
+        let group = |g: Group| -> Vec<Div> { S::ALL.into_iter().filter(|a| a.group() == g && a.module_index().is_none_or(|i| i < modules.len()) && (*a != S::ToggleAi || super::ai::active())).filter_map(|a| a.active_shortcut().map(|s| shortcut_row(a.named(&modules), s.parts(), &t))).collect() };
         let mut general = vec![
             shortcut_row(tr("Befehl suchen…"), fixed_parts("P", true), &t),
             shortcut_row(tr("Tastenkürzel anzeigen"), fixed_parts("/", false), &t),

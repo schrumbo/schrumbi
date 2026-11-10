@@ -42,10 +42,12 @@ pub struct MainWindow {
     error_shown: bool,
     /// The selection count and place when a press on the page began, if nothing inside claimed it.
     press_stamp: Option<(u64, Point<Pixels>)>,
+    ai_panel: Option<Entity<super::ai_panel::AiPanel>>,
     _subs: Vec<Subscription>,
 }
 
 const INSPECTOR_WIDTH: f32 = 340.;
+const AI_WIDTH: f32 = 400.;
 
 impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -118,6 +120,7 @@ impl MainWindow {
             focused_once: false,
             shown_route: None,
             slides: None,
+            ai_panel: None,
             _subs: subs,
         }
     }
@@ -296,7 +299,7 @@ impl MainWindow {
     }
 
     fn toolbar(&self, lib: &Library, left: f32, page_width: f32, total: f32, window: &Window, t: &Theme) -> Div {
-        let show = lib.show_inspector();
+        let show = lib.show_inspector() && !super::ai::column_open();
         let offered = lib.inspector_kind().is_some();
         let module = if let Route::Module(id) = lib.route() { Some(id.clone()) } else { None };
         let module2 = module.clone();
@@ -328,7 +331,7 @@ impl MainWindow {
                         act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: m, folder: None }))
                     }))
             })))
-            .children(super::ai::toolbar_button())
+            .children(super::ai::toolbar_button(t))
             .child(
                 Button::new("toggle-inspector")
                     .ghost()
@@ -338,7 +341,7 @@ impl MainWindow {
                     .icon(menu_icon("panel-right"))
                     .disabled(!offered)
                     .tooltip(if offered { format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()) } else { tr("Diese Seite hat keine Details") })
-                    .on_click(|_, _, cx| act(cx, |l| l.toggle_inspector())),
+                    .on_click(|_, _, cx| super::ai::toggle_details(cx)),
             )
             .child(super::coach::anchor(div().id("coach-search")).w(px(search_width)).flex_none().key_context("SearchField").child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true)))
     }
@@ -380,7 +383,8 @@ impl Render for MainWindow {
         }
         let l = lib.read(cx);
         let width = f32::from(window.viewport_size().width);
-        let inspector_open = l.show_inspector();
+        let column = super::ai::column_open() && super::ai::active();
+        let inspector_open = l.show_inspector() && !column;
 
         let base = super::coach::root(div().child(gpui_kit::base::TextSelectionLayer).id("main"))
             .capture_any_mouse_down(cx.listener(|this, e: &MouseDownEvent, _, cx| {
@@ -505,10 +509,14 @@ impl Render for MainWindow {
 
         let update = super::updates::available(cx);
         let left = sidebar::RAIL;
-        let inspector_target = if inspector_open { INSPECTOR_WIDTH } else { 0. };
+        if column && self.ai_panel.is_none() {
+            self.ai_panel = Some(cx.new(|cx| super::ai_panel::AiPanel::new(window, cx)));
+        }
+        let inspector_w = motion::follow("inspector-width", if inspector_open { INSPECTOR_WIDTH } else { 0. }, motion::MEDIUM, window, cx);
+        let ai_w = motion::follow("ai-width", if column { AI_WIDTH } else { 0. }, motion::MEDIUM, window, cx);
+        let inspector_target = if column { AI_WIDTH } else if inspector_open { INSPECTOR_WIDTH } else { 0. };
         let page_width = width - left - inspector_target;
         self.pages.update(cx, |p, _| p.width = page_width);
-        let inspector_w = motion::follow("inspector-width", inspector_target, motion::MEDIUM, window, cx);
         let setup_shown = lib.read(cx).route() == &Route::Today && self.setup.read(cx).wanted(cx);
         let covers_calendar = setup_shown && self.setup.read(cx).offers_calendar(cx);
         let setup_card = setup_shown.then(|| self.setup.clone().into_any_element());
@@ -581,6 +589,9 @@ impl Render for MainWindow {
             )
             .when(inspector_w > 0.5, |d| {
                 d.child(div().absolute().top(px(control::BAR)).bottom_0().right(px(inspector_w - INSPECTOR_WIDTH)).w(px(INSPECTOR_WIDTH)).border_l_1().border_color(t.separator).bg(t.content).child(self.inspector.clone()))
+            })
+            .when_some(self.ai_panel.clone().filter(|_| ai_w > 0.5), |d, panel| {
+                d.child(div().absolute().top(px(control::BAR)).bottom_0().right(px(ai_w - AI_WIDTH)).w(px(AI_WIDTH)).border_l_1().border_color(t.separator).bg(t.content).child(panel))
             })
             .children(super::link_card::overlay(cx))
             .children(super::ai::ask_card(cx, &t))
