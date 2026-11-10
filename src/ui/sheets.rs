@@ -103,12 +103,16 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
         let view = cx.new(|cx| ImportCalendar::new(&p, cx));
         show(view, 640., window, cx);
     } else if let Some(id) = reschedule {
+        crate::core::prefs::mark_used("reschedule");
         let view = cx.new(|cx| Reschedule::new(id, window, cx));
         show(view, 400., window, cx);
     } else if let Some(r) = new_note {
         let view = cx.new(|cx| NewNote::new(r.module_id, r.folder, window, cx));
         show(view, 540., window, cx);
     } else if let (true, kind, day) = quick_add {
+        if day.is_some() {
+            crate::core::prefs::mark_used("day_entry");
+        }
         let view = cx.new(|cx| QuickAdd::new(module, kind, day, window, cx));
         show(view, 520., window, cx);
     } else if quick_open {

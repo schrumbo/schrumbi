@@ -56,6 +56,8 @@ pub struct FilingForm {
     draft: Entity<InputState>,
     /// The user's own name mark, asked for right here when the pattern wants one and none is set.
     author: Entity<InputState>,
+    /// The name mark was missing when the form opened, so its field stays while it is typed.
+    asking_author: bool,
     date: Entity<DatePickerState>,
     date_value: NaiveDate,
     rename: bool,
@@ -139,6 +141,7 @@ impl FilingForm {
             coauthors: Vec::new(),
             draft,
             author,
+            asking_author: false,
             date,
             date_value: Local::now().date_naive(),
             rename: renames,
@@ -267,7 +270,7 @@ impl FilingForm {
             self.set_date(d, window, cx);
         }
         self.facts = Some(facts);
-        self.details = state::read(cx, |l| self.folder(l).is_none()) || (self.rename && self.title.read(cx).value().trim().is_empty());
+        self.details = state::read(cx, |l| self.folder(l).is_none() || self.wants_author(l)) || (self.rename && self.title.read(cx).value().trim().is_empty());
         if self.grab_focus {
             self.refocus(window, cx);
         }
@@ -292,6 +295,10 @@ impl FilingForm {
             Some(Target::Folder(f)) => Some(f.clone()),
             None => None,
         }
+    }
+
+    fn wants_author(&self, l: &Library) -> bool {
+        self.rename && self.role == FileRole::Work && l.config.as_ref().is_some_and(|c| c.author.trim().is_empty()) && self.module_id(l).and_then(|m| l.config.as_ref().and_then(|c| c.module(&m))).is_some_and(|m| m.naming.contains("{author}"))
     }
 
     fn module_id(&self, l: &Library) -> Option<String> {
@@ -383,6 +390,9 @@ impl FilingForm {
             }
         }
         self.target = Some(t);
+        if state::read(cx, |l| self.wants_author(l)) {
+            self.details = true;
+        }
         cx.notify();
     }
 
@@ -979,8 +989,8 @@ impl Render for FilingForm {
                 name = name.child(div().flex().flex_col().gap(px(space::S)).child(Input::new(&self.title)).when(self.titles.iter().any(|s| s.title != title_value), |d| d.child(sugg)));
                 match self.role {
                     FileRole::Work => {
-                        let wants_author = state::read(cx, |l| l.config.as_ref().is_some_and(|c| c.author.trim().is_empty()) && module_id.as_ref().and_then(|m| l.config.as_ref().and_then(|c| c.module(m))).is_some_and(|m| m.naming.contains("{author}")));
-                        if wants_author {
+                        self.asking_author |= state::read(cx, |l| self.wants_author(l));
+                        if self.asking_author && self.rename {
                             name = name.child(
                                 div()
                                     .id("author-ask")
@@ -988,7 +998,7 @@ impl Render for FilingForm {
                                     .items_center()
                                     .gap(px(space::M))
                                     .child(div().flex_none().flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).child(tr("Dein Kürzel"))).child(caption(tr("Steht einmal im Namen jeder Abgabe"), &t)))
-                                    .child(div().w(px(200.)).child(Input::new(&self.author).small())),
+                                    .child(div().w(px(super::theme::hints::DATE_WIDTH)).child(Input::new(&self.author).small())),
                             );
                         }
                         let mut row = div().flex().flex_wrap().items_center().gap(px(space::S));

@@ -6,12 +6,41 @@ Schrumbi plant dein Studium in einem normalen Ordner: Deadlines, Dateien, Notize
 
 1. {ui:Ordner wählen…} klicken oder einen Ordner ins Fenster ziehen.
 2. Schrumbi legt dort `schrumbi.json` an. Sonst ändert sich nichts.
-3. Die Einrichtung startet. {ui:Später einrichten} überspringt sie.
+3. Die Übersicht ist sofort da. Ordner, die nach Modulen aussehen, sind schon Module, und die Vorlesungszeit ist geschätzt.
 
-> [!tip] Später noch einmal
-> {key:CommandPalette} öffnen und {ui:Einrichtung erneut starten} wählen.
+Gefragt wird erst, wenn etwas gebraucht wird: dein Kürzel beim ersten Ablegen einer Abgabe, deren Name es braucht, die Moodle-Adresse, wenn du Abgaben holen willst.
 
-## Einrichtung
+## Einrichten
+
+Oben in der {ui:Übersicht} steht eine Liste, die sich von selbst abhakt.
+
+| Punkt | Fertig, sobald |
+|---|---|
+| {ui:Module} | mindestens ein Modul da ist |
+| {ui:Vorlesungszeit} | du die Daten geändert oder {ui:Stimmt so} geklickt hast |
+| {ui:Moodle-Kalender} | eine Kalenderadresse eingetragen ist |
+| {ui:Dateinamen} | Dateien nach Muster benannt werden und dein Kürzel feststeht |
+| {ui:Notizen schreiben} | du {ui:Formatiert} oder {ui:Text mit Zeilennummern} gewählt hast |
+| {ui:Karten} | die erste Karte da ist |
+| {ui:Sichern & Abgleichen} | das Abgleichen eingerichtet ist |
+
+- {ui:Überspringen} zählt als erledigt. {ui:Doch einrichten} holt den Punkt zurück.
+- Die Zeile mit {ui:Einrichten} klappt die Liste zu, das X blendet sie aus.
+- {key:OpenSettings} → {ui:Allgemein} → {ui:Einrichten in der Übersicht} zeigt sie wieder.
+- Sind alle Punkte erledigt, sagt die Liste {ui:Alles eingerichtet} und verschwindet.
+
+> [!tip] Alles auf einmal
+> {ui:Geführt einrichten…} unten in der Liste oder in {key:CommandPalette} geht Semester, Module und Abgaben nacheinander durch.
+
+## Tipp des Tages
+
+Ab dem zweiten Start erscheint einmal am Tag unten rechts ein Tipp, nur zu Dingen, die du noch nicht benutzt hast.
+
+- {ui:Zeig's mir} öffnet die Stelle und hebt sie hervor. Ein Klick oder {key:escape} schließt das.
+- {ui:Nächster Tipp} zeigt einen anderen.
+- {ui:Keine Tipps mehr} schaltet sie ab, {key:OpenSettings} → {ui:Allgemein} → {ui:Tipp des Tages} wieder ein.
+
+## Geführt einrichten
 
 Vier kurze Schritte, {key:return} geht weiter.
 

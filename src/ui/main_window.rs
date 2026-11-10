@@ -30,6 +30,7 @@ pub struct MainWindow {
     inspector: Entity<Inspector>,
     pages: Entity<Pages>,
     setup: Entity<super::setup_card::SetupCard>,
+    moodle: Entity<super::setup_card::CalendarAsk>,
     save_bounds: Option<Task<()>>,
     syncing_search: bool,
     /// What the search field says while empty: where it searches.
@@ -52,6 +53,7 @@ impl MainWindow {
         let inspector = cx.new(|cx| Inspector::new(window, cx));
         let pages = cx.new(|cx| Pages::new(window, cx));
         let setup = cx.new(super::setup_card::SetupCard::new);
+        let moodle = cx.new(|_| super::setup_card::CalendarAsk::new(false));
         let lib = state::lib(cx);
         let subs = vec![
             cx.observe_in(&lib, window, |this, lib, window, cx| {
@@ -62,6 +64,9 @@ impl MainWindow {
             cx.subscribe(&search, |this, s, e: &InputEvent, cx| match e {
                 InputEvent::Change if !this.syncing_search => {
                     let text = s.read(cx).value().to_string();
+                    if !text.is_empty() {
+                        crate::core::prefs::mark_used("search");
+                    }
                     act(cx, |l| {
                         if let Route::Module(_) = l.route() {
                             l.module_query = text;
@@ -103,6 +108,7 @@ impl MainWindow {
             inspector,
             pages,
             setup,
+            moodle,
             save_bounds: None,
             press_stamp: None,
             error_shown: false,
@@ -507,7 +513,7 @@ impl Render for MainWindow {
         let dialog_open = window.has_active_dialog(cx);
         let l = lib.read(cx);
         let page = match l.route() {
-            Route::Today => div().id("today-scroll").size_full().overflow_y_scrollbar().child(today::render(l, page_width, setup_card, covers_calendar, &t)).into_any_element(),
+            Route::Today => div().id("today-scroll").size_full().overflow_y_scrollbar().child(today::render(l, page_width, setup_card, covers_calendar, self.moodle.clone().into_any_element(), &t)).into_any_element(),
             _ => self.pages.clone().into_any_element(),
         };
         let page_key = {

@@ -238,6 +238,7 @@ pub mod annot {
 pub mod coach {
     /// How dark the rest of the window gets.
     pub const DIM: f32 = 0.3;
+    pub const DIM_DARK: f32 = 0.5;
     /// How far the pulsing ring travels outward.
     pub const PULSE_REACH: f32 = 10.;
     pub const LABEL_WIDTH: f32 = 280.;

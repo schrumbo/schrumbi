@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::date_picker::DatePicker;
-use gpui_kit::component::input::Input;
+use gpui_kit::component::input::{Input, InputEvent};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::prelude::*;
@@ -29,7 +29,104 @@ pub struct SetupCard {
     /// The list had open items this session, so finishing them deserves a word.
     had_open: bool,
     celebrating: Option<Task<()>>,
-    _sub: Subscription,
+    calendar: Entity<CalendarAsk>,
+    /// The form just unfolded; its first field takes the keyboard on the next frame.
+    focus_field: bool,
+    _subs: Vec<Subscription>,
+}
+
+/// Asks for the Moodle calendar address in place: a button first, then the field and Abrufen.
+pub struct CalendarAsk {
+    fields: Fields,
+    /// The address as typed; it is saved by Abrufen or Enter, not by each key.
+    draft: Option<String>,
+    enter: Option<Subscription>,
+    /// The field shows; a button-first ask unfolds on its button.
+    expanded: bool,
+    /// Folds back to its button once the address is saved.
+    folds: bool,
+    focus: bool,
+}
+
+/// The calendar address was saved and is being fetched.
+pub struct Fetched;
+
+impl EventEmitter<Fetched> for CalendarAsk {}
+
+impl CalendarAsk {
+    /// `expanded` shows the field at once; otherwise a button unfolds it.
+    pub fn new(expanded: bool) -> Self {
+        Self { fields: Fields::default(), draft: None, enter: None, expanded, folds: !expanded, focus: false }
+    }
+
+    fn fetch(&mut self, cx: &mut Context<Self>) {
+        let Some(url) = self.draft.clone().map(|v| v.trim().to_string()).filter(|v| v.starts_with("http")) else { return };
+        self.draft = None;
+        self.expanded = !self.folds;
+        let root = root(cx).to_string_lossy().to_string();
+        prefs::update(|p| {
+            p.calendar_sources.insert(root, url);
+        });
+        state::refresh_calendar(true, cx);
+        cx.emit(Fetched);
+        cx.refresh_windows();
+    }
+}
+
+impl Render for CalendarAsk {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::get(cx);
+        if !self.expanded && state::calendar_source(cx).is_some() {
+            return div().flex().items_center().gap(px(space::S)).child(icon("circle-check", iconsize::S, t.green)).child(caption(tr("Verbunden, wird jede Stunde abgerufen"), &t)).child(link_button("calendar-ask-change", tr("Ändern"), &t).text_size(px(font::CAPTION)).on_click(cx.listener(|this, _, _, cx| {
+                this.expanded = true;
+                this.focus = true;
+                cx.notify();
+            })));
+        }
+        if !self.expanded {
+            return div().flex().child(Button::new("calendar-ask-open").small().label(tr("Moodle-Kalender verbinden")).on_click(cx.listener(|this, _, _, cx| {
+                this.expanded = true;
+                this.focus = true;
+                cx.notify();
+            })));
+        }
+        let value = self.draft.clone().or_else(|| state::calendar_source(cx)).unwrap_or_default();
+        let me = cx.entity().downgrade();
+        let field = self.fields.input("calendar-ask", &value, "https://…", window, cx, move |v, cx| {
+            let _ = me.update(cx, |s, cx| {
+                s.draft = Some(v);
+                cx.notify();
+            });
+        });
+        if self.enter.is_none() {
+            let me = cx.entity().downgrade();
+            let app: &mut App = cx;
+            self.enter = Some(app.subscribe(&field, move |_, e: &InputEvent, cx| {
+                if matches!(e, InputEvent::PressEnter { .. }) {
+                    let _ = me.update(cx, |s, cx| s.fetch(cx));
+                }
+            }));
+        }
+        if std::mem::take(&mut self.focus) {
+            let f = field.clone();
+            cx.defer_in(window, move |_, window, cx| f.update(cx, |s, cx| s.focus(window, cx)));
+        }
+        let ready = value.trim().starts_with("http");
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(space::S))
+            .child(caption(tr("In Moodle: Kalender → Exportieren → Kalender-URL abrufen, dann die Adresse hier einfügen."), &t))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S))
+                    .child(div().flex_1().min_w_0().max_w(px(hints::URL_WIDTH)).child(Input::new(&field).small()))
+                    .child(Button::new("calendar-ask-fetch").primary().small().label(tr("Abrufen")).disabled(!ready).on_click(cx.listener(|this, _, _, cx| this.fetch(cx)))),
+            )
+    }
 }
 
 /// What the rows read from the library, copied so the forms can change it while drawing.
@@ -196,8 +293,15 @@ fn label(text: String, t: &Theme) -> Div {
 impl SetupCard {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let lib = state::lib(cx);
-        let sub = cx.observe(&lib, |_, _, cx| cx.notify());
-        Self { fields: Fields::default(), open: None, had_open: false, celebrating: None, _sub: sub }
+        let calendar = cx.new(|_| CalendarAsk::new(true));
+        let subs = vec![
+            cx.observe(&lib, |_, _, cx| cx.notify()),
+            cx.subscribe(&calendar, |this, _, _: &Fetched, cx| {
+                this.open = None;
+                cx.notify();
+            }),
+        ];
+        Self { fields: Fields::default(), open: None, had_open: false, celebrating: None, calendar, focus_field: false, _subs: subs }
     }
 
     /// Whether the overview should show the list at all right now.
@@ -218,6 +322,7 @@ impl SetupCard {
         match item {
             Item::Semester | Item::Calendar | Item::Naming | Item::Editor => {
                 self.open = if self.open == Some(item) { None } else { Some(item) };
+                self.focus_field = self.open.is_some();
                 cx.notify();
             }
             Item::Modules => pick_modules(cx),
@@ -245,38 +350,19 @@ impl SetupCard {
                     .flex()
                     .items_center()
                     .gap(px(space::M))
-                    .child(Button::new("setup-semester-ok").primary().small().label(tr("Stimmt so")).on_click(|_, _, cx| confirm(Item::Semester, cx)))
+                    .child(Button::new("setup-semester-ok").primary().small().label(tr("Stimmt so")).on_click(cx.listener(|this, _, _, cx| {
+                        this.open = None;
+                        confirm(Item::Semester, cx);
+                    })))
                     .child(link_button("setup-semester-more", tr("Pausen und Feiertage…"), t).text_size(px(font::CAPTION)).on_click(|_, _, cx| super::settings::open_lit("Pausen", cx))),
             )
     }
 
-    fn calendar_form(&mut self, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
-        let root_key = root(cx).to_string_lossy().to_string();
-        let value = state::calendar_source(cx).unwrap_or_default();
-        let field = self.fields.input("setup-calendar", &value, "https://…", window, cx, move |v, _| {
-            let (root, v) = (root_key.clone(), v.trim().to_string());
-            prefs::update(|p| {
-                if v.is_empty() {
-                    p.calendar_sources.remove(&root);
-                } else {
-                    p.calendar_sources.insert(root, v);
-                }
-            });
-        });
-        let ready = !value.trim().is_empty();
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(space::S))
-            .child(caption(tr("In Moodle: Kalender → Exportieren → Kalender-URL abrufen, dann die Adresse hier einfügen."), t))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(space::S))
-                    .child(div().flex_1().max_w(px(hints::URL_WIDTH)).child(Input::new(&field).small()))
-                    .child(Button::new("setup-calendar-fetch").primary().small().label(tr("Abrufen")).disabled(!ready).on_click(|_, _, cx| state::refresh_calendar(true, cx))),
-            )
+    fn calendar_form(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if std::mem::take(&mut self.focus_field) {
+            self.calendar.update(cx, |c, _| c.focus = true);
+        }
+        self.calendar.clone().into_any_element()
     }
 
     fn naming_form(&mut self, snap: &Snap, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
@@ -298,16 +384,23 @@ impl SetupCard {
                 d.child(div().flex().items_center().gap(px(space::M)).child(label(tr("Dein Kürzel"), t)).child(div().w(px(hints::DATE_WIDTH)).child(Input::new(&author).small())))
                     .child(div().flex().items_center().gap(px(space::M)).child(label(tr("Beispiel"), t)).child(div().min_w_0().truncate().font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.secondary).child(example)))
             })
+            .child(div().flex().child(Button::new("setup-naming-done").small().label(tr("Fertig")).on_click(cx.listener(|this, _, _, cx| {
+                this.open = None;
+                cx.notify();
+            }))))
     }
 
-    fn editor_form(&self, t: &Theme) -> Div {
+    fn editor_form(&self, cx: &mut Context<Self>, t: &Theme) -> Div {
         let current = prefs::with(|p| p.note_editor);
+        let me = cx.entity().downgrade();
         let choose = |kind: NoteEditor| {
+            let me = me.clone();
             move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
                 prefs::update(|p| {
                     p.note_editor = kind;
                     p.note_editor_chosen = true;
                 });
+                let _ = me.update(cx, |s, _| s.open = None);
                 super::app::rebuild_menus(cx);
                 cx.refresh_windows();
             }
@@ -321,8 +414,8 @@ impl SetupCard {
 
     #[allow(clippy::too_many_arguments)]
     fn row(&mut self, item: Item, first: bool, f: &Facts, snap: &Snap, marks: &SetupPrefs, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
-        let settled = setup::settled(item, f, &marks.skipped, &marks.confirmed);
-        let open = self.open == Some(item) && !settled;
+        let open = self.open == Some(item);
+        let settled = setup::settled(item, f, &marks.skipped, &marks.confirmed) && !open;
         let me = cx.entity();
         let glyph = if setup::done(item, f) || marks.confirmed.contains(item.key()) {
             div().flex_none().size(px(iconsize::L)).rounded_full().bg(t.green).flex().items_center().justify_center().child(icon("check", iconsize::XS, white()))
@@ -354,9 +447,9 @@ impl SetupCard {
         }
         let form = match (open, item) {
             (true, Item::Semester) => Some(self.semester_form(snap, window, cx, t)),
-            (true, Item::Calendar) => Some(self.calendar_form(window, cx, t)),
+            (true, Item::Calendar) => Some(div().w_full().child(self.calendar_form(cx))),
             (true, Item::Naming) => Some(self.naming_form(snap, window, cx, t)),
-            (true, Item::Editor) => Some(self.editor_form(t)),
+            (true, Item::Editor) => Some(self.editor_form(cx, t)),
             _ => None,
         };
         div()
@@ -374,7 +467,10 @@ impl SetupCard {
             self.celebrating = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(hints::DONE_FOR).await;
                 prefs::update_setup(&root, |s| s.completed = true);
-                let _ = this.update(cx, |_, cx| cx.notify());
+                let _ = this.update(cx, |s, cx| {
+                    s.celebrating = None;
+                    cx.refresh_windows();
+                });
             }));
         }
         let travel = motion::timed(motion::SLOW, cx);
@@ -393,7 +489,15 @@ impl SetupCard {
 impl Render for SetupCard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
+        let root_now = root(cx);
+        if !prefs::with(|p| p.setup.contains_key(root_now.to_string_lossy().as_ref())) {
+            let busy = state::read(cx, |l| !l.semester_assignments().is_empty());
+            prefs::update_setup(&root_now, |s| s.collapsed = busy);
+        }
         let marks = marks(cx);
+        if marks.dismissed || marks.completed {
+            return div();
+        }
         let (facts, snap) = state::read(cx, |l| (facts(l, cx), Snap { config: l.config.clone(), semester: l.semester().cloned(), modules: l.semester_modules().into_iter().cloned().collect() }));
         let open_items = setup::open_items(&facts, &marks.skipped, &marks.confirmed);
         if open_items.is_empty() {
@@ -461,13 +565,13 @@ impl Render for SetupCard {
                     })
                     .child(icon("x", iconsize::S, t.secondary)),
             );
-        let items: Vec<Item> = Item::ALL.into_iter().filter(|i| !setup::settled(*i, &facts, &marks.skipped, &marks.confirmed)).chain(Item::ALL.into_iter().filter(|i| setup::settled(*i, &facts, &marks.skipped, &marks.confirmed))).collect();
+        let first_open = open_items.first().copied();
         let mut body = div().flex().flex_col();
-        for (i, item) in items.into_iter().enumerate() {
+        for (i, item) in Item::ALL.into_iter().enumerate() {
             if i > 0 {
                 body = body.child(divider(&t));
             }
-            let row = self.row(item, i == 0, &facts, &snap, &marks, window, cx, &t);
+            let row = self.row(item, first_open == Some(item), &facts, &snap, &marks, window, cx, &t);
             body = body.child(row);
         }
         self.fields.prune();

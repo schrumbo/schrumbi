@@ -43,7 +43,7 @@ pub const WRAP_NOTICE_FOR: Duration = Duration::from_millis(1600);
 pub const PULSE: Duration = Duration::from_millis(1400);
 
 /// How long after the start the tip of the day waits, so the window has settled.
-pub const TIP_DELAY: Duration = Duration::from_secs(6);
+pub const TIP_DELAY: Duration = Duration::from_secs(20);
 
 /// How long the tip waits again while a dialog or the first-start screen is in the way.
 pub const TIP_RETRY: Duration = Duration::from_secs(15);

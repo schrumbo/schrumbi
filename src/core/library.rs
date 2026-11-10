@@ -2604,6 +2604,7 @@ impl Library {
         if !self.leaving.is_empty() {
             return;
         }
+        prefs::mark_used("undo");
         let Some(step) = self.undo_steps.pop() else { return };
         let label = step.label.clone();
         let (inverse, failed) = self.apply_step(step);
@@ -3040,6 +3041,7 @@ impl Library {
 
     /// Gives a file the name typed. A note named after its heading keeps that heading; a convention name only has to say the same title.
     pub fn rename(&mut self, file: &Path, name: &str) {
+        prefs::mark_used("rename");
         if let Err(e) = self.rename_checked(file, name) {
             self.last_error = Some(trf("Umbenennen fehlgeschlagen: %@", &[&e]));
         }

@@ -6,12 +6,41 @@ Schrumbi plans your studies in a normal folder: deadlines, files, notes and card
 
 1. Click {ui:Ordner wählen…} or drag a folder into the window.
 2. Schrumbi creates `schrumbi.json` there. Nothing else changes.
-3. Setup starts. {ui:Später einrichten} skips it.
+3. The overview is there at once. Folders that look like modules already are modules, and the lecture period is estimated.
 
-> [!tip] Again later
-> Open {key:CommandPalette} and choose {ui:Einrichtung erneut starten}.
+You are only asked when something is needed: your name tag the first time you file a submission whose name uses it, the Moodle address when you want to fetch submissions.
 
 ## Setup
+
+At the top of the {ui:Übersicht} sits a list that ticks itself off.
+
+| Item | Done as soon as |
+|---|---|
+| {ui:Module} | there is at least one module |
+| {ui:Vorlesungszeit} | you changed the dates or clicked {ui:Stimmt so} |
+| {ui:Moodle-Kalender} | a calendar address is entered |
+| {ui:Dateinamen} | files are named by pattern and your name tag is set |
+| {ui:Notizen schreiben} | you chose {ui:Formatiert} or {ui:Text mit Zeilennummern} |
+| {ui:Karten} | the first card exists |
+| {ui:Sichern & Abgleichen} | syncing is set up |
+
+- {ui:Überspringen} counts as done. {ui:Doch einrichten} brings the item back.
+- The {ui:Einrichten} row collapses the list, the X hides it.
+- {key:OpenSettings} → {ui:Allgemein} → {ui:Einrichten in der Übersicht} shows it again.
+- Once every item is done, the list says {ui:Alles eingerichtet} and goes away.
+
+> [!tip] All at once
+> {ui:Geführt einrichten…} at the bottom of the list or in {key:CommandPalette} walks through semester, modules and submissions in order.
+
+## Tip of the Day
+
+From the second start on, a tip shows once a day at the bottom right, only about things you have not used yet.
+
+- {ui:Zeig's mir} opens the place and highlights it. A click or {key:escape} closes that.
+- {ui:Nächster Tipp} shows another one.
+- {ui:Keine Tipps mehr} turns them off, {key:OpenSettings} → {ui:Allgemein} → {ui:Tipp des Tages} back on.
+
+## Guided Setup
 
 Four short steps, {key:return} moves on.
 

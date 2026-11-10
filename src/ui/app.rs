@@ -205,6 +205,7 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &SearchFiles, cx| route(Route::Search)(cx));
     cx.on_action(|a: &GoModule, cx| route(Route::Module(a.0.clone()))(cx));
     cx.on_action(|a: &GoModuleAt, cx| {
+        prefs::mark_used("module_keys");
         if let Some(id) = state::read(cx, |l| l.semester_modules().get(a.0).map(|m| m.id.clone())) {
             route(Route::Module(id))(cx);
         }

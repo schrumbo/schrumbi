@@ -102,7 +102,7 @@ fn shade(color: Hsla, left: f32, top: f32, width: f32, height: f32) -> Div {
 }
 
 /// The layer over the window while a mark shows; nothing when none does.
-pub fn overlay(window: &Window, cx: &App, t: &Theme) -> Option<AnyElement> {
+pub fn overlay(window: &mut Window, cx: &App, t: &Theme) -> Option<AnyElement> {
     let (label, target, generation, waited) = COACH.with_borrow(|c| {
         let c = c.as_ref()?;
         let target = c.found.map(|b| Bounds { origin: b.origin - c.origin, size: b.size });
@@ -110,7 +110,7 @@ pub fn overlay(window: &Window, cx: &App, t: &Theme) -> Option<AnyElement> {
     })?;
     let size = window.viewport_size();
     let (w, h) = (f32::from(size.width), f32::from(size.height));
-    let dim = t.ink.opacity(coach::DIM);
+    let dim = black().opacity(if t.dark { coach::DIM_DARK } else { coach::DIM });
     let mut layer = div().id("coach-overlay").absolute().inset_0().occlude().cursor_pointer().on_click(|_, _, cx| {
         stop(cx);
     });
@@ -159,7 +159,7 @@ pub fn overlay(window: &Window, cx: &App, t: &Theme) -> Option<AnyElement> {
         None if waited => {
             layer = layer.child(shade(dim, 0., 0., w, h)).child(div().absolute().inset_0().flex().items_center().justify_center().child(bubble(label)));
         }
-        None => {}
+        None => window.request_animation_frame(),
     }
-    Some(layer.into_any_element())
+    Some(layer.with_animation(("coach-in", generation), Animation::new(motion::timed(motion::MEDIUM, cx)).with_easing(ease_out_quint()), |d, p| d.opacity(p)).into_any_element())
 }

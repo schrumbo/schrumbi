@@ -17,7 +17,8 @@ use crate::core::next_action::NextAction;
 
 /// The overview: date header, the setup list while something is open, the next action with two tiles, bundled attention rows, the calendar and upcoming exams.
 /// `setup` is the list; `covers_calendar` says it already offers the Moodle calendar, so the empty state need not.
-pub fn render(lib: &Library, width: f32, setup: Option<AnyElement>, covers_calendar: bool, t: &Theme) -> Div {
+/// `moodle` asks for the calendar address inside the empty state.
+pub fn render(lib: &Library, width: f32, setup: Option<AnyElement>, covers_calendar: bool, moodle: AnyElement, t: &Theme) -> Div {
     let empty = lib.semester_assignments().is_empty();
     div()
         .flex()
@@ -27,7 +28,7 @@ pub fn render(lib: &Library, width: f32, setup: Option<AnyElement>, covers_calen
         .child(header(lib, t))
         .children(setup)
         .when(!empty, |d| d.child(top_row(lib, width < 860., t)))
-        .when(empty && !covers_calendar, |d| d.child(getting_started(lib, t)))
+        .when(empty && !covers_calendar, |d| d.child(getting_started(lib, moodle, t)))
         .children(attention(lib, t))
         .children(inbox_hint(lib, t))
         .children(cards_hint(t))
@@ -361,8 +362,8 @@ fn cards_hint(t: &Theme) -> Option<Stateful<Div>> {
 }
 
 /// The overview without a single deadline: the three ways to get some, each one click away.
-fn getting_started(lib: &Library, t: &Theme) -> Div {
-    let step = |id: &'static str, icon_name: &str, title: String, body: String, label: String, go: Box<dyn Fn(&mut App)>| {
+fn getting_started(lib: &Library, moodle: AnyElement, t: &Theme) -> Div {
+    let step = |icon_name: &str, title: String, body: String, action: AnyElement| {
         div()
             .flex_1()
             .min_w_0()
@@ -372,8 +373,10 @@ fn getting_started(lib: &Library, t: &Theme) -> Div {
             .child(icon(icon_name, iconsize::M, t.accent))
             .child(div().font_weight(FontWeight::MEDIUM).child(title))
             .child(div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(body))
-            .child(div().pt(px(space::XS)).child(Button::new(id).small().label(label).on_click(move |_, _, cx| go(cx))))
+            .child(div().flex_1())
+            .child(div().pt(px(space::XS)).flex().child(action))
     };
+    let button = |id: &'static str, label: String, go: Box<dyn Fn(&mut App)>| Button::new(id).small().label(label).on_click(move |_, _, cx| go(cx)).into_any_element();
     let first_module = lib.semester_modules().first().map(|m| m.id.clone());
     let weekly: Box<dyn Fn(&mut App)> = match first_module {
         Some(id) => Box::new(move |cx| super::settings::open_module(&id, cx)),
@@ -393,16 +396,15 @@ fn getting_started(lib: &Library, t: &Theme) -> Div {
         .child(
             div()
                 .flex()
-                .items_start()
                 .gap(px(space::L))
-                .child(step("start-moodle", "calendar-plus", tr("Aus Moodle"), tr("Die Kalenderadresse aus Moodle eintragen, Abgaben kommen dann von selbst."), tr("Moodle-Kalender verbinden"), Box::new(|cx| super::settings::open_lit("Kalender abonnieren", cx))))
-                .child(step("start-weekly", "repeat", tr("Jede Woche"), tr("Ein Übungsblatt jede Vorlesungswoche, einmal angelegt beim Modul."), tr("Wöchentliche Abgabe anlegen"), weekly))
-                .child(step("start-single", "circle-plus", tr("Einzeln"), trf("Eine Abgabe, Aufgabe oder Prüfung mit Datum, auch mit %@.", &[&crate::core::shortcuts::ShortcutAction::NewEntry.active_shortcut().map_or_else(|| tr("dem Plus oben"), |s| s.display())]), tr("Abgabe eintragen"), Box::new(|cx| {
+                .child(step("calendar-plus", tr("Aus Moodle"), tr("Die Kalenderadresse aus Moodle eintragen, Abgaben kommen dann von selbst."), moodle))
+                .child(step("repeat", tr("Jede Woche"), tr("Ein Übungsblatt jede Vorlesungswoche, einmal angelegt beim Modul."), button("start-weekly", tr("Wöchentliche Abgabe anlegen"), weekly)))
+                .child(step("circle-plus", tr("Einzeln"), trf("Eine Abgabe, Aufgabe oder Prüfung mit Datum, auch mit %@.", &[&crate::core::shortcuts::ShortcutAction::NewEntry.active_shortcut().map_or_else(|| tr("dem Plus oben"), |s| s.display())]), button("start-single", tr("Abgabe eintragen"), Box::new(|cx| {
                     act(cx, |l| {
                         l.quick_add_kind = Some(Kind::Submission);
                         l.show_quick_add = true;
                     })
-                }))),
+                })))),
         )
 }
 
