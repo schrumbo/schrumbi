@@ -420,7 +420,7 @@ impl Pages {
 
     /// The notes room: the workspace's files beside whatever note is shown.
     fn explorer_shown(width: f32) -> bool {
-        !crate::core::prefs::get().notes_explorer_hidden && width >= 620.
+        !crate::core::prefs::get().notes_explorer_hidden && width >= super::theme::explorer::MIN + super::theme::explorer::NOTE_MIN
     }
 
     fn with_explorer(&mut self, body: AnyElement, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -431,6 +431,7 @@ impl Pages {
         let page = self.notes_page.get_or_insert_with(|| cx.new(|cx| super::notes_page::NotesPage::new(window, cx))).clone();
         let shown = Self::explorer_shown(width);
         let fading = self.shown_route.as_ref().is_none_or(|(_, at)| at.elapsed() <= super::motion::timed(super::motion::FAST, cx) + super::motion::FAST);
+        page.update(cx, |p, _| p.fit(width));
         let mut slot = div().w(px(page.read(cx).outer_width())).h_full().flex_none();
         let slot = slot.style().clone();
         let explorer = if fading { page.into_any_element() } else { page.cached(slot).into_any_element() };
@@ -692,7 +693,7 @@ impl Render for Pages {
         }
         let mut fields = std::mem::take(&mut self.fields);
         let body: AnyElement = match route {
-            Route::Grid => div().relative().size_full().child(div().id("grid-scroll").size_full().overflow_y_scroll().track_scroll(&self.grid.scroll).child(grid::render(lib.read(cx), &self.grid, view, &t))).vertical_scrollbar(&self.grid.scroll).into_any_element(),
+            Route::Grid => div().relative().size_full().child(div().id("grid-scroll").size_full().overflow_y_scroll().track_scroll(&self.grid.scroll).child(grid::render(lib.read(cx), &self.grid, width, view, &t))).vertical_scrollbar(&self.grid.scroll).into_any_element(),
             Route::Record => match lib.read(cx).config.clone() {
                 Some(c) => div().id("record-scroll").size_full().overflow_y_scrollbar().child(record::render(&c, &self.record, &mut fields, window, cx, &t)).into_any_element(),
                 None => div().into_any_element(),

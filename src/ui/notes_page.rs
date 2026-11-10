@@ -15,7 +15,7 @@ use super::browser::DraggedFile;
 use super::drive::Mark;
 use super::motion::{self, Soft, chevron};
 use super::state::{self, act};
-use super::theme::{Theme, control, font, iconsize, radius, space};
+use super::theme::{Theme, control, explorer, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Route;
@@ -196,6 +196,8 @@ pub struct NotesPage {
     pending_folder: Option<PathBuf>,
     rename_scroll: Option<(std::time::Instant, Option<usize>)>,
     width: f32,
+    /// The most the explorer may take, so the note keeps its room in a narrow window.
+    cap: f32,
     /// A width drag is under way; it is saved when the drag ends.
     resizing: bool,
     cache: Option<Cache>,
@@ -436,6 +438,7 @@ impl NotesPage {
             pending_folder: None,
             rename_scroll: None,
             width: crate::core::prefs::get().notes_column.unwrap_or(260.),
+            cap: f32::MAX,
             resizing: false,
             cache: None,
             focus: cx.focus_handle(),
@@ -472,7 +475,12 @@ impl NotesPage {
 
     /// The explorer's full width, its resize handle included.
     pub fn outer_width(&self) -> f32 {
-        self.width + space::XS
+        self.width.min(self.cap) + space::XS
+    }
+
+    /// Fits the explorer beside a note in a page this wide.
+    pub fn fit(&mut self, page_width: f32) {
+        self.cap = (page_width - explorer::NOTE_MIN).max(explorer::MIN);
     }
 
     /// Takes the keyboard, so arrows walk the list.
@@ -1297,7 +1305,7 @@ impl Render for NotesPage {
             }))
             .on_action(|_: &super::app::TogglePreview, _, cx| act(cx, |l| l.toggle_mode = l.active_document.as_deref().is_some_and(markdown::is_markdown)))
             .on_drag_move(cx.listener(|s, e: &DragMoveEvent<ExplorerSplit>, _, cx| {
-                let width = f32::from(e.event.position.x - e.bounds.left()).round().clamp(180., 420.);
+                let width = f32::from(e.event.position.x - e.bounds.left()).round().clamp(explorer::MIN, explorer::MAX.min(s.cap.max(explorer::MIN)));
                 s.resizing = true;
                 if width != s.width {
                     s.width = width;
