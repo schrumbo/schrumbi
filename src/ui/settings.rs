@@ -123,6 +123,16 @@ const SYNONYMS: &[(&str, &str)] = &[
 ];
 
 /// Settings shown only while there is a naming convention; search leads to its switch instead.
+/// One tab of the settings bar at full width.
+const TAB: f32 = 76.;
+/// The settings search field.
+const SEARCH: f32 = 170.;
+/// The window width below which the empty search folds to its icon so all tabs keep their labels.
+const TABS_WITH_SEARCH: f32 = (if super::chrome::CUSTOM { space::M } else { 72. }) + 8. * (TAB + space::XXS) + space::S + SEARCH + space::M;
+
+/// The window width below which the module editor stacks its colours under the code and narrows its fields.
+const COMPACT_MODULE: f32 = 720.;
+
 const NEEDS_CONVENTION: &[&str] = &["Matrikelnummer", "Mitautor:innen", "Muster", "Beispiel"];
 
 /// Every labelled setting and the tab it lives on, for the search field.
@@ -315,7 +325,7 @@ fn show(module: Option<String>, cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(880.), px(640.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        window_min_size: Some(size(px(760.), px(520.))),
+        window_min_size: Some(size(px(640.), px(500.))),
         titlebar: Some(TitlebarOptions { title: Some(tr("Einstellungen").into()), appears_transparent: true, traffic_light_position: Some(point(px(14.), px(14.))) }),
         ..Default::default()
     };
@@ -799,8 +809,10 @@ impl Settings {
         div().id("settings-results").size_full().overflow_y_scrollbar().p(px(space::XL)).flex().justify_center().child(list).into_any_element()
     }
 
-    fn tab_bar(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
-        let mut bar = div().flex().justify_start().pl(px(if super::chrome::CUSTOM { space::M } else { 72. })).gap(px(space::XXS)).pt(px(if super::chrome::CUSTOM { space::M } else { space::XXL })).pb(px(space::S)).border_b_1().border_color(t.separator);
+    fn tab_bar(&self, window: &Window, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let searching = self.search.read(cx).focus_handle(cx).is_focused(window) || !self.search.read(cx).value().is_empty();
+        let folded = f32::from(window.viewport_size().width) < TABS_WITH_SEARCH && !searching;
+        let mut bar = div().flex_1().min_w_0().flex().justify_start().gap(px(space::XXS));
         for (tab, label, icon_name) in [
             (Tab::General, tr("Allgemein"), "settings"),
             (Tab::Semester, tr("Semester"), "calendar"),
@@ -816,7 +828,9 @@ impl Settings {
             bar = bar.child(
                 div()
                     .id(SharedString::from(format!("tab-{label}")))
-                    .w(px(76.))
+                    .flex_1()
+                    .min_w_0()
+                    .max_w(px(TAB))
                     .flex()
                     .flex_col()
                     .items_center()
@@ -827,7 +841,7 @@ impl Settings {
                     .when(active, |d| d.bg(t.ink.opacity(0.09)))
                     .when(!active, |d| d.soft(hover, radius::CONTROL))
                     .child(icon(icon_name, iconsize::L, if active { t.accent } else { t.secondary }))
-                    .child(div().text_size(px(font::CAPTION)).text_color(if active { t.accent_text } else { t.primary }).child(label))
+                    .child(div().max_w_full().truncate().text_size(px(font::CAPTION)).text_color(if active { t.accent_text } else { t.primary }).child(label))
                     .on_click(cx.listener(move |s, _, _, cx| {
                         s.tab = tab;
                         s.recording = None;
@@ -835,7 +849,12 @@ impl Settings {
                     })),
             );
         }
-        div().relative().child(bar).child(div().absolute().top(px(if super::chrome::CUSTOM { space::M } else { space::XXL })).right(px(space::M)).w(px(170.)).child(Input::new(&self.search).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary))))
+        let search = if folded {
+            div().flex_none().child(Button::new("settings-search-fold").ghost().small().icon(menu_icon("search")).tooltip(tr("Suchen")).on_click(cx.listener(|s, _, window, cx| s.search.update(cx, |i, cx| i.focus(window, cx)))))
+        } else {
+            div().flex_none().w(px(SEARCH)).child(Input::new(&self.search).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary)))
+        };
+        div().flex().items_center().gap(px(space::S)).pl(px(if super::chrome::CUSTOM { space::M } else { 72. })).pr(px(space::M)).pt(px(if super::chrome::CUSTOM { space::M } else { space::XXL })).pb(px(space::S)).border_b_1().border_color(t.separator).child(bar).child(search)
     }
 
     fn general(&mut self, c: &StudyConfig, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> Div {
@@ -1467,6 +1486,7 @@ impl Settings {
         let naming = fields.input(&k("naming"), &m.naming, &tr("Muster"), window, cx, move |v, cx| e(Box::new(move |m| m.naming = v.clone()))(cx));
         let root = state::read(cx, |l| l.root.clone());
         let exists = root.as_ref().is_some_and(|r| r.join(&m.folder).is_dir());
+        let compact = f32::from(window.viewport_size().width) < COMPACT_MODULE;
         let mut dots = div().flex().gap(px(space::XS));
         for name in PALETTE {
             let selected = m.color == name;
@@ -1502,8 +1522,8 @@ impl Settings {
         });
         let (e, base) = (edit.clone(), root.clone());
         let module_rows = vec![
-            row(tr("Kürzel"), div().flex().items_center().gap(px(space::M)).child(div().w(px(110.)).child(Input::new(&code))).child(dots), t),
-            row(tr("Name"), div().w(px(320.)).child(Input::new(&name)), t),
+            row(tr("Kürzel"), div().flex().when(compact, |d| d.flex_col().items_end()).when(!compact, |d| d.items_center()).gap(px(if compact { space::S } else { space::M })).child(div().w(px(110.)).child(Input::new(&code))).child(dots), t),
+            row(tr("Name"), div().w(px(if compact { 240. } else { 320. })).child(Input::new(&name)), t),
             row(tr("Semester"), sem_picker, t),
             row(
                 tr("Ordner"),
@@ -1511,7 +1531,7 @@ impl Settings {
                     .flex()
                     .items_center()
                     .gap(px(space::S))
-                    .child(div().w(px(220.)).child(Input::new(&folder)))
+                    .child(div().w(px(if compact { 150. } else { 220. })).child(Input::new(&folder)))
                     .child(div().id("folder-state").child(icon(if exists { "circle-check" } else { "circle-alert" }, iconsize::S, if exists { t.green } else { t.orange })).tooltip(tip(if exists { tr("Ordner existiert") } else { tr("Ordner existiert nicht") })))
                     .child(Button::new("m-pick-folder").small().label(tr("Wählen…")).on_click(move |_, _, cx| {
                         let (e, base) = (e.clone(), base.clone());
@@ -1568,7 +1588,7 @@ impl Settings {
         })).into_any_element());
         let example = Naming::new(&m, semester.as_ref(), c).render(&tr("Titel"), Local::now().date_naive(), "pdf", &[], None, None, None);
         let naming_rows = if c.naming_convention() {
-            vec![row(tr("Muster"), div().w(px(320.)).child(Input::new(&naming)), t), row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(example), t)]
+            vec![row(tr("Muster"), div().w(px(if compact { 240. } else { 320. })).child(Input::new(&naming)), t), row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(example), t)]
         } else {
             vec![detail_row(tr("Nach einem Muster benennen"), naming_detail(false), naming_switch("m-naming", c), t)]
         };
@@ -1612,28 +1632,23 @@ impl Settings {
             let begins = clock::parse(&s.start);
             end.update(cx, |f, cx| f.after(begins, cx));
             start.update(cx, |f, cx| f.before(Some(clock::last_minute()), cx));
-            sessions.push(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(space::S))
-                    .px(px(space::L))
-                    .py(px(space::S))
-                    .child(div().flex_1().child(Input::new(&title).small()))
-                    .child(picker(("sd", i), names[(s.weekday.clamp(1, 7) - 1) as usize].chars().take(2).collect(), move |mut menu| {
-                        for d in 1..=7u32 {
-                            let e = e1.clone();
-                            menu = menu.item(PopupMenuItem::new(names[(d - 1) as usize]).on_click(move |_, _, cx| e(Box::new(move |m| if let Some(s) = m.sessions.get_mut(i) { s.weekday = d }))(cx)));
-                        }
-                        menu
-                    }).small())
-                    .child(start)
-                    .child(div().text_color(t.secondary).child("–"))
-                    .child(end)
-                    .child(div().w(px(80.)).child(Input::new(&room).small()))
-                    .child(minus(("srm", i), tr("Termin entfernen"), move |cx| e4(Box::new(move |m| if i < m.sessions.len() { m.sessions.remove(i); }))(cx)))
-                    .into_any_element(),
-            );
+            let day = picker(("sd", i), names[(s.weekday.clamp(1, 7) - 1) as usize].chars().take(2).collect(), move |mut menu| {
+                for d in 1..=7u32 {
+                    let e = e1.clone();
+                    menu = menu.item(PopupMenuItem::new(names[(d - 1) as usize]).on_click(move |_, _, cx| e(Box::new(move |m| if let Some(s) = m.sessions.get_mut(i) { s.weekday = d }))(cx)));
+                }
+                menu
+            }).small();
+            let title = div().flex_1().min_w_0().child(Input::new(&title).small());
+            let room = div().w(px(80.)).child(Input::new(&room).small());
+            let remove = minus(("srm", i), tr("Termin entfernen"), move |cx| e4(Box::new(move |m| if i < m.sessions.len() { m.sessions.remove(i); }))(cx));
+            let dash = div().text_color(t.secondary).child("–");
+            let session = div().px(px(space::L)).py(px(space::S));
+            sessions.push(if compact {
+                session.flex().flex_col().gap(px(space::XS)).child(div().flex().items_center().gap(px(space::S)).child(title).child(room).child(remove)).child(div().flex().items_center().gap(px(space::S)).child(day).child(start).child(dash).child(end)).into_any_element()
+            } else {
+                session.flex().items_center().gap(px(space::S)).child(title).child(day).child(start).child(dash).child(end).child(room).child(remove).into_any_element()
+            });
         }
         let (e, code_text) = (edit.clone(), m.code.clone());
         sessions.push(div().px(px(space::L)).py(px(space::S)).child(Button::new("session-add").ghost().small().icon(menu_icon("plus")).label(tr("Termin hinzufügen")).on_click(move |_, _, cx| {
@@ -1711,7 +1726,12 @@ impl Settings {
             let k: Vec<String> = v.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
             s1(Box::new(move |r| r.keywords = k.clone()))(cx)
         });
-        let field = |label: String, content: AnyElement| div().flex().items_center().gap(px(space::M)).child(div().w(px(80.)).text_color(t.secondary).child(label)).child(div().flex_1().child(content));
+        let compact = f32::from(window.viewport_size().width) < COMPACT_MODULE;
+        let field = |label: String, content: AnyElement| if compact {
+            div().flex().flex_col().gap(px(space::XS)).when(!label.is_empty(), |d| d.child(div().text_color(t.secondary).child(label))).child(div().w_full().child(content))
+        } else {
+            div().flex().items_center().gap(px(space::M)).child(div().w(px(80.)).text_color(t.secondary).child(label)).child(div().flex_1().min_w_0().child(content))
+        };
         let (s1, s2, s3, s4) = (set.clone(), set.clone(), set.clone(), set.clone());
         let offset = r.week_offset;
         let offset_label = |o: i64| match o {
@@ -1728,6 +1748,7 @@ impl Settings {
                 tr("Fällig"),
                 div()
                     .flex()
+                    .flex_wrap()
                     .gap(px(space::S))
                     .child(picker(("rwd", i), wd.to_string(), move |mut menu| {
                         for d in 1..=7u32 {
@@ -2697,7 +2718,7 @@ impl Render for Settings {
         }
         let t = Theme::get(cx);
         let config = state::read(cx, |l| l.config.clone());
-        let tabs = self.tab_bar(&t, cx);
+        let tabs = self.tab_bar(window, &t, cx);
         let searching = !self.search.read(cx).value().trim().is_empty();
         let page = self.page.clone();
         let body: AnyElement = match (config, self.tab) {
