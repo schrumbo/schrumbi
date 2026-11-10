@@ -99,6 +99,7 @@ pub fn init(cx: &mut App) {
         }
     });
     cx.on_action(|_: &DailyNote, cx| {
+        prefs::mark_used("daily_note");
         act(cx, |l| l.open_daily_note());
         state::reindex(cx);
     });
@@ -122,15 +123,24 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &ShowGraph, cx| {
         act(cx, |l| if l.root.is_some() { l.show_graph(None) })
     });
-    cx.on_action(|_: &CommandPalette, cx| act(cx, |l| if l.root.is_some() { l.show_palette = true }));
-    cx.on_action(|_: &ShowShortcuts, cx| act(cx, |l| if l.root.is_some() { l.show_shortcuts = true }));
+    cx.on_action(|_: &CommandPalette, cx| {
+        prefs::mark_used("palette");
+        act(cx, |l| if l.root.is_some() { l.show_palette = true })
+    });
+    cx.on_action(|_: &ShowShortcuts, cx| {
+        prefs::mark_used("shortcuts");
+        act(cx, |l| if l.root.is_some() { l.show_shortcuts = true })
+    });
     cx.on_action(|_: &ShowHelp, cx| cx.defer(|cx| super::help::open(None, cx)));
     cx.on_action(|_: &ToggleLive, cx| {
         if note_is_active(cx) {
             toggle_live(cx);
         }
     });
-    cx.on_action(|_: &NewEntry, cx| act(cx, |l| if l.root.is_some() { l.show_quick_add = true }));
+    cx.on_action(|_: &NewEntry, cx| {
+        prefs::mark_used("new_entry");
+        act(cx, |l| if l.root.is_some() { l.show_quick_add = true })
+    });
     cx.on_action(|_: &NewFile, cx| {
         act(cx, |l| {
             if l.root.is_some() {
@@ -146,7 +156,10 @@ pub fn init(cx: &mut App) {
             }
         })
     });
-    cx.on_action(|_: &QuickOpen, cx| act(cx, |l| if l.root.is_some() { l.show_quick_open = true }));
+    cx.on_action(|_: &QuickOpen, cx| {
+        prefs::mark_used("quick_open");
+        act(cx, |l| if l.root.is_some() { l.show_quick_open = true })
+    });
     cx.on_action(|_: &ImportCalendar, cx| super::platform::pick_calendar_import(cx));
     cx.on_action(|_: &ExportCalendar, cx| super::platform::export_calendar(cx));
     cx.on_action(|_: &ExportArchive, cx| super::platform::export_archive(cx));

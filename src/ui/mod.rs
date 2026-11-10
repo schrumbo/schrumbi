@@ -1,6 +1,9 @@
 pub mod bar_fit;
 pub mod board;
+pub mod coach;
 pub mod drive;
+pub mod setup_card;
+pub mod tips;
 pub mod inspector;
 pub mod main_window;
 pub mod onboarding;

@@ -325,7 +325,8 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&notes, tr("Auswahl in neue Notiz auslagern"), "scissors", None, Run::NoteAction(Box::new(super::documents::ExtractSelection)));
         add(&notes, tr("Karte aus Auswahl…"), "layers", None, Run::NoteAction(Box::new(super::documents::CardFromSelection)));
     }
-    add(&general, tr("Einrichtung erneut starten"), "settings", None, Run::Call(Rc::new(|cx| act(cx, |l| l.needs_setup = true))));
+    add(&general, tr("Geführt einrichten…"), "list-checks", None, Run::Call(Rc::new(|cx| act(cx, |l| l.needs_setup = true))));
+    add(&general, tr("Tipp des Tages zeigen"), "lightbulb", None, Run::Call(Rc::new(super::tips::show_next)));
     add(&general, tr("Einstellungen…"), "settings", Some(fixed_keys(",")), Run::Action(Box::new(app::OpenSettings)));
     add(&general, tr("Schrumbi-Anleitung"), "book-open", Some("F1".to_string()), Run::Action(Box::new(app::ShowHelp)));
     add(&general, tr("Tastenkürzel anzeigen"), "keyboard", Some(fixed_keys("/")), Run::Action(Box::new(app::ShowShortcuts)));

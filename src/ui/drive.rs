@@ -60,13 +60,13 @@ pub trait Mark: Sized {
 
 impl Mark for Stateful<Div> {
     fn mark(self, role: &'static str, label: impl Into<SharedString>) -> Self {
-        if on() { spot(self, role, Some(label.into())) } else { self }
+        super::coach::anchor(if on() { spot(self, role, Some(label.into())) } else { self })
     }
 }
 
 /// Like `Mark::mark`, for elements whose id says enough.
 pub fn marked(element: Stateful<Div>, role: &'static str) -> Stateful<Div> {
-    if on() { spot(element, role, None) } else { element }
+    super::coach::anchor(if on() { spot(element, role, None) } else { element })
 }
 
 fn spot(mut element: Stateful<Div>, role: &'static str, label: Option<SharedString>) -> Stateful<Div> {

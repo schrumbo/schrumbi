@@ -39,6 +39,15 @@ pub const FOLDER_RETRY: Duration = Duration::from_secs(3);
 /// How long the wrap switch confirms itself in the word count bar.
 pub const WRAP_NOTICE_FOR: Duration = Duration::from_millis(1600);
 
+/// One breath of the ring a tip draws around an element.
+pub const PULSE: Duration = Duration::from_millis(1400);
+
+/// How long after the start the tip of the day waits, so the window has settled.
+pub const TIP_DELAY: Duration = Duration::from_secs(6);
+
+/// How long the tip waits again while a dialog or the first-start screen is in the way.
+pub const TIP_RETRY: Duration = Duration::from_secs(15);
+
 /// How long list rows keep sliding to new positions after a change; covers the rescan that follows it.
 const FLIP_ARMED: Duration = Duration::from_millis(500);
 

@@ -55,6 +55,7 @@ fn main() {
         ui::link_card::init(cx);
         ui::help::prepare_samples(cx);
         ui::app::init(cx);
+        ui::tips::on_launch(cx);
         if let Some(path) = workspace {
             ui::state::open_workspace(&path, cx);
         }

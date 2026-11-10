@@ -157,6 +157,9 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Automatisch nach Updates suchen", Tab::General),
     ("Symbol in der Menüleiste", Tab::General),
     ("Seitenleiste", Tab::General),
+    ("Hinweise", Tab::General),
+    ("Tipp des Tages", Tab::General),
+    ("Einrichten in der Übersicht", Tab::General),
     ("Semester", Tab::Semester),
     ("Vorlesungsbeginn", Tab::Semester),
     ("Vorlesungsende", Tab::Semester),
@@ -1112,7 +1115,34 @@ impl Settings {
                 .collect(),
             t,
         );
-        div().flex().flex_col().gap(px(space::XL)).child(language).child(studium).child(naming).child(filing).child(grades).child(sidebar).child(reminders).child(incoming).child(calendar).child(system).child(search).child(storage)
+        let setup_shown = !super::setup_card::hidden(cx);
+        let hints = section(
+            Some(tr("Hinweise")),
+            Some(tr("Der Tipp des Tages erscheint einmal am Tag unten rechts und nennt nur, was du noch nicht benutzt hast. Die Liste zum Einrichten hakt sich von selbst ab.")),
+            vec![
+                row(tr("Tipp des Tages"), Switch::new("g-tips").checked(p.tips_enabled).on_click(|v, _, cx| {
+                    let v = *v;
+                    prefs::update(|p| {
+                        p.tips_enabled = v;
+                        if v {
+                            p.tips_last.clear();
+                        }
+                    });
+                    cx.refresh_windows();
+                }), t),
+                row(tr("Einrichten in der Übersicht"), Switch::new("g-setup").checked(setup_shown).on_click(|v, _, cx| {
+                    if *v {
+                        super::setup_card::restore(cx);
+                    } else {
+                        let root = state::read(cx, |l| l.root.clone()).unwrap_or_default();
+                        prefs::update_setup(&root, |s| s.dismissed = true);
+                        cx.refresh_windows();
+                    }
+                }), t),
+            ],
+            t,
+        );
+        div().flex().flex_col().gap(px(space::XL)).child(language).child(studium).child(naming).child(filing).child(grades).child(sidebar).child(hints).child(reminders).child(incoming).child(calendar).child(system).child(search).child(storage)
     }
 }
 
@@ -1990,7 +2020,10 @@ impl Settings {
             picker("n-editor", editor_label(editor_kind), move |mut menu| {
                 for k in [prefs::NoteEditor::Code, prefs::NoteEditor::Live] {
                     menu = menu.item(PopupMenuItem::new(editor_label(k)).checked(k == editor_kind).on_click(move |_, _, cx| {
-                        prefs::update(|p| p.note_editor = k);
+                        prefs::update(|p| {
+                            p.note_editor = k;
+                            p.note_editor_chosen = true;
+                        });
                         super::app::rebuild_menus(cx);
                         cx.refresh_windows();
                     }));
@@ -2484,6 +2517,14 @@ impl Render for Settings {
             cx.set_global(OpenOnSync(false));
             self.tab = Tab::Sync;
         }
+        if let Some(label) = cx.try_global::<OpenLit>().and_then(|o| o.0.clone()) {
+            cx.set_global(OpenLit(None));
+            if let Some((_, tab)) = SEARCHABLE.iter().find(|(k, _)| *k == label) {
+                self.tab = *tab;
+                self.search.update(cx, |s, cx| s.set_value("", window, cx));
+                self.light_up(tr(&label), window, cx);
+            }
+        }
         let t = Theme::get(cx);
         let config = state::read(cx, |l| l.config.clone());
         let tabs = self.tab_bar(&t, cx);
@@ -2561,10 +2602,22 @@ pub fn open_sync(cx: &mut App) {
     cx.refresh_windows();
 }
 
+/// Opens the settings at the row or section with this German label, lit up for a moment.
+pub fn open_lit(label: &str, cx: &mut App) {
+    open(cx);
+    cx.set_global(OpenLit(Some(label.to_string())));
+    cx.refresh_windows();
+}
+
 /// Asks the settings window to switch to the sync tab on its next frame.
 struct OpenOnSync(bool);
 
 impl Global for OpenOnSync {}
+
+/// Asks the settings window to jump to a labelled setting on its next frame.
+struct OpenLit(Option<String>);
+
+impl Global for OpenLit {}
 
 #[cfg(test)]
 mod tests {

@@ -234,6 +234,32 @@ pub mod annot {
     pub const INK_MIN: f32 = 2.;
 }
 
+/// The mark a tip puts on an element.
+pub mod coach {
+    /// How dark the rest of the window gets.
+    pub const DIM: f32 = 0.3;
+    /// How far the pulsing ring travels outward.
+    pub const PULSE_REACH: f32 = 10.;
+    pub const LABEL_WIDTH: f32 = 280.;
+    /// The height a label needs below its element before it moves above it.
+    pub const LABEL_ROOM: f32 = 96.;
+}
+
+/// The tip of the day and the setup list.
+pub mod hints {
+    pub const TIP_WIDTH: f32 = 340.;
+    /// The strength of the tint behind the tip's icon.
+    pub const ICON_TINT: f32 = 0.14;
+    /// How long the completed setup list stays before it leaves.
+    pub const DONE_FOR: std::time::Duration = std::time::Duration::from_millis(3200);
+    /// The label column of an inline form in the setup list.
+    pub const FORM_LABEL: f32 = 150.;
+    pub const DATE_WIDTH: f32 = 180.;
+    pub const URL_WIDTH: f32 = 420.;
+    /// The progress bar in the head of the setup list.
+    pub const PROGRESS_WIDTH: f32 = 160.;
+}
+
 /// Measures of the page list of a PDF.
 pub mod pages {
     /// The line that shows where dragged pages land.

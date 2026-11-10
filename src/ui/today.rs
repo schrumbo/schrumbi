@@ -15,8 +15,9 @@ use crate::core::library::{Library, Route};
 use crate::core::model::{Assignment, Kind, Status};
 use crate::core::next_action::NextAction;
 
-/// The overview: date header, the next action with two tiles, bundled attention rows, the calendar and upcoming exams.
-pub fn render(lib: &Library, width: f32, t: &Theme) -> Div {
+/// The overview: date header, the setup list while something is open, the next action with two tiles, bundled attention rows, the calendar and upcoming exams.
+/// `setup` is the list; `covers_calendar` says it already offers the Moodle calendar, so the empty state need not.
+pub fn render(lib: &Library, width: f32, setup: Option<AnyElement>, covers_calendar: bool, t: &Theme) -> Div {
     let empty = lib.semester_assignments().is_empty();
     div()
         .flex()
@@ -24,8 +25,9 @@ pub fn render(lib: &Library, width: f32, t: &Theme) -> Div {
         .gap(px(space::XL))
         .p(px(space::XL))
         .child(header(lib, t))
+        .children(setup)
         .when(!empty, |d| d.child(top_row(lib, width < 860., t)))
-        .when(empty, |d| d.child(getting_started(t)))
+        .when(empty && !covers_calendar, |d| d.child(getting_started(lib, t)))
         .children(attention(lib, t))
         .children(inbox_hint(lib, t))
         .children(cards_hint(t))
@@ -86,6 +88,10 @@ fn header(lib: &Library, t: &Theme) -> Div {
         sub.push(trf("Vorlesungswoche %lld · KW%@", &[&w.index, &format!("{:02}", w.iso_week)]));
     } else if let Some(b) = lib.semester().and_then(|s| s.break_at(lib.today())) {
         sub.push(b.name.clone());
+    }
+    let guessed = lib.semester().is_some_and(crate::core::workspace::is_guessed) && lib.root.as_ref().is_none_or(|r| !crate::core::prefs::setup_of(r).confirmed.contains("semester"));
+    if guessed {
+        sub.push(tr("Vorlesungszeit geschätzt"));
     }
     div()
         .flex()
@@ -354,9 +360,29 @@ fn cards_hint(t: &Theme) -> Option<Stateful<Div>> {
     })
 }
 
-fn getting_started(t: &Theme) -> Div {
-    let step = |icon_name: &str, title: String, body: String| {
-        div().flex_1().flex().flex_col().gap(px(space::XS)).child(icon(icon_name, iconsize::M, t.accent)).child(div().font_weight(FontWeight::MEDIUM).child(title)).child(div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(body))
+/// The overview without a single deadline: the three ways to get some, each one click away.
+fn getting_started(lib: &Library, t: &Theme) -> Div {
+    let step = |id: &'static str, icon_name: &str, title: String, body: String, label: String, go: Box<dyn Fn(&mut App)>| {
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(space::XS))
+            .child(icon(icon_name, iconsize::M, t.accent))
+            .child(div().font_weight(FontWeight::MEDIUM).child(title))
+            .child(div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(body))
+            .child(div().pt(px(space::XS)).child(Button::new(id).small().label(label).on_click(move |_, _, cx| go(cx))))
+    };
+    let first_module = lib.semester_modules().first().map(|m| m.id.clone());
+    let weekly: Box<dyn Fn(&mut App)> = match first_module {
+        Some(id) => Box::new(move |cx| super::settings::open_module(&id, cx)),
+        None => Box::new(|cx| {
+            act(cx, |l| {
+                l.setup_only = Some(super::wizards::SETUP_MODULES);
+                l.needs_setup = true;
+            })
+        }),
     };
     banner(t.accent)
         .p(px(space::L))
@@ -368,10 +394,15 @@ fn getting_started(t: &Theme) -> Div {
             div()
                 .flex()
                 .items_start()
-                .gap(px(space::M))
-                .child(step("calendar-plus", tr("Aus Moodle importieren"), tr("Einstellungen → Kalender abonnieren, Adresse eintragen.")))
-                .child(step("repeat", tr("Wiederkehrende Abgaben"), tr("Einstellungen → Module → Regel hinzufügen, z. B. jeden Montag 18:00.")))
-                .child(step("circle-plus", tr("Einzeln hinzufügen"), trf("%@ für Aufgaben, Abgaben und Prüfungen.", &[&crate::core::shortcuts::ShortcutAction::NewEntry.active_shortcut().map_or_else(|| tr("Plus"), |s| s.display())]))),
+                .gap(px(space::L))
+                .child(step("start-moodle", "calendar-plus", tr("Aus Moodle"), tr("Die Kalenderadresse aus Moodle eintragen, Abgaben kommen dann von selbst."), tr("Moodle-Kalender verbinden"), Box::new(|cx| super::settings::open_lit("Kalender abonnieren", cx))))
+                .child(step("start-weekly", "repeat", tr("Jede Woche"), tr("Ein Übungsblatt jede Vorlesungswoche, einmal angelegt beim Modul."), tr("Wöchentliche Abgabe anlegen"), weekly))
+                .child(step("start-single", "circle-plus", tr("Einzeln"), trf("Eine Abgabe, Aufgabe oder Prüfung mit Datum, auch mit %@.", &[&crate::core::shortcuts::ShortcutAction::NewEntry.active_shortcut().map_or_else(|| tr("dem Plus oben"), |s| s.display())]), tr("Abgabe eintragen"), Box::new(|cx| {
+                    act(cx, |l| {
+                        l.quick_add_kind = Some(Kind::Submission);
+                        l.show_quick_add = true;
+                    })
+                }))),
         )
 }
 

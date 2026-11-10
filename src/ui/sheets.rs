@@ -79,13 +79,19 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
         show(view, 760., window, cx);
         return;
     }
-    let (quick_add, quick_open, new_note, module, import, reschedule, setup) = lib.update(cx, |l, _| {
+    let (quick_add, quick_open, new_note, module, import, reschedule, setup, only) = lib.update(cx, |l, _| {
         let module = if let crate::core::library::Route::Module(id) = l.route() { Some(id.clone()) } else { None };
         let setup = std::mem::take(&mut l.needs_setup);
-        ((std::mem::take(&mut l.show_quick_add), l.quick_add_kind.take(), l.quick_add_day.take()), std::mem::take(&mut l.show_quick_open), l.new_note.take(), module, l.import_path.take(), l.reschedule_id.take(), setup)
+        ((std::mem::take(&mut l.show_quick_add), l.quick_add_kind.take(), l.quick_add_day.take()), std::mem::take(&mut l.show_quick_open), l.new_note.take(), module, l.import_path.take(), l.reschedule_id.take(), setup, l.setup_only.take())
     });
     if setup {
-        let view = cx.new(|cx| Setup::new(window, cx));
+        let view = cx.new(|cx| {
+            let setup = Setup::new(window, cx);
+            match only {
+                Some(step) => setup.only(step),
+                None => setup,
+            }
+        });
         let handle = window.window_handle();
         cx.subscribe(&view, move |_, _: &Dismissed, cx| {
             let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));

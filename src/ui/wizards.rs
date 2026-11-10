@@ -253,11 +253,16 @@ pub struct Setup {
     /// Holds the keyboard on pages without a field, so Enter still goes on.
     focus: FocusHandle,
     focused_step: Option<usize>,
+    /// Shows this one page alone, with Übernehmen instead of Weiter.
+    only: Option<usize>,
     _subs: Vec<Subscription>,
 }
 
 /// The last page: nothing to fill in, only what to do next.
 const SETUP_DONE: usize = 4;
+
+/// The page that picks module folders.
+pub const SETUP_MODULES: usize = 2;
 
 impl EventEmitter<Dismissed> for Setup {}
 
@@ -267,13 +272,17 @@ impl Setup {
         let root = state::read(cx, |l| l.root.clone()).unwrap_or_default();
         let is_vault = root.join(".obsidian").is_dir();
         let found = crate::core::folders::all_folders(&root);
-        let chosen = crate::core::folders::suggested_modules(&found, is_vault);
         let semester = draft.semesters.first().map(|s| s.id.clone()).unwrap_or_default();
-        draft.modules.clear();
-        let mut taken = Vec::new();
-        for (i, folder) in chosen.iter().enumerate() {
-            draft.modules.push(crate::core::workspace::module_for_folder(folder, &semester, i, &mut taken));
-        }
+        let chosen = if draft.modules.is_empty() {
+            let chosen = crate::core::folders::suggested_modules(&found, is_vault);
+            let mut taken = Vec::new();
+            for (i, folder) in chosen.iter().enumerate() {
+                draft.modules.push(crate::core::workspace::module_for_folder(folder, &semester, i, &mut taken));
+            }
+            chosen
+        } else {
+            draft.modules.iter().map(|m| m.folder.clone()).collect()
+        };
         let folders = cx.new(|cx| super::folder_picker::FolderPicker::new(&root, chosen, window, cx));
         let picker = |window: &mut Window, cx: &mut Context<Self>| cx.new(|cx| DatePickerState::new(window, cx).date_format(if crate::core::i18n::lang() == crate::core::i18n::Lang::En { "%m/%d/%Y" } else { "%d.%m.%Y" }));
         let (start, end) = (picker(window, cx), picker(window, cx));
@@ -302,7 +311,14 @@ impl Setup {
                 cx.notify();
             }),
         ];
-        Self { step: 0, folders, is_vault, focused: false, draft, fields: Fields::default(), start, end, weekly: Default::default(), calendar: String::new(), new_module: String::new(), focus: cx.focus_handle(), focused_step: None, _subs: subs }
+        Self { step: 0, folders, is_vault, focused: false, draft, fields: Fields::default(), start, end, weekly: Default::default(), calendar: String::new(), new_module: String::new(), focus: cx.focus_handle(), focused_step: None, only: None, _subs: subs }
+    }
+
+    /// Shows one page alone; Übernehmen saves it.
+    pub fn only(mut self, step: usize) -> Self {
+        self.step = step.min(SETUP_DONE - 1);
+        self.only = Some(self.step);
+        self
     }
 
     fn folders_changed(&mut self, picker: Entity<super::folder_picker::FolderPicker>, _: &super::folder_picker::Changed, cx: &mut Context<Self>) {
@@ -371,7 +387,7 @@ impl Setup {
         if self.problem().is_some() {
             return;
         }
-        if self.step == SETUP_DONE {
+        if self.step == SETUP_DONE || self.only.is_some() {
             self.finish(true, cx);
         } else {
             self.step += 1;
@@ -405,7 +421,8 @@ impl Setup {
     }
 }
 
-fn order_choice(id: &'static str, icon_name: &'static str, title: String, detail: String, selected: bool, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, t: &Theme) -> Stateful<Div> {
+/// A card to pick one of two ways, as the setup offers them.
+pub(super) fn order_choice(id: &'static str, icon_name: &'static str, title: String, detail: String, selected: bool, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, t: &Theme) -> Stateful<Div> {
     let (fill, hover) = if selected { (t.accent.opacity(0.1), t.accent.opacity(0.16)) } else { (t.ink.opacity(0.03), t.ink.opacity(0.07)) };
     div()
         .id(id)
@@ -710,6 +727,7 @@ impl Render for Setup {
         fields.prune();
         self.fields = fields;
         let step = self.step;
+        let alone = self.only.is_some();
         let problem = self.problem();
         let blocked = problem.is_some();
         let (later, back, next) = (me.clone(), me.clone(), me.clone());
@@ -734,8 +752,8 @@ impl Render for Setup {
                     cx.stop_propagation();
                 }
             }))
-            .child(div().flex().gap(px(space::S)).px(px(space::XL)).pt(px(space::XL)).children((0..4).map(|i| div().flex_1().h(px(4.)).rounded_full().bg(if i <= step { t.accent } else { t.secondary.opacity(0.25) }))))
-            .child(if step == 2 { div().id("setup-body").flex_1().min_h_0().p(px(space::XL)).child(body).into_any_element() } else { div().id("setup-body").flex_1().min_h_0().overflow_y_scrollbar().p(px(space::XL)).child(body).into_any_element() })
+            .when(!alone, |d| d.child(div().flex().gap(px(space::S)).px(px(space::XL)).pt(px(space::XL)).children((0..=SETUP_DONE).map(|i| div().flex_1().h(px(space::XS)).rounded_full().bg(if i <= step { t.accent } else { t.secondary.opacity(0.25) })))))
+            .child(if step == SETUP_MODULES { div().id("setup-body").flex_1().min_h_0().p(px(space::XL)).child(body).into_any_element() } else { div().id("setup-body").flex_1().min_h_0().overflow_y_scrollbar().p(px(space::XL)).child(body).into_any_element() })
             .child(
                 div()
                     .flex()
@@ -744,16 +762,16 @@ impl Render for Setup {
                     .p(px(space::L))
                     .border_t_1()
                     .border_color(t.separator)
-                    .when(step < SETUP_DONE, |d| d.child(Button::new("setup-later").ghost().label(tr("Später einrichten")).on_click(move |_, _, cx| later.update(cx, |s, cx| s.finish(false, cx)))))
+                    .when(step < SETUP_DONE, |d| d.child(Button::new("setup-later").ghost().label(if alone { tr("Abbrechen") } else { tr("Später einrichten") }).on_click(move |_, _, cx| later.update(cx, |s, cx| s.finish(false, cx)))))
                     .child(div().flex_1())
                     .children(problem.map(|text| div().text_size(px(font::CALLOUT)).text_color(t.orange_text).child(text)))
-                    .when(step > 0, |d| {
+                    .when(step > 0 && !alone, |d| {
                         d.child(Button::new("setup-back").label(tr("Zurück")).on_click(move |_, _, cx| back.update(cx, |s, cx| {
                             s.step -= 1;
                             cx.notify();
                         })))
                     })
-                    .child(Button::new("setup-next").primary().disabled(blocked).label(if step == SETUP_DONE { tr("Los geht's") } else { tr("Weiter") }).on_click(move |_, _, cx| next.update(cx, |s, cx| s.go_on(cx)))),
+                    .child(Button::new("setup-next").primary().disabled(blocked).label(if alone { tr("Übernehmen") } else if step == SETUP_DONE { tr("Los geht's") } else { tr("Weiter") }).on_click(move |_, _, cx| next.update(cx, |s, cx| s.go_on(cx)))),
             )
             .rounded(px(radius::CARD))
     }

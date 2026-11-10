@@ -29,6 +29,7 @@ pub struct MainWindow {
     search: Entity<InputState>,
     inspector: Entity<Inspector>,
     pages: Entity<Pages>,
+    setup: Entity<super::setup_card::SetupCard>,
     save_bounds: Option<Task<()>>,
     syncing_search: bool,
     /// What the search field says while empty: where it searches.
@@ -50,6 +51,7 @@ impl MainWindow {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Suchen")));
         let inspector = cx.new(|cx| Inspector::new(window, cx));
         let pages = cx.new(|cx| Pages::new(window, cx));
+        let setup = cx.new(super::setup_card::SetupCard::new);
         let lib = state::lib(cx);
         let subs = vec![
             cx.observe_in(&lib, window, |this, lib, window, cx| {
@@ -100,6 +102,7 @@ impl MainWindow {
             search,
             inspector,
             pages,
+            setup,
             save_bounds: None,
             press_stamp: None,
             error_shown: false,
@@ -310,14 +313,14 @@ impl MainWindow {
                 Route::Doc(shown) => Self::crumbs(lib, lib.focused_document().unwrap_or(shown), total - toolbar_padding - crumb::TOOLBAR_BUTTONS * control::M - search_width - crumb::TOOLBAR_GAPS * space::S, window, t),
                 _ => div().flex_1().min_w(px(80.)).truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)),
             })
-            .child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().bg(t.ink.opacity(0.06)).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("plus")).tooltip(tr("Neu")).dropdown_menu(move |menu, _, _| {
+            .child(super::coach::anchor(div().id("coach-new")).child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().bg(t.ink.opacity(0.06)).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("plus")).tooltip(tr("Neu")).dropdown_menu(move |menu, _, _| {
                 let m = module2.clone();
                 menu.item(PopupMenuItem::new(format!("{}{}", tr("Neuer Eintrag…"), ShortcutAction::NewEntry.hint())).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)))
                     .item(PopupMenuItem::new(format!("{}{}", tr("Neue Notiz, Datei oder Ordner…"), ShortcutAction::NewFile.hint())).icon(menu_icon("file-plus")).on_click(move |_, _, cx| {
                         let m = m.clone();
                         act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: m, folder: None }))
                     }))
-            }))
+            })))
             .child(
                 Button::new("toggle-inspector")
                     .ghost()
@@ -329,7 +332,7 @@ impl MainWindow {
                     .tooltip(if offered { format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()) } else { tr("Diese Seite hat keine Details") })
                     .on_click(|_, _, cx| act(cx, |l| l.toggle_inspector())),
             )
-            .child(div().w(px(search_width)).flex_none().key_context("SearchField").child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true)))
+            .child(super::coach::anchor(div().id("coach-search")).w(px(search_width)).flex_none().key_context("SearchField").child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true)))
     }
 }
 
@@ -371,9 +374,7 @@ impl Render for MainWindow {
         let width = f32::from(window.viewport_size().width);
         let inspector_open = l.show_inspector();
 
-        let base = div()
-            .child(gpui_kit::base::TextSelectionLayer)
-            .id("main")
+        let base = super::coach::root(div().child(gpui_kit::base::TextSelectionLayer).id("main"))
             .capture_any_mouse_down(cx.listener(|this, e: &MouseDownEvent, _, cx| {
                 this.press_stamp = None;
                 if e.button == MouseButton::Right {
@@ -426,6 +427,10 @@ impl Render for MainWindow {
                 }
             })
             .capture_action(|_: &Dismiss, _, cx| {
+                if super::coach::stop(cx) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if state::read(cx, |l| l.last_error.is_some()) {
                     act(cx, |l| l.last_error = None);
                     cx.stop_propagation();
@@ -496,9 +501,13 @@ impl Render for MainWindow {
         let page_width = width - left - inspector_target;
         self.pages.update(cx, |p, _| p.width = page_width);
         let inspector_w = motion::follow("inspector-width", inspector_target, motion::MEDIUM, window, cx);
+        let setup_shown = lib.read(cx).route() == &Route::Today && self.setup.read(cx).wanted(cx);
+        let covers_calendar = setup_shown && self.setup.read(cx).offers_calendar(cx);
+        let setup_card = setup_shown.then(|| self.setup.clone().into_any_element());
+        let dialog_open = window.has_active_dialog(cx);
         let l = lib.read(cx);
         let page = match l.route() {
-            Route::Today => div().id("today-scroll").size_full().overflow_y_scrollbar().child(today::render(l, page_width, &t)).into_any_element(),
+            Route::Today => div().id("today-scroll").size_full().overflow_y_scrollbar().child(today::render(l, page_width, setup_card, covers_calendar, &t)).into_any_element(),
             _ => self.pages.clone().into_any_element(),
         };
         let page_key = {
@@ -578,6 +587,10 @@ impl Render for MainWindow {
                     .child(v)
                     .with_animation(("toast", toast_id), Animation::new(toast_motion).with_easing(ease_out_quint()), move |d, p| d.bottom(px(10. + notice_room + bar_room + 12. * p)).opacity(p))
             }));
+        if error.is_none() && !dialog_open {
+            root = root.children(super::tips::card(inspector_target + space::L, space::L + notice_room + bar_room, &t, cx));
+        }
+        root = root.children(super::coach::overlay(window, cx, &t));
         if let Some(message) = error {
             root = root.child(error_alert(message, broken, config_path, &t));
         }

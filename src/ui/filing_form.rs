@@ -54,6 +54,8 @@ pub struct FilingForm {
     byline: Entity<InputState>,
     coauthors: Vec<String>,
     draft: Entity<InputState>,
+    /// The user's own name mark, asked for right here when the pattern wants one and none is set.
+    author: Entity<InputState>,
     date: Entity<DatePickerState>,
     date_value: NaiveDate,
     rename: bool,
@@ -88,8 +90,16 @@ impl FilingForm {
         let title = cx.new(|cx| InputState::new(window, cx).placeholder(tr("z. B. Persona-Board")));
         let byline = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Dozent:in, z. B. Beispiel A (optional)")));
         let draft = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Gruppenarbeit? Nachname V")));
+        let author = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Nachname-V, z. B. Muster-M")));
         let date = cx.new(|cx| DatePickerState::new(window, cx).date_format(if crate::core::i18n::lang() == crate::core::i18n::Lang::En { "%m/%d/%Y" } else { "%d.%m.%Y" }));
         let subs = vec![
+            cx.subscribe(&author, |_, s, e: &InputEvent, cx| {
+                if matches!(e, InputEvent::Change) {
+                    let v = s.read(cx).value().trim().to_string();
+                    state::set_edited_field("author");
+                    state::edit_config(cx, |c| c.author = v);
+                }
+            }),
             cx.subscribe_in(&title, window, |this, _, e: &InputEvent, window, cx| match e {
                 InputEvent::Change => cx.notify(),
                 InputEvent::PressEnter { .. } => this.commit(window, cx),
@@ -128,6 +138,7 @@ impl FilingForm {
             byline,
             coauthors: Vec::new(),
             draft,
+            author,
             date,
             date_value: Local::now().date_naive(),
             rename: renames,
@@ -968,6 +979,18 @@ impl Render for FilingForm {
                 name = name.child(div().flex().flex_col().gap(px(space::S)).child(Input::new(&self.title)).when(self.titles.iter().any(|s| s.title != title_value), |d| d.child(sugg)));
                 match self.role {
                     FileRole::Work => {
+                        let wants_author = state::read(cx, |l| l.config.as_ref().is_some_and(|c| c.author.trim().is_empty()) && module_id.as_ref().and_then(|m| l.config.as_ref().and_then(|c| c.module(m))).is_some_and(|m| m.naming.contains("{author}")));
+                        if wants_author {
+                            name = name.child(
+                                div()
+                                    .id("author-ask")
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(space::M))
+                                    .child(div().flex_none().flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).child(tr("Dein Kürzel"))).child(caption(tr("Steht einmal im Namen jeder Abgabe"), &t)))
+                                    .child(div().w(px(200.)).child(Input::new(&self.author).small())),
+                            );
+                        }
                         let mut row = div().flex().flex_wrap().items_center().gap(px(space::S));
                         for (i, n) in self.coauthors.iter().enumerate() {
                             let (e, n2) = (me.clone(), n.clone());
