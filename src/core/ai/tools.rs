@@ -7,7 +7,7 @@ use chrono::{Datelike, Local, NaiveDate, NaiveTime, TimeZone};
 use serde_json::{Value, json};
 
 use crate::core::cards::{parse, store};
-use crate::core::i18n::{Lang, lang, trf};
+use crate::core::i18n::{Lang, lang, tr, trf};
 use crate::core::library::{Library, Route};
 use crate::core::model::{Kind, ManualAssignment, Status};
 use crate::core::text::fold;
@@ -104,13 +104,13 @@ pub fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "create_note",
-            description: "Creates a Markdown note. The file name follows the title; the folder defaults to the module's notes folder or the study folder.",
-            schema: obj(json!({ "title": { "type": "string" }, "folder": path("Where to put it"), "text": { "type": "string", "description": "Body below the title heading" } }), &["title"]),
+            description: "Creates a Markdown note with the title as heading. The file name follows the title unless `name` is given, e.g. to follow how the other notes in that folder are named; the folder defaults to the module's notes folder or the study folder. Never overwrites.",
+            schema: obj(json!({ "title": { "type": "string" }, "folder": path("Where to put it"), "name": { "type": "string", "description": "File name without folder, .md added when missing" }, "text": { "type": "string", "description": "Body below the title heading" } }), &["title"]),
             write: true,
         },
         ToolDef {
             name: "add_cards",
-            description: "Appends flashcards to a note as `Question :: Answer` lines. Cards whose question already exists in the note are skipped.",
+            description: "Appends flashcards to a note as `Question :: Answer` lines. Cards whose question already exists in the note are skipped. A missing note is created. get_context names the note Schrumbi files cards of the open document in (`cards_note`).",
             schema: obj(
                 json!({ "note": path("The note the cards go to"), "cards": { "type": "array", "items": obj(json!({ "front": { "type": "string" }, "back": { "type": "string" }, "both": { "type": "boolean", "description": "Ask in both directions", "default": false } }), &["front", "back"]) } }),
                 &["note", "cards"],
@@ -139,7 +139,53 @@ pub fn definitions() -> Vec<ToolDef> {
             write: true,
         },
         ToolDef { name: "open", description: "Shows a file in Schrumbi, optionally jumping to a text in a PDF. Changes nothing.", schema: obj(json!({ "path": path("The file"), "find": { "type": "string" } }), &["path"]), write: false },
+        ToolDef { name: "list_inbox", description: "The files waiting in the inbox folder.", schema: obj(json!({}), &[]), write: false },
+        ToolDef {
+            name: "propose_filing",
+            description: "Schrumbi's own guesses where inbox files belong: matching deadlines with their folders, material folders, titles and the file name the module's naming pattern gives. Read-only; file_document does the move.",
+            schema: obj(json!({ "paths": { "type": "array", "items": path("A file"), "description": "Files to look at; the whole inbox (at most 20 files) when omitted" } }), &[]),
+            write: false,
+        },
+        ToolDef {
+            name: "read_setup",
+            description: "How Schrumbi is set up for this study folder: semester dates and breaks, modules with folders, naming patterns, weekly deadlines and links, the naming switch with the user's short name (Kürzel), whether a Moodle calendar is connected, and the top-level folders.",
+            schema: obj(json!({}), &[]),
+            write: false,
+        },
+        ToolDef {
+            name: "propose_setup",
+            description: SETUP_PROPOSAL,
+            schema: obj(json!({ "proposal": setup_schema() }), &["proposal"]),
+            write: false,
+        },
+        ToolDef {
+            name: "apply_setup",
+            description: "Applies a setup proposal (the same object as for propose_setup), optionally only some items by key, as one undoable step after the user agreed. Changes settings only; renames are never executed. In Schrumbi's own column the user applies proposals from the card instead.",
+            schema: obj(json!({ "proposal": setup_schema(), "items": { "type": "array", "items": { "type": "string" }, "description": "Keys from propose_setup, e.g. semester, module:0, naming, calendar; all when omitted" } }), &["proposal"]),
+            write: true,
+        },
     ]
+}
+
+const SETUP_PROPOSAL: &str = "Shows the user ONE setup proposal for Schrumbi as a card they accept item by item; nothing changes until they do. Build it from read_setup and the study folder (list_folder, search, read_pdf_text of course plans) or, without material, from the user's answers. Only settings: semester dates and breaks, modules with folder, short code, naming pattern, weekly deadlines and Moodle course link, the naming switch with the user's Kürzel, the Moodle calendar address. Files are never renamed or moved for a setup: put such ideas into `renames`, which is only shown as a list. After calling it, end your turn and wait; Schrumbi tells you what the user took. Calling it again replaces the card.";
+
+fn setup_schema() -> Value {
+    let day = |what: &str| json!({ "type": "string", "description": format!("{what}, YYYY-MM-DD") });
+    let weekly = obj(
+        json!({ "title": { "type": "string" }, "weekday": { "type": "integer", "minimum": 1, "maximum": 7, "description": "1 = Monday" }, "time": { "type": "string", "description": "HH:MM, default 23:59" }, "week_offset": { "type": "integer", "minimum": 0, "maximum": 4, "description": "Weeks after the lecture week it belongs to" }, "optional": { "type": "boolean" }, "upload": { "type": "boolean", "default": true } }),
+        &["title", "weekday"],
+    );
+    obj(
+        json!({
+            "semester": obj(json!({ "name": { "type": "string", "description": "e.g. WS 2026/27" }, "start": day("First lecture day"), "end": day("Last lecture day"), "breaks": { "type": "array", "items": obj(json!({ "name": { "type": "string" }, "start": day("First free day"), "end": day("Last free day") }), &["start", "end"]) } }), &["start", "end"]),
+            "modules": { "type": "array", "items": obj(json!({ "code": { "type": "string", "description": "Short code, e.g. MA1" }, "name": { "type": "string" }, "folder": { "type": "string", "description": "Folder relative to the study folder" }, "naming": { "type": "string", "description": "File name pattern with {title}, e.g. {code}_{yy}_{title}_{author}_{date}" }, "moodle": { "type": "string", "description": "Moodle course address" }, "weekly": { "type": "array", "items": weekly } }), &["folder"]) },
+            "naming": obj(json!({ "on": { "type": "boolean", "description": "Rename filed work to the module patterns" }, "author": { "type": "string", "description": "The user's Kürzel in file names, e.g. Muster-M" } }), &[]),
+            "moodle_calendar": { "type": "string", "description": "The Moodle calendar export address the user gave" },
+            "renames": { "type": "array", "items": obj(json!({ "from": { "type": "string" }, "to": { "type": "string" }, "why": { "type": "string" } }), &["from", "to"]), "description": "Suggestions only; never executed" },
+            "workflow": { "type": "string", "description": "One or two sentences on how the user seems to work, shown above the items" }
+        }),
+        &[],
+    )
 }
 
 /// Whether the tool changes something and so asks the user first.
@@ -483,11 +529,35 @@ pub fn text_now(lib: &Library, path: &Path) -> Option<String> {
     is_text(path).then(|| current_text(lib, path).ok()).flatten()
 }
 
+/// The note cards made from `source` go into, by the cards page's convention: a note itself, else a note of the same name beside it, else `Karteikarten.md` of its module or folder.
+pub fn card_note(lib: &Library, source: &Path) -> PathBuf {
+    if crate::core::markdown::is_markdown(source) {
+        return source.to_path_buf();
+    }
+    let beside = source.with_extension("md");
+    if beside.is_file() {
+        return beside;
+    }
+    let deck = match (lib.module_containing(source), lib.root.as_ref()) {
+        (Some(m), Some(root)) => root.join(&m.folder),
+        _ => source.parent().map(Path::to_path_buf).or_else(|| lib.root.clone()).unwrap_or_default(),
+    };
+    deck.join(format!("{}.md", tr("Karteikarten")))
+}
+
+fn note_file_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.contains(['/', '\\']) || name.starts_with('.') {
+        return Err("`name` is a file name, not a path.".into());
+    }
+    Ok(if name.to_lowercase().ends_with(".md") { name.to_string() } else { format!("{name}.md") })
+}
+
 /// The file a write tool changes, before it runs.
 pub fn target(lib: &Library, name: &str, args: &Value) -> Option<PathBuf> {
     match name {
         "write_note" => resolve(lib, arg_str(args, "path")?).ok(),
-        "add_cards" => resolve(lib, arg_str(args, "note")?).ok(),
+        "add_cards" => resolve(lib, arg_str(args, "note")?).ok().filter(|p| p.exists()),
         _ => None,
     }
 }
@@ -553,19 +623,36 @@ pub fn preview(lib: &Library, name: &str, args: &Value) -> Result<Preview, Strin
         "create_note" => {
             let title = need_str(args, "title")?;
             let folder = create_folder(lib, args)?;
+            if let Some(name) = arg_str(args, "name") {
+                note_file_name(name)?;
+            }
             let lines = args.get("text").and_then(Value::as_str).map(|t| t.lines().take(6).map(String::from).collect()).unwrap_or_default();
             Ok(Preview { title: trf("Notiz „%@“ in %@ anlegen", &[&title, &folder_label(lib, &folder)]), lines })
         }
         "add_cards" => {
             let path = resolve(lib, need_str(args, "note")?)?;
-            let before = current_text(lib, &path)?;
+            let before = if path.exists() { current_text(lib, &path)? } else { String::new() };
             let (lines, _) = new_card_lines(&before, &cards_from(args)?);
             if lines.is_empty() {
                 return Err("Every card is already in the note.".into());
             }
             let shown: Vec<String> = lines.iter().take(8).map(|l| l.lines().next().unwrap_or_default().to_string()).collect();
             let title = if lines.len() == 1 { trf("1 Karte in %@ ergänzen", &[&name_of(&path)]) } else { trf("%lld Karten in %@ ergänzen", &[&lines.len(), &name_of(&path)]) };
+            let mut shown = shown;
+            if !path.exists() {
+                shown.insert(0, trf("Neue Notiz: %@", &[&rel(lib, &path)]));
+            }
             Ok(Preview { title, lines: shown })
+        }
+        "apply_setup" => {
+            let plan = super::setup::plan(lib, args.get("proposal").unwrap_or(&Value::Null))?;
+            let keys = setup_keys(args);
+            let chosen: Vec<&super::setup::Item> = plan.items.iter().filter(|i| keys.is_empty() || keys.contains(&i.key)).collect();
+            if chosen.is_empty() {
+                return Err("None of the given items is in the proposal.".into());
+            }
+            let title = if chosen.len() == 1 { tr("Einen Punkt der Einrichtung übernehmen") } else { trf("%lld Punkte der Einrichtung übernehmen", &[&chosen.len()]) };
+            Ok(Preview { title, lines: chosen.iter().map(|i| i.title.clone()).collect() })
         }
         "add_deadline" => {
             let title = need_str(args, "title")?;
@@ -676,7 +763,16 @@ pub fn call(lib: &mut Library, name: &str, args: &Value) -> Result<Outcome, Stri
         "create_note" => {
             let title = need_str(args, "title")?;
             let folder = create_folder(lib, args)?;
-            let path = lib.create_note(title, &folder, "md").ok_or_else(|| lib.last_error.take().unwrap_or_else(|| "The note could not be created.".into()))?;
+            let path = match arg_str(args, "name").map(note_file_name).transpose()? {
+                Some(name) => {
+                    let stem = name.strip_suffix(".md").or_else(|| name.strip_suffix(".MD")).unwrap_or(&name).to_string();
+                    let path = lib.create_note(&stem, &folder, "md").ok_or_else(|| lib.last_error.take().unwrap_or_else(|| "The note could not be created.".into()))?;
+                    let heading = format!("# {title}\n");
+                    lib.edit_note(&path, "ai", trf("%@ angelegt", &[&name_of(&path)]), |before| if before.trim_start().starts_with('#') { before.split_once('\n').map_or_else(|| heading.clone(), |(_, rest)| format!("{heading}{rest}")) } else { format!("{heading}{before}") });
+                    path
+                }
+                None => lib.create_note(title, &folder, "md").ok_or_else(|| lib.last_error.take().unwrap_or_else(|| "The note could not be created.".into()))?,
+            };
             if let Some(text) = args.get("text").and_then(Value::as_str).filter(|t| !t.trim().is_empty()) {
                 let body = text.to_string();
                 lib.edit_note(&path, "ai", trf("%@ geändert", &[&name_of(&path)]), |before| with_newline(format!("{}\n{body}", with_newline(before.to_string()))));
@@ -685,12 +781,19 @@ pub fn call(lib: &mut Library, name: &str, args: &Value) -> Result<Outcome, Stri
             Ok(Outcome { value: json!({ "path": rel(lib, &path), "version": version }), changed: Some(trf("%@ angelegt", &[&name_of(&path)])) })
         }
         "add_cards" => {
-            let path = resolve(lib, need_str(args, "note")?)?;
-            if !is_text(&path) {
-                return Err("Cards go into a Markdown note.".into());
+            let wanted = resolve(lib, need_str(args, "note")?)?;
+            if !crate::core::markdown::is_markdown(&wanted) {
+                return Err("Cards go into a Markdown note (.md).".into());
             }
-            let key = lib.buffer_key(&path);
             let cards = cards_from(args)?;
+            let path = if wanted.exists() {
+                wanted
+            } else {
+                let folder = wanted.parent().map(Path::to_path_buf).ok_or(OUTSIDE)?;
+                let stem = wanted.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                lib.create_note(&stem, &folder, "md").ok_or_else(|| lib.last_error.take().unwrap_or_else(|| "The note could not be created.".into()))?
+            };
+            let key = lib.buffer_key(&path);
             let before = current_text(lib, &key)?;
             let (lines, duplicates) = new_card_lines(&before, &cards);
             if lines.is_empty() {
@@ -753,8 +856,62 @@ pub fn call(lib: &mut Library, name: &str, args: &Value) -> Result<Outcome, Stri
             lib.open_file(&path);
             plain(json!({ "opened": rel(lib, &path) }))
         }
+        "list_inbox" => plain(json!({ "inbox": lib.config.as_ref().map(|c| c.inbox.clone()), "files": lib.inbox.iter().take(FOLDER_ENTRIES).map(|p| json!({ "path": rel(lib, p), "name": name_of(p) })).collect::<Vec<_>>(), "total": lib.inbox.len() })),
+        "propose_filing" => plain(filing(lib, args)?),
+        "read_setup" => plain(super::setup::read(lib, calendar_connected(lib))?),
+        "propose_setup" => {
+            let plan = super::setup::plan(lib, args.get("proposal").unwrap_or(&Value::Null))?;
+            plain(super::setup::plan_json(&plan))
+        }
+        "apply_setup" => {
+            let plan = super::setup::plan(lib, args.get("proposal").unwrap_or(&Value::Null))?;
+            super::setup::apply(lib, &plan, &setup_keys(args))
+        }
         other => Err(format!("Unknown tool `{other}`")),
     }
+}
+
+fn setup_keys(args: &Value) -> Vec<String> {
+    args.get("items").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()
+}
+
+fn calendar_connected(lib: &Library) -> bool {
+    lib.root.as_ref().is_some_and(|r| crate::core::prefs::with(|p| p.calendar_sources.get(r.to_string_lossy().as_ref()).is_some_and(|u| !u.trim().is_empty())))
+}
+
+const FILING_FILES: usize = 20;
+
+fn filing(lib: &Library, args: &Value) -> Result<Value, String> {
+    let paths: Vec<PathBuf> = match args.get("paths").and_then(Value::as_array) {
+        Some(list) => list.iter().filter_map(Value::as_str).map(|p| resolve(lib, p)).collect::<Result<_, _>>()?,
+        None => lib.inbox.clone(),
+    };
+    let namings = lib.namings();
+    let ignore = lib.title_ignore_words();
+    let folders: Vec<String> = lib.material_targets().iter().take(5).map(|t| rel(lib, &t.path)).collect();
+    let naming_on = lib.config.as_ref().is_some_and(crate::core::model::StudyConfig::naming_convention);
+    let mut out = Vec::new();
+    for path in paths.iter().take(FILING_FILES) {
+        if !path.is_file() {
+            out.push(json!({ "path": rel(lib, path), "error": "no such file" }));
+            continue;
+        }
+        let facts = crate::core::filing::FileFacts::read(path);
+        let titles: Vec<String> = crate::core::filing::title_suggestions(&facts, &namings, &ignore).into_iter().take(3).map(|s| s.title).collect();
+        let date = facts.name_date.unwrap_or_else(|| facts.created.date_naive());
+        let ext = crate::core::naming::extension(facts.name()).to_string();
+        let deadlines: Vec<Value> = lib
+            .rank_targets(&facts)
+            .iter()
+            .take(3)
+            .map(|a| {
+                let name = titles.first().filter(|_| naming_on).and_then(|t| lib.naming(&a.module_id).map(|n| n.render(t, date, &ext, &[], a.week, a.iso_week, None)));
+                json!({ "id": a.id, "title": a.title, "module": lib.module(a).map(|m| m.code.clone()), "folder": lib.filing_folder(a).map(|f| rel(lib, &f)), "name": name })
+            })
+            .collect();
+        out.push(json!({ "path": rel(lib, path), "pages": facts.page_count, "titles": titles, "deadlines": deadlines, "folders": folders }));
+    }
+    Ok(json!({ "files": out, "more": paths.len().saturating_sub(FILING_FILES) }))
 }
 
 fn context(lib: &Library) -> Value {
@@ -782,6 +939,7 @@ fn context(lib: &Library) -> Value {
         "module": module.map(module_json),
         "active_document": lib.active_document.as_ref().map(|p| rel(lib, p)),
         "split_document": lib.split_document.as_ref().map(|p| rel(lib, p)),
+        "cards_note": lib.focused_document().filter(|d| crate::core::markdown::is_markdown(d) || d.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"))).map(|d| rel(lib, &card_note(lib, d))),
         "selected_deadline": lib.selection().and_then(|id| lib.assignment(id)).map(|a| deadline_json(lib, a)),
         "today": lib.today().format("%Y-%m-%d").to_string(),
         "week": lib.current_week().map(|w| json!({ "index": w.index, "monday": w.monday.format("%Y-%m-%d").to_string() })),

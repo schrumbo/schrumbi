@@ -18,6 +18,8 @@ pub const OWN_SERVER: &str = "schrumbi-app";
 pub struct Policy {
     pub root: PathBuf,
     pub allow_execute: bool,
+    /// The agent writes files only through the client (`fs/write_text_file`), as Claude's adapter does; any other agent's own edits are refused.
+    pub client_edits: bool,
 }
 
 /// How a permission request of the agent is answered.
@@ -128,6 +130,8 @@ pub enum Event {
     Write { path: PathBuf, content: String, reply: Reply<Result<(), String>> },
     /// A tool call refused without asking, e.g. a shell command while those are off.
     Denied { tool: String },
+    /// The agent offers none of the modes that make it ask before changes; Schrumbi ends the session before the first prompt.
+    Unsafe,
     TurnEnded(Result<Stop, String>),
 }
 
@@ -143,8 +147,10 @@ pub struct Setup {
     pub cwd: PathBuf,
     pub mcp: Option<McpServerStdio>,
     pub meta: Option<Meta>,
-    /// The session mode to switch to when the agent offers it, e.g. Claude's „default“ that asks before changes.
-    pub mode: Option<String>,
+    /// Session modes that make the agent ask before changes, best first, e.g. Claude's „default“ or Codex's „read-only“.
+    pub modes: Vec<String>,
+    /// Without one of `modes` the agent could change files on its own, so the session ends at once.
+    pub require_mode: bool,
     pub policy: Policy,
 }
 
@@ -207,7 +213,8 @@ fn status_of(status: ToolCallStatus) -> Status {
 
 const SHELLS: [&str; 4] = ["Bash", "PowerShell", "shell", "execute"];
 
-/// Decides a permission request: Schrumbi's own tools ask in Schrumbi, reads inside the folder pass, shell commands follow the setting, the rest asks.
+/// Decides a permission request: Schrumbi's own tools ask in Schrumbi, reads inside the folder pass, shell commands follow the setting,
+/// deleting and moving are refused, edits ask only for agents that write through Schrumbi, the rest asks.
 pub fn decide(request: &RequestPermissionRequest, policy: &Policy) -> Decision {
     let call = &request.tool_call;
     let name = call.fields.name.as_deref().unwrap_or_default();
@@ -217,7 +224,8 @@ pub fn decide(request: &RequestPermissionRequest, policy: &Policy) -> Decision {
     let kind = call.fields.kind.map(kind_of).unwrap_or(if SHELLS.contains(&name) { Kind::Execute } else { Kind::Other });
     match kind {
         Kind::Execute if policy.allow_execute => Decision::Ask,
-        Kind::Execute => Decision::Reject,
+        Kind::Execute | Kind::Delete | Kind::Move => Decision::Reject,
+        Kind::Edit if !policy.client_edits => Decision::Reject,
         Kind::Read | Kind::Search | Kind::Think => {
             let places = call.fields.locations.as_deref().unwrap_or_default();
             if places.iter().all(|l| inside(&policy.root, &l.path)) { Decision::Allow } else { Decision::Ask }
@@ -400,10 +408,17 @@ async fn session(connection: ConnectionTo<Agent>, setup: Setup, events: async_ch
     }
     let session = connection.send_request(request).block_task().await?;
     let id = session.session_id.clone();
-    if let Some(mode) = setup.mode
-        && session.modes.as_ref().is_some_and(|m| m.available_modes.iter().any(|x| *x.id.0 == *mode) && *m.current_mode_id.0 != *mode)
-    {
-        connection.send_request(SetSessionModeRequest::new(id.clone(), mode)).block_task().await?;
+    let offered = |mode: &String| session.modes.as_ref().is_some_and(|m| m.available_modes.iter().any(|x| *x.id.0 == **mode));
+    match setup.modes.iter().find(|m| offered(m)) {
+        Some(mode) if session.modes.as_ref().is_some_and(|m| *m.current_mode_id.0 != **mode) => {
+            connection.send_request(SetSessionModeRequest::new(id.clone(), mode.clone())).block_task().await?;
+        }
+        Some(_) => {}
+        None if setup.require_mode => {
+            let _ = events.try_send(Event::Unsafe);
+            return Ok(());
+        }
+        None => {}
     }
     let _ = events.try_send(Event::Ready);
     let mut queue = VecDeque::new();

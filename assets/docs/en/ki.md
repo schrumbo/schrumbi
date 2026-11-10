@@ -34,6 +34,14 @@ Right-clicking a file, a deadline or selected text shows {ui:KI} with fitting re
 
 While Schrumbi runs, it reads your notes, PDFs, deadlines and cards. Ask for example: Which submissions are due in the next 7 days?
 
+The column's tasks are there as commands:
+
+````example
+/mcp__schrumbi__karten MA/VL3.pdf 12
+/mcp__schrumbi__woche
+/mcp__schrumbi__einrichten
+````
+
 ## Changes
 
 Before every change Schrumbi asks in the column, or at the bottom right of the window when the column is closed.
@@ -48,4 +56,4 @@ The changes of one request are one step: {key:Undo} takes them back together. If
 
 ## What the AI never does
 
-It deletes nothing, renames nothing and never rates cards. It never overwrites unsaved text. It runs commands only when you switch on {ui:Befehle ausführen erlauben}.
+It deletes nothing, renames nothing and never rates cards. Codex runs only in its read-only mode, OpenCode without its own file edits; both change things only through Schrumbi. It never overwrites unsaved text. It runs commands only when you switch on {ui:Befehle ausführen erlauben}.

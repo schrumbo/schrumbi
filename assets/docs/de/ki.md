@@ -34,6 +34,14 @@ Rechtsklick auf eine Datei, eine Abgabe oder markierten Text zeigt {ui:KI} mit p
 
 Solange Schrumbi läuft, liest es deine Notizen, PDFs, Fristen und Karten. Frag zum Beispiel: Welche Abgaben habe ich in den nächsten 7 Tagen?
 
+Die Abläufe der Spalte gibt es dort als Befehle:
+
+````example
+/mcp__schrumbi__karten MA/VL3.pdf 12
+/mcp__schrumbi__woche
+/mcp__schrumbi__einrichten
+````
+
 ## Änderungen
 
 Vor jeder Änderung fragt Schrumbi in der Spalte, bei geschlossener Spalte unten rechts im Fenster.
@@ -48,4 +56,4 @@ Die Änderungen eines Auftrags sind ein Schritt: {key:Undo} nimmt sie zusammen z
 
 ## Was die KI nie tut
 
-Sie löscht nichts, benennt nichts um und bewertet keine Karten. Ungesicherten Text überschreibt sie nicht. Befehle startet sie nur, wenn du {ui:Befehle ausführen erlauben} einschaltest.
+Sie löscht nichts, benennt nichts um und bewertet keine Karten. Codex läuft nur in seinem Nur-Lesen-Modus, OpenCode ohne eigene Dateiänderungen; beide ändern nur über Schrumbi. Ungesicherten Text überschreibt sie nicht. Befehle startet sie nur, wenn du {ui:Befehle ausführen erlauben} einschaltest.

@@ -4,12 +4,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rmcp::handler::server::ServerHandler;
-use rmcp::model::{CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool, ToolAnnotations};
+use rmcp::model::{CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, GetPromptRequestParams, GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult, ListToolsResult, PaginatedRequestParams, Prompt, PromptArgument, PromptMessage, Role, ServerCapabilities, ServerConfig, Tool, ToolAnnotations};
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData as McpError, ServiceExt};
 use serde_json::{Value, json};
 
-use super::{instance, tools};
+use super::{instance, prompts, tools};
 
 const NOT_RUNNING: &str = "Schrumbi is not running, or its assistant is switched off. Ask the user to open Schrumbi and check Settings → KI (Einstellungen → KI).";
 const READ_WAIT: Duration = Duration::from_secs(60);
@@ -31,6 +31,10 @@ fn tool_list() -> Vec<Tool> {
         .collect()
 }
 
+fn prompt_list() -> Vec<Prompt> {
+    prompts::mcp_prompts().into_iter().map(|(name, description, args)| Prompt::new(name, Some(description), Some(args.into_iter().map(|(n, d)| PromptArgument::new(n).with_description(d).with_required(false)).collect()))).collect()
+}
+
 /// Sends one tool call to the running app and waits for its answer.
 pub fn forward(session: &str, forced: Option<u32>, name: &str, args: &Value) -> Result<Value, String> {
     let cwd = std::env::current_dir().unwrap_or_default();
@@ -49,11 +53,21 @@ pub fn forward(session: &str, forced: Option<u32>, name: &str, args: &Value) -> 
 
 impl ServerHandler for Bridge {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(Implementation::new("schrumbi", env!("CARGO_PKG_VERSION"))).with_instructions(tools::INSTRUCTIONS)
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_prompts().build()).with_server_info(Implementation::new("schrumbi", env!("CARGO_PKG_VERSION"))).with_instructions(tools::INSTRUCTIONS)
     }
 
     async fn list_tools(&self, _: Option<PaginatedRequestParams>, _: RequestContext<RoleServer>) -> Result<ListToolsResult, McpError> {
         Ok(ListToolsResult::with_all_items(tool_list()))
+    }
+
+    async fn list_prompts(&self, _: Option<PaginatedRequestParams>, _: RequestContext<RoleServer>) -> Result<ListPromptsResult, McpError> {
+        Ok(ListPromptsResult::with_all_items(prompt_list()))
+    }
+
+    async fn get_prompt(&self, request: GetPromptRequestParams, _: RequestContext<RoleServer>) -> Result<GetPromptResponse, McpError> {
+        let flow = prompts::Flow::from_key(&request.name).ok_or_else(|| McpError::invalid_params(format!("unknown prompt {}", request.name), None))?;
+        let text = prompts::mcp_text(flow, &request.arguments.unwrap_or_default());
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(Role::User, text)]).into())
     }
 
     async fn call_tool(&self, request: CallToolRequestParams, _: RequestContext<RoleServer>) -> Result<CallToolResponse, McpError> {

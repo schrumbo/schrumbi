@@ -299,3 +299,185 @@ fn a_session_saved_as_note_quotes_the_user_and_lists_the_steps() {
 Fertig.
 ");
 }
+
+fn lecture_pdf(path: &Path, pages: &[&str]) {
+    use lopdf::content::{Content, Operation};
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+    let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "Encoding" => "WinAnsiEncoding" });
+    let mut kids: Vec<Object> = Vec::new();
+    for line in pages {
+        let ops = vec![Operation::new("BT", vec![]), Operation::new("Tf", vec!["F1".into(), 12.into()]), Operation::new("Td", vec![72.into(), 700.into()]), Operation::new("Tj", vec![Object::string_literal(*line)]), Operation::new("ET", vec![])];
+        let contents = doc.add_object(Stream::new(dictionary! {}, Content { operations: ops }.encode().unwrap()));
+        let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()], "Contents" => contents, "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } } });
+        kids.push(page.into());
+    }
+    let count = kids.len() as i64;
+    doc.objects.insert(pages_id, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => count }));
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    doc.trailer.set("Root", catalog);
+    doc.save(path).unwrap();
+}
+
+#[test]
+fn cards_from_a_pdf_page_land_in_the_modules_card_note_as_one_step() {
+    let root = folder("cards-page");
+    std::fs::create_dir_all(root.join("MA")).unwrap();
+    let pdf = root.join("MA").join("VL3.pdf");
+    lecture_pdf(&pdf, &["Einleitung", "Cauchy-Kriterium: eine Folge konvergiert genau dann", "Ende"]);
+    let mut lib = open(&root);
+    let mut turns = Turns::default();
+    let page = turns.call(&mut lib, "s", "read_pdf_text", &json!({ "path": "MA/VL3.pdf", "pages": "2" })).unwrap();
+    assert!(page["content"][0]["text"].as_str().unwrap().contains("Cauchy"), "{page}");
+    let target = tools::card_note(&lib, &pdf);
+    assert_eq!(target, root.join("MA").join("Karteikarten.md"), "a PDF in a module files its cards in the module's card note");
+    let rel = lib.relative_path(&target);
+    let preview = tools::preview(&lib, "add_cards", &json!({ "note": rel, "cards": [{ "front": "Cauchy-Kriterium?", "back": "Konvergenz ohne Grenzwert prüfen" }] })).unwrap();
+    assert!(preview.lines.iter().any(|l| l.contains("Karteikarten.md")), "{preview:?}");
+    assert!(!target.exists(), "a preview writes nothing");
+    let cards = json!([{ "front": "Cauchy-Kriterium?", "back": "Konvergenz ohne Grenzwert prüfen" }, { "front": "Was ist eine Cauchy-Folge?", "back": "Glieder kommen sich beliebig nahe" }]);
+    let added = turns.call(&mut lib, "s", "add_cards", &json!({ "note": rel, "cards": cards })).unwrap();
+    assert_eq!(added["added"], 2);
+    let text = lib.buffer(&target).text.clone();
+    assert!(text.contains("Cauchy-Kriterium? :: Konvergenz ohne Grenzwert prüfen"), "{text}");
+    assert_eq!(crate::core::cards::parse::cards_in(&text).len(), 2);
+    assert_eq!(lib.undo_label(), Some("KI: 2 Karten in Karteikarten.md ergänzt"));
+    lib.undo();
+    assert!(!target.exists(), "one undo takes back the new note with its cards");
+    std::fs::write(root.join("MA").join("VL3.md"), "# VL3\n").unwrap();
+    assert_eq!(tools::card_note(&lib, &pdf), root.join("MA").join("VL3.md"), "a note of the same name beside the PDF wins");
+}
+
+fn proposal() -> Value {
+    json!({
+        "semester": { "name": "WS 2026/27", "start": "2026-10-19", "end": "2027-02-12", "breaks": [{ "name": "Weihnachten", "start": "2026-12-21", "end": "2027-01-03" }] },
+        "modules": [
+            { "code": "MA", "name": "Analysis 1", "folder": "MA", "naming": "{code}_{yy}_{title}_{author}_{date}", "weekly": [{ "title": "Übungsblatt", "weekday": 4, "time": "12:00" }] },
+            { "code": "LA", "name": "Lineare Algebra", "folder": "LA", "moodle": "https://moodle.example.org/course/view.php?id=7", "weekly": [{ "title": "Abgabe", "weekday": 2, "time": "10:00", "week_offset": 1 }] }
+        ],
+        "naming": { "on": true, "author": "Muster-M" },
+        "moodle_calendar": "https://moodle.example.org/calendar/export_execute.php?token=abc",
+        "renames": [{ "from": "MA/blatt1.pdf", "to": "MA/MA_26_Blatt-1_Muster-M_261020.pdf" }],
+        "workflow": "Arbeitet wochenweise."
+    })
+}
+
+#[test]
+fn a_setup_proposal_applies_chosen_items_as_one_step_and_never_moves_files() {
+    let root = folder("setup");
+    std::fs::create_dir_all(root.join("MA")).unwrap();
+    std::fs::write(root.join("MA").join("blatt1.pdf"), b"%PDF-1.4").unwrap();
+    let mut lib = open(&root);
+    let mut turns = Turns::default();
+    let before = lib.config.clone().unwrap();
+    let on_disk = std::fs::read(root.join("schrumbi.json")).unwrap();
+    let shown = turns.call(&mut lib, "s", "propose_setup", &json!({ "proposal": proposal() })).unwrap();
+    let keys: Vec<&str> = shown["items"].as_array().unwrap().iter().map(|i| i["key"].as_str().unwrap()).collect();
+    assert_eq!(keys, vec!["semester", "module:0", "module:1", "naming", "calendar"]);
+    assert_eq!(shown["renames"][0]["from"], "MA/blatt1.pdf");
+    assert_eq!(lib.config.as_ref(), Some(&before), "proposing changes nothing");
+    assert_eq!(std::fs::read(root.join("schrumbi.json")).unwrap(), on_disk);
+    assert!(!lib.can_undo());
+    assert!(!tools::is_write("propose_setup") && tools::is_write("apply_setup"));
+    let preview = tools::preview(&lib, "apply_setup", &json!({ "proposal": proposal(), "items": ["semester", "module:0", "naming"] })).unwrap();
+    assert_eq!(preview.lines.len(), 3);
+    turns.call(&mut lib, "s", "apply_setup", &json!({ "proposal": proposal(), "items": ["semester", "module:0", "module:1", "naming", "calendar"] })).unwrap();
+    let c = lib.config.clone().unwrap();
+    let s = lib.semester().unwrap().clone();
+    assert_eq!((s.start.as_str(), s.end.as_str(), s.breaks.len()), ("2026-10-19", "2027-02-12", 1));
+    let ma = c.modules.iter().find(|m| m.folder == "MA").unwrap();
+    assert_eq!(ma.name, "Analysis 1");
+    assert_eq!(ma.rules.len(), 1);
+    assert_eq!((ma.rules[0].weekday, ma.rules[0].time.as_str()), (4, "12:00"));
+    assert_eq!(c.modules.iter().filter(|m| m.folder == "MA").count(), 1, "the existing module is changed, not doubled");
+    let la = c.modules.iter().find(|m| m.folder == "LA").unwrap();
+    assert_eq!(la.semester, s.id);
+    assert!(la.links.iter().any(|l| l.address.contains("moodle.example.org") && l.upload));
+    assert!(c.naming_convention() && c.author == "Muster-M");
+    let key = root.to_string_lossy().to_string();
+    assert!(crate::core::prefs::with(|p| p.calendar_sources.get(&key).cloned()).is_some_and(|u| u.contains("token=abc")));
+    assert!(root.join("MA").join("blatt1.pdf").exists() && !root.join("MA").join("MA_26_Blatt-1_Muster-M_261020.pdf").exists(), "renames are only shown");
+    assert!(!root.join("LA").exists(), "a setup creates no folders");
+    assert!(lib.undo_label().is_some_and(|l| l.starts_with("KI: ")));
+    lib.undo();
+    assert_eq!(lib.config.as_ref(), Some(&before), "one undo takes back every applied setting");
+    assert!(crate::core::prefs::with(|p| p.calendar_sources.get(&key).cloned()).is_none(), "the calendar address goes with it");
+    assert!(!lib.can_undo());
+}
+
+#[test]
+fn a_setup_proposal_applies_only_the_items_taken_and_refuses_what_leaves_the_folder() {
+    let root = folder("setup-part");
+    let mut lib = open(&root);
+    let mut turns = Turns::default();
+    let before = lib.config.clone().unwrap();
+    turns.call(&mut lib, "s", "apply_setup", &json!({ "proposal": proposal(), "items": ["module:1"] })).unwrap();
+    let c = lib.config.clone().unwrap();
+    assert_eq!(c.modules.len(), before.modules.len() + 1);
+    assert_eq!(c.semesters, before.semesters);
+    assert_eq!((c.naming_convention(), c.author.as_str()), (before.naming_convention(), before.author.as_str()));
+    let mut outside = proposal();
+    outside["modules"][0]["folder"] = json!("../anderswo");
+    assert!(turns.call(&mut lib, "s", "propose_setup", &json!({ "proposal": outside })).is_err());
+    let mut bad = proposal();
+    bad["semester"]["end"] = json!("2026-01-01");
+    assert!(turns.call(&mut lib, "s", "apply_setup", &json!({ "proposal": bad })).is_err());
+    assert_eq!(lib.config.as_ref(), Some(&c), "a refused proposal changes nothing");
+    assert!(turns.call(&mut lib, "s", "propose_setup", &json!({ "proposal": {} })).is_err());
+    let read = turns.call(&mut lib, "s", "read_setup", &json!({})).unwrap();
+    assert!(read["modules"].as_array().unwrap().iter().any(|m| m["folder"] == "LA"));
+}
+
+#[test]
+fn inbox_files_get_proposals_and_a_filing_turn_undoes_as_one() {
+    let root = folder("inbox");
+    std::fs::create_dir_all(root.join("_Inbox")).unwrap();
+    std::fs::create_dir_all(root.join("MA")).unwrap();
+    std::fs::write(root.join("_Inbox").join("Blatt 2.md"), "# Blatt 2\n").unwrap();
+    std::fs::write(root.join("_Inbox").join("Skript.txt"), "Analysis Skript").unwrap();
+    let mut lib = open(&root);
+    let mut turns = Turns::default();
+    let listed = turns.call(&mut lib, "s", "list_inbox", &json!({})).unwrap();
+    assert_eq!(listed["total"], 2, "{listed}");
+    let proposed = turns.call(&mut lib, "s", "propose_filing", &json!({})).unwrap();
+    assert_eq!(proposed["files"].as_array().unwrap().len(), 2);
+    assert!(proposed["files"][0]["titles"].as_array().is_some());
+    assert!(!lib.can_undo(), "proposing moves nothing");
+    for f in ["_Inbox/Blatt 2.md", "_Inbox/Skript.txt"] {
+        turns.call(&mut lib, "s", "file_document", &json!({ "path": f, "folder": "MA" })).unwrap();
+    }
+    assert!(root.join("MA").join("Blatt 2.md").exists() && root.join("MA").join("Skript.txt").exists());
+    lib.undo();
+    assert!(root.join("_Inbox").join("Blatt 2.md").exists() && root.join("_Inbox").join("Skript.txt").exists(), "one undo puts both back");
+}
+
+#[test]
+fn a_new_note_can_follow_the_folders_naming() {
+    let root = folder("named-note");
+    std::fs::create_dir_all(root.join("MA")).unwrap();
+    let mut lib = open(&root);
+    let mut turns = Turns::default();
+    let made = turns.call(&mut lib, "s", "create_note", &json!({ "title": "Grenzwerte", "folder": "MA", "name": "VL03 Grenzwerte", "text": "Kern" })).unwrap();
+    assert_eq!(made["path"], "MA/VL03 Grenzwerte.md");
+    let text = lib.buffer(&root.join("MA").join("VL03 Grenzwerte.md")).text.clone();
+    assert!(text.starts_with("# Grenzwerte\n") && text.contains("Kern"), "{text}");
+    assert!(turns.call(&mut lib, "s", "create_note", &json!({ "title": "X", "name": "../X" })).is_err());
+    lib.undo();
+    assert!(!root.join("MA").join("VL03 Grenzwerte.md").exists());
+}
+
+#[test]
+fn terminal_users_get_one_prompt_per_flow_with_its_guide() {
+    use super::prompts::{Flow, mcp_prompts, mcp_text};
+    let names: Vec<&str> = mcp_prompts().iter().map(|p| p.0).collect();
+    assert_eq!(names, vec!["karten", "erklaeren", "zusammenfassen", "woche", "inbox", "abfragen", "einrichten"]);
+    let mut args = serde_json::Map::new();
+    args.insert("path".into(), json!("MA/VL3.pdf"));
+    args.insert("pages".into(), json!("3-4"));
+    let text = mcp_text(Flow::Cards, &args);
+    assert!(text.contains("MA/VL3.pdf") && text.contains("3-4") && text.contains("add_cards"), "{text}");
+    assert!(mcp_text(Flow::Quiz, &serde_json::Map::new()).contains("read-only"));
+    assert!(Flow::Quiz.read_only() && Flow::Explain.read_only() && !Flow::Cards.read_only());
+    assert!(mcp_text(Flow::Setup, &serde_json::Map::new()).contains("propose_setup"));
+}

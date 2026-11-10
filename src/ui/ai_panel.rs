@@ -416,7 +416,7 @@ impl AiPanel {
             let (args, env) = agents::server_command(&id);
             McpServerStdio::new(acp::OWN_SERVER, exe).args(args).env(env.into_iter().map(|(k, v)| EnvVariable::new(k, v)).collect())
         });
-        let setup = acp::Setup { cwd: root.clone(), mcp, meta: launch.claude.then(|| agents::claude_meta(p.allow_execute)), mode: launch.claude.then(|| "default".to_string()), policy: acp::Policy { root: root.clone(), allow_execute: p.allow_execute } };
+        let setup = acp::Setup { cwd: root.clone(), mcp, meta: launch.claude.then(|| agents::claude_meta(p.allow_execute)), modes: launch.modes.clone(), require_mode: launch.require_mode, policy: acp::Policy { root: root.clone(), allow_execute: p.allow_execute, client_edits: launch.claude } };
         let agent = AcpAgent::new(AcpAgentConfig::new(launch.program.clone()).args(launch.args.clone()).envs(launch.env.clone()));
         let (events_tx, events_rx) = async_channel::unbounded::<Event>();
         let (commands_tx, commands_rx) = async_channel::unbounded::<Command>();
@@ -605,6 +605,10 @@ impl AiPanel {
                     t.status = Status::Failed;
                     self.touch(at);
                 }
+            }
+            Event::Unsafe => {
+                self.stop(cx);
+                self.notice(tr("Schrumbi startet dieses Programm nicht: Es lässt sich nicht so einstellen, dass es vor jeder Änderung fragt."), false);
             }
             Event::TurnEnded(result) => self.turn_ended(result, cx),
         }

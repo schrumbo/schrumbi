@@ -53,6 +53,10 @@ pub struct Launch {
     pub env: Vec<(String, String)>,
     /// Session options only Claude's adapter reads: it may not edit files or run commands itself.
     pub claude: bool,
+    /// Session modes that make the agent ask before changes, best first.
+    pub modes: Vec<String>,
+    /// The agent starts only in one of `modes`.
+    pub require_mode: bool,
 }
 
 /// Why an agent cannot start yet.
@@ -132,22 +136,18 @@ pub fn launch(runner: Runner, prefs: &AiPrefs) -> Result<Launch, Missing> {
                 env.push(("CLAUDE_CODE_EXECUTABLE".into(), cli.to_string_lossy().to_string()));
             }
             if let Some(adapter) = install::claude_adapter() {
-                return Ok(Launch { runner, program: adapter, args: Vec::new(), env, claude: true });
+                return Ok(Launch { runner, program: adapter, args: Vec::new(), env, claude: true, modes: claude_modes(), require_mode: false });
             }
             let npx = detect::which("npx").ok_or(Missing::Adapter)?;
-            Ok(Launch { runner, program: npx, args: vec!["-y".into(), CLAUDE_PACKAGE.into()], env, claude: true })
+            Ok(Launch { runner, program: npx, args: vec!["-y".into(), CLAUDE_PACKAGE.into()], env, claude: true, modes: claude_modes(), require_mode: false })
         }
         Runner::Known(Agent::Codex) => {
             let npx = detect::which("npx").ok_or(Missing::Node)?;
-            let mut env = Vec::new();
-            if !prefs.allow_execute {
-                env.push(("INITIAL_AGENT_MODE".into(), "read-only".into()));
-            }
-            Ok(Launch { runner, program: npx, args: vec!["-y".into(), CODEX_PACKAGE.into()], env, claude: false })
+            Ok(Launch { runner, program: npx, args: vec!["-y".into(), CODEX_PACKAGE.into()], env: codex_env(), claude: false, modes: vec![CODEX_SAFE_MODE.into()], require_mode: true })
         }
         Runner::Known(Agent::OpenCode) => {
             let program = cli(Agent::OpenCode).ok_or(Missing::Program)?;
-            Ok(Launch { runner, program, args: vec!["acp".into()], env: Vec::new(), claude: false })
+            Ok(Launch { runner, program, args: vec!["acp".into()], env: opencode_env(prefs.allow_execute), claude: false, modes: Vec::new(), require_mode: false })
         }
         Runner::Custom => {
             let mut parts = split_command(&prefs.custom_command).into_iter().peekable();
@@ -163,9 +163,27 @@ pub fn launch(runner: Runner, prefs: &AiPrefs) -> Result<Launch, Missing> {
                 env.extend(cleared());
             }
             args.retain(|a| !a.is_empty());
-            Ok(Launch { runner, program: PathBuf::from(program), args, env, claude })
+            Ok(Launch { runner, program: PathBuf::from(program), args, env, claude, modes: if claude { claude_modes() } else { Vec::new() }, require_mode: false })
         }
     }
+}
+
+/// The Codex mode in which it changes no file and runs commands only read-only; Schrumbi starts Codex only in it.
+pub const CODEX_SAFE_MODE: &str = "read-only";
+
+fn claude_modes() -> Vec<String> {
+    vec!["default".into()]
+}
+
+/// What Codex's adapter starts with: its read-only mode, also before the session switches to it.
+pub fn codex_env() -> Vec<(String, String)> {
+    vec![("INITIAL_AGENT_MODE".into(), CODEX_SAFE_MODE.into())]
+}
+
+/// What OpenCode starts with: its own file edits switched off, so changes go through Schrumbi's tools; the shell only when allowed, and then it asks.
+pub fn opencode_env(allow_execute: bool) -> Vec<(String, String)> {
+    let permission = json!({ "edit": "deny", "bash": if allow_execute { "ask" } else { "deny" }, "webfetch": "ask" });
+    vec![("OPENCODE_PERMISSION".into(), permission.to_string()), ("OPENCODE_CONFIG_CONTENT".into(), json!({ "permission": permission }).to_string())]
 }
 
 /// The options Claude's adapter takes with a new session: no file edits or shell of its own, Schrumbi's prompt appended.

@@ -111,6 +111,8 @@ pub enum Change {
     Bytes { path: PathBuf, bytes: Vec<u8> },
     /// Puts cards' progress back, in the vault whose cards they are.
     Cards { root: Option<PathBuf>, swaps: Vec<super::cards::Swap> },
+    /// Puts the calendar address of a workspace back; `None` takes it away.
+    CalendarSource { root: String, url: Option<String> },
 }
 
 /// What one undo or redo reverts.
@@ -1028,6 +1030,35 @@ impl Library {
         }
         self.config = Some(c);
         self.changed();
+        true
+    }
+
+    /// Applies settings worked out elsewhere, e.g. a setup proposal, as one undoable step; the calendar address goes with it.
+    /// Returns whether anything changed.
+    pub fn apply_settings(&mut self, label: String, config: StudyConfig, calendar: Option<String>) -> bool {
+        if self.read_only {
+            self.last_error = Some(tr("Der Ordner ist gerade schreibgeschützt."));
+            return false;
+        }
+        let mut changes = Vec::new();
+        if self.config.as_ref() != Some(&config) {
+            changes.extend(self.config_snapshot());
+            self.config = Some(config);
+            self.changed();
+            self.write_config();
+        }
+        if let (Some(url), Some(root)) = (calendar, self.root.as_ref()) {
+            let key = root.to_string_lossy().to_string();
+            if prefs::with(|p| p.calendar_sources.get(&key).cloned()).as_deref() != Some(url.as_str()) {
+                let before = set_calendar_source(&key, Some(url));
+                changes.push(Change::CalendarSource { root: key, url: before });
+            }
+        }
+        if changes.is_empty() {
+            return false;
+        }
+        self.refresh();
+        self.commit(label, "settings", changes);
         true
     }
 
@@ -2675,7 +2706,7 @@ impl Library {
         let (mut inverse, mut failed) = (Vec::new(), Vec::new());
         let mut changes = step.changes.into_iter().rev();
         while let Some(change) = changes.next() {
-            if !matches!(change, Change::State(_) | Change::Config(_) | Change::Highlights { .. } | Change::Cards { .. }) {
+            if !matches!(change, Change::State(_) | Change::Config(_) | Change::Highlights { .. } | Change::Cards { .. } | Change::CalendarSource { .. }) {
                 self.notes_touched = true;
             }
             match self.apply_change(change.clone()) {
@@ -2779,6 +2810,7 @@ impl Library {
                     }
                     Change::Cards { root, swaps: back }
                 }
+                Change::CalendarSource { root, url } => Change::CalendarSource { url: set_calendar_source(&root, url), root },
             })
         })();
         match result {
@@ -4445,6 +4477,20 @@ fn heading_titled(path: &Path) -> bool {
 }
 
 /// Where a rename goes; changing only the case of a name on a case-insensitive disk is not a collision.
+/// Sets or clears the calendar address of the workspace `root` and returns the one it had.
+fn set_calendar_source(root: &str, url: Option<String>) -> Option<String> {
+    let before = prefs::with(|p| p.calendar_sources.get(root).cloned());
+    prefs::update(|p| match url {
+        Some(u) => {
+            p.calendar_sources.insert(root.to_string(), u);
+        }
+        None => {
+            p.calendar_sources.remove(root);
+        }
+    });
+    before
+}
+
 fn rename_target(file: &Path, name: &str) -> PathBuf {
     let wanted = file.with_file_name(name);
     if same_file(file, &wanted) { wanted } else { unique_path(&wanted) }

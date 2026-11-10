@@ -41,7 +41,7 @@ async fn ask(connection: &ConnectionTo<Client>, log: &Log, session: &SessionId, 
     Ok(())
 }
 
-async fn fake_agent(channel: Channel, log: Log, root: PathBuf) -> Result<(), agent_client_protocol::Error> {
+async fn fake_agent(channel: Channel, log: Log, root: PathBuf, modes: Vec<&'static str>) -> Result<(), agent_client_protocol::Error> {
     let (l1, l2, l3, l4, l5) = (log.clone(), log.clone(), log.clone(), log.clone(), log.clone());
     let (stop_tx, stop_rx) = async_channel::unbounded::<()>();
     Agent
@@ -59,7 +59,7 @@ async fn fake_agent(channel: Channel, log: Log, root: PathBuf) -> Result<(), age
                 let servers: Vec<String> = r.mcp_servers.iter().map(|s| if let McpServer::Stdio(s) = s { format!("{} {}", s.name, s.args.join(" ")) } else { String::new() }).collect();
                 let meta = r.meta.as_ref().map(|m| m.contains_key("claudeCode")).unwrap_or(false);
                 note(&l2, format!("session mcp=[{}] meta={meta}", servers.join(",")));
-                responder.respond(NewSessionResponse::new(SessionId::new("s1")).modes(SessionModeState::new("auto", vec![SessionMode::new("auto", "Auto"), SessionMode::new("default", "Manual")])))
+                responder.respond(NewSessionResponse::new(SessionId::new("s1")).modes(SessionModeState::new(modes[0], modes.iter().map(|m| SessionMode::new(*m, *m)).collect())))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -92,6 +92,13 @@ async fn fake_agent(channel: Channel, log: Log, root: PathBuf) -> Result<(), age
                             }
                             c.send_notification(SessionNotification::new(session.clone(), SessionUpdate::ToolCall(ToolCall::new("t1", "Read N.md").kind(ToolKind::Read).status(ToolCallStatus::InProgress))))?;
                             c.send_notification(SessionNotification::new(session.clone(), SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("t1", ToolCallUpdateFields::new().status(ToolCallStatus::Completed)))))?;
+                            StopReason::EndTurn
+                        }
+                        "foreign" => {
+                            ask(&c, &log, &session, call("patch", "apply_patch", ToolKind::Edit, Some(&root.join("N.md")))).await?;
+                            ask(&c, &log, &session, call("rm", "delete", ToolKind::Delete, Some(&root.join("N.md")))).await?;
+                            ask(&c, &log, &session, call("mv", "move", ToolKind::Move, Some(&root.join("N.md")))).await?;
+                            ask(&c, &log, &session, call("own", "mcp__schrumbi-app__write_note", ToolKind::Edit, None)).await?;
                             StopReason::EndTurn
                         }
                         "perms" => {
@@ -133,11 +140,24 @@ fn root() -> PathBuf {
 
 fn setup(root: &Path, allow_execute: bool) -> Setup {
     let server = McpServerStdio::new(acp::OWN_SERVER, PathBuf::from("schrumbi")).args(vec!["mcp".into(), "--instance".into(), "1".into()]);
-    Setup { cwd: root.to_path_buf(), mcp: Some(server), meta: Some(super::agents::claude_meta(allow_execute)), mode: Some("default".into()), policy: Policy { root: root.to_path_buf(), allow_execute } }
+    Setup { cwd: root.to_path_buf(), mcp: Some(server), meta: Some(super::agents::claude_meta(allow_execute)), modes: vec!["default".into()], require_mode: false, policy: Policy { root: root.to_path_buf(), allow_execute, client_edits: true } }
+}
+
+fn codex_setup(root: &Path) -> Setup {
+    Setup { cwd: root.to_path_buf(), mcp: None, meta: None, modes: vec![super::agents::CODEX_SAFE_MODE.into()], require_mode: true, policy: Policy { root: root.to_path_buf(), allow_execute: false, client_edits: false } }
 }
 
 fn session<F, Fut>(allow_execute: bool, ui: F) -> Vec<String>
 where
+    F: FnOnce(async_channel::Receiver<Event>, async_channel::Sender<Command>) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    session_as(|root| setup(root, allow_execute), vec!["auto", "default"], ui)
+}
+
+fn session_as<S, F, Fut>(make: S, modes: Vec<&'static str>, ui: F) -> Vec<String>
+where
+    S: FnOnce(&Path) -> Setup,
     F: FnOnce(async_channel::Receiver<Event>, async_channel::Sender<Command>) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
@@ -146,8 +166,8 @@ where
     let (client_side, agent_side) = Channel::duplex();
     let (events_tx, events_rx) = async_channel::unbounded();
     let (commands_tx, commands_rx) = async_channel::unbounded();
-    let agent = fake_agent(agent_side, log.clone(), root.clone());
-    let client = acp::run(client_side, setup(&root, allow_execute), events_tx, commands_rx);
+    let agent = fake_agent(agent_side, log.clone(), root.clone(), modes);
+    let client = acp::run(client_side, make(&root), events_tx, commands_rx);
     let ui = ui(events_rx, commands_tx);
     futures::executor::block_on(async {
         let agent = Box::pin(agent);
@@ -277,9 +297,9 @@ fn reads_outside_the_folder_and_parent_steps_are_not_inside() {
     assert!(!acp::inside(&root, &root.join("..").join("x.md")));
     assert!(!acp::inside(&root, root.parent().unwrap()));
     let request = RequestPermissionRequest::new("s", call("r", "Read", ToolKind::Read, Some(root.parent().unwrap())), options());
-    assert_eq!(acp::decide(&request, &Policy { root: root.clone(), allow_execute: false }), Decision::Ask);
+    assert_eq!(acp::decide(&request, &Policy { root: root.clone(), allow_execute: false, client_edits: true }), Decision::Ask);
     let shell = RequestPermissionRequest::new("s", ToolCallUpdate::new("b", ToolCallUpdateFields::new().name("Bash".to_string())), options());
-    assert_eq!(acp::decide(&shell, &Policy { root, allow_execute: false }), Decision::Reject);
+    assert_eq!(acp::decide(&shell, &Policy { root, allow_execute: false, client_edits: true }), Decision::Reject);
 }
 
 #[test]
@@ -345,4 +365,68 @@ fn the_adapter_download_unpacks_inside_its_folder_and_refuses_escaping_entries()
     let bad = make("bad.zip", &["../escaped.exe"]);
     assert!(super::install::unpack(&bad, &dir.join("bad")).is_err());
     assert!(!dir.join("escaped.exe").exists());
+}
+
+#[test]
+fn codex_starts_only_in_its_read_only_mode() {
+    let log = session_as(codex_setup, vec!["auto", "read-only", "full-access"], |events, commands| async move {
+        commands.send(Command::Prompt("hello".into())).await.unwrap();
+        assert_eq!(until_turn_end(&events, drop).await, Ok(Stop::Done));
+    });
+    assert!(log.contains(&"mode read-only".to_string()), "{log:?}");
+}
+
+#[test]
+fn an_agent_without_an_asking_mode_is_ended_before_its_first_prompt() {
+    let mut unsafe_seen = false;
+    let log = session_as(codex_setup, vec!["auto", "full-access"], |events, commands| async move {
+        let _ = commands.send(Command::Prompt("hello".into())).await;
+        while let Ok(e) = events.recv().await {
+            if matches!(e, Event::Unsafe) {
+                unsafe_seen = true;
+            }
+            assert!(!matches!(e, Event::Ready), "no session may start");
+        }
+        assert!(unsafe_seen);
+    });
+    assert!(!log.iter().any(|l| l.starts_with("prompt") || l.starts_with("mode")), "{log:?}");
+}
+
+#[test]
+fn agents_that_edit_on_their_own_are_refused_and_nobody_may_delete_or_move() {
+    let mut asked = Vec::new();
+    let mut denied = Vec::new();
+    let log = session_as(codex_setup, vec!["read-only"], |events, commands| async move {
+        commands.send(Command::Prompt("foreign".into())).await.unwrap();
+        let _ = until_turn_end(&events, |e| match e {
+            Event::Ask { ask, reply } => {
+                asked.push(ask.tool.clone());
+                reply.send(true);
+            }
+            Event::Denied { tool } => denied.push(tool),
+            _ => {}
+        })
+        .await;
+        assert!(asked.is_empty(), "nothing is even asked: {asked:?}");
+        assert_eq!(denied, vec!["patch", "rm", "mv"]);
+    });
+    let permissions: Vec<&String> = log.iter().filter(|l| l.starts_with("permission")).collect();
+    assert_eq!(permissions, vec!["permission patch reject", "permission rm reject", "permission mv reject", "permission own allow"]);
+    let claude = Policy { root: root(), allow_execute: true, client_edits: true };
+    let delete = RequestPermissionRequest::new("s", call("d", "Delete", ToolKind::Delete, Some(&root().join("N.md"))), options());
+    assert_eq!(acp::decide(&delete, &claude), Decision::Reject, "deleting is refused even for an agent that writes through Schrumbi");
+}
+
+#[test]
+fn codex_and_opencode_start_with_their_own_edits_switched_off() {
+    assert!(super::agents::codex_env().contains(&("INITIAL_AGENT_MODE".into(), "read-only".into())));
+    let env = super::agents::opencode_env(false);
+    let permission: serde_json::Value = serde_json::from_str(&env.iter().find(|(k, _)| k == "OPENCODE_PERMISSION").unwrap().1).unwrap();
+    assert_eq!((permission["edit"].as_str(), permission["bash"].as_str()), (Some("deny"), Some("deny")));
+    let config: serde_json::Value = serde_json::from_str(&env.iter().find(|(k, _)| k == "OPENCODE_CONFIG_CONTENT").unwrap().1).unwrap();
+    assert_eq!(config["permission"]["edit"], "deny");
+    let shell: serde_json::Value = serde_json::from_str(&super::agents::opencode_env(true)[0].1).unwrap();
+    assert_eq!((shell["edit"].as_str(), shell["bash"].as_str()), (Some("deny"), Some("ask")));
+    let custom = super::agents::launch(super::agents::Runner::Custom, &crate::core::prefs::AiPrefs { custom_command: "some-agent acp".into(), ..Default::default() }).unwrap();
+    assert!(!custom.claude && custom.modes.is_empty(), "an unknown agent's own edits are refused, not asked");
 }

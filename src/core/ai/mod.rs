@@ -4,6 +4,8 @@ pub mod detect;
 pub mod install;
 pub mod instance;
 pub mod mcp;
+pub mod prompts;
+pub mod setup;
 pub mod tools;
 pub mod transcript;
 pub mod turn;
