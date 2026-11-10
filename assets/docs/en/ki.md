@@ -8,7 +8,7 @@ When a program is installed, the AI is on. {ui:KI-Assistent verwenden} in {key:O
 
 ## The column
 
-{key:toggleAi} or the button {ui:KI einblenden} opens the column {ui:KI} on the right. It shares its place with Details; {key:toggleInspector} brings Details back.
+{key:toggleAi} or the button {ui:KI einblenden} opens the column {ui:KI} on the right. It shares its place with the details: at the top you switch between {ui:Details} and {ui:KI}, {key:toggleInspector} jumps to the details. The same button again closes the column. Drag its left edge to make it wider or narrower; a double click resets the width.
 
 1. Open a note or a PDF.
 2. {key:toggleAi}
@@ -23,8 +23,27 @@ Chips at the bottom show what the AI gets to see: open note, PDF page, selection
 | {ui:Rückgängig} | Takes back only this one change |
 | {ui:Stopp} | Stops the request |
 | {ui:Als Notiz speichern} | The conversation as a note in your folder |
+| {ui:Frühere Unterhaltungen} | Open an old conversation and keep writing |
+| {ui:Verwerfen} | In the comparison: take back only this change |
 
-Right-clicking a file, a deadline or selected text shows {ui:KI} with fitting requests. After {ui:Sitzung beenden nach} without a message the program ends; the next message starts it again. Conversations stay in the app data, not in your folder.
+Right-clicking a file, a PDF page, a deadline or selected text shows {ui:KI} with fitting requests.
+
+## Tasks
+
+| Task | What happens |
+|---|---|
+| {ui:Karten erstellen} | Cards from a PDF page, pages, a selection or a note; they go as question :: answer into the note beside the PDF or into the module's {ui:Karteikarten} |
+| {ui:Passage erklären} | Explains the passage and changes nothing; {ui:In Notiz einfügen} appends the explanation |
+| {ui:Vorlesung zusammenfassen} | A new note in the module folder, named like the others there |
+| {ui:Woche planen} | A plan from deadlines, due cards and the lecture week; tasks only after your yes |
+| {ui:Inbox aufräumen} | Reads every file and shows a table: module, kind, date, deadline, new name |
+| {ui:Abfragen} | Quizzes you, writes nothing and never rates a card |
+
+In the filing window, {ui:Mit KI ausfüllen} fills the fields from the file. What the AI entered stays marked until you change it; nothing is filed before {ui:Ablegen}.
+
+## Set up with AI
+
+{ui:Mit KI einrichten} in the empty column or in the command search. If your folder already holds material, the AI reads it and derives modules, lecture period, naming pattern and weekly deadlines; otherwise it asks a few questions. Its proposal appears as a card: tick what fits, {ui:Alles übernehmen}, one {key:Undo} takes it all back. The AI only changes settings; renaming files it suggests at most in a list. After {ui:Sitzung beenden nach} without a message the program ends; the next message starts it again. Conversations stay in the app data, not in your folder.
 
 ## In the terminal
 

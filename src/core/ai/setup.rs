@@ -256,7 +256,8 @@ pub fn plan_json(plan: &Plan) -> Value {
     })
 }
 
-fn apply_module(config: &mut StudyConfig, plan: &ModulePlan, semester: &str) {
+fn apply_module(config: &mut StudyConfig, plan: &ModulePlan, semester: &str, now: chrono::DateTime<chrono::Local>) {
+    let weeks = config.semester(semester).map(crate::core::schedule::lecture_weeks).unwrap_or_default();
     let index = plan.existing.as_deref().and_then(|id| config.modules.iter().position(|m| m.id == id));
     let position = config.modules.len();
     let module = match index {
@@ -274,7 +275,8 @@ fn apply_module(config: &mut StudyConfig, plan: &ModulePlan, semester: &str) {
         module.naming.clone_from(n);
     }
     for w in &plan.weekly {
-        let rule = Rule { title: w.title.clone(), weekday: w.weekday, time: w.time.clone(), week_offset: w.week_offset, optional: w.optional, upload: w.upload, ..Rule::default() };
+        let mut rule = Rule { title: w.title.clone(), weekday: w.weekday, time: w.time.clone(), week_offset: w.week_offset, optional: w.optional, upload: w.upload, ..Rule::default() };
+        rule.start_week = weeks.iter().find(|wk| crate::core::schedule::due_date(&rule, wk).is_some_and(|d| d >= now)).map(|wk| wk.index).filter(|i| *i > 1);
         match module.rules.iter_mut().find(|r| fold(&r.title) == fold(&w.title)) {
             Some(r) => {
                 r.weekday = rule.weekday;
@@ -332,7 +334,7 @@ pub fn apply(lib: &mut Library, plan: &Plan, keys: &[String]) -> Result<Outcome,
     }
     for item in &chosen {
         if let Change::Module(m) = &item.change {
-            apply_module(&mut config, m, &semester);
+            apply_module(&mut config, m, &semester, lib.now);
         }
     }
     let label = if chosen.len() == 1 { trf("Einrichtung: %@", &[&chosen[0].title]) } else { trf("Einrichtung: %lld Punkte übernommen", &[&chosen.len()]) };

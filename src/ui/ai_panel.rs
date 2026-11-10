@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -8,6 +8,7 @@ use agent_client_protocol::v1::schema::{EnvVariable, McpServerStdio};
 use agent_client_protocol::{AcpAgent, AcpAgentConfig};
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
@@ -24,6 +25,8 @@ use super::theme::{Theme, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::ai::acp::{self, Command, Event, Kind, Status, Stop, ToolPatch, Update};
 use crate::core::ai::agents::{self, Missing};
+use crate::core::ai::prompts::Flow;
+use crate::core::ai::setup::{self, Plan};
 use crate::core::ai::tools::{self, Preview};
 use crate::core::ai::{detect, transcript};
 use crate::core::i18n::{tr, trf};
@@ -35,15 +38,21 @@ const REPARSE: Duration = Duration::from_millis(120);
 const SELECTION_CHARS: usize = 4000;
 const SHOWN_OUTPUT: usize = 4000;
 const HIDDEN_TOOLS: [&str; 3] = ["ToolSearch", "TodoWrite", "ExitPlanMode"];
+const RECAP_CHARS: usize = 6000;
+const HISTORY_SHOWN: usize = 20;
 
 /// Something the agent sees with the next message.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Chip {
     Note(PathBuf),
     Pdf(PathBuf, usize),
+    /// Pages of a PDF, first and last counted from 0.
+    Pages(PathBuf, usize, usize),
     Selection(String),
     Module(String),
     Deadline(String),
+    /// The week starting on this Monday.
+    Week(chrono::NaiveDate),
 }
 
 struct Tool {
@@ -68,10 +77,51 @@ struct Edit {
 
 enum Item {
     User { text: String, chips: Vec<String> },
-    Agent { text: String, parsed: Option<Rc<ParsedNote>>, parsed_len: usize },
+    Agent { text: String, parsed: Option<Rc<ParsedNote>>, parsed_len: usize, insert: Option<Insert> },
     Tool(Tool),
     Edit(Edit),
     Notice { text: String, restart: bool },
+    Setup(SetupCard),
+    Inbox(InboxCard),
+}
+
+/// The agent's reading of inbox files: one row per file, taken or left, filed in one step.
+struct InboxCard {
+    rows: Vec<crate::core::ai::inbox::Row>,
+    chosen: HashSet<usize>,
+    edited: HashSet<usize>,
+    state: CardState,
+    error: Option<String>,
+}
+
+/// Where an explanation can go when the user wants it in a note.
+struct Insert {
+    note: PathBuf,
+    done: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CardState {
+    Open,
+    Applied(usize, usize),
+    Replaced,
+    Dismissed,
+}
+
+/// The agent's setup proposal: items the user ticks and takes in one step.
+struct SetupCard {
+    plan: Plan,
+    chosen: HashSet<String>,
+    state: CardState,
+    renames_open: bool,
+    error: Option<String>,
+}
+
+/// What one turn was started for.
+#[derive(Clone, Default)]
+struct TurnInfo {
+    flow: Option<Flow>,
+    source: Option<PathBuf>,
 }
 
 struct Session {
@@ -107,6 +157,9 @@ pub struct AiPanel {
     focus_input: bool,
     cancelling: bool,
     asks: Vec<u64>,
+    pending: VecDeque<TurnInfo>,
+    recap: Option<String>,
+    hint: Option<&'static str>,
     _subs: Vec<Subscription>,
 }
 
@@ -151,6 +204,13 @@ pub fn title_for(name: Option<&str>, kind: Kind, input: Option<&Value>, fallback
         Some("set_status") => tr("Ändert einen Status"),
         Some("file_document") => trf("Legt %@ ab", &[&file("path")]),
         Some("open") => trf("Öffnet %@", &[&file("path")]),
+        Some("list_inbox") => tr("Schaut in die Inbox"),
+        Some("propose_filing") => tr("Sucht Plätze für die Inbox"),
+        Some("read_setup") => tr("Liest die Einstellungen"),
+        Some("propose_setup") => tr("Schlägt eine Einrichtung vor"),
+        Some("apply_setup") => tr("Übernimmt die Einrichtung"),
+        Some("propose_inbox") => tr("Schlägt vor, wohin die Dateien gehören"),
+        Some("apply_inbox") => tr("Legt die Dateien ab"),
         Some("Read") => trf("Liest %@", &[&file("file_path")]),
         Some("Glob" | "Grep") => trf("Sucht „%@“", &[&quoted("pattern")]),
         Some("WebFetch") => trf("Ruft %@ ab", &[&quoted("url")]),
@@ -198,8 +258,24 @@ fn counts(before: &str, after: &str) -> (usize, usize) {
     })
 }
 
-fn first_added(before: &str, after: &str) -> Option<String> {
-    similar::TextDiff::from_lines(before, after).iter_all_changes().find(|c| c.tag() == similar::ChangeTag::Insert).map(|c| c.value().trim().to_string()).filter(|l| !l.is_empty())
+/// The line ranges of `after` that differ from `before`, counted from 0; a pure deletion marks the line where it was.
+pub fn changed_lines(before: &str, after: &str) -> Vec<(usize, usize)> {
+    let total = after.split('\n').count().max(1);
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for op in similar::TextDiff::from_lines(before, after).ops() {
+        let range = op.new_range();
+        let span = match op.tag() {
+            similar::DiffTag::Equal => continue,
+            similar::DiffTag::Delete => (range.start.min(total - 1), range.start.min(total - 1)),
+            _ if range.is_empty() => continue,
+            _ => (range.start, range.end - 1),
+        };
+        match out.last_mut() {
+            Some(last) if span.0 <= last.1 + 1 => last.1 = last.1.max(span.1),
+            _ => out.push(span),
+        }
+    }
+    out
 }
 
 fn missing_text(m: &Missing) -> String {
@@ -211,32 +287,75 @@ fn missing_text(m: &Missing) -> String {
     }
 }
 
-/// The few things worth asking where the user is right now: label, icon, prompt and the chip that goes with it.
-pub fn suggestions(cx: &App) -> Vec<(String, &'static str, String)> {
-    let (route, doc) = state::read(cx, |l| (l.route().clone(), l.focused_document().map(Path::to_path_buf)));
+/// A study task worth offering where the user is right now.
+#[derive(Clone)]
+pub struct Suggestion {
+    pub label: String,
+    pub icon: &'static str,
+    pub flow: Flow,
+    pub chips: Vec<Chip>,
+}
+
+/// The few tasks worth offering where the user is right now, at most three.
+pub fn suggestions(cx: &App) -> Vec<Suggestion> {
+    let (route, doc, inbox, monday) = state::read(cx, |l| (l.route().clone(), l.focused_document().map(Path::to_path_buf), !l.inbox.is_empty(), crate::core::day::monday(l.today())));
+    let s = |label: String, flow: Flow, chips: Vec<Chip>| Suggestion { label, icon: flow.icon(), flow, chips };
     let mut out = Vec::new();
     match (&route, doc) {
         (Route::Doc(_), Some(doc)) if is_pdf(&doc) => {
-            out.push((tr("Karten aus dieser Seite"), "layers", tr("Mach Karteikarten aus dieser PDF-Seite und ergänze sie in der passenden Notiz.")));
-            out.push((tr("Diese Seite erklären"), "info", tr("Erklär mir diese PDF-Seite in einfachen Worten.")));
-            out.push((tr("Zusammenfassen"), "file-text", tr("Fass dieses PDF kurz zusammen.")));
+            let focus = ai::pdf_focus(&doc);
+            let page = Chip::Pdf(doc.clone(), focus.as_ref().map_or(0, |f| f.page));
+            match focus.as_ref().map(|f| f.text.clone()).filter(|t| !t.trim().is_empty()) {
+                Some(text) => {
+                    out.push(s(tr("Karten aus der Auswahl"), Flow::Cards, vec![page.clone(), Chip::Selection(text.clone())]));
+                    out.push(s(tr("Passage erklären"), Flow::Explain, vec![page, Chip::Selection(text)]));
+                }
+                None => {
+                    out.push(s(tr("Karten aus dieser Seite"), Flow::Cards, vec![page.clone()]));
+                    out.push(s(tr("Diese Seite erklären"), Flow::Explain, vec![page]));
+                }
+            }
+            out.push(s(Flow::Summary.label(), Flow::Summary, vec![whole_file_chip(&doc)]));
         }
         (Route::Doc(_), Some(doc)) if crate::core::markdown::is_markdown(&doc) => {
-            out.push((tr("Karten aus dieser Notiz"), "layers", tr("Mach Karteikarten aus dieser Notiz und ergänze sie darin.")));
-            out.push((tr("Abfragen"), "graduation-cap", tr("Frag mich zu dieser Notiz ab, eine Frage nach der anderen. Schreib nichts.")));
-            out.push((tr("Zusammenfassen"), "file-text", tr("Fass diese Notiz kurz zusammen.")));
+            out.push(s(tr("Karten aus dieser Notiz"), Flow::Cards, vec![Chip::Note(doc.clone())]));
+            out.push(s(Flow::Quiz.label(), Flow::Quiz, vec![Chip::Note(doc)]));
         }
-        (Route::Today, _) => out.push((tr("Woche planen"), "calendar", tr("Schau dir meine Fristen der nächsten 14 Tage und diese Woche an und schlag mir einen Plan vor."))),
-        (Route::Inbox, _) if state::read(cx, |l| !l.inbox.is_empty()) => out.push((tr("Inbox aufräumen"), "inbox", tr("Schlag mir für jede Datei in der Inbox einen Ordner und Namen vor und leg sie nach meinem Ja ab."))),
+        (Route::Today | Route::Grid, _) => out.push(s(Flow::Week.label(), Flow::Week, vec![Chip::Week(monday)])),
+        (Route::Inbox, _) if inbox => out.push(s(Flow::Inbox.label(), Flow::Inbox, Vec::new())),
+        (Route::Cards, _) => out.push(s(tr("Karten abfragen"), Flow::Quiz, Vec::new())),
         _ => {}
     }
+    out.truncate(3);
     out
+}
+
+/// Whether setting up with the assistant is worth offering in the empty column: modules, semester, naming or the Moodle calendar are still open.
+pub fn setup_wanted(cx: &App) -> bool {
+    use crate::core::setup::{Item as Step, settled};
+    let Some(root) = state::read(cx, |l| l.root.clone()) else { return false };
+    let facts = state::read(cx, |l| super::setup_card::facts(l, cx));
+    let marks = prefs::setup_of(&root);
+    [Step::Modules, Step::Semester, Step::Naming, Step::Calendar].into_iter().any(|s| !settled(s, &facts, &marks.skipped, &marks.confirmed))
+}
+
+/// The chip for a whole file: all pages of a PDF, else the note.
+pub fn whole_file_chip(path: &Path) -> Chip {
+    if is_pdf(path) {
+        let pages = ai::pdf_focus(path).map(|f| f.pages).filter(|n| *n > 0).or_else(|| crate::core::pdf_render::PdfDoc::open(path).map(|d| d.page_count())).unwrap_or(1);
+        Chip::Pages(path.to_path_buf(), 0, pages.saturating_sub(1))
+    } else {
+        Chip::Note(path.to_path_buf())
+    }
 }
 
 fn chip_label(chip: &Chip, cx: &App) -> String {
     match chip {
         Chip::Note(p) => name_of(p),
         Chip::Pdf(p, page) => trf("%@ · S. %lld", &[&name_of(p), &(page + 1)]),
+        Chip::Pages(p, first, last) if first == last => trf("%@ · S. %lld", &[&name_of(p), &(first + 1)]),
+        Chip::Pages(p, first, last) => trf("%@ · S. %lld–%lld", &[&name_of(p), &(first + 1), &(last + 1)]),
+        Chip::Week(monday) => state::read(cx, |l| l.lecture_week_containing(*monday).map(|w| w.label())).unwrap_or_else(|| trf("Woche ab %@", &[&crate::core::day::short_date(*monday)])),
         Chip::Selection(text) => {
             let short: String = text.chars().take(24).collect();
             if text.chars().count() > 24 { format!("„{}…“", short.trim_end()) } else { format!("„{short}“") }
@@ -249,7 +368,8 @@ fn chip_label(chip: &Chip, cx: &App) -> String {
 fn chip_icon(chip: &Chip) -> &'static str {
     match chip {
         Chip::Note(_) => "file-text",
-        Chip::Pdf(..) => "file",
+        Chip::Pdf(..) | Chip::Pages(..) => "file",
+        Chip::Week(_) => "calendar-range",
         Chip::Selection(_) => "text-select",
         Chip::Module(_) => "book-open",
         Chip::Deadline(_) => "calendar-clock",
@@ -266,6 +386,11 @@ fn context_lines(chips: &[Chip], cx: &App) -> Vec<String> {
                 let total = ai::pdf_focus(p).map(|f| f.pages).filter(|n| *n > 0).map(|n| format!(" of {n}")).unwrap_or_default();
                 Some(format!("- PDF: {}, page {}{total}", rel(p), page + 1))
             }
+            Chip::Pages(p, first, last) => {
+                let total = ai::pdf_focus(p).map(|f| f.pages).filter(|n| *n > 0).map(|n| format!(" of {n}")).unwrap_or_default();
+                Some(format!("- PDF: {}, pages {}-{}{total}", rel(p), first + 1, last + 1))
+            }
+            Chip::Week(monday) => Some(format!("- Week: {} to {}", monday.format("%Y-%m-%d"), (*monday + chrono::Days::new(6)).format("%Y-%m-%d"))),
             Chip::Selection(text) => {
                 let cut: String = text.chars().take(SELECTION_CHARS).collect();
                 Some(format!("- Selected text:\n> {}", cut.replace('\n', "\n> ")))
@@ -314,7 +439,7 @@ impl AiPanel {
             }),
         ];
         ai::set_panel(cx.entity().downgrade(), cx);
-        Self { input, items: Vec::new(), tools: HashMap::new(), expanded: HashSet::new(), session: None, turn: false, queued: 0, removed: HashSet::new(), extra: Vec::new(), last_prompt: None, list: Self::new_list(), listed: 0, dirty: BTreeSet::new(), tail: (Vec::new(), None), idle: None, reparse: None, focus_input: true, cancelling: false, asks: Vec::new(), _subs: subs }
+        Self { input, items: Vec::new(), tools: HashMap::new(), expanded: HashSet::new(), session: None, turn: false, queued: 0, removed: HashSet::new(), extra: Vec::new(), last_prompt: None, list: Self::new_list(), listed: 0, dirty: BTreeSet::new(), tail: (Vec::new(), None), idle: None, reparse: None, focus_input: true, cancelling: false, asks: Vec::new(), pending: VecDeque::new(), recap: None, hint: None, _subs: subs }
     }
 
     fn new_list() -> ListState {
@@ -356,6 +481,9 @@ impl AiPanel {
         {
             out.push(Chip::Deadline(d));
         }
+        if matches!(route, Route::Today | Route::Grid) {
+            out.push(Chip::Week(state::read(cx, |l| crate::core::day::monday(l.today()))));
+        }
         out
     }
 
@@ -381,6 +509,7 @@ impl AiPanel {
                     self.focus_input = true;
                 }
                 Request::Send(text) => self.send(text, cx),
+                Request::Flow(flow, chips, text) => self.start_flow_with(flow, chips, text, cx),
             }
         }
         if self.session.is_none() && self.items.is_empty() {
@@ -496,6 +625,28 @@ impl AiPanel {
     }
 
     fn send(&mut self, text: String, cx: &mut Context<Self>) {
+        self.dispatch(text, None, true, cx);
+    }
+
+    fn start_flow(&mut self, flow: Flow, chips: Vec<Chip>, cx: &mut Context<Self>) {
+        self.start_flow_with(flow, chips, None, cx);
+    }
+
+    fn start_flow_with(&mut self, flow: Flow, chips: Vec<Chip>, text: Option<String>, cx: &mut Context<Self>) {
+        for c in chips {
+            self.removed.remove(&c);
+            if !self.extra.contains(&c) {
+                self.extra.push(c);
+            }
+        }
+        if text.is_some() && flow == Flow::Inbox {
+            self.hint = Some("The filing window of this file takes your propose_inbox result directly. Afterwards tell the user in one or two sentences what you filled in and that they check it in the filing window and press Ablegen.");
+        }
+        self.dispatch(text.unwrap_or_else(|| flow.prompt()), Some(flow), true, cx);
+    }
+
+    /// Sends a message; `shown` puts it in the stream with its chips, otherwise it goes to the agent alone, e.g. what the user took from a setup card.
+    fn dispatch(&mut self, text: String, flow: Option<Flow>, shown: bool, cx: &mut Context<Self>) {
         let text = text.trim().to_string();
         if text.is_empty() {
             return;
@@ -503,28 +654,58 @@ impl AiPanel {
         if self.session.is_none() {
             self.start(cx);
         }
-        let chips = self.chips(cx);
-        let lines = context_lines(&chips, cx);
-        let prompt = if lines.is_empty() { text.clone() } else { format!("{text}\n\n[Context from Schrumbi]\n{}", lines.join("\n")) };
+        let chips = if shown { self.chips(cx) } else { Vec::new() };
+        let mut lines = context_lines(&chips, cx);
+        let source = chips.iter().find_map(|c| match c {
+            Chip::Note(p) | Chip::Pdf(p, _) | Chip::Pages(p, ..) => Some(p.clone()),
+            _ => None,
+        });
+        if flow == Some(Flow::Cards)
+            && let Some(src) = &source
+        {
+            lines.push(format!("- Cards go to: {}", state::read(cx, |l| l.relative_path(&tools::card_note(l, src)))));
+        }
+        let mut prompt = text.clone();
+        if let Some(recap) = self.recap.take() {
+            prompt = format!("[Earlier conversation of this user, continued now]\n{recap}\n[New message]\n{prompt}");
+        }
+        if !lines.is_empty() {
+            prompt.push_str(&format!("\n\n[Context from Schrumbi]\n{}", lines.join("\n")));
+        }
+        if let Some(f) = flow {
+            prompt.push_str(&format!("\n\n[How Schrumbi wants this done]\n{}", f.guide()));
+        }
+        if let Some(hint) = self.hint.take() {
+            prompt.push_str(&format!("\n{hint}"));
+        }
         let labels: Vec<String> = chips.iter().map(|c| chip_label(c, cx)).collect();
         let Some(session) = self.session.as_ref() else { return };
         if session.commands.try_send(Command::Prompt(prompt)).is_err() {
             return;
         }
-        let id = session.id.clone();
-        self.log(vec![transcript::Entry { role: transcript::Role::User, text: text.clone(), at: chrono::Utc::now().timestamp() }], cx);
-        self.items.push(Item::User { text: text.clone(), chips: labels });
-        self.last_prompt = Some(text);
+        if shown {
+            self.log(vec![transcript::Entry { role: transcript::Role::User, text: text.clone(), at: chrono::Utc::now().timestamp() }], cx);
+            self.items.push(Item::User { text: text.clone(), chips: labels });
+            self.last_prompt = Some(text);
+            self.extra.clear();
+        }
+        self.pending.push_back(TurnInfo { flow, source });
         if self.turn {
             self.queued += 1;
         } else {
             self.turn = true;
-            ai::begin_turn(&id, cx);
+            self.begin(cx);
         }
-        self.extra.clear();
         self.idle = None;
         self.list.scroll_to_end();
         cx.notify();
+    }
+
+    fn begin(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.session.as_ref().map(|s| s.id.clone()) else { return };
+        ai::begin_turn(&id, cx);
+        let read_only = self.pending.front().and_then(|t| t.flow).is_some_and(Flow::read_only);
+        ai::set_read_only(&id, read_only, cx);
     }
 
     fn cancel(&mut self, cx: &mut Context<Self>) {
@@ -537,6 +718,8 @@ impl AiPanel {
         self.turn = false;
         self.queued = 0;
         let session = s.id.clone();
+        self.pending.clear();
+        ai::set_read_only(&session, false, cx);
         for id in std::mem::take(&mut self.asks) {
             ai::answer_ask(id, Answer::Decline, cx);
         }
@@ -580,7 +763,7 @@ impl AiPanel {
                         t.push_str(&text);
                         self.touch(self.items.len() - 1);
                     }
-                    _ => self.items.push(Item::Agent { text, parsed: None, parsed_len: 0 }),
+                    _ => self.items.push(Item::Agent { text, parsed: None, parsed_len: 0, insert: None }),
                 }
                 self.schedule_reparse(cx);
             }
@@ -727,11 +910,11 @@ impl AiPanel {
             return;
         }
         if prefs::with(|p| p.ai.follow_edits) && path.exists() {
-            let find = first_added(before.as_deref().unwrap_or_default(), &after);
+            let lines = changed_lines(before.as_deref().unwrap_or_default(), &after);
             let target = path.clone();
             act(cx, move |l| {
-                if let Some(find) = find {
-                    l.find_in_file = Some((target.clone(), find, 0));
+                if !lines.is_empty() {
+                    l.changed_lines = Some((target.clone(), lines));
                 }
                 l.quiet_open = true;
                 l.open_file(&target);
@@ -745,6 +928,21 @@ impl AiPanel {
     fn turn_ended(&mut self, result: Result<Stop, String>, cx: &mut Context<Self>) {
         let Some(id) = self.session.as_ref().map(|s| s.id.clone()) else { return };
         ai::end_turn(&id, cx);
+        ai::set_read_only(&id, false, cx);
+        ai::release_fills(cx);
+        let done = self.pending.pop_front().unwrap_or_default();
+        if done.flow == Some(Flow::Explain)
+            && result == Ok(Stop::Done)
+            && let Some(src) = done.source
+        {
+            let note = if crate::core::markdown::is_markdown(&src) { src } else { src.with_extension("md") };
+            if let Some(at) = self.items.iter().rposition(|i| matches!(i, Item::Agent { .. })).filter(|at| !self.items[*at..].iter().any(|i| matches!(i, Item::User { .. })))
+                && let Some(Item::Agent { insert, .. }) = self.items.get_mut(at)
+            {
+                *insert = Some(Insert { note, done: false });
+                self.dirty.insert(at);
+            }
+        }
         match result {
             Ok(Stop::Done) => {}
             Ok(Stop::Cancelled) => self.notice(tr("Abgebrochen."), false),
@@ -779,7 +977,7 @@ impl AiPanel {
         self.reparse_now();
         if self.queued > 0 {
             self.queued -= 1;
-            ai::begin_turn(&id, cx);
+            self.begin(cx);
         } else {
             self.turn = false;
             self.schedule_idle(cx);
@@ -806,7 +1004,7 @@ impl AiPanel {
         let count = self.items.len();
         let mut touched = Vec::new();
         for (back, item) in self.items.iter_mut().rev().take(4).enumerate() {
-            if let Item::Agent { text, parsed, parsed_len } = item
+            if let Item::Agent { text, parsed, parsed_len, .. } = item
                 && *parsed_len != text.len()
             {
                 *parsed = Some(Rc::new(markdown_view::parse(text)));
@@ -837,6 +1035,295 @@ impl AiPanel {
         if done && let Some(Item::Edit(e)) = self.items.get_mut(at) {
             e.undone = true;
         }
+        cx.notify();
+    }
+
+    /// Shows the agent's setup proposal as a card; an earlier open card is marked as replaced.
+    pub fn record_setup(&mut self, session: &str, proposal: Value, cx: &mut Context<Self>) {
+        if self.session.as_ref().is_none_or(|s| s.id != session) {
+            return;
+        }
+        let Ok(plan) = state::read(cx, |l| setup::plan(l, &proposal)) else { return };
+        let mut touched = Vec::new();
+        for (at, item) in self.items.iter_mut().enumerate() {
+            if let Item::Setup(card) = item
+                && card.state == CardState::Open
+            {
+                card.state = CardState::Replaced;
+                touched.push(at);
+            }
+        }
+        self.dirty.extend(touched);
+        let chosen = plan.items.iter().map(|i| i.key.clone()).collect();
+        self.items.push(Item::Setup(SetupCard { plan, chosen, state: CardState::Open, renames_open: false, error: None }));
+        cx.notify();
+    }
+
+    /// Shows the agent's reading of inbox files as a table to take row by row.
+    pub fn record_inbox(&mut self, session: &str, rows: Vec<crate::core::ai::inbox::Row>, cx: &mut Context<Self>) {
+        if self.session.as_ref().is_none_or(|s| s.id != session) || rows.is_empty() {
+            return;
+        }
+        let mut touched = Vec::new();
+        for (at, item) in self.items.iter_mut().enumerate() {
+            if let Item::Inbox(card) = item
+                && card.state == CardState::Open
+            {
+                card.state = CardState::Replaced;
+                touched.push(at);
+            }
+        }
+        self.dirty.extend(touched);
+        let chosen = (0..rows.len()).collect();
+        self.items.push(Item::Inbox(InboxCard { rows, chosen, edited: HashSet::new(), state: CardState::Open, error: None }));
+        cx.notify();
+    }
+
+    fn apply_inbox(&mut self, at: usize, cx: &mut Context<Self>) {
+        let Some(Item::Inbox(card)) = self.items.get(at) else { return };
+        if card.state != CardState::Open {
+            return;
+        }
+        let rows: Vec<crate::core::ai::inbox::Row> = card.rows.iter().enumerate().filter(|(i, _)| card.chosen.contains(i) && !card.edited.contains(i)).map(|(_, r)| r.clone()).collect();
+        if rows.is_empty() {
+            return;
+        }
+        let total = card.rows.len();
+        let session = self.session.as_ref().map_or_else(|| "inbox".to_string(), |s| s.id.clone());
+        let result = ai::run_for(&session, cx, |l| crate::core::ai::inbox::apply(l, &rows));
+        self.dirty.insert(at);
+        if let Some(Item::Inbox(card)) = self.items.get_mut(at) {
+            match result {
+                Ok(_) => {
+                    card.state = CardState::Applied(rows.len(), total);
+                    card.error = None;
+                }
+                Err(e) => card.error = Some(e),
+            }
+        }
+        cx.notify();
+    }
+
+    fn edit_inbox_row(&mut self, at: usize, row: usize, cx: &mut Context<Self>) {
+        let Some(Item::Inbox(card)) = self.items.get_mut(at) else { return };
+        let Some(r) = card.rows.get(row).cloned() else { return };
+        card.edited.insert(row);
+        self.dirty.insert(at);
+        let (path, deadline) = (r.path.clone(), r.deadline.clone());
+        ai::keep_prefill(r, cx);
+        act(cx, |l| l.request_filing(vec![path], deadline));
+        cx.notify();
+    }
+
+    fn inbox_card(&self, at: usize, card: &InboxCard, cx: &mut Context<Self>, t: &Theme) -> AnyElement {
+        let me = cx.entity();
+        let open = card.state == CardState::Open;
+        let head = match card.state {
+            CardState::Open => tr("So würde ich ablegen"),
+            CardState::Applied(n, total) => trf("Abgelegt: %lld von %lld Dateien", &[&n, &total]),
+            CardState::Replaced => tr("Durch einen neuen Vorschlag ersetzt"),
+            CardState::Dismissed => tr("Verworfen"),
+        };
+        let mut rows = div().flex().flex_col().gap(px(space::S));
+        for (i, r) in card.rows.iter().enumerate() {
+            let edited = card.edited.contains(&i);
+            let checked = card.chosen.contains(&i) && !edited;
+            let (me_check, me_edit) = (me.clone(), me.clone());
+            let module = r.module.as_deref().and_then(|m| state::read(cx, |l| l.module_by_id(m).map(|m| m.code.clone()))).unwrap_or_default();
+            let mut facts = vec![r.kind.label()];
+            if !module.is_empty() {
+                facts.insert(0, module);
+            }
+            if let Some(d) = r.date {
+                facts.push(d.format("%d.%m.%Y").to_string());
+            }
+            let deadline = r.deadline.as_deref().and_then(|id| state::read(cx, |l| l.assignment(id).map(|a| a.title.clone()))).map(|d| trf("Frist: %@", &[&d])).or_else(|| r.new_deadline.as_ref().map(|n| trf("Neue Frist: %@ bis %@", &[&n.title, &n.due.format("%d.%m. %H:%M").to_string()])));
+            let target = format!("{}/{}", state::read(cx, |l| l.relative_path(&r.folder)), r.name);
+            rows = rows.child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(space::S))
+                    .when(!open && !checked, |d| d.opacity(0.5))
+                    .child(Checkbox::new(SharedString::from(format!("ai-inbox-{at}-{i}"))).checked(checked).disabled(!open || edited).on_click(move |v, _, cx| {
+                        let on = *v;
+                        me_check.update(cx, |p, cx| {
+                            if let Some(Item::Inbox(c)) = p.items.get_mut(at) {
+                                if on {
+                                    c.chosen.insert(i);
+                                } else {
+                                    c.chosen.remove(&i);
+                                }
+                            }
+                            p.dirty.insert(at);
+                            cx.notify();
+                        });
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(space::XXS))
+                            .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(name_of(&r.path)))
+                            .child(div().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(facts.join(" · ")))
+                            .children(deadline.map(|d| div().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(d)))
+                            .child(div().min_w_0().truncate().font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.tertiary).child(if edited { tr("Im Ablegen-Fenster") } else { format!("→ {target}") })),
+                    )
+                    .when(open && !edited, |d| d.child(Button::new(SharedString::from(format!("ai-inbox-edit-{at}-{i}"))).ghost().xsmall().label(tr("Bearbeiten")).tooltip(tr("Im Ablegen-Fenster ändern")).on_click(move |_, _, cx| me_edit.update(cx, |p, cx| p.edit_inbox_row(at, i, cx))))),
+            );
+        }
+        let chosen = card.rows.iter().enumerate().filter(|(i, _)| card.chosen.contains(i) && !card.edited.contains(i)).count();
+        let (me_apply, me_dismiss) = (me.clone(), me.clone());
+        let actions = open.then(|| {
+            div()
+                .flex()
+                .flex_wrap()
+                .justify_end()
+                .gap(px(space::S))
+                .child(Button::new(("ai-inbox-dismiss", at)).ghost().small().label(tr("Verwerfen")).on_click(move |_, _, cx| {
+                    me_dismiss.update(cx, |p, cx| {
+                        if let Some(Item::Inbox(c)) = p.items.get_mut(at) {
+                            c.state = CardState::Dismissed;
+                        }
+                        p.dirty.insert(at);
+                        cx.notify();
+                    });
+                }))
+                .child(Button::new(("ai-inbox-apply", at)).primary().small().label(if chosen == 1 { tr("1 Datei ablegen") } else { trf("%lld Dateien ablegen", &[&chosen]) }).disabled(chosen == 0).on_click(move |_, _, cx| me_apply.update(cx, |p, cx| p.apply_inbox(at, cx))))
+        });
+        super::drive::marked(div().id(("ai-inbox", at)), "dialog")
+            .flex()
+            .flex_col()
+            .gap(px(space::M))
+            .p(px(space::M))
+            .rounded(px(radius::CARD))
+            .border_1()
+            .border_color(if open { t.accent.opacity(0.5) } else { t.separator })
+            .when(open, |d| d.bg(t.accent.opacity(0.04)))
+            .child(div().flex().items_center().gap(px(space::S)).child(icon(Flow::Inbox.icon(), iconsize::S, t.secondary)).child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child(head)))
+            .when(card.state != CardState::Replaced, |d| d.child(rows))
+            .children(card.error.clone().map(|e| div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(e)))
+            .children(actions)
+            .into_any_element()
+    }
+
+    fn toggle_setup_item(&mut self, at: usize, key: &str, on: bool, cx: &mut Context<Self>) {
+        if let Some(Item::Setup(card)) = self.items.get_mut(at)
+            && card.state == CardState::Open
+        {
+            if on {
+                card.chosen.insert(key.to_string());
+            } else {
+                card.chosen.remove(key);
+            }
+            self.dirty.insert(at);
+            cx.notify();
+        }
+    }
+
+    fn apply_setup(&mut self, at: usize, cx: &mut Context<Self>) {
+        let Some(Item::Setup(card)) = self.items.get(at) else { return };
+        if card.state != CardState::Open {
+            return;
+        }
+        let plan = card.plan.clone();
+        let keys: Vec<String> = plan.items.iter().filter(|i| card.chosen.contains(&i.key)).map(|i| i.key.clone()).collect();
+        if keys.is_empty() {
+            return;
+        }
+        let session = self.session.as_ref().map(|s| s.id.clone());
+        let result = ai::run_for(session.as_deref().unwrap_or("setup"), cx, |l| setup::apply(l, &plan, &keys));
+        self.dirty.insert(at);
+        let Some(Item::Setup(card)) = self.items.get_mut(at) else { return };
+        match result {
+            Ok(_) => {
+                card.state = CardState::Applied(keys.len(), plan.items.len());
+                card.error = None;
+                let taken: Vec<&str> = plan.items.iter().filter(|i| keys.contains(&i.key)).map(|i| i.title.as_str()).collect();
+                let left: Vec<&str> = plan.items.iter().filter(|i| !keys.contains(&i.key)).map(|i| i.title.as_str()).collect();
+                if session.is_some() && !self.turn {
+                    self.notice(if keys.len() == 1 { tr("1 Punkt übernommen.") } else { trf("%lld Punkte übernommen.", &[&keys.len()]) }, false);
+                    let note = format!("[Schrumbi] The user applied these setup items: {}. Not taken: {}. Ask in one short sentence whether everything fits now; propose again only if they want changes.", taken.join("; "), if left.is_empty() { "none".to_string() } else { left.join("; ") });
+                    self.dispatch(note, None, false, cx);
+                }
+            }
+            Err(e) => card.error = Some(e),
+        }
+        cx.notify();
+    }
+
+    fn dismiss_setup(&mut self, at: usize, cx: &mut Context<Self>) {
+        if let Some(Item::Setup(card)) = self.items.get_mut(at)
+            && card.state == CardState::Open
+        {
+            card.state = CardState::Dismissed;
+            self.dirty.insert(at);
+            cx.notify();
+        }
+    }
+
+    fn insert_answer(&mut self, at: usize, cx: &mut Context<Self>) {
+        let Some(Item::Agent { text, insert: Some(target), .. }) = self.items.get(at) else { return };
+        if target.done {
+            return;
+        }
+        let (note, body) = (target.note.clone(), text.trim().to_string());
+        let done = act(cx, |l| {
+            let (path, made) = if note.exists() {
+                (note.clone(), false)
+            } else {
+                let folder = note.parent().map(Path::to_path_buf).unwrap_or_default();
+                let stem = note.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                match l.create_note(&stem, &folder, "md") {
+                    Some(p) => (p, true),
+                    None => return false,
+                }
+            };
+            let key = l.buffer_key(&path);
+            let label = trf("Erklärung in %@ eingefügt", &[&name_of(&path)]);
+            let written = l.edit_note(&key, "ai-insert", label.clone(), |before| {
+                let mut out = before.to_string();
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                if !out.is_empty() && !out.ends_with("\n\n") {
+                    out.push('\n');
+                }
+                out.push_str(&body);
+                out.push('\n');
+                out
+            });
+            if written && made {
+                l.join_latest(2, "square-pen", label);
+            }
+            written
+        });
+        if done && let Some(Item::Agent { insert: Some(target), .. }) = self.items.get_mut(at) {
+            target.done = true;
+            self.dirty.insert(at);
+        }
+        cx.notify();
+    }
+
+    fn open_past(&mut self, file: PathBuf, cx: &mut Context<Self>) {
+        let entries = transcript::load(&file);
+        if entries.is_empty() {
+            return;
+        }
+        self.new_conversation_quiet(cx);
+        let when = transcript::started(&file).map(|d| d.format("%d.%m.%Y %H:%M").to_string()).unwrap_or_default();
+        self.notice(trf("Unterhaltung vom %@. Schreib weiter, dann liest die KI sie mit.", &[&when]), false);
+        for e in &entries {
+            match e.role {
+                transcript::Role::User => self.items.push(Item::User { text: e.text.clone(), chips: Vec::new() }),
+                transcript::Role::Agent => self.items.push(Item::Agent { text: e.text.clone(), parsed: Some(Rc::new(markdown_view::parse(&e.text))), parsed_len: e.text.len(), insert: None }),
+                transcript::Role::Tool => self.items.push(Item::Tool(Tool { name: None, title: e.text.clone(), kind: Kind::Other, status: Status::Done, input: None, output: None, denied: false })),
+            }
+        }
+        self.recap = Some(transcript::recap(&entries, RECAP_CHARS));
+        self.focus_input = true;
         cx.notify();
     }
 
@@ -874,7 +1361,16 @@ impl AiPanel {
     }
 
     fn new_conversation(&mut self, cx: &mut Context<Self>) {
+        self.new_conversation_quiet(cx);
+        self.start(cx);
+        self.focus_input = true;
+        cx.notify();
+    }
+
+    fn new_conversation_quiet(&mut self, cx: &mut Context<Self>) {
         self.stop(cx);
+        self.pending.clear();
+        self.recap = None;
         self.items.clear();
         self.list = Self::new_list();
         self.listed = 0;
@@ -883,9 +1379,6 @@ impl AiPanel {
         self.expanded.clear();
         self.extra.clear();
         self.removed.clear();
-        self.start(cx);
-        self.focus_input = true;
-        cx.notify();
     }
 
     fn header(&self, cx: &mut Context<Self>, t: &Theme) -> Div {
@@ -895,7 +1388,7 @@ impl AiPanel {
         let me = cx.entity();
         let (me2, me3) = (me.clone(), me.clone());
         let has_items = !self.items.is_empty();
-        let mut head = div().h(px(super::theme::control::BAR)).flex_none().flex().items_center().gap(px(space::XS)).px(px(space::L)).border_b_1().border_color(t.separator).child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(tr("KI")));
+        let mut head = div().h(px(super::theme::control::SUBBAR)).flex_none().flex().items_center().gap(px(space::XS)).pl(px(space::S)).pr(px(space::S)).border_b_1().border_color(t.separator).child(ai::panel_tabs(true, t, cx));
         if runners.len() > 1 {
             let label = chosen.map(|r| tr(r.label())).unwrap_or_default();
             let me = me.clone();
@@ -910,16 +1403,40 @@ impl AiPanel {
                 menu
             }));
         }
+        let root = state::read(cx, |l| l.root.clone());
+        let me4 = me.clone();
+        let history = Button::new("ai-history").ghost().size(px(super::theme::control::S)).rounded_full().icon(menu_icon("history")).tooltip(tr("Frühere Unterhaltungen")).dropdown_menu(move |mut menu, _, _| {
+            let past = root.as_deref().map(|r| transcript::list(r, HISTORY_SHOWN)).unwrap_or_default();
+            if past.is_empty() {
+                return menu.item(PopupMenuItem::new(tr("Noch keine früheren Unterhaltungen")).disabled(true));
+            }
+            for p in past {
+                let me = me4.clone();
+                let when = p.started.map(|d| d.format("%d.%m. %H:%M").to_string()).unwrap_or_default();
+                let first: String = p.first.lines().next().unwrap_or_default().chars().take(48).collect();
+                let file = p.file.clone();
+                menu = menu.item(PopupMenuItem::new(format!("{when}  {first}")).on_click(move |_, _, cx| {
+                    let file = file.clone();
+                    me.update(cx, |panel, cx| panel.open_past(file, cx));
+                }));
+            }
+            menu
+        });
         head.child(div().flex_1())
+            .child(history)
             .child(Button::new("ai-save").ghost().size(px(super::theme::control::S)).rounded_full().icon(menu_icon("file-down")).disabled(!has_items).tooltip(tr("Als Notiz speichern")).on_click(move |_, _, cx| me2.update(cx, |p, cx| p.save_as_note(cx))))
             .child(Button::new("ai-new").ghost().size(px(super::theme::control::S)).rounded_full().icon(menu_icon("message-square-plus")).disabled(!has_items).tooltip(tr("Neue Unterhaltung")).on_click(move |_, _, cx| me3.update(cx, |p, cx| p.new_conversation(cx))))
-            .child(Button::new("ai-close").ghost().size(px(super::theme::control::S)).rounded_full().icon(menu_icon("x")).tooltip(format!("{}{}", tr("KI ausblenden"), crate::core::shortcuts::ShortcutAction::ToggleAi.hint())).on_click(|_, _, cx| ai::close_column(cx)))
+            .child(Button::new("ai-close").ghost().size(px(super::theme::control::S)).rounded_full().icon(menu_icon("x")).tooltip(format!("{}{}", tr("KI ausblenden"), crate::core::shortcuts::ShortcutAction::ToggleAi.hint())).on_click(|_, _, cx| ai::close_panel(cx)))
     }
 
     fn empty(&self, cx: &mut Context<Self>, t: &Theme) -> Div {
         let me = cx.entity();
         let mut list = div().flex().flex_col().gap(px(space::XS)).w_full();
-        for (i, (label, icon_name, prompt)) in suggestions(cx).into_iter().take(3).enumerate() {
+        let mut offered = suggestions(cx);
+        if setup_wanted(cx) {
+            offered.push(Suggestion { label: Flow::Setup.label(), icon: Flow::Setup.icon(), flow: Flow::Setup, chips: Vec::new() });
+        }
+        for (i, Suggestion { label, icon: icon_name, flow, chips }) in offered.into_iter().take(4).enumerate() {
             let me = me.clone();
             list = list.child(
                 div()
@@ -938,8 +1455,8 @@ impl AiPanel {
                     .child(icon(icon_name, iconsize::S, t.secondary))
                     .child(div().flex_1().truncate().child(label))
                     .on_click(move |_, _, cx| {
-                        let prompt = prompt.clone();
-                        me.update(cx, |p, cx| p.send(prompt, cx));
+                        let chips = chips.clone();
+                        me.update(cx, |p, cx| p.start_flow(flow, chips, cx));
                     }),
             );
         }
@@ -1038,8 +1555,117 @@ impl AiPanel {
                     .child(div().min_w_0().truncate().child(trf("in %@", &[&name_of(&edit.path)])))
                     .when(edit.undone, |d| d.text_color(t.tertiary)),
             )
-            .child(Button::new(("ai-edit-view", at)).ghost().xsmall().label(tr("Ansehen")).on_click(move |_, window, cx| show_diff(&path, &before, &after, window, cx)))
+            .child(Button::new(("ai-edit-view", at)).ghost().xsmall().label(tr("Ansehen")).on_click({
+                let me = me.clone();
+                move |_, window, cx| {
+                    let me = me.clone();
+                    let discard: Option<Rc<dyn Fn(&mut App)>> = can_undo.then(|| Rc::new(move |cx: &mut App| me.update(cx, |p, cx| p.undo_edit(at, cx))) as Rc<dyn Fn(&mut App)>);
+                    show_diff(&path, &before, &after, discard, window, cx);
+                }
+            }))
             .child(Button::new(("ai-edit-undo", at)).ghost().xsmall().label(tr("Rückgängig")).disabled(!can_undo).tooltip(undo_tip).on_click(move |_, _, cx| me.update(cx, |p, cx| p.undo_edit(at, cx))))
+            .into_any_element()
+    }
+
+    fn setup_card(&self, at: usize, card: &SetupCard, cx: &mut Context<Self>, t: &Theme) -> AnyElement {
+        let me = cx.entity();
+        let open = card.state == CardState::Open;
+        let head = match card.state {
+            CardState::Open => tr("Vorschlag zur Einrichtung"),
+            CardState::Applied(n, total) => trf("Übernommen: %lld von %lld Punkten", &[&n, &total]),
+            CardState::Replaced => tr("Durch einen neuen Vorschlag ersetzt"),
+            CardState::Dismissed => tr("Verworfen"),
+        };
+        let mut rows = div().flex().flex_col().gap(px(space::S));
+        for (i, item) in card.plan.items.iter().enumerate() {
+            let (me, key) = (me.clone(), item.key.clone());
+            let checked = card.chosen.contains(&item.key);
+            let mut lines = div().flex().flex_col().gap(px(space::XXS)).pl(px(space::XL)).text_size(px(font::CALLOUT)).text_color(t.secondary);
+            for line in &item.lines {
+                lines = lines.child(div().min_w_0().truncate().child(line.clone()));
+            }
+            rows = rows.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::XXS))
+                    .when(!open && !checked, |d| d.opacity(0.5))
+                    .child(Checkbox::new(SharedString::from(format!("ai-setup-{at}-{i}"))).label(item.title.clone()).checked(checked).disabled(!open).on_click(move |v, _, cx| {
+                        let (key, on) = (key.clone(), *v);
+                        me.update(cx, |p, cx| p.toggle_setup_item(at, &key, on, cx));
+                    }))
+                    .when(!item.lines.is_empty(), |d| d.child(lines)),
+            );
+        }
+        let renames = if card.plan.renames.is_empty() {
+            None
+        } else {
+            let me = me.clone();
+            let shown = card.renames_open;
+            let mut list = div().flex().flex_col().gap(px(space::XXS)).font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.secondary);
+            if shown {
+                for r in &card.plan.renames {
+                    list = list.child(div().min_w_0().truncate().child(format!("{} → {}", r.from, r.to)));
+                }
+            }
+            let count = card.plan.renames.len();
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::XS))
+                    .child(
+                        div()
+                            .id(("ai-setup-renames", at))
+                            .flex()
+                            .items_center()
+                            .gap(px(space::XS))
+                            .text_size(px(font::CALLOUT))
+                            .text_color(t.secondary)
+                            .cursor_pointer()
+                            .key_nav()
+                            .soft(t.ink.opacity(0.05), radius::INNER)
+                            .child(motion::chevron(("ai-setup-renames-chevron", at), shown, t.tertiary))
+                            .child(div().flex_1().min_w_0().child(if count == 1 { tr("1 Datei würde die KI umbenennen. Schrumbi tut das nicht von selbst.") } else { trf("%lld Dateien würde die KI umbenennen. Schrumbi tut das nicht von selbst.", &[&count]) }))
+                            .on_click(move |_, _, cx| {
+                                me.update(cx, |p, cx| {
+                                    if let Some(Item::Setup(c)) = p.items.get_mut(at) {
+                                        c.renames_open = !c.renames_open;
+                                    }
+                                    p.dirty.insert(at);
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .when(shown, |d| d.child(list.p(px(space::S)).rounded(px(radius::INNER)).bg(t.ink.opacity(0.04)))),
+            )
+        };
+        let chosen = card.chosen.len();
+        let (me_apply, me_dismiss) = (me.clone(), me.clone());
+        let actions = open.then(|| {
+            div()
+                .flex()
+                .flex_wrap()
+                .justify_end()
+                .gap(px(space::S))
+                .child(Button::new(("ai-setup-dismiss", at)).ghost().small().label(tr("Verwerfen")).on_click(move |_, _, cx| me_dismiss.update(cx, |p, cx| p.dismiss_setup(at, cx))))
+                .child(Button::new(("ai-setup-apply", at)).primary().small().label(if chosen == card.plan.items.len() { tr("Alles übernehmen") } else { trf("%lld übernehmen", &[&chosen]) }).disabled(chosen == 0).on_click(move |_, _, cx| me_apply.update(cx, |p, cx| p.apply_setup(at, cx))))
+        });
+        super::drive::marked(div().id(("ai-setup", at)), "dialog")
+            .flex()
+            .flex_col()
+            .gap(px(space::M))
+            .p(px(space::M))
+            .rounded(px(radius::CARD))
+            .border_1()
+            .border_color(if open { t.accent.opacity(0.5) } else { t.separator })
+            .when(open, |d| d.bg(t.accent.opacity(0.04)))
+            .child(div().flex().items_center().gap(px(space::S)).child(icon(Flow::Setup.icon(), iconsize::S, t.secondary)).child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child(head)))
+            .when(!card.plan.workflow.is_empty() && open, |d| d.child(div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(card.plan.workflow.clone())))
+            .when(!card.plan.items.is_empty() && card.state != CardState::Replaced, |d| d.child(rows))
+            .children(renames)
+            .children(card.error.clone().map(|e| div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(e)))
+            .children(actions)
             .into_any_element()
     }
 
@@ -1079,16 +1705,41 @@ impl AiPanel {
         let Some(item) = self.items.get(at) else { return div().into_any_element() };
         match item {
             Item::User { text, chips } => {
-                let mut row = div().flex().flex_wrap().gap(px(space::XS));
+                let mut row = div().flex().flex_wrap().justify_end().gap(px(space::XS));
                 for c in chips {
-                    row = row.child(div().px(px(space::S)).rounded_full().bg(t.ink.opacity(0.06)).text_size(px(font::CAPTION)).text_color(t.secondary).child(c.clone()));
+                    row = row.child(div().max_w(px(180.)).truncate().px(px(space::S)).rounded_full().bg(t.ink.opacity(0.06)).text_size(px(font::CAPTION)).text_color(t.tertiary).child(c.clone()));
                 }
-                div().flex().flex_col().gap(px(space::XS)).p(px(space::M)).rounded(px(radius::CARD)).bg(t.ink.opacity(0.05)).child(div().child(text.clone())).when(!chips.is_empty(), |d| d.child(row)).into_any_element()
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_end()
+                    .gap(px(space::XS))
+                    .pl(px(space::XL))
+                    .child(div().px(px(space::M)).py(px(space::S)).rounded(px(radius::CARD)).bg(t.ink.opacity(0.07)).line_height(relative(1.45)).child(text.clone()))
+                    .when(!chips.is_empty(), |d| d.child(row))
+                    .into_any_element()
             }
-            Item::Agent { text, parsed, parsed_len } => match parsed {
-                Some(p) if *parsed_len == text.len() || text.len() < *parsed_len + 400 => div().min_w_0().child(markdown_view::render(p, None, None, t)).into_any_element(),
-                _ => div().min_w_0().child(text.clone()).into_any_element(),
-            },
+            Item::Agent { text, parsed, parsed_len, insert } => {
+                let body = match parsed {
+                    Some(p) if *parsed_len == text.len() || text.len() < *parsed_len + 400 => div().min_w_0().line_height(relative(1.5)).child(markdown_view::render(p, None, None, t)).into_any_element(),
+                    _ => div().min_w_0().line_height(relative(1.5)).child(text.clone()).into_any_element(),
+                };
+                match insert {
+                    Some(target) => {
+                        let me = cx.entity();
+                        let note = name_of(&target.note);
+                        let action = if target.done {
+                            div().flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).text_color(t.tertiary).child(icon("check", iconsize::XS, t.tertiary)).child(trf("In %@ eingefügt", &[&note])).into_any_element()
+                        } else {
+                            Button::new(("ai-insert", at)).ghost().xsmall().icon(menu_icon("corner-down-left")).label(tr("In Notiz einfügen")).tooltip(trf("Hängt die Erklärung an %@ an", &[&note])).on_click(move |_, _, cx| me.update(cx, |p, cx| p.insert_answer(at, cx))).into_any_element()
+                        };
+                        div().flex().flex_col().gap(px(space::S)).child(body).child(div().flex().child(action)).into_any_element()
+                    }
+                    None => body,
+                }
+            }
+            Item::Setup(card) => self.setup_card(at, card, cx, t),
+            Item::Inbox(card) => self.inbox_card(at, card, cx, t),
             Item::Tool(tool) => self.tool_card(at, tool, cx, t),
             Item::Edit(e) => self.edit_card(at, e, cx, t),
             Item::Notice { text, restart } => {
@@ -1120,7 +1771,13 @@ impl AiPanel {
             let label = status.clone().unwrap_or_default();
             div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(motion::loading(iconsize::XS, t.secondary)).child(label).into_any_element()
         };
-        div().px(px(space::L)).pt(px(space::M)).when(last, |d| d.pb(px(space::L))).child(el).into_any_element()
+        let step = |i: usize| matches!(self.items.get(i), Some(Item::Tool(_) | Item::Edit(_)));
+        let top = match self.items.get(ix) {
+            Some(Item::User { .. }) if ix > 0 => space::XL,
+            _ if ix > 0 && step(ix) && step(ix - 1) => space::XXS,
+            _ => space::M,
+        };
+        div().px(px(space::L)).pt(px(top)).when(last, |d| d.pb(px(space::L))).child(el).into_any_element()
     }
 
     fn sync_list(&mut self, cx: &mut Context<Self>) {
@@ -1182,7 +1839,19 @@ impl AiPanel {
         }
         let removed: Vec<Chip> = self.auto_chips(cx).into_iter().filter(|c| self.removed.contains(c)).collect();
         let tabs: Vec<PathBuf> = state::read(cx, |l| l.open_documents.clone()).into_iter().filter(|p| !chips.iter().any(|c| matches!(c, Chip::Note(q) | Chip::Pdf(q, _) if q == p))).take(8).collect();
-        let labels: Vec<(Chip, String)> = removed.into_iter().map(|c| { let l = chip_label(&c, cx); (c, l) }).collect();
+        let mut labels: Vec<(Chip, String)> = removed.into_iter().map(|c| { let l = chip_label(&c, cx); (c, l) }).collect();
+        let week = Chip::Week(state::read(cx, |l| crate::core::day::monday(l.today())));
+        if !chips.contains(&week) && !labels.iter().any(|(c, _)| *c == week) {
+            let label = tr("Diese Woche");
+            labels.push((week, label));
+        }
+        let soon: Vec<(String, String)> = state::read(cx, |l| l.upcoming_days(14).into_iter().take(5).map(|a| (a.id.clone(), a.title.clone())).collect());
+        for (id, title) in soon {
+            let chip = Chip::Deadline(id);
+            if !chips.contains(&chip) && !labels.iter().any(|(c, _)| *c == chip) {
+                labels.push((chip, title));
+            }
+        }
         let me_add = me.clone();
         let add = Button::new("ai-context").ghost().xsmall().icon(menu_icon("plus")).label(tr("Kontext")).disabled(labels.is_empty() && tabs.is_empty()).dropdown_menu(move |mut menu, _, _| {
             for (c, label) in labels.clone() {
@@ -1190,7 +1859,9 @@ impl AiPanel {
                 menu = menu.item(PopupMenuItem::new(label).icon(menu_icon(chip_icon(&c))).on_click(move |_, _, cx| {
                     let c = c.clone();
                     me.update(cx, |p, cx| {
-                        p.removed.remove(&c);
+                        if !p.removed.remove(&c) && !p.extra.contains(&c) {
+                            p.extra.push(c);
+                        }
                         cx.notify();
                     });
                 }));
@@ -1241,8 +1912,8 @@ impl AiPanel {
     }
 }
 
-/// Shows a change side by side: before on the left, after on the right.
-pub fn show_diff(path: &Path, before: &str, after: &str, window: &mut Window, cx: &mut App) {
+/// Shows a change side by side: before on the left, after on the right; with `discard` the user keeps it or takes it back.
+pub fn show_diff(path: &Path, before: &str, after: &str, discard: Option<Rc<dyn Fn(&mut App)>>, window: &mut Window, cx: &mut App) {
     let name = name_of(path);
     let closed = |t: &str| if t.ends_with('\n') || t.is_empty() { t.to_string() } else { format!("{t}\n") };
     let (old, new) = (closed(before), closed(after));
@@ -1261,7 +1932,15 @@ pub fn show_diff(path: &Path, before: &str, after: &str, window: &mut Window, cx
                 .flex_col()
                 .child(div().flex_none().py(px(space::M)).flex().border_b_1().border_color(t.separator).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.secondary).child(div().flex_1().px(px(space::L)).child(tr("Vorher"))).child(div().flex_1().px(px(space::L)).child(tr("Nachher"))))
                 .child(div().flex_1().min_h_0().child(gpui_kit::component::diff::Diff::new(&state).header_visible(false).hunk_separator(gpui_kit::component::diff::DiffHunkSeparator::Simple)))
-                .child(div().flex_none().p(px(space::M)).flex().justify_end().border_t_1().border_color(t.separator).child(Button::new("ai-diff-close").small().primary().label(tr("Schließen")).on_click(|_, window, cx| window.close_dialog(cx)))),
+                .child(match discard.clone() {
+                    Some(discard) => div().flex_none().p(px(space::M)).flex().justify_end().gap(px(space::S)).border_t_1().border_color(t.separator)
+                        .child(Button::new("ai-diff-discard").small().ghost().label(tr("Verwerfen")).tooltip(tr("Nimmt nur diese Änderung zurück")).on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            discard(cx);
+                        }))
+                        .child(Button::new("ai-diff-keep").small().primary().label(tr("Behalten")).on_click(|_, window, cx| window.close_dialog(cx))),
+                    None => div().flex_none().p(px(space::M)).flex().justify_end().border_t_1().border_color(t.separator).child(Button::new("ai-diff-close").small().primary().label(tr("Schließen")).on_click(|_, window, cx| window.close_dialog(cx))),
+                }),
         )
     });
 }

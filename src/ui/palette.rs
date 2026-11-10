@@ -335,9 +335,12 @@ fn commands(cx: &App) -> Vec<Command> {
     if super::ai::active() {
         let ki = tr("KI");
         add(&ki, tr("Frag die KI…"), "bot", keys(S::ToggleAi), Run::Call(Rc::new(super::ai::open_column)));
-        for (label, icon_name, prompt) in super::ai_panel::suggestions(cx).into_iter().take(3) {
-            add(&ki, label, icon_name, None, Run::Call(Rc::new(move |cx| super::ai::ask_with(prompt.clone(), None, cx))));
+        for s in super::ai_panel::suggestions(cx) {
+            let (flow, chips) = (s.flow, s.chips.clone());
+            add(&ki, s.label, s.icon, None, Run::Call(Rc::new(move |cx| super::ai::start_flow(flow, chips.clone(), cx))));
         }
+        let setup = crate::core::ai::prompts::Flow::Setup;
+        add(&ki, setup.label(), setup.icon(), None, Run::Call(Rc::new(move |cx| super::ai::start_flow(setup, Vec::new(), cx))));
     }
     list.extend(extra);
     list

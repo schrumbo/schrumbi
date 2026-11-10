@@ -1,6 +1,7 @@
 pub mod acp;
 pub mod agents;
 pub mod detect;
+pub mod inbox;
 pub mod install;
 pub mod instance;
 pub mod mcp;

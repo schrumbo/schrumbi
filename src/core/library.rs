@@ -295,6 +295,8 @@ pub struct Library {
     pub link_pick: Option<String>,
     /// A PDF about to open and the text to look for in it, set when coming from the file search.
     pub find_in_file: Option<(PathBuf, String, usize)>,
+    /// Line ranges the assistant just changed in a file, counted from 0, for the open note to show.
+    pub changed_lines: Option<(PathBuf, Vec<(usize, usize)>)>,
     pub show_palette: bool,
     pub show_overdue: bool,
     pub show_unconfirmed: bool,
@@ -482,6 +484,7 @@ impl Library {
             show_quick_open: false,
             link_pick: None,
             find_in_file: None,
+            changed_lines: None,
             show_palette: false,
             show_overdue: false,
             show_unconfirmed: false,

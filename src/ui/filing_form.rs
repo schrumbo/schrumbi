@@ -35,6 +35,17 @@ pub enum FilingEvent {
     Finished,
 }
 
+/// What the assistant read from the file and filled in; a field stays marked while it still holds this value.
+struct AiFill {
+    path: PathBuf,
+    role: FileRole,
+    target: Option<Target>,
+    title: String,
+    date: Option<NaiveDate>,
+    new_deadline: Option<crate::core::ai::inbox::NewDeadline>,
+    module: Option<String>,
+}
+
 impl EventEmitter<FilingEvent> for FilingForm {}
 
 /// Shared filing flow: say what the file is, pick target, title and date; preview the final name; file one or many.
@@ -69,6 +80,8 @@ pub struct FilingForm {
     width: f32,
     focus: FocusHandle,
     load: Option<Task<()>>,
+    ai: Option<AiFill>,
+    ai_waiting: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -152,10 +165,121 @@ impl FilingForm {
             width: 560.,
             focus: cx.focus_handle(),
             load: None,
+            ai: None,
+            ai_waiting: false,
             _subs: subs,
         };
         form.load_current(window, cx);
         form
+    }
+
+    /// Asks the assistant to read the current file and fill the form; the column shows what it does.
+    fn ask_ai(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.path().cloned() else { return };
+        self.ai_waiting = true;
+        super::ai::fill_filing(path, cx.entity().downgrade(), cx);
+        cx.notify();
+    }
+
+    /// Fills the form with what the assistant read from the file; the user checks it and files as usual.
+    pub fn apply_ai(&mut self, row: crate::core::ai::inbox::Row, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::core::ai::inbox::FileKind;
+        if self.path() != Some(&row.path) {
+            return;
+        }
+        self.ai_waiting = false;
+        let role = match row.kind {
+            FileKind::Submission => FileRole::Work,
+            FileKind::Exercise => FileRole::Brief,
+            _ => FileRole::Material,
+        };
+        self.role = role;
+        let target = match &row.deadline {
+            Some(id) => Some(Target::Assignment(id.clone())),
+            None => Some(Target::Folder(row.folder.clone())),
+        };
+        if let Some(t) = target.clone() {
+            self.select(t, window, cx);
+        }
+        self.title.update(cx, |s, cx| s.set_value(row.title.clone(), window, cx));
+        if let Some(d) = row.date {
+            self.set_date(d, window, cx);
+        }
+        self.ai = Some(AiFill { path: row.path.clone(), role, target, title: row.title, date: row.date, new_deadline: row.new_deadline, module: row.module });
+        cx.notify();
+    }
+
+    /// The assistant gave up or the session ended; the form waits no longer.
+    pub fn ai_done(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.ai_waiting) {
+            cx.notify();
+        }
+    }
+
+    fn ai_marks(&self, cx: &App) -> Option<(bool, bool, bool)> {
+        let ai = self.ai.as_ref().filter(|a| self.path() == Some(&a.path))?;
+        let target = ai.role == self.role && ai.target == self.target;
+        let title = self.title.read(cx).value().trim() == ai.title.trim();
+        let date = ai.date.is_some_and(|d| d == self.date_value);
+        (target || title || date).then_some((target, title, date))
+    }
+
+    fn create_ai_deadline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ai) = self.ai.as_mut() else { return };
+        let (Some(n), Some(module)) = (ai.new_deadline.take(), ai.module.clone()) else { return };
+        let kind = if ai.role == FileRole::Material { crate::core::model::Kind::Task } else { crate::core::model::Kind::Submission };
+        let m = crate::core::model::ManualAssignment { module, title: n.title, due: n.due.with_timezone(&chrono::Utc), kind, upload: true, ..Default::default() };
+        let id = format!("manual.{}", m.id);
+        act(cx, |l| l.add_manual(m));
+        let target = Target::Assignment(id);
+        if let Some(ai) = self.ai.as_mut() {
+            ai.target = Some(target.clone());
+        }
+        self.select(target, window, cx);
+    }
+
+    /// Takes what the assistant read for the current file once it arrived.
+    pub fn take_ai(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.facts.is_some()
+            && let Some(row) = self.path().cloned().and_then(|p| super::ai::take_prefill(&p, cx))
+        {
+            self.apply_ai(row, window, cx);
+        }
+    }
+
+    fn ai_row(&self, me: Entity<Self>, cx: &App, t: &Theme) -> Option<Div> {
+        if !super::ai::active() {
+            return None;
+        }
+        if self.ai_waiting {
+            return Some(div().flex().items_center().gap(px(space::S)).text_size(px(font::CAPTION)).text_color(t.secondary).child(super::motion::loading(iconsize::XS, t.secondary)).child(tr("Die KI liest die Datei …")));
+        }
+        let marks = self.ai_marks(cx);
+        let pending = self.ai.as_ref().filter(|a| self.path() == Some(&a.path)).and_then(|a| a.new_deadline.clone());
+        let mut row = div().flex().flex_col().gap(px(space::XS));
+        if let Some(n) = pending {
+            let e = me.clone();
+            row = row.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S))
+                    .text_size(px(font::CALLOUT))
+                    .child(icon("calendar-plus", iconsize::XS, t.secondary))
+                    .child(div().flex_1().min_w_0().truncate().child(trf("Neue Frist laut Blatt: %@ bis %@", &[&n.title, &n.due.format("%d.%m. %H:%M").to_string()])))
+                    .child(Button::new("filing-ai-deadline").ghost().xsmall().label(tr("Anlegen")).on_click(move |_, window, cx| e.update(cx, |f, cx| f.create_ai_deadline(window, cx)))),
+            );
+        }
+        row = match marks {
+            Some(_) => row.child(caption(tr("Von der KI ausgefüllt. Prüf es kurz, dann ablegen."), t).text_color(t.tertiary)),
+            None => row.child(link_button("filing-ai", tr("Mit KI ausfüllen"), t).text_size(px(font::CAPTION)).on_click(move |_, _, cx| me.update(cx, |f, cx| f.ask_ai(cx)))),
+        };
+        Some(row)
+    }
+
+    fn ai_label(&self, label: String, field: usize, cx: &App, t: &Theme) -> Div {
+        let marked = self.ai_marks(cx).is_some_and(|(a, b, c)| [a, b, c][field.min(2)]);
+        div().flex().items_center().gap(px(space::XS)).child(section_label(label, t)).when(marked, |d| d.child(div().text_size(px(font::CAPTION)).text_color(t.tertiary).child(tr("· von der KI"))))
     }
 
     /// The file currently being filed.
@@ -271,6 +395,9 @@ impl FilingForm {
         }
         self.facts = Some(facts);
         self.details = state::read(cx, |l| self.folder(l).is_none() || self.wants_author(l)) || (self.rename && self.title.read(cx).value().trim().is_empty());
+        if let Some(row) = self.path().cloned().and_then(|p| super::ai::take_prefill(&p, cx)) {
+            self.apply_ai(row, window, cx);
+        }
         if self.grab_focus {
             self.refocus(window, cx);
         }
@@ -484,7 +611,7 @@ impl FilingForm {
 impl FilingForm {
     /// The suggestion as one decision: where the file goes and what it will be called.
     #[allow(clippy::too_many_arguments)]
-    fn summary(&self, me: Entity<Self>, thumb: AnyElement, preview: PathBuf, final_name: &str, valid: bool, can_file: bool, l: &Library, t: &Theme) -> Div {
+    fn summary(&self, me: Entity<Self>, thumb: AnyElement, preview: PathBuf, final_name: &str, valid: bool, can_file: bool, l: &Library, cx: &App, t: &Theme) -> Div {
         const CHOICE_MIN: f32 = 300.;
         let room = self.width - 2. * space::XL - space::XL - CHOICE_MIN;
         let stacked = room < 140.;
@@ -528,6 +655,7 @@ impl FilingForm {
         }
         choice = choice
             .child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(icon(role_icon, iconsize::XS, t.secondary)).child(role_label))
+            .children(self.ai_row(me.clone(), cx, t))
             .children(described.map(|(name, tint, context)| {
                 div()
                     .flex()
@@ -730,7 +858,10 @@ fn has_convention(cx: &App) -> bool {
 }
 
 impl Render for FilingForm {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.ai_waiting {
+            self.take_ai(window, cx);
+        }
         self.follow_rename_setting(cx);
         let t = Theme::get(cx);
         let Some(path) = self.path().cloned() else {
@@ -753,7 +884,7 @@ impl Render for FilingForm {
             None => file_icon(&path, iconsize::HERO).into_any_element(),
         };
         if !self.details {
-            let body = self.summary(me.clone(), thumb, preview_path, &final_name, valid, can_file, l, &t);
+            let body = self.summary(me.clone(), thumb, preview_path, &final_name, valid, can_file, l, cx, &t);
             let footer = self.footer(me, folder.is_some(), can_file, false, &t);
             return self.shell(body, footer, cx).into_any_element();
         }
@@ -838,7 +969,8 @@ impl Render for FilingForm {
                     .flex()
                     .items_center()
                     .gap(px(space::S))
-                    .child(section_label(tr("Was ist das?"), &t))
+                    .child(self.ai_label(tr("Was ist das?"), 0, cx, &t))
+                    .children(self.ai_row(me.clone(), cx, &t))
                     .when(self.guessed == Some(self.role), |d| d.child(div().id("guessed").flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("sparkles", iconsize::XS, t.secondary)).child(tr("erkannt")).tooltip(tip(tr("Aus Dateiname und Inhalt geschätzt"))))),
             )
             .child(div().flex().child(roles))
@@ -945,7 +1077,7 @@ impl Render for FilingForm {
             .flex()
             .flex_col()
             .gap(px(space::S))
-            .child(section_label(tr("Wohin?"), &t))
+            .child(self.ai_label(tr("Wohin?"), 0, cx, &t))
             .child(chips)
             .child(match &folder {
                 Some(f) => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", iconsize::XS, t.secondary)).child(div().truncate().child(l.relative_path(f))),
@@ -959,7 +1091,7 @@ impl Render for FilingForm {
             let e = me.clone();
             let convention = has_convention(cx);
             let mut name = div().flex().flex_col().gap(px(space::M)).child(
-                div().flex().items_center().child(section_label(tr("Name"), &t)).child(div().flex_1()).when(convention, |d| d.child(
+                div().flex().items_center().child(self.ai_label(tr("Name"), 1, cx, &t)).child(div().flex_1()).when(convention, |d| d.child(
                     div()
                         .id("rename-switch")
                         .flex()

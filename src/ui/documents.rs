@@ -40,7 +40,7 @@ actions!(
     schrumbi_editor,
     [
         Bold, Italic, InsertLink, InlineCode, ToggleTask, ToggleComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine, SelectLine, IndentLines, OutdentLines, ZoomIn, ZoomOut, ZoomReset,
-        ListNewline, ListTab, ListBacktab, ExtractSelection, CardFromSelection, AskAiSelection, CardsAiSelection, PlainNewline, Strike, Mark, InlineMath, Quote, BulletList, NumberedList, Heading1, Heading2, Heading3, ToggleWrap
+        ListNewline, ListTab, ListBacktab, ExtractSelection, CardFromSelection, AskAiSelection, CardsAiSelection, ExplainAiSelection, PlainNewline, Strike, Mark, InlineMath, Quote, BulletList, NumberedList, Heading1, Heading2, Heading3, ToggleWrap
     ]
 );
 
@@ -107,6 +107,7 @@ const LIVE_LINE_MAX: usize = 250_000;
 const NOTE_END_ROOM: f32 = 160.;
 const SPLIT_HOLD: Duration = Duration::from_millis(300);
 const FIND_MARKS_AROUND: usize = 1000;
+const CHANGE_MARKS: usize = 200;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -343,6 +344,7 @@ pub struct NoteView {
     future: Vec<(String, usize)>,
     last_snapshot: Option<std::time::Instant>,
     found: Option<markdown_view::Found>,
+    change_marks: Option<TextDecorationCollection>,
     /// Editor and reader offsets at the last sync of the split view.
     link_focus: markdown_view::LinkFocus,
     place_restored: bool,
@@ -498,7 +500,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), caret_seen: (0, 0), follow_caret: false, live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, split_lead: None, reparse: None, parse_hold: false, first_parse: true, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), pdf_drop: None, pdf_drop_bar: None, fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), caret_seen: (0, 0), follow_caret: false, live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, split_lead: None, reparse: None, parse_hold: false, first_parse: true, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, change_marks: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), pdf_drop: None, pdf_drop_bar: None, fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -517,7 +519,7 @@ impl NoteView {
             self.split_hold = Some(std::time::Instant::now());
         }
         let still = cx.reduce_motion();
-        self.found = Some(markdown_view::Found { block, line, token, still });
+        self.found = Some(markdown_view::Found::one(block, line, token, still));
         if still {
             cx.spawn_in(window, async move |this, cx| {
                 cx.background_executor().timer(markdown_view::FOUND_HOLD).await;
@@ -530,6 +532,59 @@ impl NoteView {
             })
             .detach();
         }
+    }
+
+    /// Shows what the assistant changed: the first changed line comes into view and every changed line is marked for a moment.
+    fn show_changes(&mut self, lines: &[(usize, usize)], text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let starts: Vec<usize> = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
+        let offset = |line: usize| starts.get(line).copied().unwrap_or(text.len());
+        let ranges: Vec<std::ops::Range<usize>> = lines.iter().take(CHANGE_MARKS).map(|(from, to)| offset(*from)..offset(to + 1).saturating_sub(1).max(offset(*from))).filter(|r| r.start < text.len()).collect();
+        let Some(first) = ranges.first().cloned() else { return };
+        self.editor.update(cx, |s, cx| s.set_selected_range(first.start..first.start, cx));
+        let token = self.found.as_ref().map_or(0, |f| f.token + 1);
+        let line_of = |offset: usize| text.get(..offset).unwrap_or_default().matches('\n').count();
+        let first_line = line_of(first.start);
+        self.reveal_line = Some(first_line);
+        if self.mode == Mode::Split {
+            self.split_hold = Some(std::time::Instant::now());
+        }
+        let still = cx.reduce_motion();
+        let mut blocks = Vec::new();
+        let mut marked = Vec::new();
+        for r in &ranges {
+            for line in line_of(r.start)..=line_of(r.end) {
+                marked.push(line);
+                let at = offset(line);
+                let block = markdown_view::block_at(text, at);
+                if !blocks.contains(&block) {
+                    blocks.push(block);
+                }
+            }
+        }
+        self.found = Some(markdown_view::Found { block: markdown_view::block_at(text, first.start), line: first_line, token, still, more: Rc::from(blocks), lines: Rc::from(marked) });
+        let t = Theme::get(cx);
+        let fill = HighlightStyle { background_color: Some(t.accent.opacity(0.22)), ..Default::default() };
+        let decorations: Vec<TextDecoration> = ranges.iter().filter(|r| r.end > r.start).map(|r| TextDecoration::new(r.clone(), fill)).collect();
+        match &self.change_marks {
+            Some(known) => known.set(decorations, cx),
+            None if decorations.is_empty() => {}
+            None => self.change_marks = Some(self.editor.update(cx, |e, cx| e.create_decorations_collection(decorations, cx))),
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(markdown_view::FOUND_HOLD).await;
+            let _ = this.update(cx, |n, cx| {
+                if n.found.as_ref().is_some_and(|f| f.token == token) {
+                    if let Some(marks) = &n.change_marks {
+                        marks.set(Vec::new(), cx);
+                    }
+                    if still {
+                        n.found = None;
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn find_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<super::find_bar::FindBar> {
@@ -3357,8 +3412,20 @@ impl NoteView {
             .on_action(cx.listener(|n, _: &CardsAiSelection, _, cx| {
                 let (text, range) = n.with_text(cx);
                 let chosen = text.get(range).unwrap_or_default().trim().to_string();
-                let chip = if chosen.is_empty() { super::ai_panel::Chip::Note(n.path.clone()) } else { super::ai_panel::Chip::Selection(chosen) };
-                super::ai::ask_with(tr("Mach Karteikarten aus dieser Auswahl und ergänze sie in dieser Notiz."), Some(chip), cx);
+                let mut chips = vec![super::ai_panel::Chip::Note(n.path.clone())];
+                if !chosen.is_empty() {
+                    chips.push(super::ai_panel::Chip::Selection(chosen));
+                }
+                super::ai::start_flow(crate::core::ai::prompts::Flow::Cards, chips, cx);
+            }))
+            .on_action(cx.listener(|n, _: &ExplainAiSelection, _, cx| {
+                let (text, range) = n.with_text(cx);
+                let chosen = text.get(range).unwrap_or_default().trim().to_string();
+                let mut chips = vec![super::ai_panel::Chip::Note(n.path.clone())];
+                if !chosen.is_empty() {
+                    chips.push(super::ai_panel::Chip::Selection(chosen));
+                }
+                super::ai::start_flow(crate::core::ai::prompts::Flow::Explain, chips, cx);
             }))
             .on_action(cx.listener(|n, _: &CardFromSelection, w, cx| {
                 let (text, range) = n.with_text(cx);
@@ -3729,6 +3796,14 @@ mod key_tests {
 
 /// Estimated rows of soft-wrapped monospaced text in an editor column of `width`, gutter included.
 
+/// The lines the assistant just changed in this file, waiting to be shown.
+fn take_changed_request(path: &Path, cx: &mut App) -> Option<Vec<(usize, usize)>> {
+    state::lib(cx).update(cx, |l, _| {
+        let matches = l.changed_lines.as_ref().is_some_and(|(p, _)| dunce::canonicalize(p).is_ok_and(|p| p == path));
+        if matches { l.changed_lines.take().map(|(_, lines)| lines) } else { None }
+    })
+}
+
 /// The search match waiting to be shown in this file, if any.
 fn take_find_request(path: &Path, cx: &mut App) -> Option<(String, usize)> {
     state::lib(cx).update(cx, |l, _| {
@@ -3794,6 +3869,9 @@ impl Render for NoteView {
         let request = take_find_request(&self.path, cx);
         if let Some((term, nth)) = request {
             self.reveal(&term, nth, &text, window, cx);
+        }
+        if let Some(lines) = take_changed_request(&self.path, cx) {
+            self.show_changes(&lines, &text, window, cx);
         }
         self.sync_find(&text, false, true, window, cx);
         self.center_find(cx);
@@ -4589,7 +4667,7 @@ fn writing_menu(field: Editor) -> Editor {
             .separator()
             .menu(tr("Karte aus Auswahl…"), Box::new(CardFromSelection));
         if super::ai::active() {
-            menu.separator().submenu(tr("KI"), gpui_kit::component::native_menu::NativeMenu::new().menu(tr("Frag die KI zu dieser Auswahl"), Box::new(AskAiSelection)).menu(tr("Karten aus Auswahl"), Box::new(CardsAiSelection)))
+            menu.separator().submenu(tr("KI"), gpui_kit::component::native_menu::NativeMenu::new().menu(tr("Frag die KI zu dieser Auswahl"), Box::new(AskAiSelection)).menu(tr("Karten aus Auswahl"), Box::new(CardsAiSelection)).menu(tr("Passage erklären"), Box::new(ExplainAiSelection)))
         } else {
             menu
         }

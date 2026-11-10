@@ -3136,7 +3136,17 @@ impl PdfView {
                                     cx.new(|_| DraggedPages { grab, image, ..d.clone() })
                                 })
                             });
-                        let row = if editable { row.context_menu(move |menu, _, _| Self::thumb_menu(menu, page, menu_view.clone(), labels.clone(), up, down)).into_any_element() } else { row.into_any_element() };
+                        let row = if editable {
+                            row.context_menu(move |menu, window, cx| {
+                                let menu = Self::thumb_menu(menu, page, menu_view.clone(), labels.clone(), up, down);
+                                Self::ai_menu(menu, &menu_view, Some(page), window, cx)
+                            })
+                            .into_any_element()
+                        } else if super::ai::active() {
+                            row.context_menu(move |menu, window, cx| Self::ai_menu(menu, &menu_view, Some(page), window, cx)).into_any_element()
+                        } else {
+                            row.into_any_element()
+                        };
                         div()
                             .id(("pdf-thumb-slot", page))
                             .relative()
@@ -4202,6 +4212,25 @@ impl PdfView {
         cx.notify();
     }
 
+    /// „KI ›“ for the pages picked in the page list, or for the page in view with the selected text.
+    fn ai_menu(menu: PopupMenu, view: &Entity<PdfView>, row: Option<usize>, window: &mut Window, cx: &mut Context<PopupMenu>) -> PopupMenu {
+        let v = view.read(cx);
+        let (path, total) = (v.path.clone(), v.page_count());
+        let (pages, text) = match row {
+            Some(page) if v.selected.contains(&page) && v.selected.len() > 1 => ((v.selected.first().copied().unwrap_or(page), v.selected.last().copied().unwrap_or(page)), None),
+            Some(page) => ((page, page), None),
+            None => {
+                let at = v.ordered_selection().map_or_else(|| v.current_page(), |(from, _)| from.0);
+                ((at, at), v.selected_parts().map(|(_, text)| text))
+            }
+        };
+        super::ai::pdf_submenu(menu, &path, pages, total, text, window, cx)
+    }
+
+    fn with_ai_menu(view: Entity<PdfView>, pages: Stateful<Div>) -> AnyElement {
+        if super::ai::active() { pages.context_menu(move |menu, window, cx| Self::ai_menu(menu, &view, None, window, cx)).into_any_element() } else { pages.into_any_element() }
+    }
+
     fn thumb_menu(menu: PopupMenu, page: usize, view: Entity<PdfView>, labels: PageLabels, up: bool, down: bool) -> PopupMenu {
         let hint = |a: ShortcutAction, label: String| format!("{label}{}", a.hint());
         let (left, right, above, below, delete, insert) = (view.clone(), view.clone(), view.clone(), view.clone(), view.clone(), view);
@@ -4466,7 +4495,8 @@ impl Render for PdfView {
                             },
                             |_, _, _, _| {},
                         ).absolute().size_full())
-                        .child(
+                        .child(Self::with_ai_menu(
+                            cx.entity(),
                             div()
                                 .id("pdf-pages")
                                 .size_full()
@@ -4486,7 +4516,7 @@ impl Render for PdfView {
                                 .on_mouse_up(MouseButton::Left, cx.listener(|v, _, _, cx| v.on_mouse_up(cx)))
                                 .on_mouse_up_out(MouseButton::Left, cx.listener(|v, _, _, cx| v.on_mouse_up(cx)))
                                 .child(div().relative().w(px(content_width)).h(px(total)).children(pages).children(mark_bar).children(note_editor)),
-                        )
+                        ))
                         .scrollbar(&self.scroll, gpui_kit::component::scroll::ScrollbarAxis::Both)
                         .child(super::image_view::wheel_zoom({
                             let me = cx.entity();

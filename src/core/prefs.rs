@@ -91,11 +91,15 @@ pub struct AiPrefs {
     pub agent: String,
     /// A command line for an agent Schrumbi does not know.
     pub custom_command: String,
+    /// The right panel showed the assistant when the app was left.
+    pub column_open: bool,
+    /// Width of the right panel on the assistant's tab; `None` is the default.
+    pub width: Option<f32>,
 }
 
 impl Default for AiPrefs {
     fn default() -> Self {
-        Self { enabled: true, toolbar_button: true, allow_execute: false, follow_edits: true, idle_minutes: 30, agent: String::new(), custom_command: String::new() }
+        Self { enabled: true, toolbar_button: true, allow_execute: false, follow_edits: true, idle_minutes: 30, agent: String::new(), custom_command: String::new(), column_open: false, width: None }
     }
 }
 
@@ -254,6 +258,8 @@ pub struct Prefs {
     pub calendar_view: super::calendar::CalendarView,
     /// Kinds of pages whose details column the user keeps open: `document`, `assignments`, `graph`.
     pub inspector_pinned: BTreeSet<String>,
+    /// Width of the right panel on the details tab; `None` is the default.
+    pub inspector_width: Option<f32>,
     /// Sidebar entries the user hid; they stay reachable by shortcut and palette.
     pub hidden_tabs: Vec<String>,
     /// Last position and size of the main window: x, y, width, height.
@@ -338,6 +344,7 @@ impl Default for Prefs {
             calendar_sources: BTreeMap::new(),
             calendar_view: Default::default(),
             inspector_pinned: BTreeSet::new(),
+            inspector_width: None,
             hidden_tabs: Vec::new(),
             main_window: None,
             upload_window: None,

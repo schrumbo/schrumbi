@@ -147,6 +147,18 @@ pub fn definitions() -> Vec<ToolDef> {
             write: false,
         },
         ToolDef {
+            name: "propose_inbox",
+            description: INBOX_PROPOSAL,
+            schema: obj(json!({ "files": { "type": "array", "items": inbox_row_schema() } }), &["files"]),
+            write: false,
+        },
+        ToolDef {
+            name: "apply_inbox",
+            description: "Files inbox files as proposed (same rows as propose_inbox), creating the new deadlines first, as one undoable step after the user agreed. In Schrumbi's own column the user applies proposals from the card instead.",
+            schema: obj(json!({ "files": { "type": "array", "items": inbox_row_schema() } }), &["files"]),
+            write: true,
+        },
+        ToolDef {
             name: "read_setup",
             description: "How Schrumbi is set up for this study folder: semester dates and breaks, modules with folders, naming patterns, weekly deadlines and links, the naming switch with the user's short name (Kürzel), whether a Moodle calendar is connected, and the top-level folders.",
             schema: obj(json!({}), &[]),
@@ -168,6 +180,29 @@ pub fn definitions() -> Vec<ToolDef> {
 }
 
 const SETUP_PROPOSAL: &str = "Shows the user ONE setup proposal for Schrumbi as a card they accept item by item; nothing changes until they do. Build it from read_setup and the study folder (list_folder, search, read_pdf_text of course plans) or, without material, from the user's answers. Only settings: semester dates and breaks, modules with folder, short code, naming pattern, weekly deadlines and Moodle course link, the naming switch with the user's Kürzel, the Moodle calendar address. Files are never renamed or moved for a setup: put such ideas into `renames`, which is only shown as a list. After calling it, end your turn and wait; Schrumbi tells you what the user took. Calling it again replaces the card.";
+
+const INBOX_PROPOSAL: &str = "Shows the user how you would file inbox files, as a table they accept row by row; nothing moves until they do. \
+Read each file first (read_pdf_text, read_note) and decide: module, kind (lecture = slides or script, exercise = task sheet, submission = the user's own solution, notes = own lecture notes, other), \
+the date the file belongs to (lecture or sheet date), the lecture number or week, a short title, and for exercises and submissions the deadline: an existing one by id from list_deadlines, \
+or new_deadline with title and due date read from the sheet. Schrumbi works out folder and file name from its own conventions unless you give them. After calling it, end your turn and wait.";
+
+fn inbox_row_schema() -> Value {
+    obj(
+        json!({
+            "path": { "type": "string", "description": "The inbox file, relative to the study folder" },
+            "module": { "type": "string", "description": "Module code, name or id" },
+            "kind": { "type": "string", "enum": ["lecture", "exercise", "submission", "notes", "other"] },
+            "date": { "type": "string", "description": "YYYY-MM-DD the file belongs to" },
+            "week": { "type": "integer", "description": "Lecture number or lecture week" },
+            "title": { "type": "string", "description": "Short title, e.g. Grenzwerte or Blatt 4" },
+            "deadline": { "type": "string", "description": "Id of an existing deadline from list_deadlines" },
+            "new_deadline": obj(json!({ "title": { "type": "string" }, "due": { "type": "string", "description": "YYYY-MM-DD or YYYY-MM-DDTHH:MM" } }), &["due"]),
+            "folder": { "type": "string", "description": "Only to override Schrumbi's folder" },
+            "name": { "type": "string", "description": "Only to override Schrumbi's file name" }
+        }),
+        &["path", "kind"],
+    )
+}
 
 fn setup_schema() -> Value {
     let day = |what: &str| json!({ "type": "string", "description": format!("{what}, YYYY-MM-DD") });
@@ -252,7 +287,7 @@ fn anchored(p: &Path) -> PathBuf {
 }
 
 /// A path the agent named, inside the study folder; `rel` may be empty for the folder itself.
-fn resolve(lib: &Library, rel: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve(lib: &Library, rel: &str) -> Result<PathBuf, String> {
     let root = lib.root.as_ref().ok_or(NO_ROOT)?;
     let rel = rel.trim();
     if rel.starts_with("//") || rel.starts_with("\\\\") {
@@ -342,7 +377,7 @@ fn status_name(status: Status) -> &'static str {
     }
 }
 
-fn find_module<'a>(lib: &'a Library, query: &str) -> Result<&'a crate::core::model::Module, String> {
+pub(crate) fn find_module<'a>(lib: &'a Library, query: &str) -> Result<&'a crate::core::model::Module, String> {
     let q = fold(query);
     let modules = lib.semester_modules();
     modules
@@ -354,7 +389,7 @@ fn find_module<'a>(lib: &'a Library, query: &str) -> Result<&'a crate::core::mod
         .ok_or_else(|| format!("No module matches `{query}`; list_modules shows them."))
 }
 
-fn parse_due(text: &str) -> Result<chrono::DateTime<Local>, String> {
+pub(crate) fn parse_due(text: &str) -> Result<chrono::DateTime<Local>, String> {
     let text = text.trim();
     let naive = chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M")
         .or_else(|_| chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M"))
@@ -644,6 +679,11 @@ pub fn preview(lib: &Library, name: &str, args: &Value) -> Result<Preview, Strin
             }
             Ok(Preview { title, lines: shown })
         }
+        "apply_inbox" => {
+            let rows = super::inbox::plan(lib, args)?;
+            let title = if rows.len() == 1 { tr("1 Datei ablegen") } else { trf("%lld Dateien ablegen", &[&rows.len()]) };
+            Ok(Preview { title, lines: rows.iter().take(8).map(|r| super::inbox::summary(lib, r)).collect() })
+        }
         "apply_setup" => {
             let plan = super::setup::plan(lib, args.get("proposal").unwrap_or(&Value::Null))?;
             let keys = setup_keys(args);
@@ -859,6 +899,14 @@ pub fn call(lib: &mut Library, name: &str, args: &Value) -> Result<Outcome, Stri
         "list_inbox" => plain(json!({ "inbox": lib.config.as_ref().map(|c| c.inbox.clone()), "files": lib.inbox.iter().take(FOLDER_ENTRIES).map(|p| json!({ "path": rel(lib, p), "name": name_of(p) })).collect::<Vec<_>>(), "total": lib.inbox.len() })),
         "propose_filing" => plain(filing(lib, args)?),
         "read_setup" => plain(super::setup::read(lib, calendar_connected(lib))?),
+        "propose_inbox" => {
+            let rows = super::inbox::plan(lib, args)?;
+            plain(super::inbox::plan_json(lib, &rows))
+        }
+        "apply_inbox" => {
+            let rows = super::inbox::plan(lib, args)?;
+            super::inbox::apply(lib, &rows)
+        }
         "propose_setup" => {
             let plan = super::setup::plan(lib, args.get("proposal").unwrap_or(&Value::Null))?;
             plain(super::setup::plan_json(&plan))

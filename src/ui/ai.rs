@@ -13,11 +13,13 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use serde_json::{Value, json};
 
+use super::motion::Soft;
 use super::state::{self, act};
 use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::ai::detect::{self, Agent};
 use crate::core::ai::instance::{self, Instance};
+use crate::core::ai::prompts::Flow;
 use crate::core::ai::tools::{self, Preview};
 use crate::core::ai::turn::Turns;
 use crate::core::i18n::tr;
@@ -27,6 +29,7 @@ const ASK_WAIT: Duration = Duration::from_secs(600);
 const OFF: &str = "The assistant is switched off in Schrumbi (Settings → KI).";
 const DECLINED: &str = "The user declined this change in Schrumbi. Nothing was written.";
 const UNANSWERED: &str = "Nobody answered the permission request in Schrumbi within ten minutes. Nothing was written.";
+const READ_ONLY: &str = "This turn is read-only (explaining or quizzing): Schrumbi writes nothing now. The user can insert your answer into a note themselves or ask for the change in a new message.";
 
 struct Server {
     port: u16,
@@ -57,6 +60,7 @@ pub enum Request {
     Focus,
     Chip(super::ai_panel::Chip),
     Send(String),
+    Flow(Flow, Vec<super::ai_panel::Chip>, Option<String>),
 }
 
 /// How the user answered a write of the agent.
@@ -96,6 +100,9 @@ struct Ai {
     panel: Option<WeakEntity<super::ai_panel::AiPanel>>,
     download: Option<Download>,
     logins: HashMap<Agent, bool>,
+    read_only: HashSet<String>,
+    fills: HashMap<PathBuf, WeakEntity<super::filing_form::FilingForm>>,
+    prefills: HashMap<PathBuf, crate::core::ai::inbox::Row>,
 }
 
 impl Global for Ai {}
@@ -145,22 +152,114 @@ pub fn pdf_focus(path: &std::path::Path) -> Option<PdfFocus> {
 
 /// „KI ›“ in a file's context menu, only while the assistant is active.
 pub fn file_submenu(menu: gpui_kit::component::menu::PopupMenu, path: &std::path::Path, window: &mut Window, cx: &mut Context<gpui_kit::component::menu::PopupMenu>) -> gpui_kit::component::menu::PopupMenu {
+    use gpui_kit::component::menu::PopupMenuItem;
     if !active() {
         return menu;
     }
     let path = path.to_path_buf();
     menu.separator().submenu_with_icon(Some(menu_icon("bot")), tr("KI"), window, cx, move |m, _, _| {
-        let (ask, cards, sum) = (path.clone(), path.clone(), path.clone());
-        let pdf = sum.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
-        let text = crate::core::markdown::is_markdown(&cards);
-        let m = m.item(gpui_kit::component::menu::PopupMenuItem::new(tr("Frag die KI zu dieser Datei")).on_click(move |_, _, cx| request(Request::Chip(super::ai_panel::file_chip(&ask)), cx)));
-        let m = if pdf || text {
-            m.item(gpui_kit::component::menu::PopupMenuItem::new(tr("Karten daraus machen")).on_click(move |_, _, cx| ask_with(tr("Mach Karteikarten aus dieser Datei und ergänze sie in der passenden Notiz."), Some(super::ai_panel::file_chip(&cards)), cx)))
-        } else {
-            m
-        };
-        m.item(gpui_kit::component::menu::PopupMenuItem::new(tr("Zusammenfassen")).on_click(move |_, _, cx| ask_with(tr("Fass diese Datei kurz zusammen."), Some(super::ai_panel::file_chip(&sum)), cx)))
+        let pdf = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+        let text = crate::core::markdown::is_markdown(&path);
+        let whole = super::ai_panel::whole_file_chip(&path);
+        let ask = path.clone();
+        let mut m = m.item(PopupMenuItem::new(tr("Frag die KI zu dieser Datei")).on_click(move |_, _, cx| request(Request::Chip(super::ai_panel::file_chip(&ask)), cx)));
+        if pdf || text {
+            let chip = whole.clone();
+            m = m.item(PopupMenuItem::new(Flow::Cards.label()).on_click(move |_, _, cx| start_flow(Flow::Cards, vec![chip.clone()], cx)));
+        }
+        if pdf {
+            let chip = whole.clone();
+            m = m.item(PopupMenuItem::new(Flow::Summary.label()).on_click(move |_, _, cx| start_flow(Flow::Summary, vec![chip.clone()], cx)));
+        }
+        if text {
+            let chip = whole.clone();
+            m = m.item(PopupMenuItem::new(Flow::Quiz.label()).on_click(move |_, _, cx| start_flow(Flow::Quiz, vec![chip.clone()], cx)));
+        }
+        m
     })
+}
+
+/// „KI ›“ for PDF pages: the page under the pointer or the pages picked in the page list, with the selected text when there is one.
+pub fn pdf_submenu(menu: gpui_kit::component::menu::PopupMenu, path: &std::path::Path, pages: (usize, usize), total: usize, selection: Option<String>, window: &mut Window, cx: &mut Context<gpui_kit::component::menu::PopupMenu>) -> gpui_kit::component::menu::PopupMenu {
+    use gpui_kit::component::menu::PopupMenuItem;
+    use super::ai_panel::Chip;
+    if !active() {
+        return menu;
+    }
+    let path = path.to_path_buf();
+    let several = pages.1 > pages.0;
+    let mut chips = vec![if several { Chip::Pages(path.clone(), pages.0, pages.1) } else { Chip::Pdf(path.clone(), pages.0) }];
+    let selected = selection.filter(|t| !t.trim().is_empty());
+    if let Some(text) = &selected {
+        chips.push(Chip::Selection(text.clone()));
+    }
+    let whole = Chip::Pages(path, 0, total.saturating_sub(1));
+    menu.separator().submenu_with_icon(Some(menu_icon("bot")), tr("KI"), window, cx, move |m, _, _| {
+        let some = selected.is_some();
+        let (ask, cards, explain, quiz) = (chips.clone(), chips.clone(), chips.clone(), chips.clone());
+        let whole = whole.clone();
+        let ask_label = if some { tr("Frag die KI zu dieser Auswahl") } else if several { tr("Frag die KI zu diesen Seiten") } else { tr("Frag die KI zu dieser Seite") };
+        let cards_label = if some { tr("Karten aus der Auswahl") } else if several { tr("Karten aus diesen Seiten") } else { tr("Karten aus dieser Seite") };
+        m.item(PopupMenuItem::new(ask_label).on_click(move |_, _, cx| {
+            for c in ask.clone() {
+                request(Request::Chip(c), cx);
+            }
+        }))
+        .item(PopupMenuItem::new(cards_label).on_click(move |_, _, cx| start_flow(Flow::Cards, cards.clone(), cx)))
+        .item(PopupMenuItem::new(if some { tr("Passage erklären") } else { Flow::Explain.label() }).on_click(move |_, _, cx| start_flow(Flow::Explain, explain.clone(), cx)))
+        .item(PopupMenuItem::new(Flow::Quiz.label()).on_click(move |_, _, cx| start_flow(Flow::Quiz, quiz.clone(), cx)))
+        .separator()
+        .item(PopupMenuItem::new(Flow::Summary.label()).on_click(move |_, _, cx| start_flow(Flow::Summary, vec![whole.clone()], cx)))
+    })
+}
+
+/// Opens the column and starts a study task with its context chips.
+pub fn start_flow(flow: Flow, chips: Vec<super::ai_panel::Chip>, cx: &mut App) {
+    request(Request::Flow(flow, chips, None), cx);
+}
+
+/// The filing form's „Mit KI ausfüllen“: the agent reads the file and its reading comes back into that form.
+pub fn fill_filing(path: PathBuf, form: WeakEntity<super::filing_form::FilingForm>, cx: &mut App) {
+    if !active() || !cx.has_global::<Ai>() {
+        return;
+    }
+    cx.global_mut::<Ai>().fills.insert(path.clone(), form);
+    request(Request::Flow(Flow::Inbox, vec![super::ai_panel::Chip::Note(path)], Some(tr("Lies diese Datei und füll das Ablegen für mich aus."))), cx);
+}
+
+/// What the agent read for a file whose filing form opens now, e.g. after „Bearbeiten“ in the column.
+pub fn take_prefill(path: &std::path::Path, cx: &mut App) -> Option<crate::core::ai::inbox::Row> {
+    if cx.has_global::<Ai>() { cx.global_mut::<Ai>().prefills.remove(path) } else { None }
+}
+
+/// Keeps a row for the filing form that opens next for its file.
+pub fn keep_prefill(row: crate::core::ai::inbox::Row, cx: &mut App) {
+    if cx.has_global::<Ai>() {
+        cx.global_mut::<Ai>().prefills.insert(row.path.clone(), row);
+    }
+}
+
+/// Lets every filing form waiting for the agent stop waiting, e.g. when its turn ended without an answer.
+pub fn release_fills(cx: &mut App) {
+    if !cx.has_global::<Ai>() {
+        return;
+    }
+    let waiting: Vec<WeakEntity<super::filing_form::FilingForm>> = cx.global_mut::<Ai>().fills.drain().map(|(_, f)| f).collect();
+    for form in waiting.into_iter().filter_map(|f| f.upgrade()) {
+        form.update(cx, |f, cx| f.ai_done(cx));
+    }
+}
+
+/// Makes the current turn of a column session read-only: its writes are declined without asking.
+pub fn set_read_only(session: &str, on: bool, cx: &mut App) {
+    if cx.has_global::<Ai>() {
+        let ai = cx.global_mut::<Ai>();
+        if on {
+            ai.read_only.insert(session.to_string());
+        } else {
+            ai.read_only.remove(session);
+        }
+    }
 }
 
 /// „KI ›“ in a deadline's context menu, only while the assistant is active.
@@ -176,9 +275,69 @@ pub fn deadline_submenu(menu: gpui_kit::component::menu::PopupMenu, id: &str, wi
     })
 }
 
-/// Opens or closes the column; closing hands the place back to Details.
+fn set_column(on: bool) {
+    COLUMN.store(on, Ordering::Relaxed);
+    if prefs::with(|p| p.ai.column_open) != on {
+        prefs::update(|p| p.ai.column_open = on);
+    }
+}
+
+/// The KI button and its shortcut: opens the right panel on the KI tab, or closes the panel when that tab is shown.
 pub fn toggle_column(cx: &mut App) {
-    if column_open() { close_column(cx) } else { open_column(cx) }
+    if column_open() { close_panel(cx) } else { open_column(cx) }
+}
+
+/// Closes the right panel, whichever tab it shows.
+pub fn close_panel(cx: &mut App) {
+    set_column(false);
+    if state::read(cx, |l| l.show_inspector()) {
+        act(cx, |l| l.toggle_inspector());
+    }
+    cx.refresh_windows();
+}
+
+/// Switches the right panel to its details tab, without closing it in between.
+pub fn show_details(cx: &mut App) {
+    set_column(false);
+    if state::read(cx, |l| l.inspector_kind().is_some() && !l.show_inspector()) {
+        act(cx, |l| l.toggle_inspector());
+    }
+    cx.refresh_windows();
+}
+
+/// The switch at the top of the right panel: „Details | KI“ where both are offered, else the name of what is shown.
+pub fn panel_tabs(ki: bool, t: &Theme, cx: &App) -> AnyElement {
+    let details = state::read(cx, |l| l.inspector_kind().is_some());
+    if !(details && active()) {
+        return div().text_size(px(font::BODY)).font_weight(FontWeight::SEMIBOLD).child(if ki { tr("KI") } else { tr("Details") }).into_any_element();
+    }
+    let segment = |id: &'static str, label: String, selected: bool, hint: String| {
+        div()
+            .id(id)
+            .px(px(space::S))
+            .h(px(control::S - 4.))
+            .flex()
+            .items_center()
+            .rounded(px(radius::INNER))
+            .text_size(px(font::CALLOUT))
+            .font_weight(FontWeight::MEDIUM)
+            .cursor_pointer()
+            .key_nav()
+            .tooltip(tip(hint))
+            .when(selected, |d| d.bg(t.content).shadow_xs().text_color(t.primary))
+            .when(!selected, |d| d.soft(t.ink.opacity(0.06), radius::INNER).text_color(t.secondary))
+            .child(label)
+    };
+    div()
+        .flex()
+        .items_center()
+        .p(px(2.))
+        .gap(px(2.))
+        .rounded(px(radius::CONTROL))
+        .bg(t.ink.opacity(0.06))
+        .child(segment("panel-tab-details", tr("Details"), !ki, format!("{}{}", tr("Details"), crate::core::shortcuts::ShortcutAction::ToggleInspector.hint())).on_click(|_, _, cx| show_details(cx)))
+        .child(segment("panel-tab-ai", tr("KI"), ki, format!("{}{}", tr("KI"), crate::core::shortcuts::ShortcutAction::ToggleAi.hint())).on_click(|_, _, cx| open_column(cx)))
+        .into_any_element()
 }
 
 /// Opens the column and gives its input the keyboard.
@@ -189,10 +348,7 @@ pub fn open_column(cx: &mut App) {
 /// Shows or hides Details; while the column is open it gives the place back to Details first.
 pub fn toggle_details(cx: &mut App) {
     if column_open() {
-        close_column(cx);
-        if !state::read(cx, |l| l.show_inspector()) {
-            act(cx, |l| l.toggle_inspector());
-        }
+        show_details(cx);
     } else {
         act(cx, |l| l.toggle_inspector());
     }
@@ -200,7 +356,7 @@ pub fn toggle_details(cx: &mut App) {
 
 /// Closes the column; a running session keeps going until it idles out.
 pub fn close_column(cx: &mut App) {
-    COLUMN.store(false, Ordering::Relaxed);
+    set_column(false);
     cx.refresh_windows();
 }
 
@@ -209,7 +365,7 @@ pub fn request(r: Request, cx: &mut App) {
     if !active() || !cx.has_global::<Ai>() {
         return;
     }
-    COLUMN.store(true, Ordering::Relaxed);
+    set_column(true);
     cx.global_mut::<Ai>().requests.push(r);
     if let Some(panel) = cx.global::<Ai>().panel.clone().and_then(|p| p.upgrade()) {
         panel.update(cx, |_, cx| cx.notify());
@@ -442,6 +598,9 @@ fn sync(cx: &mut App) {
     if want && !running {
         let root = state::read(cx, |l| l.root.clone());
         cx.global_mut::<Ai>().server = start(root, cx);
+        if prefs::with(|p| p.ai.column_open) {
+            COLUMN.store(true, Ordering::Relaxed);
+        }
     } else if !want && running {
         if let Some(server) = cx.global_mut::<Ai>().server.take() {
             stop(&server);
@@ -544,6 +703,9 @@ async fn run(session: &str, name: &str, args: &Value, cx: &mut AsyncApp) -> Resu
     }
     cx.update(follow_root);
     if tools::is_write(name) {
+        if cx.update(|cx| cx.global::<Ai>().read_only.contains(session)) {
+            return Err(READ_ONLY.into());
+        }
         let preview = cx.update(|cx| state::read(cx, |l| tools::preview(l, name, args)))?;
         if !cx.update(|cx| allowed_today(name, cx)) {
             let answer = cx.update(|cx| ask_for(session, name, preview, cx));
@@ -573,8 +735,35 @@ fn call(session: &str, name: &str, args: &Value, cx: &mut App) -> Result<Value, 
         state::lib(cx).update(cx, |l, _| turns.call(l, session, name, args))
     };
     cx.global_mut::<Ai>().turns = turns;
+    if name == "propose_inbox"
+        && out.is_ok()
+        && let Ok(rows) = state::read(cx, |l| crate::core::ai::inbox::plan(l, args))
+    {
+        let mut rest = Vec::new();
+        for row in rows {
+            match cx.global_mut::<Ai>().fills.remove(&row.path).and_then(|f| f.upgrade()) {
+                Some(form) => {
+                    keep_prefill(row, cx);
+                    form.update(cx, |_, cx| cx.notify());
+                }
+                None => rest.push(row),
+            }
+        }
+        if !rest.is_empty()
+            && let Some(panel) = cx.global::<Ai>().panel.clone().and_then(|p| p.upgrade())
+        {
+            panel.update(cx, |p, cx| p.record_inbox(session, rest, cx));
+        }
+    }
+    if name == "propose_setup"
+        && out.is_ok()
+        && let Some(panel) = cx.global::<Ai>().panel.clone().and_then(|p| p.upgrade())
+    {
+        let proposal = args.get("proposal").cloned().unwrap_or_default();
+        panel.update(cx, |p, cx| p.record_setup(session, proposal, cx));
+    }
     if write && let Ok(value) = &out {
-        let made = value["path"].as_str().and_then(|r| state::read(cx, |l| l.root.as_ref().map(|root| root.join(r))));
+        let made = value["path"].as_str().or_else(|| value["note"].as_str()).and_then(|r| state::read(cx, |l| l.root.as_ref().map(|root| root.join(r))));
         let (path, old) = match before {
             Some((p, old)) => (Some(p), old),
             None => (made, None),

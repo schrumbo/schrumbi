@@ -43,11 +43,34 @@ pub struct MainWindow {
     /// The selection count and place when a press on the page began, if nothing inside claimed it.
     press_stamp: Option<(u64, Point<Pixels>)>,
     ai_panel: Option<Entity<super::ai_panel::AiPanel>>,
+    /// The right panel's width while its edge is dragged.
+    resizing: Option<f32>,
     _subs: Vec<Subscription>,
 }
 
 const INSPECTOR_WIDTH: f32 = 340.;
 const AI_WIDTH: f32 = 400.;
+const PANEL_MIN: f32 = 280.;
+const PANEL_MAX: f32 = 640.;
+const PAGE_KEEPS: f32 = 420.;
+const EDGE_GRIP: f32 = 6.;
+
+/// The edge of the right panel being dragged.
+#[derive(Clone)]
+struct PanelEdge;
+
+impl Render for PanelEdge {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+/// How wide the right panel is on a tab: what the user dragged it to, within what the window leaves.
+fn panel_width(ki: bool, window_width: f32) -> f32 {
+    let stored = crate::core::prefs::with(|p| if ki { p.ai.width } else { p.inspector_width });
+    let wanted = stored.unwrap_or(if ki { AI_WIDTH } else { INSPECTOR_WIDTH });
+    wanted.clamp(PANEL_MIN, PANEL_MAX.min((window_width - sidebar::RAIL - PAGE_KEEPS).max(PANEL_MIN)))
+}
 
 impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -121,6 +144,7 @@ impl MainWindow {
             shown_route: None,
             slides: None,
             ai_panel: None,
+            resizing: None,
             _subs: subs,
         }
     }
@@ -512,9 +536,15 @@ impl Render for MainWindow {
         if column && self.ai_panel.is_none() {
             self.ai_panel = Some(cx.new(|cx| super::ai_panel::AiPanel::new(window, cx)));
         }
-        let inspector_w = motion::follow("inspector-width", if inspector_open { INSPECTOR_WIDTH } else { 0. }, motion::MEDIUM, window, cx);
-        let ai_w = motion::follow("ai-width", if column { AI_WIDTH } else { 0. }, motion::MEDIUM, window, cx);
-        let inspector_target = if column { AI_WIDTH } else if inspector_open { INSPECTOR_WIDTH } else { 0. };
+        if self.resizing.is_some() && !cx.has_active_drag() {
+            if let Some(w) = self.resizing.take() {
+                crate::core::prefs::update(|p| if column { p.ai.width = Some(w) } else { p.inspector_width = Some(w) });
+            }
+        }
+        let panel_open = column || inspector_open;
+        let full = self.resizing.unwrap_or_else(|| panel_width(column, width));
+        let inspector_target = if panel_open { full } else { 0. };
+        let slot_w = motion::follow("right-panel-width", inspector_target, if self.resizing.is_some() { std::time::Duration::ZERO } else { motion::MEDIUM }, window, cx);
         let page_width = width - left - inspector_target;
         self.pages.update(cx, |p, _| p.width = page_width);
         let setup_shown = lib.read(cx).route() == &Route::Today && self.setup.read(cx).wanted(cx);
@@ -587,11 +617,62 @@ impl Render for MainWindow {
                         }))
                         .child(page).with_animation(("page", page_key), Animation::new(page_motion).with_easing(ease_out_quint()), |d, p| d.opacity(0.4 + 0.6 * p))),
             )
-            .when(inspector_w > 0.5, |d| {
-                d.child(div().absolute().top(px(control::BAR)).bottom_0().right(px(inspector_w - INSPECTOR_WIDTH)).w(px(INSPECTOR_WIDTH)).border_l_1().border_color(t.separator).bg(t.content).child(self.inspector.clone()))
-            })
-            .when_some(self.ai_panel.clone().filter(|_| ai_w > 0.5), |d, panel| {
-                d.child(div().absolute().top(px(control::BAR)).bottom_0().right(px(ai_w - AI_WIDTH)).w(px(AI_WIDTH)).border_l_1().border_color(t.separator).bg(t.content).child(panel))
+            .when(slot_w > 0.5, |d| {
+                let content: AnyElement = match self.ai_panel.clone().filter(|_| column) {
+                    Some(panel) => panel.into_any_element(),
+                    None if super::ai::active() => {
+                        let head = div().h(px(control::SUBBAR)).flex_none().flex().items_center().gap(px(space::XS)).pl(px(space::S)).pr(px(space::S)).border_b_1().border_color(t.separator)
+                            .child(super::ai::panel_tabs(false, &t, cx))
+                            .child(div().flex_1())
+                            .child(Button::new("details-close").ghost().size(px(control::S)).rounded_full().icon(menu_icon("x")).tooltip(format!("{}{}", tr("Details ausblenden"), ShortcutAction::ToggleInspector.hint())).on_click(|_, _, cx| super::ai::close_panel(cx)));
+                        div().size_full().flex().flex_col().child(head).child(div().flex_1().min_h_0().child(self.inspector.clone())).into_any_element()
+                    }
+                    None => self.inspector.clone().into_any_element(),
+                };
+                let shown = inspector_target.max(slot_w);
+                let edge = div()
+                    .id("right-panel-edge")
+                    .occlude()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(px(EDGE_GRIP))
+                    .cursor_col_resize()
+                    .hover(|s| s.bg(t.accent.opacity(0.25)))
+                    .when(self.resizing.is_some(), |d| d.bg(t.accent.opacity(0.35)))
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        if e.click_count() == 2 {
+                            this.resizing = None;
+                            crate::core::prefs::update(|p| if column { p.ai.width = None } else { p.inspector_width = None });
+                            let _ = window;
+                            cx.notify();
+                        }
+                    }))
+                    .on_drag(PanelEdge, |d, _, _, cx| cx.new(|_| d.clone()));
+                d.child(
+                    div()
+                        .id("right-panel")
+                        .absolute()
+                        .top(px(control::BAR))
+                        .bottom_0()
+                        .right_0()
+                        .w(px(slot_w))
+                        .overflow_hidden()
+                        .bg(t.content)
+                        .child(div().absolute().top_0().bottom_0().right_0().w(px(shown)).child(content))
+                        .child(div().absolute().top_0().bottom_0().left_0().w(px(1.)).bg(t.separator))
+                        .child(edge),
+                )
+                .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<PanelEdge>, window, cx| {
+                    let total = f32::from(window.viewport_size().width);
+                    let max = PANEL_MAX.min((total - sidebar::RAIL - PAGE_KEEPS).max(PANEL_MIN));
+                    let w = (total - f32::from(e.event.position.x)).round().clamp(PANEL_MIN, max);
+                    if this.resizing != Some(w) {
+                        this.resizing = Some(w);
+                        cx.notify();
+                    }
+                }))
             })
             .children(super::link_card::overlay(cx))
             .children(super::ai::ask_card(cx, &t))

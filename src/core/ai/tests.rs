@@ -390,6 +390,10 @@ fn a_setup_proposal_applies_chosen_items_as_one_step_and_never_moves_files() {
     assert_eq!(ma.name, "Analysis 1");
     assert_eq!(ma.rules.len(), 1);
     assert_eq!((ma.rules[0].weekday, ma.rules[0].time.as_str()), (4, "12:00"));
+    let today = lib.today().format("%Y-%m-%d").to_string();
+    if today.as_str() > "2026-10-30" && today.as_str() < "2027-02-01" {
+        assert!(ma.rules[0].start_week.is_some_and(|w| w > 1), "a weekly deadline set up mid-semester starts now, not with an overdue wall");
+    }
     assert_eq!(c.modules.iter().filter(|m| m.folder == "MA").count(), 1, "the existing module is changed, not doubled");
     let la = c.modules.iter().find(|m| m.folder == "LA").unwrap();
     assert_eq!(la.semester, s.id);
@@ -480,4 +484,56 @@ fn terminal_users_get_one_prompt_per_flow_with_its_guide() {
     assert!(mcp_text(Flow::Quiz, &serde_json::Map::new()).contains("read-only"));
     assert!(Flow::Quiz.read_only() && Flow::Explain.read_only() && !Flow::Cards.read_only());
     assert!(mcp_text(Flow::Setup, &serde_json::Map::new()).contains("propose_setup"));
+}
+
+#[test]
+fn earlier_sessions_are_listed_newest_first_and_continue_with_a_recap() {
+    use super::transcript::{Entry, Role, append, list, load, recap};
+    let root = folder("history");
+    let dir = super::transcript::dir(&root).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let e = |role, text: &str| Entry { role, text: text.into(), at: 0 };
+    append(&dir.join("2026-11-01-090000-a.jsonl"), &[e(Role::User, "Erste Frage"), e(Role::Agent, "Antwort")]).unwrap();
+    append(&dir.join("2026-11-02-090000-b.jsonl"), &[e(Role::User, "Zweite Frage")]).unwrap();
+    append(&dir.join("2026-11-03-090000-c.jsonl"), &[e(Role::Tool, "nur ein Schritt")]).unwrap();
+    let past = list(&root, 10);
+    assert_eq!(past.iter().map(|p| p.first.as_str()).collect::<Vec<_>>(), vec!["Zweite Frage", "Erste Frage"]);
+    assert_eq!(past[0].started.map(|d| d.format("%d.%m.").to_string()).as_deref(), Some("02.11."));
+    let entries = load(&past[1].file);
+    assert_eq!(entries.len(), 2);
+    assert_eq!(recap(&entries, 1000), "User: Erste Frage\nYou: Antwort\n");
+    assert_eq!(recap(&entries, 14), "You: Antwort\n", "a long session keeps its newest part");
+}
+
+#[test]
+fn inbox_files_read_by_the_agent_file_through_the_app_with_new_deadlines_as_one_step() {
+    let root = folder("inbox-ai");
+    std::fs::create_dir_all(root.join("_Inbox")).unwrap();
+    std::fs::create_dir_all(root.join("MA")).unwrap();
+    lecture_pdf(&root.join("_Inbox").join("scan1.pdf"), &["Vorlesung 4: Reihen"]);
+    lecture_pdf(&root.join("_Inbox").join("blatt.pdf"), &["Uebungsblatt 4, Abgabe bis 20.11."]);
+    std::fs::write(root.join("_Inbox").join("loesung.md"), "# Lösung Blatt 4\n").unwrap();
+    let mut lib = open(&root);
+    let mut turns = Turns::default();
+    let due = (chrono::Local::now() + chrono::Duration::days(9)).format("%Y-%m-%d").to_string();
+    let files = json!({ "files": [
+        { "path": "_Inbox/scan1.pdf", "module": "MA", "kind": "lecture", "date": "2026-11-03", "week": 4, "title": "Reihen" },
+        { "path": "_Inbox/blatt.pdf", "module": "MA", "kind": "exercise", "title": "Blatt 4", "new_deadline": { "title": "Blatt 4", "due": due } },
+        { "path": "_Inbox/loesung.md", "module": "MA", "kind": "submission", "title": "Blatt 4", "new_deadline": { "title": "Blatt 4", "due": due } }
+    ] });
+    let shown = turns.call(&mut lib, "s", "propose_inbox", &files).unwrap();
+    assert_eq!(shown["files"].as_array().unwrap().len(), 3);
+    assert!(root.join("_Inbox").join("blatt.pdf").exists() && !lib.can_undo(), "proposing moves and creates nothing");
+    let before = lib.semester_assignments().len();
+    let preview = tools::preview(&lib, "apply_inbox", &files).unwrap();
+    assert_eq!(preview.lines.len(), 3);
+    turns.call(&mut lib, "s", "apply_inbox", &files).unwrap();
+    assert_eq!(lib.semester_assignments().len(), before + 1, "the new deadline exists once, though two files named it");
+    assert!(std::fs::read_dir(root.join("_Inbox")).unwrap().next().is_none(), "the inbox is empty");
+    assert!(walkdir::WalkDir::new(root.join("MA")).into_iter().flatten().any(|e| e.file_name() == "scan1.pdf"));
+    lib.undo();
+    assert!(root.join("_Inbox").join("scan1.pdf").exists() && root.join("_Inbox").join("blatt.pdf").exists() && root.join("_Inbox").join("loesung.md").exists(), "one undo puts every file back");
+    assert_eq!(lib.semester_assignments().len(), before, "and takes the new deadline away");
+    let outside = json!({ "files": [{ "path": "../x.pdf", "kind": "other", "module": "MA" }] });
+    assert!(turns.call(&mut lib, "s", "propose_inbox", &outside).is_err());
 }

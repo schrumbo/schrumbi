@@ -2899,6 +2899,25 @@ pub struct Found {
     pub token: usize,
     /// Drawn without fading, for reduced motion; the note clears it after `FOUND_HOLD`.
     pub still: bool,
+    /// Further blocks marked with it, e.g. every block the assistant changed.
+    pub more: Rc<[usize]>,
+    /// The source lines of `more`.
+    pub lines: Rc<[usize]>,
+}
+
+impl Found {
+    /// Marks one block, as after a search match.
+    pub fn one(block: usize, line: usize, token: usize, still: bool) -> Self {
+        Self { block, line, token, still, more: Rc::from(Vec::new()), lines: Rc::from(Vec::new()) }
+    }
+
+    fn covers(&self, block: usize) -> bool {
+        self.block == block || self.more.contains(&block)
+    }
+
+    fn covers_row(&self, block: usize, lines: std::ops::Range<usize>) -> bool {
+        (self.block == block && lines.contains(&self.line)) || (self.more.contains(&block) && self.lines.iter().any(|l| lines.contains(l)))
+    }
 }
 
 /// How long a search match takes to fade.
@@ -3015,7 +3034,7 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
         }
         _ => element,
     };
-    found_mark(element, found.filter(|f| f.block == i), t)
+    found_mark(element, found.filter(|f| f.covers(i)), t)
 }
 
 /// Marks a block briefly after arriving from a search match.
@@ -3048,7 +3067,7 @@ pub fn render_row(note: &ParsedNote, row: &ReaderRow, base: Option<&Path>, on_to
         Some(Block::Paragraph(inl)) => styled_text(inl.get(from..to.min(inl.len())).unwrap_or_default(), &cx, note_size(font::BODY)),
         _ => div().into_any_element(),
     };
-    found_mark(element, found.filter(|f| f.block == row.block && (row.line..row.end_line).contains(&f.line)), t)
+    found_mark(element, found.filter(|f| f.covers_row(row.block, row.line..row.end_line)), t)
 }
 
 /// Which match of a paragraph part is the current one, counted in what the part draws, when the current match lies on one of its lines.
