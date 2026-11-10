@@ -39,6 +39,9 @@ pub const FOLDER_RETRY: Duration = Duration::from_secs(3);
 /// How long the wrap switch confirms itself in the word count bar.
 pub const WRAP_NOTICE_FOR: Duration = Duration::from_millis(1600);
 
+/// How long the inbox confirms that everything was filed before it shows where to drop files again.
+pub const CLEARED_FOR: Duration = Duration::from_millis(2600);
+
 /// One breath of the ring a tip draws around an element.
 pub const PULSE: Duration = Duration::from_millis(1400);
 

@@ -27,6 +27,10 @@ pub struct InboxPage {
     leaving: Vec<(usize, PathBuf)>,
     peak: usize,
     cleared: usize,
+    fading: bool,
+    returned: usize,
+    settle: Option<Task<()>>,
+    away: bool,
     form: Option<(Vec<PathBuf>, Entity<FilingForm>, Subscription)>,
     focus: FocusHandle,
     scroll: ScrollHandle,
@@ -38,13 +42,28 @@ impl InboxPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let lib = state::lib(cx);
         let scroll = ScrollHandle::new();
-        Self { selection: HashSet::new(), range_start: None, shown: Vec::new(), leaving: Vec::new(), peak: 0, cleared: 0, form: None, focus: cx.focus_handle(), anchor: ScrollAnchor::for_handle(scroll.clone()), scroll, _sub: cx.observe(&lib, |_, _, cx| cx.notify()) }
+        Self { selection: HashSet::new(), range_start: None, shown: Vec::new(), leaving: Vec::new(), peak: 0, cleared: 0, fading: false, returned: 0, settle: None, away: true, form: None, focus: cx.focus_handle(), anchor: ScrollAnchor::for_handle(scroll.clone()), scroll, _sub: cx.observe(&lib, |this, lib, cx| {
+            this.away |= lib.read(cx).route() != &library::Route::Inbox;
+            cx.notify();
+        }) }
     }
 
     /// Takes the keyboard when the page is entered, so its keys work without a click first.
     pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
         cx.notify();
+    }
+
+    /// Forgets a finished round of filing when the page is entered, so an empty inbox shows where to drop files.
+    fn enter(&mut self, inbox: &[PathBuf]) {
+        self.away = false;
+        if inbox.is_empty() {
+            self.peak = 0;
+        }
+        self.cleared = 0;
+        self.fading = false;
+        self.returned = 0;
+        self.settle = None;
     }
 
     fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -135,11 +154,32 @@ impl InboxPage {
         if inbox.is_empty() {
             if self.peak > 0 {
                 self.cleared = self.peak;
+                self.fading = false;
+                let fade = motion::timed(motion::SLOW, cx);
+                self.settle = Some(cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor().timer(motion::CLEARED_FOR).await;
+                    if this.update(cx, |this, cx| {
+                        this.fading = true;
+                        cx.notify();
+                    }).is_err() {
+                        return;
+                    }
+                    cx.background_executor().timer(fade).await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.cleared = 0;
+                        this.fading = false;
+                        this.returned += 1;
+                        this.settle = None;
+                        cx.notify();
+                    });
+                }));
             }
             self.peak = 0;
             self.leaving.clear();
         } else {
             self.cleared = 0;
+            self.fading = false;
+            self.settle = None;
             self.peak = self.peak.max(inbox.len());
         }
         self.shown = inbox.to_vec();
@@ -161,6 +201,9 @@ impl Render for InboxPage {
         let me = cx.entity();
         let list_focused = self.focus.is_focused(window);
         let (inbox, inbox_name, now) = state::read(cx, |l| (l.inbox.clone(), l.config.as_ref().map(|c| c.inbox.clone()).unwrap_or_else(|| "_Inbox".into()), l.now));
+        if self.away {
+            self.enter(&inbox);
+        }
         self.track_changes(&inbox, window, cx);
         self.selection.retain(|p| inbox.contains(p));
         let queue = self.queue(&inbox);
@@ -191,9 +234,9 @@ impl Render for InboxPage {
             });
         let content: AnyElement = if inbox.is_empty() {
             let hint = trf("Zieh Dateien hierher oder lege sie in „%@“ ab. Die App schlägt Abgabe, Titel und Namen vor.", &[&inbox_name]);
+            let travel = motion::timed(motion::SLOW, cx);
             if self.cleared > 0 {
-                let travel = motion::timed(motion::SLOW, cx);
-                div()
+                let done = div()
                     .size_full()
                     .flex()
                     .flex_col()
@@ -204,10 +247,19 @@ impl Render for InboxPage {
                     .child(icon("circle-check", iconsize::HERO, t.green))
                     .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).child(tr("Alles abgelegt")))
                     .child(div().text_color(t.secondary).child(if self.cleared == 1 { tr("1 Datei abgelegt") } else { trf("%lld Dateien abgelegt", &[&self.cleared]) }))
-                    .with_animation(("inbox-cleared", self.cleared), Animation::new(travel).with_easing(ease_out_quint()), |d, p| d.opacity(p).mt(px(space::M * (1. - p))))
-                    .into_any_element()
+                    .with_animation(("inbox-cleared", self.cleared), Animation::new(travel).with_easing(ease_out_quint()), |d, p| d.opacity(p).mt(px(space::M * (1. - p))));
+                if self.fading {
+                    div().size_full().child(done).with_animation(("inbox-cleared-out", self.cleared), Animation::new(travel).with_easing(ease_out_quint()), |d, p| d.opacity(1. - p).mt(px(-space::M * p))).into_any_element()
+                } else {
+                    done.into_any_element()
+                }
             } else {
-                unavailable("inbox", tr("Inbox leer"), hint, &t).child(Button::new("inbox-add").label(tr("Dateien hinzufügen…")).on_click(|_, _, cx| add_files(cx))).into_any_element()
+                let empty = unavailable("inbox", tr("Inbox leer"), hint, &t).child(Button::new("inbox-add").label(tr("Dateien hinzufügen…")).on_click(|_, _, cx| add_files(cx)));
+                if self.returned > 0 {
+                    empty.with_animation(("inbox-returned", self.returned), Animation::new(travel).with_easing(ease_out_quint()), |d, p| d.opacity(p).mt(px(space::M * (1. - p)))).into_any_element()
+                } else {
+                    empty.into_any_element()
+                }
             }
         } else {
             let mut list = div().flex().flex_col().p(px(space::S));
