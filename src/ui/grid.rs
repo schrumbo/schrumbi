@@ -72,7 +72,7 @@ fn progress(lib: &Library, items: &[&Assignment]) -> Option<f32> {
     (!relevant.is_empty()).then(|| relevant.iter().filter(|a| lib.is_done(a)).count() as f32 / relevant.len() as f32)
 }
 
-pub fn render(lib: &Library, st: &GridState, view: Entity<super::pages::Pages>, t: &Theme) -> Div {
+pub fn render(lib: &Library, st: &GridState, width: f32, view: Entity<super::pages::Pages>, t: &Theme) -> Div {
     let slots = slots(lib);
     let current = day::monday(lib.today());
     let past: Vec<&Slot> = slots.iter().filter(|s| s.monday < current).collect();
@@ -127,7 +127,7 @@ pub fn render(lib: &Library, st: &GridState, view: Entity<super::pages::Pages>, 
             .flex_col()
             .gap(px(space::XXL))
             .child(progress_card(lib, &strip, current, view_for_strip, t))
-            .child(div().flex().flex_col().gap(px(space::M)).child(section_title(tr("Module"))).child(module_list(lib, t)))
+            .child(div().flex().flex_col().gap(px(space::M)).child(section_title(tr("Module"))).child(module_list(lib, width >= BAR_MIN_PAGE, t)))
             .child(div().flex().flex_col().gap(px(space::M)).child(section_title(tr("Wochen"))).child(weeks)),
     )
 }
@@ -227,7 +227,10 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
         )
 }
 
-fn module_list(lib: &Library, t: &Theme) -> Div {
+/// The page width below which module rows drop their progress bar and keep the count.
+const BAR_MIN_PAGE: f32 = 720.;
+
+fn module_list(lib: &Library, bars: bool, t: &Theme) -> Div {
     let mut list = grouped(t);
     for (i, m) in lib.semester_modules().into_iter().enumerate() {
         if i > 0 {
@@ -259,7 +262,7 @@ fn module_list(lib: &Library, t: &Theme) -> Div {
                 )
                 .when(overdue > 0, |d| d.child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.red).child(icon("circle-alert", iconsize::XS, t.red)).child(trf("%lld offen", &[&overdue]))))
                 .when(total > 0, |d| {
-                    d.child(div().w(px(120.)).child(progress_bar(done as f32 / total as f32, color, t))).child(div().font_features(tabular()).w(px(44.)).text_right().text_size(px(font::CALLOUT)).text_color(t.secondary).child(format!("{done}/{total}")))
+                    d.when(bars, |d| d.child(div().w(px(120.)).child(progress_bar(done as f32 / total as f32, color, t)))).child(div().font_features(tabular()).w(px(44.)).text_right().text_size(px(font::CALLOUT)).text_color(t.secondary).child(format!("{done}/{total}")))
                 })
                 .child(icon("chevron-right", iconsize::XS, t.tertiary)),
         );

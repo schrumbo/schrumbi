@@ -362,7 +362,7 @@ impl Render for InboxPage {
                 .flex()
                 .child(
                     div()
-                        .w(px(if f32::from(window.viewport_size().width) < 1200. { 220. } else { 280. }))
+                        .w(px(match f32::from(window.viewport_size().width) { w if w < 760. => 180., w if w < 1200. => 220., _ => 280. }))
                         .h_full()
                         .flex()
                         .flex_col()

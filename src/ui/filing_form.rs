@@ -933,7 +933,7 @@ impl Render for FilingForm {
             FileRole::Brief => tr("Liegt bei der Abgabe, zählt aber nicht als erledigt."),
             FileRole::Material => tr("Folien, Skripte, Handouts – Vorschläge nach deinen letzten Kursen."),
         };
-        let mut roles = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS));
+        let mut roles = div().flex().min_w_0().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS));
         for r in FileRole::ALL {
             let (label, icon_name) = match r {
                 FileRole::Work => (tr("Meine Abgabe"), "file-up"),
@@ -946,6 +946,7 @@ impl Render for FilingForm {
                 div()
                     .id(SharedString::from(format!("role-{label}")))
                     .flex()
+                    .min_w_0()
                     .items_center()
                     .gap(px(space::XS))
                     .px(px(space::M))
@@ -955,8 +956,8 @@ impl Render for FilingForm {
                     .cursor_pointer().key_nav()
                     .text_size(px(font::CALLOUT))
                     .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
-                    .child(icon(icon_name, iconsize::XS, if active { t.primary } else { t.secondary }))
-                    .child(label)
+                    .child(div().flex_none().child(icon(icon_name, iconsize::XS, if active { t.primary } else { t.secondary })))
+                    .child(div().min_w_0().truncate().child(label))
                     .on_click(move |_, window, cx| e.update(cx, |f, cx| f.set_role(r, window, cx))),
             );
         }
@@ -973,7 +974,7 @@ impl Render for FilingForm {
                     .children(self.ai_row(me.clone(), cx, &t))
                     .when(self.guessed == Some(self.role), |d| d.child(div().id("guessed").flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("sparkles", iconsize::XS, t.secondary)).child(tr("erkannt")).tooltip(tip(tr("Aus Dateiname und Inhalt geschätzt"))))),
             )
-            .child(div().flex().child(roles))
+            .child(div().flex().min_w_0().child(roles))
             .child(caption(role_hint, &t));
 
         let mut chips = div().flex().flex_wrap().gap(px(space::S));
@@ -1197,13 +1198,14 @@ impl Render for FilingForm {
             name = name.child(
                 div()
                     .flex()
+                    .min_w_0()
                     .items_start()
                     .gap(px(space::S))
                     .p(px(space::M))
                     .rounded(px(radius::CONTROL))
                     .bg(t.secondary_bg)
                     .child(icon(if valid { "badge-check" } else { "triangle-alert" }, iconsize::S, if valid { t.green } else { t.orange }))
-                    .child(div().flex_1().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).line_clamp(2).child(final_name)),
+                    .child(div().flex_1().min_w_0().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).line_clamp(2).child(final_name)),
             );
             body = body.child(name);
         }
