@@ -166,7 +166,11 @@ pub fn week_relative(d: NaiveDate, today: NaiveDate) -> String {
 
 /// "3.–9. Nov", "27. Okt – 2. Nov", with the year when the week lies outside this year.
 pub fn week_range(d: NaiveDate, today: NaiveDate) -> String {
-    let (a, b) = (monday(d), monday(d) + Days::new(6));
+    day_range(monday(d), monday(d) + Days::new(6), today)
+}
+
+/// "10.–16. Nov" / "Nov 10–16": the days from `a` to `b`, with the year when neither is in the year of `today`.
+pub fn day_range(a: NaiveDate, b: NaiveDate, today: NaiveDate) -> String {
     let year = (a.year() != today.year() && b.year() != today.year()).then_some(b.year());
     let month = |x: NaiveDate| if en() { MONTHS_SHORT_EN[x.month0() as usize] } else { MONTHS_SHORT[x.month0() as usize] };
     let span_years = a.year() != b.year() && year.is_some();
@@ -187,10 +191,17 @@ pub fn week_range(d: NaiveDate, today: NaiveDate) -> String {
 
 /// "W07 · KW45": the lecture week, if any, and the calendar week of `d`.
 pub fn week_codes(lecture: Option<u32>, d: NaiveDate) -> String {
-    let kw = super::i18n::trf("KW%@", &[&format!("{:02}", iso_week(d))]);
-    match lecture {
-        Some(w) => format!("W{w:02} · {kw}"),
-        None => kw,
+    span_codes([lecture, lecture], d, d)
+}
+
+/// "W07–08 · KW46–47": the lecture weeks of `a` and `b`, if any, and their calendar weeks, once when they agree.
+pub fn span_codes(lectures: [Option<u32>; 2], a: NaiveDate, b: NaiveDate) -> String {
+    let (ka, kb) = (iso_week(a), iso_week(b));
+    let kw = if ka == kb { super::i18n::trf("KW%@", &[&format!("{ka:02}")]) } else { super::i18n::trf("KW%@–%@", &[&format!("{ka:02}"), &format!("{kb:02}")]) };
+    match lectures {
+        [Some(x), Some(y)] if x != y => format!("W{x:02}–{y:02} · {kw}"),
+        [Some(w), _] | [None, Some(w)] => format!("W{w:02} · {kw}"),
+        [None, None] => kw,
     }
 }
 
@@ -330,6 +341,9 @@ mod tests {
         assert_eq!(week_range(ymd(2025, 12, 30), today), "29. Dez – 4. Jan");
         assert_eq!(week_range(ymd(2025, 12, 30), ymd(2027, 6, 1)), "29. Dez 2025 – 4. Jan 2026");
         assert_eq!(week_range(ymd(2027, 3, 3), today), "1.–7. März 2027");
+        assert_eq!(day_range(ymd(2026, 11, 10), ymd(2026, 11, 16), today), "10.–16. Nov");
+        assert_eq!(day_range(ymd(2026, 11, 28), ymd(2026, 12, 4), today), "28. Nov – 4. Dez");
+        assert_eq!(day_range(ymd(2026, 12, 30), ymd(2027, 1, 5), today), "30. Dez – 5. Jan");
     }
 
     #[test]
@@ -339,6 +353,10 @@ mod tests {
         assert_eq!(week_codes(Some(12), ymd(2027, 1, 4)), "W12 · KW01");
         assert_eq!(week_codes(None, ymd(2027, 12, 27)), "KW52");
         assert_eq!(week_codes(None, ymd(2025, 12, 29)), "KW01");
+        assert_eq!(span_codes([Some(7), Some(8)], ymd(2026, 11, 10), ymd(2026, 11, 16)), "W07–08 · KW46–47");
+        assert_eq!(span_codes([None, Some(1)], ymd(2026, 11, 10), ymd(2026, 11, 16)), "W01 · KW46–47");
+        assert_eq!(span_codes([None, None], ymd(2026, 12, 30), ymd(2027, 1, 5)), "KW53–01");
+        assert_eq!(span_codes([None, None], ymd(2026, 11, 9), ymd(2026, 11, 15)), "KW46");
     }
 
     #[test]

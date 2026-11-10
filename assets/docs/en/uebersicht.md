@@ -77,6 +77,8 @@ A file counts for a submission when it belongs to it. Date and folder alone are 
 
 The week in columns or the month as a grid. {ui:Woche} and {ui:Monat} at the top right switch, ‹ and › page, {ui:Heute} jumps back. The choice is remembered.
 
+The week starts today and shows the next seven days. From there ‹ and › page in weeks from Monday to Sunday: › to the week from next Monday, ‹ to the current week with the days already past.
+
 | Key | Effect |
 |---|---|
 | {key:left} and {key:right} | One week or one month back and forward |

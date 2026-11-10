@@ -77,6 +77,8 @@ Eine Datei zählt für eine Abgabe, wenn sie dazugehört. Datum und Ordner allei
 
 Die Woche in Spalten oder der Monat als Raster. {ui:Woche} und {ui:Monat} rechts oben wechseln, ‹ und › blättern, {ui:Heute} springt zurück. Die Wahl bleibt gespeichert.
 
+Die Woche beginnt heute und zeigt die nächsten sieben Tage. ‹ und › blättern von dort in Wochen von Montag bis Sonntag: › zur Woche ab nächstem Montag, ‹ zur laufenden Woche mit den schon vergangenen Tagen.
+
 | Taste | Wirkung |
 |---|---|
 | {key:left} und {key:right} | Eine Woche oder einen Monat zurück und vor |

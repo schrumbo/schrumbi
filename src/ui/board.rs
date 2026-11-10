@@ -38,17 +38,16 @@ impl RenderOnce for Board {
         let travel = motion::timed(motion::FAST, cx);
         let lib = state::lib(cx);
         let l = lib.read(cx);
-        let anchor = l.calendar_anchor();
         let page = match view {
-            CalendarView::Week => week(l, anchor, self.narrow, &t),
-            CalendarView::Month => month(l, anchor, self.narrow, &t),
+            CalendarView::Week => week(l, calendar::page_days(l.calendar_anchor, l.today()), self.narrow, &t),
+            CalendarView::Month => month(l, l.calendar_anchor(), self.narrow, &t),
         };
         let slide = f32::from(turn.1) * cal::SLIDE;
         div()
             .flex()
             .flex_col()
             .gap(px(space::S))
-            .child(header(l, view, anchor, segment, &t))
+            .child(header(l, view, segment, &t))
             .child(div().child(page).with_animation(("board-turn", turn.0 as usize), Animation::new(travel).with_easing(ease_out_quint()), move |d, p| d.opacity(0.3 + 0.7 * p).ml(px(slide * (1. - p))).mr(px(-slide * (1. - p)))))
     }
 }
@@ -66,13 +65,19 @@ pub fn key(key: &str, cx: &mut App) -> bool {
     true
 }
 
-fn header(l: &Library, view: CalendarView, anchor: NaiveDate, segment: f32, t: &Theme) -> Div {
+fn header(l: &Library, view: CalendarView, segment: f32, t: &Theme) -> Div {
     let today = l.today();
-    let at_today = calendar::shows(view, anchor, today);
+    let anchor = l.calendar_anchor;
+    let at_today = calendar::at_home(view, anchor, today);
     let caption = match view {
-        CalendarView::Week => format!("{} · {}", day::week_codes(l.lecture_week_containing(anchor).map(|w| w.index), anchor), day::week_range(anchor, today)),
+        CalendarView::Week => {
+            let days = calendar::page_days(anchor, today);
+            let (a, b) = (days[0], days[6]);
+            let lectures = [a, b].map(|d| l.lecture_week_containing(d).map(|w| w.index));
+            format!("{} · {}", day::span_codes(lectures, a, b), day::day_range(a, b, today))
+        }
         CalendarView::Month => {
-            let weeks = calendar::week_numbers(&calendar::month_grid(anchor));
+            let weeks = calendar::week_numbers(&calendar::month_grid(l.calendar_anchor()));
             trf("KW%@–%@", &[&format!("{:02}", weeks[0]), &format!("{:02}", weeks[calendar::ROWS - 1])])
         }
     };
@@ -101,7 +106,7 @@ fn header(l: &Library, view: CalendarView, anchor: NaiveDate, segment: f32, t: &
                 .flex()
                 .items_baseline()
                 .gap(px(space::S))
-                .child(section_title(day::month_year(calendar::named_month(view, anchor))))
+                .child(section_title(day::month_year(calendar::named_month(view, anchor, today))))
                 .child(div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.secondary).child(caption)),
         )
         .child(segmented(view, segment, t))
@@ -140,8 +145,7 @@ fn segment_button(id: &'static str, label: String, key: &str, on: bool, view: Ca
         .child(div().text_size(px(font::CAPTION)).font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }).text_color(if on { t.primary } else { t.secondary }).child(label))
 }
 
-fn week(lib: &Library, anchor: NaiveDate, narrow: bool, t: &Theme) -> Div {
-    let days = calendar::week_days(anchor);
+fn week(lib: &Library, days: [NaiveDate; 7], narrow: bool, t: &Theme) -> Div {
     if narrow {
         return div().flex().flex_col().gap(px(space::S)).children(days.iter().map(|d| agenda_row(lib, *d, t)));
     }

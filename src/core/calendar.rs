@@ -18,12 +18,6 @@ pub const ROWS: usize = 6;
 /// One month as rows of weeks, Monday first.
 pub type Grid = [[NaiveDate; 7]; ROWS];
 
-/// The seven days of the week holding `anchor`, Monday first.
-pub fn week_days(anchor: NaiveDate) -> [NaiveDate; 7] {
-    let monday = day::monday(anchor);
-    std::array::from_fn(|i| monday + Days::new(i as u64))
-}
-
 /// The first day of the month holding `d`.
 pub fn month_start(d: NaiveDate) -> NaiveDate {
     d.with_day(1).unwrap_or(d)
@@ -50,30 +44,77 @@ pub fn shift(view: CalendarView, anchor: NaiveDate, pages: i32) -> NaiveDate {
     moved.unwrap_or(anchor)
 }
 
-/// Whether the page holding `anchor` shows `today`.
-pub fn shows(view: CalendarView, anchor: NaiveDate, today: NaiveDate) -> bool {
-    match view {
-        CalendarView::Week => day::monday(anchor) == day::monday(today),
-        CalendarView::Month => (anchor.year(), anchor.month()) == (today.year(), today.month()),
+/// The first day of the week page of `anchor`: today on the page that follows today, else the Monday of its week.
+pub fn page_start(anchor: Option<NaiveDate>, today: NaiveDate) -> NaiveDate {
+    anchor.map_or(today, day::monday)
+}
+
+/// The seven days of the week page of `anchor`: today and the six after it when `None`, else Monday to Sunday.
+pub fn page_days(anchor: Option<NaiveDate>, today: NaiveDate) -> [NaiveDate; 7] {
+    let first = page_start(anchor, today);
+    std::array::from_fn(|i| first + Days::new(i as u64))
+}
+
+/// The anchor of the week page showing `d`: the page that follows today when it has `d`.
+pub fn anchor_for(d: NaiveDate, today: NaiveDate) -> Option<NaiveDate> {
+    (!page_days(None, today).contains(&d)).then_some(d)
+}
+
+fn position(anchor: Option<NaiveDate>, today: NaiveDate) -> i64 {
+    let monday = day::monday(today);
+    match anchor {
+        None => i64::from(today != monday),
+        Some(d) => 2 * ((day::monday(d) - monday).num_days() / 7),
     }
 }
 
-/// Which way the page holding `to` lies from the page holding `from`: -1 earlier, 1 later, 0 the same page.
-pub fn direction(view: CalendarView, from: NaiveDate, to: NaiveDate) -> i8 {
-    if shows(view, from, to) {
-        0
-    } else if to < from {
-        -1
-    } else {
-        1
+/// The anchor `pages` pages on from `anchor`, where `None` follows today. The week page following today sits between the week holding today and the next one, and replaces the week holding today when today is a Monday.
+pub fn turn(view: CalendarView, anchor: Option<NaiveDate>, today: NaiveDate, pages: i32) -> Option<NaiveDate> {
+    if view == CalendarView::Month {
+        return Some(shift(view, anchor.unwrap_or(today), pages));
+    }
+    let rolling = position(None, today);
+    let step = i64::from(pages.signum());
+    let mut at = position(anchor, today);
+    for _ in 0..pages.unsigned_abs() {
+        at += step;
+        if at % 2 != 0 && at != rolling {
+            at += step;
+        }
+    }
+    if at == rolling {
+        return None;
+    }
+    let base = anchor.unwrap_or(today);
+    let weeks = (at - position(Some(base), today)) / 2;
+    Some(i32::try_from(weeks).map_or(base, |w| shift(view, base, w)))
+}
+
+/// Whether the page of `anchor` is the one "Heute" brings back: the week following today, or the month holding today.
+pub fn at_home(view: CalendarView, anchor: Option<NaiveDate>, today: NaiveDate) -> bool {
+    match view {
+        CalendarView::Week => page_start(anchor, today) == today,
+        CalendarView::Month => anchor.is_none_or(|a| (a.year(), a.month()) == (today.year(), today.month())),
     }
 }
 
-/// The month a page is named after; for a week its Thursday decides, as ISO week numbering does.
-pub fn named_month(view: CalendarView, anchor: NaiveDate) -> NaiveDate {
+/// Which way the page "Heute" brings back lies from the page of `anchor`: -1 earlier, 1 later, 0 the same page.
+pub fn toward_home(view: CalendarView, anchor: Option<NaiveDate>, today: NaiveDate) -> i8 {
+    if at_home(view, anchor, today) {
+        return 0;
+    }
+    let later = match view {
+        CalendarView::Week => position(None, today) > position(anchor, today),
+        CalendarView::Month => anchor.is_some_and(|a| a < today),
+    };
+    if later { 1 } else { -1 }
+}
+
+/// The month a page is named after: the middle of its seven days for a week, as ISO week numbering does with the Thursday.
+pub fn named_month(view: CalendarView, anchor: Option<NaiveDate>, today: NaiveDate) -> NaiveDate {
     match view {
-        CalendarView::Week => day::monday(anchor) + Days::new(3),
-        CalendarView::Month => month_start(anchor),
+        CalendarView::Week => page_start(anchor, today) + Days::new(3),
+        CalendarView::Month => month_start(anchor.unwrap_or(today)),
     }
 }
 
@@ -93,10 +134,11 @@ mod tests {
 
     #[test]
     fn a_week_runs_monday_to_sunday_around_its_anchor() {
-        let days = week_days(ymd(2026, 11, 10));
+        let today = ymd(2026, 11, 10);
+        let days = page_days(Some(ymd(2026, 11, 10)), today);
         assert_eq!(days[0], ymd(2026, 11, 9));
         assert_eq!(days[6], ymd(2026, 11, 15));
-        assert_eq!(week_days(ymd(2026, 11, 15))[0], ymd(2026, 11, 9));
+        assert_eq!(page_days(Some(ymd(2026, 11, 15)), today)[0], ymd(2026, 11, 9));
     }
 
     #[test]
@@ -158,22 +200,86 @@ mod tests {
     }
 
     #[test]
-    fn a_page_knows_whether_today_is_on_it() {
+    fn the_current_week_page_rolls_from_today_and_pages_into_monday_weeks() {
         let today = ymd(2026, 11, 10);
-        assert!(shows(CalendarView::Week, ymd(2026, 11, 15), today));
-        assert!(!shows(CalendarView::Week, ymd(2026, 11, 16), today));
-        assert!(shows(CalendarView::Month, ymd(2026, 11, 30), today));
-        assert!(!shows(CalendarView::Month, ymd(2026, 12, 1), today));
-        assert_eq!(direction(CalendarView::Week, ymd(2026, 11, 23), today), -1);
-        assert_eq!(direction(CalendarView::Week, ymd(2026, 10, 1), today), 1);
-        assert_eq!(direction(CalendarView::Month, ymd(2026, 11, 1), today), 0);
+        assert_eq!(page_days(None, today)[0], today);
+        assert_eq!(page_days(None, today)[6], ymd(2026, 11, 16));
+        let next = turn(CalendarView::Week, None, today, 1);
+        assert_eq!(page_days(next, today)[0], ymd(2026, 11, 16));
+        assert_eq!(turn(CalendarView::Week, next, today, -1), None);
+        let this = turn(CalendarView::Week, None, today, -1);
+        assert_eq!(page_days(this, today)[0], ymd(2026, 11, 9));
+        assert_eq!(page_days(this, today)[6], ymd(2026, 11, 15));
+        assert_eq!(turn(CalendarView::Week, this, today, 1), None);
+        assert_eq!(page_start(turn(CalendarView::Week, this, today, -1), today), ymd(2026, 11, 2));
+        assert_eq!(page_start(turn(CalendarView::Week, None, today, 2), today), ymd(2026, 11, 23));
+        assert_eq!(page_start(turn(CalendarView::Week, None, today, -2), today), ymd(2026, 11, 2));
     }
 
     #[test]
-    fn a_week_is_named_after_the_month_of_its_thursday() {
-        assert_eq!(named_month(CalendarView::Week, ymd(2026, 11, 30)), ymd(2026, 12, 3));
-        assert_eq!(named_month(CalendarView::Week, ymd(2027, 1, 1)), ymd(2026, 12, 31));
-        assert_eq!(named_month(CalendarView::Week, ymd(2025, 12, 29)), ymd(2026, 1, 1));
-        assert_eq!(named_month(CalendarView::Month, ymd(2026, 11, 30)), ymd(2026, 11, 1));
+    fn on_a_monday_the_rolling_page_is_the_week_itself() {
+        let monday = ymd(2026, 11, 9);
+        assert_eq!(page_days(None, monday), page_days(Some(ymd(2026, 11, 12)), monday));
+        assert_eq!(page_start(turn(CalendarView::Week, None, monday, -1), monday), ymd(2026, 11, 2));
+        assert_eq!(page_start(turn(CalendarView::Week, None, monday, 1), monday), ymd(2026, 11, 16));
+        assert_eq!(turn(CalendarView::Week, Some(ymd(2026, 11, 4)), monday, 1), None);
+        assert!(at_home(CalendarView::Week, Some(ymd(2026, 11, 12)), monday));
+    }
+
+    #[test]
+    fn on_a_sunday_the_next_page_starts_the_next_morning() {
+        let sunday = ymd(2026, 11, 15);
+        assert_eq!(page_days(None, sunday)[6], ymd(2026, 11, 21));
+        assert_eq!(page_start(turn(CalendarView::Week, None, sunday, 1), sunday), ymd(2026, 11, 16));
+        let this = turn(CalendarView::Week, None, sunday, -1);
+        assert_eq!(page_days(this, sunday)[6], sunday);
+        assert!(!at_home(CalendarView::Week, this, sunday));
+    }
+
+    #[test]
+    fn the_rolling_page_crosses_the_year_boundary() {
+        let today = ymd(2026, 12, 30);
+        assert_eq!(page_days(None, today)[6], ymd(2027, 1, 5));
+        let next = turn(CalendarView::Week, None, today, 1);
+        assert_eq!(page_start(next, today), ymd(2027, 1, 4));
+        assert_eq!(day::iso_week(page_start(next, today)), 1);
+        let this = turn(CalendarView::Week, None, today, -1);
+        assert_eq!(day::iso_week(page_start(this, today)), 53);
+        assert_eq!(page_start(turn(CalendarView::Week, this, today, -1), today), ymd(2026, 12, 21));
+        let sunday = ymd(2027, 1, 3);
+        assert_eq!(page_start(turn(CalendarView::Week, None, sunday, -1), sunday), ymd(2026, 12, 28));
+        assert_eq!(page_start(turn(CalendarView::Week, None, sunday, 1), sunday), ymd(2027, 1, 4));
+    }
+
+    #[test]
+    fn a_page_knows_whether_it_is_home_and_which_way_home_lies() {
+        let today = ymd(2026, 11, 10);
+        assert!(at_home(CalendarView::Week, None, today));
+        assert!(!at_home(CalendarView::Week, Some(today), today));
+        assert!(at_home(CalendarView::Month, Some(ymd(2026, 11, 30)), today));
+        assert!(!at_home(CalendarView::Month, Some(ymd(2026, 12, 1)), today));
+        assert_eq!(toward_home(CalendarView::Week, Some(ymd(2026, 11, 23)), today), -1);
+        assert_eq!(toward_home(CalendarView::Week, Some(ymd(2026, 11, 16)), today), -1);
+        assert_eq!(toward_home(CalendarView::Week, Some(today), today), 1);
+        assert_eq!(toward_home(CalendarView::Week, Some(ymd(2026, 10, 1)), today), 1);
+        assert_eq!(toward_home(CalendarView::Month, Some(ymd(2026, 11, 1)), today), 0);
+        assert_eq!(toward_home(CalendarView::Month, Some(ymd(2027, 1, 1)), today), -1);
+    }
+
+    #[test]
+    fn a_day_outside_the_rolling_page_opens_its_own_week() {
+        let today = ymd(2026, 11, 10);
+        assert_eq!(anchor_for(ymd(2026, 11, 16), today), None);
+        assert_eq!(anchor_for(ymd(2026, 11, 9), today), Some(ymd(2026, 11, 9)));
+        assert_eq!(anchor_for(ymd(2026, 11, 17), today), Some(ymd(2026, 11, 17)));
+    }
+
+    #[test]
+    fn a_week_is_named_after_the_month_of_its_middle_day() {
+        assert_eq!(named_month(CalendarView::Week, Some(ymd(2026, 11, 30)), ymd(2026, 11, 10)), ymd(2026, 12, 3));
+        assert_eq!(named_month(CalendarView::Week, Some(ymd(2027, 1, 1)), ymd(2026, 11, 10)), ymd(2026, 12, 31));
+        assert_eq!(named_month(CalendarView::Week, Some(ymd(2025, 12, 29)), ymd(2026, 11, 10)), ymd(2026, 1, 1));
+        assert_eq!(named_month(CalendarView::Week, None, ymd(2026, 11, 28)), ymd(2026, 12, 1));
+        assert_eq!(named_month(CalendarView::Month, Some(ymd(2026, 11, 30)), ymd(2026, 11, 10)), ymd(2026, 11, 1));
     }
 }

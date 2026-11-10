@@ -284,7 +284,7 @@ pub struct Library {
     pub quick_add_day: Option<chrono::NaiveDate>,
     /// Whether the overview calendar shows a week or a month.
     pub calendar_view: CalendarView,
-    /// A day on the calendar page shown; `None` follows today.
+    /// A day on the calendar page shown; `None` follows today, which in the week shows today and the six days after it.
     pub calendar_anchor: Option<NaiveDate>,
     /// How often the calendar page changed and which way the last turn went, so the board can slide in from there.
     pub calendar_turn: (u64, i8),
@@ -1975,24 +1975,26 @@ impl Library {
         if pages == 0 {
             return;
         }
-        let to = calendar::shift(self.calendar_view, self.calendar_anchor(), pages);
-        self.calendar_anchor = Some(to);
+        self.calendar_anchor = calendar::turn(self.calendar_view, self.calendar_anchor, self.today(), pages);
         self.calendar_turn = (self.calendar_turn.0 + 1, pages.signum() as i8);
     }
 
-    /// Brings the calendar back to the page with today on it.
+    /// Brings the calendar back to today: the week from today on, or the month holding today.
     pub fn calendar_today(&mut self) {
-        let dir = calendar::direction(self.calendar_view, self.calendar_anchor(), self.today());
+        let dir = calendar::toward_home(self.calendar_view, self.calendar_anchor, self.today());
         self.calendar_anchor = None;
         if dir != 0 {
             self.calendar_turn = (self.calendar_turn.0 + 1, dir);
         }
     }
 
-    /// Switches between the week and the month and remembers the choice.
+    /// Switches between the week and the month and remembers the choice; the month holding today becomes the week from today on.
     pub fn set_calendar_view(&mut self, view: CalendarView) {
         if self.calendar_view == view {
             return;
+        }
+        if view == CalendarView::Week && calendar::at_home(CalendarView::Month, self.calendar_anchor, self.today()) {
+            self.calendar_anchor = None;
         }
         self.calendar_view = view;
         self.calendar_turn = (self.calendar_turn.0 + 1, 0);
@@ -2004,10 +2006,12 @@ impl Library {
     /// Shows the week holding `d` in the week view.
     pub fn show_week_of(&mut self, d: NaiveDate) {
         self.set_calendar_view(CalendarView::Week);
-        if !calendar::shows(CalendarView::Week, self.calendar_anchor(), d) {
+        let today = self.today();
+        let to = calendar::anchor_for(d, today);
+        if calendar::page_start(self.calendar_anchor, today) != calendar::page_start(to, today) {
             self.calendar_turn = (self.calendar_turn.0 + 1, 0);
         }
-        self.calendar_anchor = Some(d);
+        self.calendar_anchor = to;
     }
 
     /// Every deadline due between `from` and `to` inclusive, with its local day, in library order.
