@@ -119,6 +119,36 @@ pub mod radius {
     pub const FULL: f32 = 999.;
 }
 
+/// The calendar on the overview.
+pub mod calendar {
+    /// The column with the week numbers of the month grid.
+    pub const KW: f32 = 36.;
+    /// A row of the month grid.
+    pub const ROW: f32 = 104.;
+    /// A row of the month grid in a narrow window, where days show dots instead of chips.
+    pub const ROW_NARROW: f32 = 60.;
+    /// The inset of a day cell.
+    pub const CELL_PAD: f32 = 4.;
+    /// The day number of a cell; today's sits in a disc of this size.
+    pub const DAY: f32 = 22.;
+    /// A deadline chip in the month grid.
+    pub const CHIP: f32 = 22.;
+    /// The module colour at the left edge of a card or chip.
+    pub const EDGE: f32 = 3.;
+    /// A dot standing for one entry in a narrow month grid.
+    pub const DOT: f32 = 6.;
+    /// One half of the Woche/Monat switch.
+    pub const SEGMENT: f32 = 76.;
+    /// How far a page slides in when it turns.
+    pub const SLIDE: f32 = 20.;
+    /// The least height of a week column, so paging keeps the board's height.
+    pub const COLUMN: f32 = 230.;
+    /// The width of the list a crowded day opens.
+    pub const MORE: f32 = 300.;
+    /// The most that list grows before it scrolls.
+    pub const MORE_HEIGHT: f32 = 440.;
+}
+
 /// The ink opacity the small controls floating over a note light up with under the pointer.
 pub mod hover {
     pub const FLOAT: f32 = 0.1;

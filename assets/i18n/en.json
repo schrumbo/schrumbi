@@ -1714,5 +1714,15 @@
   "zeichnen malen schreiben stift": "draw paint write pen",
   "löschen wegmachen": "delete wipe",
   "kommentar anmerkung": "comment annotation",
-  "zeigen markieren zeiger werkzeug": "pointer select tool"
+  "zeigen markieren zeiger werkzeug": "pointer select tool",
+  "Woche": "Week",
+  "Monat": "Month",
+  "KW": "CW",
+  "KW%@–%@": "CW%@–%@",
+  "Vorherige Woche": "Previous week",
+  "Vorheriger Monat": "Previous month",
+  "Nächster Monat": "Next month",
+  "Zu heute springen": "Jump to today",
+  "Woche öffnen": "Open week",
+  "Kalender": "Calendar"
 }

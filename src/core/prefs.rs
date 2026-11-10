@@ -210,6 +210,8 @@ pub struct Prefs {
     pub apple_calendar: bool,
     /// Calendar addresses to fetch deadlines from, by workspace.
     pub calendar_sources: BTreeMap<String, String>,
+    /// Whether the calendar on the overview shows a week or a month.
+    pub calendar_view: super::calendar::CalendarView,
     /// Kinds of pages whose details column the user keeps open: `document`, `assignments`, `graph`.
     pub inspector_pinned: BTreeSet<String>,
     /// Sidebar entries the user hid; they stay reachable by shortcut and palette.
@@ -279,6 +281,7 @@ impl Default for Prefs {
             calendar_token: String::new(),
             apple_calendar: false,
             calendar_sources: BTreeMap::new(),
+            calendar_view: Default::default(),
             inspector_pinned: BTreeSet::new(),
             hidden_tabs: Vec::new(),
             main_window: None,

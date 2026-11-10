@@ -1,4 +1,3 @@
-use chrono::Days;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::ContextMenuExt;
 use gpui_kit::component::Sizable;
@@ -16,10 +15,8 @@ use crate::core::library::{Library, Route};
 use crate::core::model::{Assignment, Kind, Status};
 use crate::core::next_action::NextAction;
 
-/// The overview: date header, the next action with two tiles, bundled attention rows, the 7-day board and upcoming exams.
+/// The overview: date header, the next action with two tiles, bundled attention rows, the calendar and upcoming exams.
 pub fn render(lib: &Library, width: f32, t: &Theme) -> Div {
-    let today = lib.today();
-    let days: Vec<_> = (0..7).map(|i| today + Days::new(i)).collect();
     let empty = lib.semester_assignments().is_empty();
     div()
         .flex()
@@ -32,14 +29,7 @@ pub fn render(lib: &Library, width: f32, t: &Theme) -> Div {
         .children(attention(lib, t))
         .children(inbox_hint(lib, t))
         .children(cards_hint(t))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(space::S))
-                .child(section_title(tr("Nächste 7 Tage")))
-                .child(board::render(lib, &days, width < 7. * 100. + 36. + 48., t)),
-        )
+        .child(board::render(width < 7. * 100. + 36. + 48.))
         .children(exams(lib, t))
         .children(recent_notes(t))
 }

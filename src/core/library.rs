@@ -20,6 +20,7 @@ use super::highlights::{self, Highlight, Highlights};
 use super::search_index::SearchIndex;
 use super::text::fold;
 use super::workspace::{self, CONFIG_NAME, STATE_NAME};
+use super::calendar::{self, CalendarView};
 use super::{day, prefs, schedule};
 
 /// Where a dragged document lands in the document area.
@@ -281,6 +282,12 @@ pub struct Library {
     pub quick_add_kind: Option<Kind>,
     /// The day the next quick add starts on, when it was opened from a day.
     pub quick_add_day: Option<chrono::NaiveDate>,
+    /// Whether the overview calendar shows a week or a month.
+    pub calendar_view: CalendarView,
+    /// A day on the calendar page shown; `None` follows today.
+    pub calendar_anchor: Option<NaiveDate>,
+    /// How often the calendar page changed and which way the last turn went, so the board can slide in from there.
+    pub calendar_turn: (u64, i8),
     pub show_quick_open: bool,
     /// A deadline waiting for a file to be picked and linked to it.
     pub link_pick: Option<String>,
@@ -464,6 +471,9 @@ impl Library {
             show_quick_add: false,
             quick_add_kind: None,
             quick_add_day: None,
+            calendar_view: if cfg!(test) { CalendarView::Week } else { prefs::with(|p| p.calendar_view) },
+            calendar_anchor: None,
+            calendar_turn: (0, 0),
             show_quick_open: false,
             link_pick: None,
             find_in_file: None,
@@ -1946,6 +1956,61 @@ impl Library {
 
     pub fn today(&self) -> NaiveDate {
         day::local_date(self.now)
+    }
+
+    // MARK: Calendar
+
+    /// The day the calendar page is built around; today unless the user paged away.
+    pub fn calendar_anchor(&self) -> NaiveDate {
+        self.calendar_anchor.unwrap_or_else(|| self.today())
+    }
+
+    /// Turns the calendar by `pages` weeks or months, forward when positive.
+    pub fn turn_calendar(&mut self, pages: i32) {
+        if pages == 0 {
+            return;
+        }
+        let to = calendar::shift(self.calendar_view, self.calendar_anchor(), pages);
+        self.calendar_anchor = Some(to);
+        self.calendar_turn = (self.calendar_turn.0 + 1, pages.signum() as i8);
+    }
+
+    /// Brings the calendar back to the page with today on it.
+    pub fn calendar_today(&mut self) {
+        let dir = calendar::direction(self.calendar_view, self.calendar_anchor(), self.today());
+        self.calendar_anchor = None;
+        if dir != 0 {
+            self.calendar_turn = (self.calendar_turn.0 + 1, dir);
+        }
+    }
+
+    /// Switches between the week and the month and remembers the choice.
+    pub fn set_calendar_view(&mut self, view: CalendarView) {
+        if self.calendar_view == view {
+            return;
+        }
+        self.calendar_view = view;
+        self.calendar_turn = (self.calendar_turn.0 + 1, 0);
+        if !cfg!(test) {
+            prefs::update(|p| p.calendar_view = view);
+        }
+    }
+
+    /// Shows the week holding `d` in the week view.
+    pub fn show_week_of(&mut self, d: NaiveDate) {
+        self.set_calendar_view(CalendarView::Week);
+        if !calendar::shows(CalendarView::Week, self.calendar_anchor(), d) {
+            self.calendar_turn = (self.calendar_turn.0 + 1, 0);
+        }
+        self.calendar_anchor = Some(d);
+    }
+
+    /// Every deadline due between `from` and `to` inclusive, with its local day, in library order.
+    pub fn assignments_between(&self, from: NaiveDate, to: NaiveDate) -> Vec<(NaiveDate, &Assignment)> {
+        self.assignments.iter().filter_map(|a| {
+            let d = day::local_date(a.due);
+            (d >= from && d <= to).then_some((d, a))
+        }).collect()
     }
 
     /// Lecture weeks of the shown semester, computed once per semester change.

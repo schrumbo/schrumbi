@@ -103,6 +103,12 @@ fn commands(cx: &App) -> Vec<Command> {
             add(&general, tr("Konflikte lösen…"), "git-merge", None, Run::Action(Box::new(app::ResolveConflicts)));
         }
         add(&go, S::GoToday.label(), "layout-grid", keys(S::GoToday), Run::Action(Box::new(app::GoToday)));
+        if state::read(cx, |l| matches!(l.route(), Route::Today)) {
+            let calendar = tr("Kalender");
+            add(&calendar, tr("Heute"), "calendar-check", Some("T".into()), Run::Call(Rc::new(|cx| act(cx, crate::core::library::Library::calendar_today))));
+            add(&calendar, tr("Woche"), "calendar", Some("W".into()), Run::Call(Rc::new(|cx| act(cx, |l| l.set_calendar_view(crate::core::calendar::CalendarView::Week)))));
+            add(&calendar, tr("Monat"), "calendar-days", Some("M".into()), Run::Call(Rc::new(|cx| act(cx, |l| l.set_calendar_view(crate::core::calendar::CalendarView::Month)))));
+        }
         add(&go, S::GoGrid.label(), "table", keys(S::GoGrid), Run::Action(Box::new(app::GoGrid)));
         add(&go, S::GoRecord.label(), "award", keys(S::GoRecord), Run::Action(Box::new(app::GoRecord)));
         add(&go, S::GoInbox.label(), "inbox", keys(S::GoInbox), Run::Action(Box::new(app::GoInbox)));

@@ -468,8 +468,14 @@ impl Render for MainWindow {
                 }
                 let slash = k.key == "/" || k.key_char.as_deref() == Some("/");
                 let typing = window.context_stack().iter().any(|c| c.contains("Input"));
-                if slash && !k.modifiers.platform && !k.modifiers.control && !k.modifiers.alt && !typing && !window.has_active_dialog(cx) {
+                let plain = !k.modifiers.platform && !k.modifiers.control && !k.modifiers.alt;
+                if slash && plain && !typing && !window.has_active_dialog(cx) {
                     this.focus_search(window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+                let menu = window.context_stack().iter().any(|c| c.contains("PopupMenu"));
+                if plain && !typing && !menu && !window.has_active_dialog(cx) && state::read(cx, |l| matches!(l.route(), Route::Today)) && super::board::key(&k.key, cx) {
                     cx.stop_propagation();
                 }
             }));

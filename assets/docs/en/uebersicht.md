@@ -70,12 +70,26 @@ A file counts for a submission when it belongs to it. Date and folder alone are 
 ## Further Down
 
 - Collected: {ui:Überfällig} and {ui:Fertig, aber Upload nicht bestätigt}, with {ui:Alle als hochgeladen markieren}.
-- {ui:Nächste 7 Tage}, {ui:Prüfungen} and {ui:Zuletzt geschrieben}.
+- The calendar, {ui:Prüfungen} and {ui:Zuletzt geschrieben}.
 - If cards are waiting, a hint with {ui:Lernen} appears.
+
+## Calendar
+
+The week in columns or the month as a grid. {ui:Woche} and {ui:Monat} at the top right switch, ‹ and › page, {ui:Heute} jumps back. The choice is remembered.
+
+| Key | Effect |
+|---|---|
+| {key:left} and {key:right} | One week or one month back and forward |
+| {key:t} or {key:home} | Back to today |
+| {key:w} and {key:m} | Week or month |
+
+- In the month, every entry is a chip in its module colour, exams with a cap. If not all fit into a day, the last line opens the whole list.
+- Clicking the day number opens that week. Chips can be dragged to another day.
+- Weekends and lecture-free time from the semester are tinted lightly.
 
 ## Add for a Day
 
-Right-click a day under {ui:Nächste 7 Tage}, or click the + at its top right. For one-off things without a rule:
+Right-click a day in the calendar, the + at the top right of a day in the week, or click free space in the month. For one-off things without a rule:
 
 | Command | Default time |
 |---|---|

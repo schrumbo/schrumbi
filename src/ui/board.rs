@@ -1,25 +1,410 @@
-use chrono::{Datelike, Local, NaiveDate, Utc};
+use std::collections::HashMap;
+
+use chrono::{Datelike, Days, NaiveDate, Utc};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem};
-use gpui_kit::component::Sizable;
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{Disableable, Selectable, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::state::act;
-use super::motion::Soft;
-use super::theme::{Theme, font, radius, space, iconsize};
-use super::widgets::{KeyNav, file_target, icon, menu_icon, status_menu, status_toggle, tip};
-use crate::core::i18n::tr;
+use super::state::{self, act};
+use super::motion::{self, Soft};
+use super::theme::{Theme, calendar as cal, control, font, radius, space, iconsize};
+use super::widgets::{KeyNav, file_target, icon, menu_icon, section_title, status_menu, status_toggle, tabular, tip};
+use crate::core::calendar::{self, CalendarView};
+use crate::core::i18n::{tr, trf};
 use crate::core::library::Library;
 use crate::core::model::{Assignment, Kind, Module, Session, Status};
 use crate::core::day;
 
-/// Column-per-day board showing timetable sessions and deadlines; one row per day when narrow.
-pub fn render(lib: &Library, days: &[NaiveDate], narrow: bool, t: &Theme) -> Div {
+/// The calendar of the overview: paging and the view switch above the week's columns or the month's grid.
+#[derive(IntoElement)]
+pub struct Board {
+    narrow: bool,
+}
+
+/// The calendar for a page that is `narrow` or not; it reads the library itself so it can animate with the window.
+pub fn render(narrow: bool) -> Board {
+    Board { narrow }
+}
+
+impl RenderOnce for Board {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = Theme::get(cx);
+        let (view, turn) = state::read(cx, |l| (l.calendar_view, l.calendar_turn));
+        let segment = motion::follow("board-segment", if view == CalendarView::Month { 1. } else { 0. }, motion::FAST, window, cx);
+        let travel = motion::timed(motion::FAST, cx);
+        let lib = state::lib(cx);
+        let l = lib.read(cx);
+        let anchor = l.calendar_anchor();
+        let page = match view {
+            CalendarView::Week => week(l, anchor, self.narrow, &t),
+            CalendarView::Month => month(l, anchor, self.narrow, &t),
+        };
+        let slide = f32::from(turn.1) * cal::SLIDE;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(space::S))
+            .child(header(l, view, anchor, segment, &t))
+            .child(div().child(page).with_animation(("board-turn", turn.0 as usize), Animation::new(travel).with_easing(ease_out_quint()), move |d, p| d.opacity(0.3 + 0.7 * p).ml(px(slide * (1. - p))).mr(px(-slide * (1. - p)))))
+    }
+}
+
+/// The calendar keys of the overview: ←/→ turn the page, T and Home go to today, W and M pick the view. Says whether `key` was one of them.
+pub fn key(key: &str, cx: &mut App) -> bool {
+    match key {
+        "left" => act(cx, |l| l.turn_calendar(-1)),
+        "right" => act(cx, |l| l.turn_calendar(1)),
+        "t" | "home" => act(cx, Library::calendar_today),
+        "w" => act(cx, |l| l.set_calendar_view(CalendarView::Week)),
+        "m" => act(cx, |l| l.set_calendar_view(CalendarView::Month)),
+        _ => return false,
+    }
+    true
+}
+
+fn header(l: &Library, view: CalendarView, anchor: NaiveDate, segment: f32, t: &Theme) -> Div {
+    let today = l.today();
+    let at_today = calendar::shows(view, anchor, today);
+    let caption = match view {
+        CalendarView::Week => format!("{} · {}", day::week_codes(l.lecture_week_containing(anchor).map(|w| w.index), anchor), day::week_range(anchor, today)),
+        CalendarView::Month => {
+            let weeks = calendar::week_numbers(&calendar::month_grid(anchor));
+            trf("KW%@–%@", &[&format!("{:02}", weeks[0]), &format!("{:02}", weeks[calendar::ROWS - 1])])
+        }
+    };
+    let (back, forward) = match view {
+        CalendarView::Week => (tr("Vorherige Woche"), tr("Nächste Woche")),
+        CalendarView::Month => (tr("Vorheriger Monat"), tr("Nächster Monat")),
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(space::M))
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(space::XXS))
+                .child(Button::new("board-prev").ghost().small().icon(menu_icon("chevron-left")).tooltip(format!("{back} (←)")).on_click(|_, _, cx| act(cx, |l| l.turn_calendar(-1))))
+                .child(Button::new("board-next").ghost().small().icon(menu_icon("chevron-right")).tooltip(format!("{forward} (→)")).on_click(|_, _, cx| act(cx, |l| l.turn_calendar(1))))
+                .child(Button::new("board-today").small().label(tr("Heute")).disabled(at_today).tooltip(format!("{} (T)", tr("Zu heute springen"))).on_click(|_, _, cx| act(cx, Library::calendar_today))),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_baseline()
+                .gap(px(space::S))
+                .child(section_title(day::month_year(calendar::named_month(view, anchor))))
+                .child(div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.secondary).child(caption)),
+        )
+        .child(segmented(view, segment, t))
+}
+
+fn segmented(view: CalendarView, segment: f32, t: &Theme) -> Stateful<Div> {
+    div()
+        .id("board-view")
+        .relative()
+        .flex()
+        .flex_none()
+        .h(px(control::M))
+        .p(px(space::XXS))
+        .rounded(px(radius::CONTROL))
+        .bg(t.ink.opacity(0.06))
+        .child(div().absolute().top(px(space::XXS)).bottom(px(space::XXS)).left(px(space::XXS + segment * cal::SEGMENT)).w(px(cal::SEGMENT)).rounded(px(radius::INNER)).bg(t.content).shadow_sm())
+        .child(segment_button("board-view-week", tr("Woche"), "W", view == CalendarView::Week, CalendarView::Week, t))
+        .child(segment_button("board-view-month", tr("Monat"), "M", view == CalendarView::Month, CalendarView::Month, t))
+}
+
+fn segment_button(id: &'static str, label: String, key: &str, on: bool, view: CalendarView, t: &Theme) -> Stateful<Div> {
+    let help = format!("{label} ({key})");
+    div()
+        .id(id)
+        .w(px(cal::SEGMENT))
+        .h_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(radius::INNER))
+        .soft(t.ink.opacity(0.05), radius::INNER)
+        .cursor_pointer()
+        .key_nav()
+        .tooltip(tip(help))
+        .on_click(move |_, _, cx| act(cx, |l| l.set_calendar_view(view)))
+        .child(div().text_size(px(font::CAPTION)).font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }).text_color(if on { t.primary } else { t.secondary }).child(label))
+}
+
+fn week(lib: &Library, anchor: NaiveDate, narrow: bool, t: &Theme) -> Div {
+    let days = calendar::week_days(anchor);
     if narrow {
         return div().flex().flex_col().gap(px(space::S)).children(days.iter().map(|d| agenda_row(lib, *d, t)));
     }
     div().flex().gap(px(space::S)).children(days.iter().map(|d| column(lib, *d, t)))
+}
+
+/// How many chips a month cell holds before the rest fold into "+N".
+fn chip_capacity(row_height: f32) -> usize {
+    let free = row_height - 2. * cal::CELL_PAD - cal::DAY - space::XXS;
+    ((free + space::XXS) / (cal::CHIP + space::XXS)).floor().max(1.) as usize
+}
+
+fn month(lib: &Library, anchor: NaiveDate, narrow: bool, t: &Theme) -> Div {
+    let grid = calendar::month_grid(anchor);
+    let weeks = calendar::week_numbers(&grid);
+    let (first, last) = (grid[0][0], grid[calendar::ROWS - 1][6]);
+    let mut by_day: HashMap<NaiveDate, Vec<&Assignment>> = HashMap::new();
+    for (d, a) in lib.assignments_between(first, last) {
+        by_day.entry(d).or_default().push(a);
+    }
+    let line = t.separator.opacity(0.7);
+    let row_height = if narrow { cal::ROW_NARROW } else { cal::ROW };
+    let head = div()
+        .flex()
+        .py(px(space::XS))
+        .child(div().w(px(cal::KW)).flex_none().text_size(px(font::CAPTION2)).font_weight(FontWeight::SEMIBOLD).text_color(t.tertiary).text_center().child(tr("KW")))
+        .children(grid[0].iter().map(|d| div().flex_1().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(if day::is_weekend(*d) { t.tertiary } else { t.secondary }).text_center().child(day::weekday_short(*d).to_uppercase())));
+    let rows = grid.iter().zip(weeks).map(|(row, kw)| {
+        div()
+            .flex()
+            .h(px(row_height))
+            .border_t_1()
+            .border_color(line)
+            .child(div().w(px(cal::KW)).flex_none().pt(px(cal::CELL_PAD + space::XXS)).text_size(px(font::CAPTION2)).text_color(t.tertiary).text_center().font_features(tabular()).child(kw.to_string()))
+            .children(row.iter().map(|d| cell(lib, *d, anchor.month(), by_day.get(d).map_or(&[][..], Vec::as_slice), first, row_height, narrow, line, t)))
+    });
+    div().flex().flex_col().rounded(px(radius::CARD)).border_1().border_color(line).bg(t.content).overflow_hidden().child(head).children(rows)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cell(lib: &Library, d: NaiveDate, month: u32, items: &[&Assignment], first: NaiveDate, row_height: f32, narrow: bool, line: Hsla, t: &Theme) -> AnyElement {
+    let today = lib.today();
+    let is_today = d == today;
+    let in_month = d.month() == month;
+    let semester = lib.semester();
+    let brk = semester.and_then(|s| s.break_at(d));
+    let free = semester.is_some_and(|s| !s.contains(d) || brk.is_some());
+    let weekend = day::is_weekend(d);
+    let shade = if weekend { 0.02 } else { 0. } + if free { 0.03 } else { 0. };
+    let mut bg = t.content;
+    if shade > 0. {
+        bg = bg.blend(t.ink.opacity(shade));
+    }
+    if is_today {
+        bg = bg.blend(t.accent.opacity(0.06));
+    }
+    let break_name = brk.filter(|b| d == first || !b.contains(d - Days::new(1))).map(|b| b.name.clone());
+    let ce = d.num_days_from_ce() as u32 as usize;
+    let accent = t.accent;
+    let capacity = chip_capacity(row_height);
+    let total = items.len();
+    let shown = if narrow {
+        0
+    } else if total > capacity {
+        capacity - 1
+    } else {
+        total
+    };
+    let hidden = total - shown;
+    let used = if narrow { usize::from(total > 0) } else { shown + usize::from(hidden > 0) };
+    let free_height = row_height - 2. * cal::CELL_PAD - cal::DAY - (used as f32 + 1.) * space::XXS - used as f32 * cal::CHIP;
+    let number = div()
+        .id(("board-cell-day", ce))
+        .flex_none()
+        .size(px(cal::DAY))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .when(is_today, |n| n.bg(accent))
+        .soft(if is_today { t.on_accent.opacity(0.2) } else { t.ink.opacity(0.08) }, radius::FULL)
+        .cursor_pointer()
+        .key_nav()
+        .tooltip(tip(tr("Woche öffnen")))
+        .on_click(move |_, _, cx| act(cx, |l| l.show_week_of(d)))
+        .child(div().text_size(px(font::CAPTION)).font_weight(if is_today { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }).text_color(if is_today { t.on_accent } else if in_month { t.primary } else { t.tertiary }).font_features(tabular()).child(d.day().to_string()));
+    div()
+        .id(("board-cell", ce))
+        .group(day_group(d))
+        .drag_over::<DraggedCard>(move |s, _, _, _| s.bg(accent.opacity(0.1)))
+        .on_drop(move |card: &DraggedCard, _, cx| move_to_day(&card.id, d, cx))
+        .context_menu(move |menu, _, _| day_menu(menu, d))
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .relative()
+        .flex()
+        .flex_col()
+        .p(px(cal::CELL_PAD))
+        .gap(px(space::XXS))
+        .border_l_1()
+        .border_color(line)
+        .bg(bg)
+        .when(!in_month, |c| c.opacity(0.45))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::XS))
+                .child(number)
+                .when_some(break_name, |h, name| h.child(div().min_w_0().flex().items_center().gap(px(space::XXS)).text_size(px(font::CAPTION2)).text_color(t.secondary).child(icon("sun", iconsize::XS, t.secondary)).child(div().truncate().child(name)))),
+        )
+        .when(narrow && total > 0, |c| c.child(dots(lib, d, items, t)))
+        .children(items.iter().take(shown).map(|a| chip(lib, a, t)))
+        .when(!narrow && hidden > 0, |c| c.child(more_button(d, hidden)))
+        .when(free_height >= cal::DOT, |c| c.child(DayArea(empty_area(d, free_height, t)).dropdown_menu(move |menu, _, _| day_menu(menu, d))))
+        .into_any_element()
+}
+
+/// The empty part of a day cell; a click opens the day menu, a double click the week.
+fn empty_area(d: NaiveDate, height: f32, t: &Theme) -> Stateful<Div> {
+    div()
+        .id(("board-day-space", d.num_days_from_ce() as u32 as usize))
+        .w_full()
+        .h(px(height))
+        .rounded(px(radius::INNER))
+        .soft(t.ink.opacity(0.04), radius::INNER)
+        .cursor_pointer()
+        .key_nav()
+        .on_click(move |e, _, cx| {
+            if e.click_count() == 2 {
+                act(cx, |l| l.show_week_of(d));
+            }
+        })
+}
+
+/// A plain div lent the kit's trigger trait, so the day menu opens on a left click as it does on a button.
+struct DayArea(Stateful<Div>);
+
+impl Selectable for DayArea {
+    fn selected(self, _: bool) -> Self {
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        false
+    }
+}
+
+impl Styled for DayArea {
+    fn style(&mut self) -> &mut StyleRefinement {
+        self.0.style()
+    }
+}
+
+impl InteractiveElement for DayArea {
+    fn interactivity(&mut self) -> &mut Interactivity {
+        self.0.interactivity()
+    }
+}
+
+impl IntoElement for DayArea {
+    type Element = Stateful<Div>;
+
+    fn into_element(self) -> Self::Element {
+        self.0
+    }
+}
+
+impl DropdownMenu for DayArea {}
+
+/// The whole day as cards, for the days of the month grid that show fewer chips than they have.
+fn more_list(d: NaiveDate, cx: &App) -> AnyElement {
+    let t = Theme::get(cx);
+    let lib = state::lib(cx);
+    let l = lib.read(cx);
+    let items = l.assignments_on(d);
+    div()
+        .id("board-more-list")
+        .w(px(cal::MORE))
+        .max_h(px(cal::MORE_HEIGHT))
+        .overflow_y_scrollbar()
+        .flex()
+        .flex_col()
+        .gap(px(space::S))
+        .child(div().text_size(px(font::CALLOUT)).font_weight(FontWeight::SEMIBOLD).child(day::day_header(d, l.today())))
+        .children(items.iter().map(|a| deadline_card(l, a, &t)))
+        .into_any_element()
+}
+
+fn more_button(d: NaiveDate, hidden: usize) -> impl IntoElement {
+    let ce = d.num_days_from_ce() as u32 as usize;
+    Popover::new(("board-more", ce))
+        .anchor(Anchor::TopLeft)
+        .trigger_style(StyleRefinement::default().w_full())
+        .trigger(Button::new(("board-more-trigger", ce)).ghost().xsmall().w_full().h(px(cal::CHIP)).label(trf("+%@ weitere", &[&hidden])))
+        .content(move |_, _, cx| more_list(d, cx))
+}
+
+/// One dot per entry and their count, standing in for chips when the window is narrow.
+fn dots(lib: &Library, d: NaiveDate, items: &[&Assignment], t: &Theme) -> impl IntoElement {
+    let ce = d.num_days_from_ce() as u32 as usize;
+    let marks: Vec<Hsla> = items.iter().take(5).map(|a| t.palette(lib.module(a).map_or("blue", |m| m.color.as_str())).opacity(if lib.is_done(a) { 0.35 } else { 1. })).collect();
+    let count = items.len();
+    Popover::new(("board-dots", ce))
+        .anchor(Anchor::TopLeft)
+        .trigger_style(StyleRefinement::default().w_full())
+        .trigger(
+            Button::new(("board-dots-trigger", ce))
+                .ghost()
+                .xsmall()
+                .w_full()
+                .h(px(cal::CHIP))
+                .tooltip(trf("%@ weitere", &[&count]))
+                .child(div().flex().items_center().gap(px(space::XXS)).children(marks.into_iter().map(|c| div().size(px(cal::DOT)).rounded_full().bg(c))).child(div().text_size(px(font::CAPTION2)).text_color(t.secondary).font_features(tabular()).child(count.to_string()))),
+        )
+        .content(move |_, _, cx| more_list(d, cx))
+}
+
+/// A deadline as one line of the month grid: module colour at the edge, the title, a cap for exams.
+fn chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
+    let e = lib.evaluation(a);
+    let module = lib.module(a);
+    let tint = t.palette(module.map_or("blue", |m| m.color.as_str()));
+    let closed = e.status.is_closed();
+    let selected = lib.is_selected(&a.id);
+    let attention = lib.needs_action(a);
+    let exam = a.kind == Kind::Exam;
+    let fill = if exam && !closed { tint.opacity(0.22) } else { tint.opacity(if closed { 0.06 } else { 0.12 }) };
+    let hover = tint.opacity(if closed { 0.12 } else { 0.3 });
+    let edge = if attention {
+        if e.status == Status::Ready { t.blue } else { t.orange }
+    } else {
+        tint.opacity(if closed { 0.35 } else { 1. })
+    };
+    let (select_id, menu_id) = (a.id.clone(), a.id.clone());
+    let help = format!("{} · {}", a.title, day::due(a.due, lib.now));
+    let title = div().flex_1().min_w_0().truncate().text_size(px(font::CAPTION)).font_weight(if exam { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }).text_color(if closed { t.secondary } else { t.primary }).child(a.title.clone());
+    let chip = div()
+        .id(SharedString::from(format!("mchip-{}", a.id)))
+        .relative()
+        .flex_none()
+        .w_full()
+        .h(px(cal::CHIP))
+        .pl(px(space::M))
+        .pr(px(space::XS))
+        .flex()
+        .items_center()
+        .gap(px(space::XS))
+        .rounded(px(radius::INNER))
+        .bg(if selected { hover } else { fill })
+        .soft(hover, radius::INNER)
+        .cursor_pointer()
+        .key_nav()
+        .when(selected, |c| c.border(px(1.5)).border_color(t.accent))
+        .tooltip(tip(help))
+        .on_click(move |_, _, cx| act(cx, |l| l.select(Some(select_id.clone()))))
+        .when(!closed, |c| c.on_drag(DraggedCard { id: a.id.clone(), title: a.title.clone(), tint }, |d, _, _, cx| cx.new(|_| d.clone())))
+        .child(div().absolute().top(px(space::XS)).bottom(px(space::XS)).left(px(space::XS)).w(px(cal::EDGE)).rounded_full().bg(edge))
+        .when(exam, |c| c.child(icon("graduation-cap", iconsize::XS, t.readable(tint))))
+        .child(if e.status == Status::Skipped { title.line_through() } else { title })
+        .context_menu(move |menu, _, cx| status_menu(menu, &menu_id, cx));
+    motion::flip(format!("mchip-{}", a.id), chip).into_any_element()
 }
 
 /// A deadline card on its way to another day.
@@ -42,7 +427,7 @@ fn move_to_day(id: &str, date: NaiveDate, cx: &mut App) {
     let id = id.to_string();
     act(cx, |l| {
         let Some(a) = l.assignment(&id).cloned() else { return };
-        let Some(due) = date.and_time(a.due.time()).and_local_timezone(Local).earliest() else { return };
+        let Some(due) = calendar::same_time_on(a.due, date) else { return };
         if due.date_naive() == a.due.date_naive() {
             return;
         }
@@ -123,7 +508,7 @@ fn column(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
         .context_menu(move |menu, _, _| day_menu(menu, d))
         .flex_1()
         .min_w_0()
-        .min_h(px(230.))
+        .min_h(px(cal::COLUMN))
         .p(px(space::S))
         .flex()
         .flex_col()
@@ -168,6 +553,7 @@ fn agenda_row(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
         .bg(if is_today { t.content.blend(t.accent.opacity(0.07)) } else { t.secondary_bg })
         .border(px(if is_today { 1.5 } else { 1. }))
         .border_color(if is_today { t.accent.opacity(0.7) } else { t.ink.opacity(0.06) })
+        .when(d < today, |c| c.opacity(0.6))
         .child(
             div()
                 .w(px(52.))
@@ -202,7 +588,7 @@ fn session_chip(m: &Module, s: &Session, t: &Theme) -> Stateful<Div> {
         .gap(px(space::S))
         .py(px(space::XXS))
         .tooltip(tip(format!("{} · {} {}–{}", m.code, s.title, s.start, s.end)))
-        .child(div().w(px(3.)).flex_none().rounded_full().bg(t.palette(&m.color).opacity(0.6)))
+        .child(div().w(px(cal::EDGE)).flex_none().rounded_full().bg(t.palette(&m.color).opacity(0.6)))
         .child(
             div()
                 .flex()
@@ -215,7 +601,7 @@ fn session_chip(m: &Module, s: &Session, t: &Theme) -> Stateful<Div> {
 
 /// The module's colour at a card's left edge, inset so the card's corners stay free.
 pub fn edge_bar(color: Hsla) -> Div {
-    div().absolute().top(px(space::S)).bottom(px(space::S)).left(px(space::XS)).w(px(3.)).rounded_full().bg(color)
+    div().absolute().top(px(space::S)).bottom(px(space::S)).left(px(space::XS)).w(px(cal::EDGE)).rounded_full().bg(color)
 }
 
 pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {

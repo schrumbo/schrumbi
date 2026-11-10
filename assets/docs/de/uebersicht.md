@@ -70,12 +70,26 @@ Eine Datei zählt für eine Abgabe, wenn sie dazugehört. Datum und Ordner allei
 ## Weiter unten
 
 - Gesammelt: {ui:Überfällig} und {ui:Fertig, aber Upload nicht bestätigt}, mit {ui:Alle als hochgeladen markieren}.
-- {ui:Nächste 7 Tage}, {ui:Prüfungen} und {ui:Zuletzt geschrieben}.
+- Der Kalender, {ui:Prüfungen} und {ui:Zuletzt geschrieben}.
 - Warten Karten, erscheint ein Hinweis mit {ui:Lernen}.
+
+## Kalender
+
+Die Woche in Spalten oder der Monat als Raster. {ui:Woche} und {ui:Monat} rechts oben wechseln, ‹ und › blättern, {ui:Heute} springt zurück. Die Wahl bleibt gespeichert.
+
+| Taste | Wirkung |
+|---|---|
+| {key:left} und {key:right} | Eine Woche oder einen Monat zurück und vor |
+| {key:t} oder {key:home} | Zurück zu heute |
+| {key:w} und {key:m} | Woche oder Monat |
+
+- Im Monat steht jeder Eintrag als Chip in der Modulfarbe, Prüfungen mit Hut. Passen nicht alle in den Tag, öffnet die letzte Zeile die ganze Liste.
+- Klick auf die Tageszahl öffnet diese Woche. Chips lassen sich auf einen anderen Tag ziehen.
+- Wochenenden und vorlesungsfreie Zeit aus dem Semester sind leicht getönt.
 
 ## Für einen Tag eintragen
 
-Rechtsklick auf einen Tag unter {ui:Nächste 7 Tage}, oder auf das + rechts oben im Tag. Für Einmaliges ohne Regel:
+Rechtsklick auf einen Tag im Kalender, das + rechts oben in der Woche oder ein Klick auf freie Fläche im Monat. Für Einmaliges ohne Regel:
 
 | Befehl | Standardzeit |
 |---|---|

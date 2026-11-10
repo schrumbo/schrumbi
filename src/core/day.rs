@@ -112,6 +112,11 @@ pub fn weekday_long(d: NaiveDate) -> String {
     (if en() { WEEKDAYS_EN[w] } else { WEEKDAYS[w] }).to_string()
 }
 
+/// "November 2026".
+pub fn month_year(d: NaiveDate) -> String {
+    format!("{} {}", if en() { MONTHS_EN[d.month0() as usize] } else { MONTHS[d.month0() as usize] }, d.year())
+}
+
 /// "Do" / "Thu".
 pub fn weekday_short(d: NaiveDate) -> &'static str {
     let w = d.weekday().num_days_from_monday() as usize;
