@@ -22,17 +22,14 @@ use crate::core::i18n::{tr, trf};
 use crate::core::library::{Library, NewNoteRequest, Route};
 use crate::core::shortcuts::ShortcutAction;
 
-actions!(schrumbi_main, [Dismiss, FocusSearch, ToggleSidebar, SearchUp, SearchDown]);
+actions!(schrumbi_main, [Dismiss, FocusSearch, SearchUp, SearchDown]);
 
-/// The main window: floating sidebar, toolbar, the routed page and the inspector.
+/// The main window: icon rail, toolbar, the routed page and the inspector.
 pub struct MainWindow {
     search: Entity<InputState>,
     inspector: Entity<Inspector>,
     pages: Entity<Pages>,
-    /// Whether the sidebar shows labels; its icons always stay.
-    sidebar_open: bool,
     save_bounds: Option<Task<()>>,
-    sidebar_auto_closed: bool,
     syncing_search: bool,
     /// What the search field says while empty: where it searches.
     search_placeholder: String,
@@ -47,18 +44,6 @@ pub struct MainWindow {
 }
 
 const INSPECTOR_WIDTH: f32 = 340.;
-
-fn main_view(window: &Window, cx: &App) -> Option<Entity<MainWindow>> {
-    let root = window.root::<gpui_kit::base::Root>()??;
-    root.read(cx).view().clone().downcast::<MainWindow>().ok()
-}
-
-/// Shows or hides the sidebar labels (⌘B or a click on the selected tab).
-pub fn toggle_sidebar(window: &mut Window, cx: &mut App) {
-    if let Some(view) = main_view(window, cx) {
-        view.update(cx, |w, cx| w.set_open(!w.sidebar_open, cx));
-    }
-}
 
 impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -111,14 +96,11 @@ impl MainWindow {
                 cx.notify();
             }),
         ];
-        let p = crate::core::prefs::get();
         Self {
             search,
             inspector,
             pages,
-            sidebar_open: p.sidebar_open,
             save_bounds: None,
-            sidebar_auto_closed: false,
             press_stamp: None,
             error_shown: false,
             syncing_search: false,
@@ -129,13 +111,6 @@ impl MainWindow {
             slides: None,
             _subs: subs,
         }
-    }
-
-    fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.sidebar_open = open;
-        self.sidebar_auto_closed = false;
-        crate::core::prefs::update(|p| p.sidebar_open = open);
-        cx.notify();
     }
 
     /// One search field for the whole window, so the toolbar never changes between pages:
@@ -395,14 +370,6 @@ impl Render for MainWindow {
         let l = lib.read(cx);
         let width = f32::from(window.viewport_size().width);
         let inspector_open = l.show_inspector();
-        let crowded = inspector_open && width < if self.sidebar_auto_closed { 1280. } else { 1240. };
-        if crowded && self.sidebar_open {
-            self.sidebar_open = false;
-            self.sidebar_auto_closed = true;
-        } else if !crowded && self.sidebar_auto_closed {
-            self.sidebar_open = true;
-            self.sidebar_auto_closed = false;
-        }
 
         let base = div()
             .child(gpui_kit::base::TextSelectionLayer)
@@ -489,7 +456,6 @@ impl Render for MainWindow {
             })
             .on_action(cx.listener(|this, _: &SearchUp, _, cx| this.step_results(-1, cx)))
             .on_action(cx.listener(|this, _: &SearchDown, _, cx| this.step_results(1, cx)))
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.set_open(!this.sidebar_open, cx)))
             .on_action(|_: &super::app::Minimize, window, _| window.minimize_window())
             .on_action(|_: &super::app::Zoom, window, _| window.zoom_window())
             .on_action(|_: &super::app::ToggleFullscreen, window, _| window.toggle_fullscreen())
@@ -519,11 +485,10 @@ impl Render for MainWindow {
         }
 
         let update = super::updates::available(cx);
-        let target = if self.sidebar_open { sidebar::WIDTH } else { sidebar::RAIL };
+        let left = sidebar::RAIL;
         let inspector_target = if inspector_open { INSPECTOR_WIDTH } else { 0. };
-        let page_width = width - target - inspector_target;
+        let page_width = width - left - inspector_target;
         self.pages.update(cx, |p, _| p.width = page_width);
-        let left = motion::follow("sidebar-width", target, motion::MEDIUM, window, cx);
         let inspector_w = motion::follow("inspector-width", inspector_target, motion::MEDIUM, window, cx);
         let l = lib.read(cx);
         let page = match l.route() {
@@ -564,7 +529,7 @@ impl Render for MainWindow {
                     .left_0()
                     .bottom_0()
                     .w(px(left))
-                    .child(sidebar::render(l, update, self.sidebar_open, &t, cx)),
+                    .child(sidebar::render(l, update, &t, cx)),
             )
             .child(
                 div()

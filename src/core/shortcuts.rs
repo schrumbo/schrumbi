@@ -647,7 +647,7 @@ const fn fixed_on(platform: Platform, key: &'static str, command: bool, shift: b
     Fixed { key, command, shift, option, label, notes_only, platform }
 }
 
-const FIXED: [Fixed; 25] = [
+const FIXED: [Fixed; 24] = [
     fixed("k", true, false, false, "Befehl suchen…", false),
     fixed("p", true, false, false, "Befehl suchen…", false),
     fixed("p", true, true, false, "Befehl suchen…", false),
@@ -659,7 +659,6 @@ const FIXED: [Fixed; 25] = [
     fixed("w", true, true, false, "Fenster schließen", false),
     fixed("r", true, true, false, "Studienordner im Finder zeigen", false),
     fixed("m", true, false, false, "Im Dock ablegen", false),
-    fixed("b", true, false, false, "Seitenleiste ein-/ausblenden", false),
     fixed("f", true, false, true, "In Notiz ersetzen", true),
     fixed_on(Platform::Other, "h", true, false, false, "In Notiz ersetzen", true),
     fixed_on(Platform::Mac, "h", true, false, false, "Schrumbi ausblenden", false),
@@ -1038,8 +1037,8 @@ mod tests {
 
     #[test]
     fn a_key_of_the_app_names_what_it_does() {
-        let sidebar = s("b", true, false, false, false);
-        ShortcutAction::Italic.set(Some(sidebar));
+        let settings = s(",", true, false, false, false);
+        ShortcutAction::Italic.set(Some(settings));
         let fixed = ShortcutAction::Italic.fixed_conflicts();
         ShortcutAction::Italic.reset();
         assert_eq!(fixed.len(), 1);

@@ -37,7 +37,7 @@ Bei {ui:Module} sind passende Ordner schon angehakt: alles direkt in einem Semes
 | {ui:Notizen} | {key:goNotes} | Notizen, Suche, Tags, Aufgaben |
 | {ui:Karten} | {key:goCards} | Karteikarten zum Lernen |
 
-- Klick auf den offenen Bereich oder {key:ToggleSidebar} blendet die Beschriftungen ein und aus.
+- Die Seitenleiste zeigt nur Symbole. Der Zeiger darauf nennt Bereich und Kürzel.
 - Rechtsklick auf einen Bereich außer {ui:Übersicht}: {ui:Aus der Seitenleiste ausblenden}.
 
 ## Was im Ordner liegt

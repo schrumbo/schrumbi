@@ -20,7 +20,6 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:In Obsidian öffnen} | {key:openInObsidian} |
 | {ui:Rückgängig} | {key:Undo} |
 | {ui:Anderen Ordner öffnen…} | {key:openOtherWorkspace} |
-| {ui:Seitenleiste ein-/ausblenden} | {key:ToggleSidebar} |
 | {ui:Details ein-/ausblenden} | {key:toggleInspector} |
 
 ## Navigation

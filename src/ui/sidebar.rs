@@ -18,10 +18,8 @@ use crate::core::shortcuts::ShortcutAction;
 
 /// Height of the title band that holds the traffic lights.
 pub const BAND: f32 = if super::chrome::CUSTOM { 8. } else { 52. };
-/// Width of the sidebar when collapsed: just the icons.
+/// Width of the sidebar: one column of icons.
 pub const RAIL: f32 = 48.;
-/// Width of the sidebar with labels.
-pub const WIDTH: f32 = 220.;
 const ROW: f32 = 44.;
 
 fn is_active(lib: &Library, route: &Route) -> bool {
@@ -33,15 +31,6 @@ fn navigate(route: Route, cx: &mut App) {
         Route::Notes => l.show_notes(),
         _ => l.set_route(route.clone()),
     });
-}
-
-/// Clicking the selected tab shows or hides the labels, any other tab just navigates.
-fn tab_click(route: Route, window: &mut Window, cx: &mut App) {
-    if super::state::read(cx, |l| is_active(l, &route)) {
-        super::main_window::toggle_sidebar(window, cx);
-    } else {
-        navigate(route, cx);
-    }
 }
 
 struct Entry {
@@ -108,21 +97,13 @@ fn badge(n: usize, tint: Hsla) -> Div {
         .child(if n > 99 { "99+".to_string() } else { n.to_string() })
 }
 
-fn count_pill(n: usize, tint: Hsla) -> Div {
-    div().flex_none().min_w(px(iconsize::M)).px(px(space::XS)).rounded_full().bg(tint).flex().items_center().justify_center().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).text_color(white()).child(if n > 99 { "99+".to_string() } else { n.to_string() })
-}
-
-fn label_view(label: String, trailing: Option<Div>) -> Div {
-    div().w(px(WIDTH - RAIL - space::M)).flex_none().flex().items_center().gap(px(space::S)).text_size(px(font::BODY)).child(div().flex_1().min_w_0().truncate().child(label)).children(trailing)
-}
-
-/// One row; the count sits behind the label when there is room, otherwise on the glyph.
+/// One row: the glyph with its count on it; the name and shortcut live in the tooltip.
 #[allow(clippy::too_many_arguments)]
-fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: String, count: Option<(usize, Hsla)>, wide: bool, help: String, t: &Theme) -> Stateful<Div> {
+fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: String, count: Option<(usize, Hsla)>, help: String, t: &Theme) -> Stateful<Div> {
     let (accent, selected, hover) = (t.accent, t.ink.opacity(0.08), t.ink.opacity(0.05));
     div()
         .id(id)
-        .mark("tab", label.clone())
+        .mark("tab", label)
         .relative()
         .w_full()
         .h(px(ROW))
@@ -143,11 +124,10 @@ fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: Stri
                 .items_center()
                 .justify_center()
                 .child(glyph)
-                .when_some(count.filter(|_| !wide), |d, (n, tint)| d.child(badge(n, tint))),
+                .when_some(count, |d, (n, tint)| d.child(badge(n, tint))),
         )
-        .child(label_view(label, count.filter(|_| wide).map(|(n, tint)| count_pill(n, tint))))
         .when(dim && !active, |d| d.opacity(0.65))
-        .when(!wide || help.contains("  "), |d| d.tooltip(tip(help)))
+        .tooltip(tip(help))
 }
 
 /// An invisible button over a tab, so the row can open a menu and still look like every other tab.
@@ -155,8 +135,8 @@ fn menu_overlay(id: &'static str) -> Button {
     Button::new(id).ghost().w_full().h(px(ROW))
 }
 
-/// The sidebar: one column of tabs. The icons always show, the labels sit beside them when wide enough.
-pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: &App) -> Div {
+/// The sidebar: one column of icons, each named by its tooltip.
+pub fn render(lib: &Library, update: Option<String>, t: &Theme, cx: &App) -> Div {
     let fg = t.primary;
     let mut top = div().flex().flex_col();
     let hidden = prefs::get().hidden_tabs;
@@ -173,7 +153,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
         let route = e.route.clone();
         let is_inbox = e.route == Route::Inbox;
         let count = (e.badge > 0).then_some((e.badge, t.badge_fill(if e.urgent { t.red } else { t.accent })));
-        let row = tab(SharedString::from(format!("tab-{:?}", e.route)), active, true, icon(e.icon, iconsize::L, fg).into_any_element(), e.label, count, wide, help, t).on_click(move |_, window, cx| tab_click(route.clone(), window, cx));
+        let row = tab(SharedString::from(format!("tab-{:?}", e.route)), active, true, icon(e.icon, iconsize::L, fg).into_any_element(), e.label, count, help, t).on_click(move |_, _, cx| navigate(route.clone(), cx));
         let Some(key) = hide_key else {
             top = top.child(row);
             continue;
@@ -222,7 +202,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
         let folder = lib.root.as_ref().map(|r| r.join(&m.folder));
         let (outside, inside, edit_id) = (m.id.clone(), m.id.clone(), m.id.clone());
         mods = mods.child(
-            tab(SharedString::from(format!("tab-module-{}", m.id)), active, false, chip, if m.name.is_empty() { m.code.clone() } else { m.name.clone() }, count, wide, module_help(m.display_name(), index), t)
+            tab(SharedString::from(format!("tab-module-{}", m.id)), active, false, chip, if m.name.is_empty() { m.code.clone() } else { m.name.clone() }, count, module_help(m.display_name(), index), t)
                 .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(color.opacity(0.15)))
                 .drag_over::<super::browser::DraggedFile>(move |s, _, _, _| s.bg(color.opacity(0.15)))
                 .on_drop(move |paths: &ExternalPaths, _, cx| {
@@ -233,7 +213,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
                     let path = f.0.clone();
                     act(cx, |l| l.request_filing(vec![path], l.next_in_module(&inside)));
                 })
-                .on_click(move |_, window, cx| tab_click(route.clone(), window, cx))
+                .on_click(move |_, _, cx| navigate(route.clone(), cx))
                 .context_menu(move |mut menu, _, _| {
                     for (title, url) in &links {
                         let url = url.clone();
@@ -252,7 +232,9 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
     }
     let recents = prefs::get().recent_workspaces;
     let current = lib.root.clone();
-    let workspace = lib.config.as_ref().map(|c| c.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| tr("Arbeitsordner"));
+    let name = lib.config.as_ref().map(|c| c.name.clone()).filter(|n| !n.is_empty());
+    let workspace_help = name.as_ref().map_or_else(|| tr("Arbeitsordner"), |n| format!("{}: {n}", tr("Arbeitsordner")));
+    let workspace = name.unwrap_or_else(|| tr("Arbeitsordner"));
     let semesters = lib.config.as_ref().map(|c| c.semesters.clone()).unwrap_or_default();
     let semester = lib.semester().map(|s| s.name.clone()).unwrap_or_default();
     let selected_id = lib.selected_semester_id.clone();
@@ -262,11 +244,11 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
         .pb(px(space::S))
         .when_some(update, |d, version| {
             let label = trf("Update auf %@", &[&version]);
-            d.child(tab("tab-update".into(), false, false, icon("download", iconsize::L, t.accent).into_any_element(), label.clone(), None, wide, label, t).on_click(|_, window, cx| super::updates::show(window, cx)))
+            d.child(tab("tab-update".into(), false, false, icon("download", iconsize::L, t.accent).into_any_element(), label.clone(), None, label, t).on_click(|_, window, cx| super::updates::show(window, cx)))
         })
-        .when_some(sync_row(wide, t, cx), |d, row| d.child(row))
+        .when_some(sync_row(t, cx), |d, row| d.child(row))
         .when(semesters.len() > 1, |d| {
-            d.child(tab("tab-semester-row".into(), false, true, icon("calendar-range", iconsize::L, fg).into_any_element(), semester.clone(), None, wide, semester.clone(), t).child(div().absolute().inset_0().child(menu_overlay("tab-semester").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+            d.child(tab("tab-semester-row".into(), false, true, icon("calendar-range", iconsize::L, fg).into_any_element(), semester.clone(), None, format!("{}: {semester}", tr("Semester")), t).child(div().absolute().inset_0().child(menu_overlay("tab-semester").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
                 for s in &semesters {
                     let id = s.id.clone();
                     menu = menu.item(PopupMenuItem::new(s.name.clone()).checked(selected_id.as_deref() == Some(s.id.as_str())).on_click(move |_, _, cx| {
@@ -279,14 +261,14 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
                 menu
             }))))
         })
-        .child(tab("tab-workspace-row".into(), false, true, icon("folder-open", iconsize::L, fg).into_any_element(), workspace, None, wide, tr("Arbeitsordner"), t).child(div().absolute().inset_0().child(menu_overlay("tab-workspace").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+        .child(tab("tab-workspace-row".into(), false, true, icon("folder-open", iconsize::L, fg).into_any_element(), workspace, None, workspace_help, t).child(div().absolute().inset_0().child(menu_overlay("tab-workspace").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
             for (i, p) in recents.iter().enumerate() {
                 let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 menu = menu.item(PopupMenuItem::new(name).checked(current.as_ref() == Some(p)).on_click(move |_, window, cx| window.dispatch_action(Box::new(super::app::OpenRecent(i)), cx)));
             }
             menu.separator().item(PopupMenuItem::new(format!("{}{}", tr("Anderen Ordner öffnen…"), ShortcutAction::OpenOtherWorkspace.hint())).on_click(|_, window, cx| window.dispatch_action(Box::new(super::app::OpenOtherWorkspace), cx)))
         }))))
-        .child(tab("tab-settings".into(), false, true, icon("settings", iconsize::L, fg).into_any_element(), tr("Einstellungen"), None, wide, format!("{}  {}", tr("Einstellungen"), shortcut_label(",")), t).on_click(|_, _, cx| super::settings::open(cx)));
+        .child(tab("tab-settings".into(), false, true, icon("settings", iconsize::L, fg).into_any_element(), tr("Einstellungen"), None, format!("{}  {}", tr("Einstellungen"), shortcut_label(",")), t).on_click(|_, _, cx| super::settings::open(cx)));
     div()
         .size_full()
         .flex()
@@ -299,7 +281,7 @@ pub fn render(lib: &Library, update: Option<String>, wide: bool, t: &Theme, cx: 
 }
 
 /// The sync state, always in the same place; the row opens what the state needs.
-fn sync_row(wide: bool, t: &Theme, cx: &App) -> Option<AnyElement> {
+fn sync_row(t: &Theme, cx: &App) -> Option<AnyElement> {
     use super::sync_panel::RowKind;
     let row = super::sync_panel::row(t, cx)?;
     let fg = t.primary;
@@ -310,7 +292,7 @@ fn sync_row(wide: bool, t: &Theme, cx: &App) -> Option<AnyElement> {
     };
     let dim = row.tint.is_none() && row.count.is_none() && !row.working;
     let spoken = format!("{}: {}", tr("Synchronisierung"), row.label);
-    let base = tab("tab-sync".into(), false, dim, glyph, row.label, row.count, wide, row.help.clone(), t).aria_label(spoken);
+    let base = tab("tab-sync".into(), false, dim, glyph, row.label, row.count, row.help.clone(), t).aria_label(spoken);
     Some(match row.kind {
         RowKind::Offer => base
             .on_click(|_, _, cx| act(cx, |l| l.show_sync_setup = true))

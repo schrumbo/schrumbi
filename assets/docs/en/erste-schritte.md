@@ -37,7 +37,7 @@ In {ui:Module}, matching folders are already ticked: everything directly inside 
 | {ui:Notizen} | {key:goNotes} | Notes, search, tags, tasks |
 | {ui:Karten} | {key:goCards} | Flashcards to study |
 
-- Clicking the open area or {key:ToggleSidebar} shows and hides the labels.
+- The sidebar shows icons only. Hovering one names the area and its shortcut.
 - Right-click an area except {ui:Übersicht}: {ui:Aus der Seitenleiste ausblenden}.
 
 ## What Is in the Folder

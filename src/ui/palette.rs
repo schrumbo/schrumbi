@@ -145,7 +145,6 @@ fn commands(cx: &App) -> Vec<Command> {
     if state::read(cx, |l| l.inspector_kind().is_some()) {
         add(&view, S::ToggleInspector.label(), "panel-right", keys(S::ToggleInspector), Run::Action(Box::new(app::ToggleInspector)));
     }
-    add(&view, tr("Seitenleiste ein-/ausblenden"), "panel-left", Some(fixed_keys("B")), Run::Action(Box::new(super::main_window::ToggleSidebar)));
     add(&view, S::Refresh.label(), "refresh-cw", keys(S::Refresh), Run::Action(Box::new(app::Refresh)));
     add(&view, S::ToggleFullscreen.label(), "maximize", keys(S::ToggleFullscreen), Run::Action(Box::new(app::ToggleFullscreen)));
     if active.is_some() {
@@ -518,7 +517,6 @@ impl Render for ShortcutSheet {
             shortcut_row(tr("Tastenkürzel anzeigen"), fixed_parts("/", false), &t),
             shortcut_row(tr("Schrumbi-Anleitung"), vec!["F1".to_string()], &t),
             shortcut_row(tr("Suchen"), vec!["/".to_string()], &t),
-            shortcut_row(tr("Seitenleiste ein-/ausblenden"), fixed_parts("B", false), &t),
             shortcut_row(tr("Rückgängig"), fixed_parts("Z", false), &t),
         ];
         general.extend(group(Group::General));

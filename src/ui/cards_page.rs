@@ -255,10 +255,6 @@ fn deck_pause_all(deck: &str, pause: bool, cx: &mut App) {
     act(cx, |l| l.cards_changed(message, "pause", cards::since(saved)));
 }
 
-fn state_sidebar_open(_: &App) -> bool {
-    crate::core::prefs::get().sidebar_open
-}
-
 /// Sorts `Modul2` before `Modul10`.
 fn natural_key(text: &str) -> String {
     let mut out = String::new();
@@ -1719,7 +1715,7 @@ impl Render for CardsPage {
         } else if self.all.is_empty() {
             self.empty_room(&t, cx)
         } else {
-            let room = width - if state_sidebar_open(cx) { super::sidebar::WIDTH } else { super::sidebar::RAIL } - if width > 860. { 260. } else { 0. };
+            let room = width - super::sidebar::RAIL - if width > 860. { 260. } else { 0. };
             self.overview(now, room, &t, cx)
         };
         let side = (!reviewing && !self.all.is_empty() && width > 860.).then(|| self.deck_column(now, &t, cx));
