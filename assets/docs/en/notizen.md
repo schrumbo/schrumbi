@@ -128,6 +128,8 @@ On the left in {ui:Seiten}, the page list. {key:pageList} shows and hides it. A 
 - In the page list: {key:up} and {key:down} change the page, {key:home} and {key:end} go to the first and last, {key:pageup} and {key:pagedown} page through, {key:shift-up}, {key:shift-down}, {key:shift-home}, {key:shift-end}, {key:shift-pageup} and {key:shift-pagedown} extend the selection, {key:cmd-a} selects all, {key:shift-f10} opens the menu.
 - Drag pages, the line shows where they land. {key:escape} cancels the drag.
 - Drag PDFs from the file manager onto the page list to insert them together at the line, as one step for {key:Undo} with one message. While a PDF is being saved, more wait. {key:escape} stops the rest, those already in stay.
+- Drag a page from the page list into a note to embed it there, as in the example below; several selected pages become one paragraph each. The line shows where the paragraph lands, {key:Undo} in the note takes it back. The PDF itself, dragged as a tab or from the file list, embeds the whole file; dropped at the right edge it opens beside.
+- Drag a page onto the page list of another PDF to insert a copy there at the line, as one step for {key:Undo}. The source stays as it is.
 - After a delete, the page at the deleted spot is selected, so the keyboard can carry on.
 - For Word and PowerPoint files, a note under the list says why pages cannot be changed there.
 - Right-clicking a page shows the same commands.

@@ -178,6 +178,8 @@ pub mod tint {
     pub const NAV_DARK: f32 = 0.16;
     /// The ground the pages of a document lie on.
     pub const CANVAS: f32 = 0.04;
+    /// The accent wash over a place that takes what is being dragged.
+    pub const DROP_ZONE: f32 = 0.08;
 }
 
 /// Pins, note badges, the note popover and the pen controls over a PDF page.
@@ -240,6 +242,8 @@ pub mod pages {
     pub const NOTICE_WIDTH: f32 = 360.;
     /// Half the height of the chip that follows dragged pages, so the pointer is level with its middle.
     pub const CHIP_HALF: f32 = 16.;
+    /// The height of the page picture that follows dragged pages.
+    pub const DRAG_THUMB: f32 = 64.;
 }
 
 /// The fill a control gets while the keyboard has the focus.

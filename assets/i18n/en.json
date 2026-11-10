@@ -1629,6 +1629,7 @@
   "Seite %lld verschoben": "Page %lld moved",
   "%lld Seiten verschoben": "%lld pages moved",
   "Seite %lld eingefügt": "Page %lld inserted",
+  "%@ eingefügt": "%@ inserted",
   "%lld Seiten eingefügt": "%lld pages inserted",
   "Markieren": "Highlight",
   "Seiten links drehen": "Rotate pages left",

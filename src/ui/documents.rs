@@ -16,13 +16,14 @@ use gpui_kit::*;
 use super::find_bar::{CloseFind, FindEvent, FindInNote, FindState, ReplaceInNote};
 use super::markdown_view::{self, ParsedNote};
 use super::spell_card::{self, AddWordAtCaret, AddWordUnderPointer, SpellHover, SpellState};
-use super::pdf_view::PdfView;
+use super::browser::DraggedFile;
+use super::pdf_view::{DraggedPages, PdfView};
 use super::preview::FilePreview;
 use super::state::{self, act};
 use super::motion::Soft;
 use super::bar_fit::{self, BarFit, Room};
 use crate::core::vault::index;
-use super::theme::{Theme, control, font, hover, note_size, note_scale, radius, space, iconsize, tab, tint};
+use super::theme::{Theme, control, font, hover, note_size, note_scale, pages, radius, space, iconsize, tab, tint};
 use super::widgets::*;
 use crate::core::live_text::{self, LiveStyle, Segment, SegmentKind};
 use crate::core::edit_ops::{self, Edit};
@@ -48,6 +49,37 @@ fn editor_viewport(s: &EditorState) -> Option<Bounds<Pixels>> {
     let mut view = s.text_bounds()?;
     view.origin.y -= s.scroll_offset().y;
     Some(view)
+}
+
+/// Where the note editors of the main window are on screen, so a PDF dragged there is embedded instead of opened beside.
+#[derive(Default)]
+pub struct NotePanels(std::collections::HashMap<EntityId, Bounds<Pixels>>, bool);
+
+impl NotePanels {
+    pub fn contains(&self, at: Point<Pixels>) -> bool {
+        self.0.values().any(|b| b.contains(&at))
+    }
+
+    /// Whether the document area shows its own drop zone, so the notes draw no line of their own.
+    pub fn set_held(&mut self, held: bool) {
+        self.1 = held;
+    }
+
+    fn held(cx: &App) -> bool {
+        cx.try_global::<Self>().is_some_and(|p| p.1)
+    }
+
+    /// Forgets every editor; the ones on screen report again while they are drawn.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
+impl Global for NotePanels {}
+
+/// Whether a dragged file or tab is a PDF that a note embeds when it is dropped there.
+pub fn is_pdf_file(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
 }
 
 const FIND_IN_BACKGROUND_FROM: usize = 200_000;
@@ -338,6 +370,9 @@ pub struct NoteView {
     focus: FocusHandle,
     needs_focus: bool,
     window_title: String,
+    /// The source line before which a dragged PDF or page lands, and where the writing field draws its line: left and top inside the field's wrapper.
+    pdf_drop: Option<usize>,
+    pdf_drop_bar: Option<(f32, f32)>,
     _subs: Vec<Subscription>,
 }
 
@@ -463,7 +498,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), caret_seen: (0, 0), follow_caret: false, live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, split_lead: None, reparse: None, parse_hold: false, first_parse: true, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), caret_seen: (0, 0), follow_caret: false, live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, split_lead: None, reparse: None, parse_hold: false, first_parse: true, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), pdf_drop: None, pdf_drop_bar: None, fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -2788,6 +2823,11 @@ impl NoteView {
         let room = if live_mode { self.reader_list.bounds_for_item(items - 2).map_or(px(0.), |b| self.reader_list.viewport_bounds().bottom() - b.bottom()) } else { px(0.) };
         let drop_me = me.clone();
         let gutter_me = me.clone();
+        let pdf_drop = self.pdf_drop.filter(|_| cx.has_active_drag() && !NotePanels::held(cx));
+        let pdf_me = me.clone();
+        let (root_me, file_me, tab_me) = (me.clone(), me.clone(), me.clone());
+        let (leave_pages, leave_file, leave_tab) = (me.clone(), me.clone(), me.clone());
+        let total_lines = source_lines.len();
         let row = list(self.reader_list.clone(), move |i, window, cx| {
             let t = Theme::get(cx);
             if i == 0 {
@@ -2797,7 +2837,8 @@ impl NoteView {
             if i + 1 == items {
                 let last_line = source_lines.len().saturating_sub(1);
                 let footnotes = markdown_view::render_footnotes(&parsed, Some(footnote_list.clone()), &t).map(|notes| div().capture_any_mouse_down(|_, _, _| markdown_view::press_control()).child(notes));
-                let footer = div().id("note-end").min_h(px(NOTE_END_ROOM).max(room)).pb(px(space::XXL)).children(footnotes).when(live_mode, |d| d.cursor_text().on_mouse_up(MouseButton::Left, opener(last_line)));
+                let footer = div().id("note-end").relative().min_h(px(NOTE_END_ROOM).max(room)).pb(px(space::XXL)).children(footnotes).when(live_mode, |d| d.cursor_text().on_mouse_up(MouseButton::Left, opener(last_line)));
+                let footer = Self::pdf_targets(footer, &pdf_me, total_lines, total_lines, pdf_drop == Some(total_lines), t.accent);
                 return content(footer.into_any_element());
             }
             if !live_mode {
@@ -2805,7 +2846,9 @@ impl NoteView {
                 if hidden.get(row.block).copied().unwrap_or(false) {
                     return div().into_any_element();
                 }
-                return content(div().id(("read-item", i)).pb(px(parsed.row_gap(i - 1))).child(markdown_view::render_row(&parsed, &row, base.as_deref(), (!stale).then(|| toggle.clone()), found.as_ref(), Some(&focus), &t)).into_any_element());
+                let next = parsed.rows().get(i).map_or(total_lines, |r| r.line);
+                let item = div().id(("read-item", i)).relative().pb(px(parsed.row_gap(i - 1))).child(markdown_view::render_row(&parsed, &row, base.as_deref(), (!stale).then(|| toggle.clone()), found.as_ref(), Some(&focus), &t));
+                return content(Self::pdf_targets(item, &pdf_me, row.line, next, pdf_drop == Some(row.line), t.accent).into_any_element());
             }
             let Some(segment) = segments.get(i - 1).copied() else {
                 let field = me.update(cx, |n, cx| n.live_field(window, cx));
@@ -2938,22 +2981,200 @@ impl NoteView {
                 }
                 .into_any_element()
             });
-            content(
-                div()
-                    .id(("live-item", i))
-                    .relative()
-                    .ml(px(-LIVE_ROOM))
-                    .pl(px(LIVE_ROOM))
-                    .group(group)
-                    .cursor_text()
-                    .on_mouse_up(MouseButton::Left, opener(line))
-                    .drag_over::<DraggedLines>(move |s, _, _, _| s.border_t_2().border_color(accent))
-                    .on_drop(move |d: &DraggedLines, window, cx| drop_target.update(cx, |n, cx| n.move_lines_to(d.line, d.count, line, window, cx)))
-                    .child(div().relative().child(body).children(handle).children(table_tools))
-                    .into_any_element(),
-            )
+            let item = div()
+                .id(("live-item", i))
+                .relative()
+                .ml(px(-LIVE_ROOM))
+                .pl(px(LIVE_ROOM))
+                .group(group)
+                .cursor_text()
+                .on_mouse_up(MouseButton::Left, opener(line))
+                .drag_over::<DraggedLines>(move |s, _, _, _| s.border_t_2().border_color(accent))
+                .on_drop(move |d: &DraggedLines, window, cx| drop_target.update(cx, |n, cx| n.move_lines_to(d.line, d.count, line, window, cx)))
+                .child(div().relative().child(body).children(handle).children(table_tools));
+            content(Self::pdf_targets(item, &pdf_me, line, line + count, pdf_drop == Some(line), accent).into_any_element())
         });
-        div().relative().size_full().bg(t.content).child(row.size_full()).vertical_scrollbar(&self.reader_list).into_any_element()
+        let accent = t.accent;
+        let id = cx.entity_id();
+        div()
+            .relative()
+            .size_full()
+            .bg(t.content)
+            .drag_over::<DraggedPages>(move |s, _, _, _| s.bg(accent.opacity(tint::DROP_ZONE)))
+            .drag_over::<DraggedFile>(move |s, d, _, _| if is_pdf_file(&d.0) { s.bg(accent.opacity(tint::DROP_ZONE)) } else { s })
+            .drag_over::<DraggedTab>(move |s, d, _, _| if is_pdf_file(&d.path) { s.bg(accent.opacity(tint::DROP_ZONE)) } else { s })
+            .on_drag_move::<DraggedPages>(move |e, _, cx| leave_pages.update(cx, |n, cx| n.leave_reader_drop(e.event.position, e.bounds, cx)))
+            .on_drag_move::<DraggedFile>(move |e, _, cx| leave_file.update(cx, |n, cx| n.leave_reader_drop(e.event.position, e.bounds, cx)))
+            .on_drag_move::<DraggedTab>(move |e, _, cx| leave_tab.update(cx, |n, cx| n.leave_reader_drop(e.event.position, e.bounds, cx)))
+            .on_drop(move |d: &DraggedPages, window, cx| root_me.update(cx, |n, cx| n.drop_pdf(&d.path, &d.pages, window, cx)))
+            .on_drop(move |d: &DraggedFile, window, cx| {
+                if is_pdf_file(&d.0) {
+                    file_me.update(cx, |n, cx| n.drop_pdf(&d.0, &[], window, cx));
+                }
+            })
+            .on_drop(move |d: &DraggedTab, window, cx| {
+                if is_pdf_file(&d.path) {
+                    tab_me.update(cx, |n, cx| n.drop_pdf(&d.path, &[], window, cx));
+                }
+            })
+            .child(row.size_full())
+            .vertical_scrollbar(&self.reader_list)
+            .when(self.embedded, |d| {
+                d.child(
+                    canvas(
+                        move |bounds, _, cx| {
+                            cx.default_global::<NotePanels>().0.insert(id, bounds);
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// Lets a PDF, or pages of one, be dropped on a block of the reader: above the block's middle it lands before `line`, below it before `next`. `shown` draws the line where it lands.
+    fn pdf_targets(item: Stateful<Div>, me: &Entity<Self>, line: usize, next: usize, shown: bool, accent: Hsla) -> Stateful<Div> {
+        let (a, b, c, d, e, f) = (me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me.clone());
+        item.on_drag_move::<DraggedPages>(move |ev, _, cx| a.update(cx, |n, cx| n.hover_item_drop(line, next, ev.event.position, ev.bounds, cx)))
+            .on_drag_move::<DraggedFile>(move |ev, _, cx| {
+                if is_pdf_file(&ev.drag(cx).0) {
+                    b.update(cx, |n, cx| n.hover_item_drop(line, next, ev.event.position, ev.bounds, cx));
+                }
+            })
+            .on_drag_move::<DraggedTab>(move |ev, _, cx| {
+                if is_pdf_file(&ev.drag(cx).path) {
+                    c.update(cx, |n, cx| n.hover_item_drop(line, next, ev.event.position, ev.bounds, cx));
+                }
+            })
+            .on_drop(move |dp: &DraggedPages, window, cx| d.update(cx, |n, cx| n.drop_pdf(&dp.path, &dp.pages, window, cx)))
+            .on_drop(move |df: &DraggedFile, window, cx| {
+                if is_pdf_file(&df.0) {
+                    e.update(cx, |n, cx| n.drop_pdf(&df.0, &[], window, cx));
+                }
+            })
+            .on_drop(move |dt: &DraggedTab, window, cx| {
+                if is_pdf_file(&dt.path) {
+                    f.update(cx, |n, cx| n.drop_pdf(&dt.path, &[], window, cx));
+                }
+            })
+            .when(shown, |d| d.child(div().absolute().left_0().right_0().top(px(-pages::DROP_LINE / 2.)).h(px(pages::DROP_LINE)).rounded(px(radius::FULL)).bg(accent)))
+    }
+
+    /// Follows a dragged PDF over a block of the reader: above the block's middle it lands before `line`, below it before `next`.
+    fn hover_item_drop(&mut self, line: usize, next: usize, at: Point<Pixels>, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
+        if !bounds.contains(&at) {
+            return;
+        }
+        let target = if at.y > bounds.center().y { next } else { line };
+        if self.pdf_drop != Some(target) || self.pdf_drop_bar.is_some() {
+            self.pdf_drop = Some(target);
+            self.pdf_drop_bar = None;
+            cx.notify();
+        }
+    }
+
+    /// A drag that left the reader takes its line along; `at` is the pointer, `bounds` the reader.
+    fn leave_reader_drop(&mut self, at: Point<Pixels>, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
+        if !bounds.contains(&at) && self.pdf_drop_bar.is_none() && self.pdf_drop.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Follows a dragged PDF over the writing field: the line snaps to the nearest start of a source line, wrapped rows included; over an open block of the live view it lands before or after the block.
+    fn hover_editor_drop(&mut self, at: Point<Pixels>, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
+        if !bounds.contains(&at) {
+            if self.pdf_drop_bar.take().is_some() {
+                self.pdf_drop = None;
+                cx.notify();
+            }
+            return;
+        }
+        let (line, bar) = if let Some(live) = self.live.as_ref() {
+            let after = at.y > bounds.center().y;
+            (if after { live.first_line + live.line_count } else { live.first_line }, (0., if after { f32::from(bounds.size.height) } else { 0. }))
+        } else {
+            let editor = self.editor.read(cx);
+            let (Some(text), Some(height)) = (editor.text_bounds(), editor.line_height()) else { return };
+            let map = editor.display_map();
+            let (rows, lines, height) = (map.display_row_count(), map.buffer_line_count(), f32::from(height).max(1.));
+            let pos = (f32::from(at.y - text.top()) / height).clamp(0., rows as f32);
+            let row = (pos.floor() as usize).min(rows);
+            let line = if row >= rows { lines } else { map.display_row_to_buffer_line(row).min(lines) };
+            let start = if line >= lines { rows } else { map.buffer_line_to_display_row(line) };
+            let next = if line + 1 >= lines { rows } else { map.buffer_line_to_display_row(line + 1) };
+            let (line, row) = if line >= lines || pos - start as f32 <= next as f32 - pos { (line, start) } else { (line + 1, next) };
+            (line, (f32::from(text.left() - bounds.left()), f32::from(text.top() - bounds.top()) + row as f32 * height))
+        };
+        if self.pdf_drop != Some(line) || self.pdf_drop_bar != Some(bar) {
+            self.pdf_drop = Some(line);
+            self.pdf_drop_bar = Some(bar);
+            cx.notify();
+        }
+    }
+
+    /// Embeds a PDF, or the dragged pages of one, where the drag ended: each as a paragraph of its own, one undo step, with a short confirmation.
+    fn drop_pdf(&mut self, pdf: &Path, pages: &[usize], window: &mut Window, cx: &mut Context<Self>) {
+        let line = self.pdf_drop.take();
+        self.pdf_drop_bar = None;
+        let (missing, undecodable) = state::read(cx, |l| l.buffers.get(&self.path).map_or((true, false), |b| (b.missing, b.undecodable)));
+        if missing || undecodable {
+            cx.notify();
+            return;
+        }
+        let vault = index::current();
+        let in_vault = state::read(cx, |l| l.is_vault) && self.path.starts_with(&vault.root);
+        let note = self.path.clone();
+        let block = edit_ops::pdf_embeds(pages, |sub| if in_vault { vault.new_link(Some(&note), pdf, sub) } else { edit_ops::folder_link(&note, pdf, sub) });
+        let name = pdf.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let message = match pages {
+            [] => trf("%@ eingefügt", &[&name]),
+            [page] => trf("Seite %lld eingefügt", &[&(page + 1)]),
+            many => trf("%lld Seiten eingefügt", &[&many.len()]),
+        };
+        if !self.insert_paragraph_at(line, &block, message.clone(), window, cx) {
+            cx.notify();
+            return;
+        }
+        if matches!(self.mode, Mode::Source | Mode::Split) && self.live.is_none() {
+            self.editor.update(cx, |s, cx| s.focus(window, cx));
+        } else {
+            window.focus(&self.focus, cx);
+        }
+        let in_reader = self.mode == Mode::Read;
+        act(cx, |l| {
+            let undo = in_reader.then(|| l.undo_latest());
+            l.notify(message, "file-text", None, undo);
+        });
+    }
+
+    /// Puts a block before source line `line`, or at the end, as a paragraph of its own and one undo step: in the writing field as one of its steps, in the live view as one of the note's history, in the reader as one of the app's, named `label`. `false` when the note refused the change.
+    fn insert_paragraph_at(&mut self, line: Option<usize>, block: &str, label: String, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let place = |text: &str| line.map_or(text.len(), |l| Self::line_offset(text, l));
+        if matches!(self.mode, Mode::Source | Mode::Split) && self.live.is_none() {
+            let text = self.editor.read(cx).value().to_string();
+            self.apply(edit_ops::insert_paragraph(&text, place(&text), block), window, cx);
+            return true;
+        }
+        if self.mode == Mode::Read {
+            let path = self.path.clone();
+            let kind = format!("pdf-embed@{}", line.unwrap_or(usize::MAX));
+            return act(cx, |l| l.edit_note(&path, &kind, label, |text| edit_ops::apply(text, &edit_ops::insert_paragraph(text, place(text), block))));
+        }
+        self.finish_block(cx);
+        let before = self.current_text(cx);
+        let at = place(&before);
+        let edit = edit_ops::insert_paragraph(&before, at, block);
+        self.history.push((before.to_string(), before[..at].matches('\n').count()));
+        self.future.clear();
+        self.last_snapshot = None;
+        self.put_text(edit_ops::apply(&before, &edit), cx);
+        self.schedule_autosave(cx);
+        cx.notify();
+        true
     }
 
     /// What stands in for the reader until a long note is parsed; a word only when that takes a while.
@@ -3039,11 +3260,49 @@ impl NoteView {
     /// Everything a writing field reacts to, for the whole note and for a single block.
     fn note_editor_wrapper(&self, field: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         let accent = Theme::get(cx).accent;
+        let id = cx.entity_id();
         div()
             .w_full()
             .when(self.live.is_none(), |d| d.h_full())
             .id("note-editor")
+            .relative()
             .key_context("NoteEditor")
+            .on_drag_move::<DraggedPages>(cx.listener(|n, e: &DragMoveEvent<DraggedPages>, _, cx| n.hover_editor_drop(e.event.position, e.bounds, cx)))
+            .on_drag_move::<DraggedFile>(cx.listener(|n, e: &DragMoveEvent<DraggedFile>, _, cx| {
+                if is_pdf_file(&e.drag(cx).0) {
+                    n.hover_editor_drop(e.event.position, e.bounds, cx);
+                }
+            }))
+            .on_drag_move::<DraggedTab>(cx.listener(|n, e: &DragMoveEvent<DraggedTab>, _, cx| {
+                if is_pdf_file(&e.drag(cx).path) {
+                    n.hover_editor_drop(e.event.position, e.bounds, cx);
+                }
+            }))
+            .on_drop(cx.listener(|n, d: &DraggedPages, window, cx| n.drop_pdf(&d.path, &d.pages, window, cx)))
+            .on_drop(cx.listener(|n, d: &DraggedFile, window, cx| {
+                if is_pdf_file(&d.0) {
+                    n.drop_pdf(&d.0, &[], window, cx);
+                }
+            }))
+            .on_drop(cx.listener(|n, d: &DraggedTab, window, cx| {
+                if is_pdf_file(&d.path) {
+                    n.drop_pdf(&d.path, &[], window, cx);
+                }
+            }))
+            .when(self.embedded, |d| {
+                d.child(
+                    canvas(
+                        move |bounds, _, cx| {
+                            cx.default_global::<NotePanels>().0.insert(id, bounds);
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
+            })
             .on_mouse_move(cx.listener(|n, e: &MouseMoveEvent, _, cx| n.spell_pointer(e.position, cx)))
             .on_hover(cx.listener(|n, on: &bool, _, cx| {
                 if !*on {
@@ -3412,6 +3671,10 @@ impl NoteView {
                 }
             }))
             .child(field)
+            .when_some(self.pdf_drop_bar.filter(|_| cx.has_active_drag() && !NotePanels::held(cx)), |d, (left, top)| {
+                d.child(div().absolute().top_0().left_0().size_full().bg(accent.opacity(tint::DROP_ZONE)))
+                    .child(div().absolute().left(px(left.max(space::M))).right(px(space::M)).top(px(top - pages::DROP_LINE / 2.)).h(px(pages::DROP_LINE)).rounded(px(radius::FULL)).bg(accent))
+            })
             .into_any_element()
     }
 }
@@ -3463,6 +3726,9 @@ impl Render for NoteView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if std::mem::take(&mut self.needs_focus) {
             self.activate(window, cx);
+        }
+        if !cx.has_active_drag() && self.pdf_drop.take().is_some() {
+            self.pdf_drop_bar = None;
         }
         if self.save_problem.is_some() {
             self.retry_held = self.retry_focus.is_focused(window);

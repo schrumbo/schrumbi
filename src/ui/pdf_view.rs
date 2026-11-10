@@ -270,6 +270,8 @@ enum ExportFailure {
 enum Edit {
     Op(PageOp),
     Insert { at: usize, files: Vec<PathBuf>, progress: Arc<Progress> },
+    /// Copies of pages of another PDF, dragged over from its page list.
+    Copy { at: usize, source: PathBuf, pages: Vec<usize> },
 }
 
 /// How far a batch of PDFs being inserted has come, and whether the rest was called off.
@@ -370,23 +372,31 @@ struct Unsaved {
     known: bool,
 }
 
-/// A page of the old file that is dragged, or the pages selected with it, and the view they belong to.
+/// A page dragged out of a PDF's page list, or the pages selected with it: the file they belong to and the view they came from. Dropped on the same list they move, on another PDF they are copied, in a note they are embedded.
 #[derive(Clone)]
-struct DraggedPages {
+pub struct DraggedPages {
     view: EntityId,
-    pages: Vec<usize>,
+    pub path: PathBuf,
+    pub pages: Vec<usize>,
     grab: Point<Pixels>,
+    image: Option<Arc<RenderImage>>,
+    size: (f32, f32),
 }
 
 impl Render for DraggedPages {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
         let label = match self.pages.as_slice() {
-            [page] => page_word(false, page + 1),
+            [page] => (page + 1).to_string(),
             many => trf("%lld Seiten", &[&many.len()]),
         };
-        let chip = div().flex().items_center().gap(px(space::S)).px(px(space::S)).py(px(space::XS)).rounded(px(radius::INNER)).bg(t.material).text_color(t.primary).shadow_md().child(icon("arrow-up-down", iconsize::M, t.secondary)).child(label);
-        div().ml(self.grab.x + px(space::S)).mt(self.grab.y - px(pages::CHIP_HALF)).child(chip)
+        let (w, h) = self.size;
+        let height = pages::DRAG_THUMB;
+        let width = (w / h.max(1.) * height).clamp(height * 0.5, height * 1.6);
+        let badge = div().absolute().bottom(px(-space::XS)).right(px(-space::XS)).px(px(space::XS)).py(px(space::XXS)).rounded(px(radius::FULL)).bg(t.accent).text_color(white()).text_size(px(font::CAPTION)).font_features(tabular()).font_weight(FontWeight::SEMIBOLD).shadow_sm().child(label);
+        let picture = div().relative().w(px(width)).h(px(height)).rounded(px(radius::SMALL)).bg(white()).shadow_md().overflow_hidden().children(self.image.clone().map(|i| img(i).size_full()));
+        let stack = div().relative().w(px(width)).h(px(height)).when(self.pages.len() > 1, |d| d.child(div().absolute().top(px(-space::XXS)).left(px(space::XXS)).w(px(width)).h(px(height)).rounded(px(radius::SMALL)).bg(t.material).shadow_sm())).child(picture).child(badge);
+        div().ml(self.grab.x + px(space::S)).mt(self.grab.y - px(height / 2.)).child(stack)
     }
 }
 
@@ -3062,6 +3072,7 @@ impl PdfView {
                         let image = this.cache.get(&(page, PREVIEW)).map(|c| c.image.clone());
                         let selected = this.selected.contains(&page);
                         let (view, menu_view, press_view, drag_view) = (me.clone(), me.clone(), me.clone(), me.clone());
+                        let path = this.path.clone();
                         let moving = this.targets(Some(page));
                         let (up, down) = (moving.first().is_some_and(|p| *p > 0), moving.last().is_some_and(|p| p + 1 < count));
                         let labels = this.page_labels(Some(page));
@@ -3115,13 +3126,14 @@ impl PdfView {
                                         cx.notify();
                                     })
                                 })
-                                .on_drag(DraggedPages { view: me.entity_id(), pages: dragged, grab: Point::default() }, move |d, grab, window, cx| {
-                                    drag_view.update(cx, |v, cx| {
+                                .on_drag(DraggedPages { view: me.entity_id(), path: path.clone(), pages: dragged, grab: Point::default(), image: None, size: (w, h) }, move |d, grab, window, cx| {
+                                    let image = drag_view.update(cx, |v, cx| {
                                         v.dragging = d.pages.iter().copied().collect();
                                         window.focus(&v.pages_focus, cx);
                                         cx.notify();
+                                        v.cache.get(&(page, PREVIEW)).map(|c| c.image.clone())
                                     });
-                                    cx.new(|_| DraggedPages { grab, ..d.clone() })
+                                    cx.new(|_| DraggedPages { grab, image, ..d.clone() })
                                 })
                             });
                         let row = if editable { row.context_menu(move |menu, _, _| Self::thumb_menu(menu, page, menu_view.clone(), labels.clone(), up, down)).into_any_element() } else { row.into_any_element() };
@@ -3143,6 +3155,7 @@ impl PdfView {
         .track_scroll(&handle)
         .size_full();
         let id = cx.entity_id();
+        let accent = t.accent;
         let carrying = dragging && !self.dragging.is_empty();
         let body = div()
             .relative()
@@ -3164,12 +3177,8 @@ impl PdfView {
                 .size_full(),
             )
             .when(editable, |d| {
-                d.drag_over::<DraggedPages>(move |style, dragged, _, _| if dragged.view == id { style } else { style.opacity(tint::DISABLED).cursor(CursorStyle::OperationNotAllowed) })
-                .on_drag_move::<DraggedPages>(cx.listener(|v, e: &DragMoveEvent<DraggedPages>, _, cx| {
-                    if e.drag(cx).view == cx.entity_id() {
-                        v.hover_slot(e.event.position, e.bounds, cx);
-                    }
-                }))
+                d.drag_over::<DraggedPages>(move |style, dragged, _, _| if dragged.view == id { style } else { style.bg(accent.opacity(tint::DROP_ZONE)) })
+                .on_drag_move::<DraggedPages>(cx.listener(|v, e: &DragMoveEvent<DraggedPages>, _, cx| v.hover_slot(e.event.position, e.bounds, cx)))
                 .on_drag_move::<ExternalPaths>(cx.listener(|v, e: &DragMoveEvent<ExternalPaths>, _, cx| v.hover_slot(e.event.position, e.bounds, cx)))
                 .on_drag_move::<super::browser::DraggedFile>(cx.listener(|v, e: &DragMoveEvent<super::browser::DraggedFile>, _, cx| v.hover_slot(e.event.position, e.bounds, cx)))
                 .on_drop(cx.listener(|v, d: &DraggedPages, _, cx| v.drop_pages(d, cx)))
@@ -3433,14 +3442,18 @@ impl PdfView {
         self.start_edit(Edit::Op(PageOp::Move { pages, to }), cx);
     }
 
+    /// Pages dropped on the page list: from this list they move to the gap, from another PDF copies of them land there.
     fn drop_pages(&mut self, dragged: &DraggedPages, cx: &mut Context<Self>) {
         self.drag_step = 0.;
         self.dragging.clear();
-        let slot = self.drop_at.take();
-        let (Some(slot), true) = (slot, dragged.view == cx.entity_id()) else {
+        let Some(slot) = self.drop_at.take() else {
             cx.notify();
             return;
         };
+        if dragged.view != cx.entity_id() && dragged.path != self.path && !crate::core::library::same_file(&dragged.path, &self.path) {
+            self.copy_pages(dragged, slot, cx);
+            return;
+        }
         let count = self.page_count();
         let mut pages = dragged.pages.clone();
         pages.retain(|p| *p < count);
@@ -3455,6 +3468,19 @@ impl PdfView {
             return;
         }
         self.start_edit(Edit::Op(PageOp::Move { pages, to }), cx);
+    }
+
+    /// Inserts copies of pages dragged over from another PDF before the gap `slot`, as one undo step; the other file stays as it is.
+    fn copy_pages(&mut self, dragged: &DraggedPages, slot: usize, cx: &mut Context<Self>) {
+        let mut pages = dragged.pages.clone();
+        pages.sort_unstable();
+        pages.dedup();
+        if pages.is_empty() || !self.ready(cx) {
+            cx.notify();
+            return;
+        }
+        let at = self.gap_now(slot).min(self.page_count());
+        self.start_edit(Edit::Copy { at, source: dragged.path.clone(), pages }, cx);
     }
 
     fn choose_pdf(&mut self, page: Option<usize>, cx: &mut Context<Self>) {
@@ -3546,7 +3572,7 @@ impl PdfView {
         let Some(old_key) = self.marks_key.clone() else { return };
         let pages = match &edit {
             Edit::Op(PageOp::Rotate { pages, .. } | PageOp::Move { pages, .. } | PageOp::Delete(pages)) => pages.clone(),
-            Edit::Op(PageOp::Insert { .. }) | Edit::Insert { .. } => Vec::new(),
+            Edit::Op(PageOp::Insert { .. }) | Edit::Insert { .. } | Edit::Copy { .. } => Vec::new(),
         };
         let started = Started { sizes: self.sizes.clone(), pages, old_key: old_key.clone() };
         let path = self.path.clone();
@@ -3557,6 +3583,13 @@ impl PdfView {
                 Edit::Op(op) => {
                     let bytes = pdf_edit::apply(&data, &op).map_err(Failure::Edit)?;
                     (op, bytes, 0, 0, 0, Vec::new())
+                }
+                Edit::Copy { at, source, pages } => {
+                    let other = std::fs::read(&source).map_err(|_| Failure::Edit(EditError::Broken))?;
+                    let part = pdf_edit::extract(&other, &pages).map_err(Failure::Edit)?;
+                    let inserted = pdf_edit::insertable(&part).map_err(Failure::Edit)?;
+                    let bytes = pdf_edit::apply(&data, &PageOp::Insert { at, pdf: part }).map_err(Failure::Edit)?;
+                    (PageOp::Insert { at, pdf: Vec::new() }, bytes, inserted, 1, 0, Vec::new())
                 }
                 Edit::Insert { at, files, progress } => {
                     let (mut bytes, mut gap, mut inserted, mut done, mut seen) = (data, at, 0, 0, 0);

@@ -128,6 +128,8 @@ Links in {ui:Seiten}, der Seitenliste. {key:pageList} blendet sie ein und aus. E
 - In der Seitenliste: {key:up} und {key:down} wechseln die Seite, {key:home} und {key:end} gehen zur ersten und letzten, {key:pageup} und {key:pagedown} blättern, {key:shift-up}, {key:shift-down}, {key:shift-home}, {key:shift-end}, {key:shift-pageup} und {key:shift-pagedown} erweitern die Auswahl, {key:cmd-a} wählt alle, {key:shift-f10} öffnet das Menü.
 - Seiten ziehen, die Linie zeigt, wohin sie kommen. {key:escape} bricht das Ziehen ab.
 - PDFs aus dem Dateimanager auf die Seitenliste ziehen fügt sie zusammen an der Linie ein, als ein Schritt für {key:Undo} mit einer Meldung. Während eine PDF gespeichert wird, warten weitere. {key:escape} hält die übrigen an, schon eingefügte bleiben.
+- Eine Seite aus der Seitenliste in eine Notiz ziehen bettet sie dort ein, wie im Beispiel unten; mehrere gewählte Seiten ergeben je einen Absatz. Die Linie zeigt, wo der Absatz landet, {key:Undo} in der Notiz nimmt ihn zurück. Die PDF selbst, als Tab oder aus der Dateiliste gezogen, bettet die ganze Datei ein; am rechten Rand abgelegt öffnet sie sich daneben.
+- Eine Seite auf die Seitenliste einer anderen PDF ziehen fügt dort eine Kopie an der Linie ein, als ein Schritt für {key:Undo}. Die Quelle bleibt, wie sie ist.
 - Nach dem Löschen ist die Seite an der Stelle der gelöschten gewählt, so geht es mit der Tastatur weiter.
 - Bei Word- und PowerPoint-Dateien steht unter der Liste, warum sich Seiten dort nicht ändern lassen.
 - Rechtsklick auf eine Seite zeigt dieselben Befehle.

@@ -572,7 +572,9 @@ impl Pages {
         let top = bounds.top() + px(control::SUBBAR);
         let x = if bounds.size.width > px(0.) { f32::from(at.x - bounds.left()) / f32::from(bounds.size.width) } else { 0. };
         let over_pages = cx.try_global::<super::pdf_view::PagePanels>().is_some_and(|p| p.contains(at));
-        let zone = (bounds.contains(&at) && at.y >= top && !over_pages).then(|| panes.zone(x, file)).flatten();
+        let over_notes = super::documents::is_pdf_file(&path) && cx.try_global::<super::documents::NotePanels>().is_some_and(|p| p.contains(at));
+        let note_band = over_notes && x >= 1. - CANVAS_BAND;
+        let zone = (bounds.contains(&at) && at.y >= top && !over_pages && (!over_notes || note_band)).then(|| if note_band { Some((DocDrop::Beside, true)) } else { panes.zone(x, file) }).flatten();
         let hover = zone.and_then(|(to, band)| {
             let fallback = panes.fallback.clone();
             let ok = match &self.doc_drop {
@@ -581,6 +583,7 @@ impl Pages {
             };
             ok.then_some(DropHover { path, to, band, fallback })
         });
+        cx.default_global::<super::documents::NotePanels>().set_held(hover.is_some());
         if hover != self.doc_drop {
             self.doc_drop = hover;
             cx.notify();
@@ -630,7 +633,9 @@ impl DropPanes {
 impl Render for Pages {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         cx.default_global::<super::pdf_view::PagePanels>().clear();
+        cx.default_global::<super::documents::NotePanels>().clear();
         if !cx.has_active_drag() {
+            cx.default_global::<super::documents::NotePanels>().set_held(false);
             self.doc_dragging = false;
             self.doc_drop = None;
         }
