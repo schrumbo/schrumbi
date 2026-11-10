@@ -1922,7 +1922,7 @@ pub fn show_diff(path: &Path, before: &str, after: &str, discard: Option<Rc<dyn 
     if window.has_active_dialog(cx) {
         return;
     }
-    let state = cx.new(|cx| gpui_kit::component::diff::DiffState::new(files, cx).with_mode(gpui_kit::component::diff::DiffMode::Split));
+    let state = cx.new(|cx| gpui_kit::component::diff::DiffState::new(files, cx).with_mode(gpui_kit::component::diff::DiffMode::Unified));
     window.open_dialog(cx, move |d, _, cx| {
         let t = Theme::get(cx);
         d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().on_ok(super::sheets::pass_enter).child(
@@ -1930,7 +1930,7 @@ pub fn show_diff(path: &Path, before: &str, after: &str, discard: Option<Rc<dyn 
                 .h(px(480.))
                 .flex()
                 .flex_col()
-                .child(div().flex_none().py(px(space::M)).flex().border_b_1().border_color(t.separator).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.secondary).child(div().flex_1().px(px(space::L)).child(tr("Vorher"))).child(div().flex_1().px(px(space::L)).child(tr("Nachher"))))
+                .child(div().flex_none().py(px(space::M)).px(px(space::L)).flex().border_b_1().border_color(t.separator).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.secondary).child(name.clone()))
                 .child(div().flex_1().min_h_0().child(gpui_kit::component::diff::Diff::new(&state).header_visible(false).hunk_separator(gpui_kit::component::diff::DiffHunkSeparator::Simple)))
                 .child(match discard.clone() {
                     Some(discard) => div().flex_none().p(px(space::M)).flex().justify_end().gap(px(space::S)).border_t_1().border_color(t.separator)
