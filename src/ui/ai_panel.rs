@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -23,14 +23,14 @@ use super::state::{self, act};
 use super::theme::{Theme, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::ai::acp::{self, Command, Event, Kind, Status, Stop, ToolPatch, Update};
-use crate::core::ai::agents::{self, Missing, Runner};
+use crate::core::ai::agents::{self, Missing};
 use crate::core::ai::tools::{self, Preview};
 use crate::core::ai::{detect, transcript};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Route;
 use crate::core::prefs;
 
-const FRAME: Duration = Duration::from_millis(8);
+const FRAME: Duration = Duration::from_millis(16);
 const REPARSE: Duration = Duration::from_millis(120);
 const SELECTION_CHARS: usize = 4000;
 const SHOWN_OUTPUT: usize = 4000;
@@ -47,7 +47,6 @@ pub enum Chip {
 }
 
 struct Tool {
-    id: String,
     name: Option<String>,
     title: String,
     kind: Kind,
@@ -64,6 +63,7 @@ struct Edit {
     added: usize,
     removed: usize,
     undone: bool,
+    stale: bool,
 }
 
 enum Item {
@@ -98,11 +98,15 @@ pub struct AiPanel {
     removed: HashSet<Chip>,
     extra: Vec<Chip>,
     last_prompt: Option<String>,
-    scroll: ScrollHandle,
-    stick: bool,
+    list: ListState,
+    listed: usize,
+    dirty: BTreeSet<usize>,
+    tail: (Vec<ai::Waiting>, Option<String>),
     idle: Option<Task<()>>,
     reparse: Option<Task<()>>,
     focus_input: bool,
+    cancelling: bool,
+    asks: Vec<u64>,
     _subs: Vec<Subscription>,
 }
 
@@ -310,7 +314,17 @@ impl AiPanel {
             }),
         ];
         ai::set_panel(cx.entity().downgrade(), cx);
-        Self { input, items: Vec::new(), tools: HashMap::new(), expanded: HashSet::new(), session: None, turn: false, queued: 0, removed: HashSet::new(), extra: Vec::new(), last_prompt: None, scroll: ScrollHandle::new(), stick: true, idle: None, reparse: None, focus_input: true, _subs: subs }
+        Self { input, items: Vec::new(), tools: HashMap::new(), expanded: HashSet::new(), session: None, turn: false, queued: 0, removed: HashSet::new(), extra: Vec::new(), last_prompt: None, list: Self::new_list(), listed: 0, dirty: BTreeSet::new(), tail: (Vec::new(), None), idle: None, reparse: None, focus_input: true, cancelling: false, asks: Vec::new(), _subs: subs }
+    }
+
+    fn new_list() -> ListState {
+        let list = ListState::new(0, ListAlignment::Bottom, px(600.));
+        list.set_follow_mode(FollowMode::Tail);
+        list
+    }
+
+    fn touch(&mut self, at: usize) {
+        self.dirty.insert(at);
     }
 
     fn auto_chips(&self, cx: &App) -> Vec<Chip> {
@@ -380,7 +394,6 @@ impl AiPanel {
 
     fn notice(&mut self, text: String, restart: bool) {
         self.items.push(Item::Notice { text, restart });
-        self.stick = true;
     }
 
     fn start(&mut self, cx: &mut Context<Self>) {
@@ -510,16 +523,26 @@ impl AiPanel {
         }
         self.extra.clear();
         self.idle = None;
-        self.stick = true;
+        self.list.scroll_to_end();
         cx.notify();
     }
 
     fn cancel(&mut self, cx: &mut Context<Self>) {
-        if let Some(s) = &self.session
-            && self.turn
-        {
-            let _ = s.commands.try_send(Command::Cancel);
+        let Some(s) = &self.session else { return };
+        if !self.turn {
+            return;
         }
+        let _ = s.commands.try_send(Command::Cancel);
+        self.cancelling = true;
+        self.turn = false;
+        self.queued = 0;
+        let session = s.id.clone();
+        for id in std::mem::take(&mut self.asks) {
+            ai::answer_ask(id, Answer::Decline, cx);
+        }
+        ai::decline_session(&session, cx);
+        self.reparse_now();
+        self.notice(tr("Abgebrochen."), false);
         cx.notify();
     }
 
@@ -529,15 +552,34 @@ impl AiPanel {
     }
 
     fn apply(&mut self, event: Event, cx: &mut Context<Self>) {
+        let event = match event {
+            Event::Update(_) if self.cancelling => return,
+            Event::Ask { reply, .. } if self.cancelling => {
+                reply.send(false);
+                return;
+            }
+            Event::TurnEnded(_) if self.cancelling => {
+                self.cancelling = false;
+                if let Some(id) = self.session.as_ref().map(|s| s.id.clone()) {
+                    ai::end_turn(&id, cx);
+                }
+                self.schedule_idle(cx);
+                return;
+            }
+            other => other,
+        };
         match event {
-            Event::Ready { .. } => {
+            Event::Ready => {
                 if let Some(s) = self.session.as_mut() {
                     s.ready = true;
                 }
             }
             Event::Update(Update::Text(text)) => {
                 match self.items.last_mut() {
-                    Some(Item::Agent { text: t, .. }) => t.push_str(&text),
+                    Some(Item::Agent { text: t, .. }) => {
+                        t.push_str(&text);
+                        self.touch(self.items.len() - 1);
+                    }
                     _ => self.items.push(Item::Agent { text, parsed: None, parsed_len: 0 }),
                 }
                 self.schedule_reparse(cx);
@@ -556,9 +598,12 @@ impl AiPanel {
             }
             Event::Write { path, content, reply } => self.write(path, content, reply, cx),
             Event::Denied { tool } => {
-                if let Some(Item::Tool(t)) = self.tools.get(&tool).and_then(|i| self.items.get_mut(*i)) {
+                if let Some(at) = self.tools.get(&tool).copied()
+                    && let Some(Item::Tool(t)) = self.items.get_mut(at)
+                {
                     t.denied = true;
                     t.status = Status::Failed;
+                    self.touch(at);
                 }
             }
             Event::TurnEnded(result) => self.turn_ended(result, cx),
@@ -572,12 +617,13 @@ impl AiPanel {
         let at = match self.tools.get(&id) {
             Some(at) => *at,
             None if new || patch.title.is_some() => {
-                self.items.push(Item::Tool(Tool { id: id.clone(), name: None, title: String::new(), kind: Kind::Other, status: Status::Pending, input: None, output: None, denied: false }));
+                self.items.push(Item::Tool(Tool { name: None, title: String::new(), kind: Kind::Other, status: Status::Pending, input: None, output: None, denied: false }));
                 self.tools.insert(id, self.items.len() - 1);
                 self.items.len() - 1
             }
             None => return,
         };
+        self.touch(at);
         let Some(Item::Tool(t)) = self.items.get_mut(at) else { return };
         if let Some(n) = patch.name {
             t.name = Some(n);
@@ -606,16 +652,16 @@ impl AiPanel {
         let lines = ask.patch.diffs.as_deref().map(diff_lines).unwrap_or_default();
         let key = name.unwrap_or_else(|| format!("{kind:?}"));
         let places: Vec<PathBuf> = ask.patch.locations.iter().flatten().map(|(p, _)| p.clone()).chain(ask.patch.diffs.iter().flatten().map(|d| d.path.clone())).collect();
-        let answer = ai::ask_change(&key, Preview { title, lines }, cx);
+        let (ask_id, answer) = ai::ask_change(&key, Preview { title, lines }, cx);
+        self.asks.extend(ask_id);
         cx.spawn(async move |this, cx| {
             let allow = matches!(answer.recv().await, Ok(Answer::Allow | Answer::Today));
-            if allow {
-                let _ = this.update(cx, |p, _| {
-                    if let Some(s) = p.session.as_mut() {
-                        s.granted.extend(places);
-                    }
-                });
-            }
+            let _ = this.update(cx, |p, _| {
+                p.asks.retain(|a| Some(*a) != ask_id);
+                if allow && let Some(s) = p.session.as_mut() {
+                    s.granted.extend(places);
+                }
+            });
             reply.send(allow);
         })
         .detach();
@@ -640,7 +686,9 @@ impl AiPanel {
             let _ = tx.try_send(Answer::Allow);
             rx
         } else {
-            ai::ask_change("write_file", preview, cx)
+            let (ask_id, rx) = ai::ask_change("write_file", preview, cx);
+            self.asks.extend(ask_id);
+            rx
         };
         cx.spawn(async move |this, cx| {
             if !matches!(answer.recv().await, Ok(Answer::Allow | Answer::Today)) {
@@ -686,8 +734,7 @@ impl AiPanel {
             });
         }
         self.log(vec![transcript::Entry { role: transcript::Role::Tool, text: trf("+%lld −%lld in %@", &[&added, &removed, &name_of(&path)]), at: chrono::Utc::now().timestamp() }], cx);
-        self.items.push(Item::Edit(Edit { path, before, after, added, removed, undone: false }));
-        self.stick = true;
+        self.items.push(Item::Edit(Edit { path, before, after, added, removed, undone: false, stale: false }));
         cx.notify();
     }
 
@@ -702,14 +749,17 @@ impl AiPanel {
             Err(e) => self.notice(trf("Das hat nicht geklappt: %@", &[&e.chars().take(200).collect::<String>()]), false),
         }
         let shell_off = !prefs::with(|p| p.ai.allow_execute);
-        for item in &mut self.items {
+        let mut touched = Vec::new();
+        for (at, item) in self.items.iter_mut().enumerate() {
             if let Item::Tool(t) = item
                 && matches!(t.status, Status::Pending | Status::Running)
             {
                 t.denied = shell_off && (t.kind == Kind::Execute || t.name.as_deref().is_some_and(|n| matches!(n, "Bash" | "PowerShell")));
                 t.status = Status::Failed;
+                touched.push(at);
             }
         }
+        self.dirty.extend(touched);
         let mut entries: Vec<transcript::Entry> = Vec::new();
         let now = chrono::Utc::now().timestamp();
         for item in self.items.iter().rev() {
@@ -736,8 +786,10 @@ impl AiPanel {
         if self.reparse.is_some() {
             return;
         }
+        let grown = self.items.last().map_or(0, |i| if let Item::Agent { text, .. } = i { text.len() } else { 0 });
+        let wait = REPARSE + Duration::from_millis(u64::try_from(grown / 40).unwrap_or(u64::MAX).min(600));
         self.reparse = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(REPARSE).await;
+            cx.background_executor().timer(wait).await;
             let _ = this.update(cx, |p, cx| {
                 p.reparse = None;
                 p.reparse_now();
@@ -747,26 +799,36 @@ impl AiPanel {
     }
 
     fn reparse_now(&mut self) {
-        for item in self.items.iter_mut().rev().take(4) {
+        let count = self.items.len();
+        let mut touched = Vec::new();
+        for (back, item) in self.items.iter_mut().rev().take(4).enumerate() {
             if let Item::Agent { text, parsed, parsed_len } = item
                 && *parsed_len != text.len()
             {
                 *parsed = Some(Rc::new(markdown_view::parse(text)));
                 *parsed_len = text.len();
+                touched.push(count - 1 - back);
             }
         }
+        self.dirty.extend(touched);
     }
 
     fn undo_edit(&mut self, at: usize, cx: &mut Context<Self>) {
         let Some(Item::Edit(e)) = self.items.get(at) else { return };
         let (Some(before), path, after) = (e.before.clone(), e.path.clone(), e.after.clone()) else { return };
+        self.touch(at);
         let now = state::read(cx, |l| tools::text_now(l, &path));
         if now.as_deref() != Some(after.as_str()) {
+            if let Some(Item::Edit(e)) = self.items.get_mut(at) {
+                e.stale = true;
+            }
+            cx.notify();
             return;
         }
         let done = act(cx, |l| {
             let key = l.buffer_key(&path);
-            l.edit_note(&key, "ai", trf("KI-Änderung an %@ zurückgenommen", &[&name_of(&path)]), |_| before)
+            let kind = format!("ai-undo:{}", key.display());
+            l.edit_note(&key, &kind, trf("KI-Änderung an %@ zurückgenommen", &[&name_of(&path)]), |_| before)
         });
         if done && let Some(Item::Edit(e)) = self.items.get_mut(at) {
             e.undone = true;
@@ -798,7 +860,10 @@ impl AiPanel {
         act(cx, |l| {
             if let Some(path) = l.create_note(&title, &folder, "md") {
                 let key = l.buffer_key(&path);
-                l.edit_note(&key, "ai", trf("%@ angelegt", &[&name_of(&path)]), |_| body);
+                let label = trf("%@ angelegt", &[&name_of(&path)]);
+                if l.edit_note(&key, "ai", label.clone(), |_| body) {
+                    l.join_latest(2, "square-pen", label);
+                }
                 l.open_document(&path);
             }
         });
@@ -807,6 +872,9 @@ impl AiPanel {
     fn new_conversation(&mut self, cx: &mut Context<Self>) {
         self.stop(cx);
         self.items.clear();
+        self.list = Self::new_list();
+        self.listed = 0;
+        self.dirty.clear();
         self.tools.clear();
         self.expanded.clear();
         self.extra.clear();
@@ -914,6 +982,7 @@ impl AiPanel {
                         if !p.expanded.remove(&at) {
                             p.expanded.insert(at);
                         }
+                        p.touch(at);
                         cx.notify();
                     });
                 }),
@@ -941,9 +1010,8 @@ impl AiPanel {
     fn edit_card(&self, at: usize, edit: &Edit, cx: &mut Context<Self>, t: &Theme) -> AnyElement {
         let me = cx.entity();
         let (path, before, after) = (edit.path.clone(), edit.before.clone().unwrap_or_default(), edit.after.clone());
-        let current = state::read(cx, |l| tools::text_now(l, &edit.path));
-        let can_undo = edit.before.is_some() && !edit.undone && current.as_deref() == Some(edit.after.as_str());
-        let undo_tip = if edit.undone { tr("Schon zurückgenommen") } else if edit.before.is_none() { tr("Eine neu angelegte Datei nimmt das normale Rückgängig zurück") } else if !can_undo { tr("Die Datei hat sich seitdem geändert") } else { tr("Nur diese Änderung zurücknehmen") };
+        let can_undo = edit.before.is_some() && !edit.undone && !edit.stale;
+        let undo_tip = if edit.undone { tr("Schon zurückgenommen") } else if edit.before.is_none() { tr("Eine neu angelegte Datei nimmt das normale Rückgängig zurück") } else if edit.stale { tr("Die Datei hat sich seitdem geändert") } else { tr("Nur diese Änderung zurücknehmen") };
         div()
             .flex()
             .items_center()
@@ -1003,48 +1071,70 @@ impl AiPanel {
             .into_any_element()
     }
 
-    fn stream(&self, cx: &mut Context<Self>, t: &Theme) -> Vec<AnyElement> {
-        let mut out = Vec::new();
-        for (at, item) in self.items.iter().enumerate() {
-            let el = match item {
-                Item::User { text, chips } => {
-                    let mut row = div().flex().flex_wrap().gap(px(space::XS));
-                    for c in chips {
-                        row = row.child(div().px(px(space::S)).rounded_full().bg(t.ink.opacity(0.06)).text_size(px(font::CAPTION)).text_color(t.secondary).child(c.clone()));
-                    }
-                    div().flex().flex_col().gap(px(space::XS)).p(px(space::M)).rounded(px(radius::CARD)).bg(t.ink.opacity(0.05)).child(div().child(text.clone())).when(!chips.is_empty(), |d| d.child(row)).into_any_element()
+    fn item_element(&self, at: usize, cx: &mut Context<Self>, t: &Theme) -> AnyElement {
+        let Some(item) = self.items.get(at) else { return div().into_any_element() };
+        match item {
+            Item::User { text, chips } => {
+                let mut row = div().flex().flex_wrap().gap(px(space::XS));
+                for c in chips {
+                    row = row.child(div().px(px(space::S)).rounded_full().bg(t.ink.opacity(0.06)).text_size(px(font::CAPTION)).text_color(t.secondary).child(c.clone()));
                 }
-                Item::Agent { text, parsed, parsed_len } => match parsed {
-                    Some(p) if *parsed_len == text.len() || text.len() < *parsed_len + 400 => div().min_w_0().child(markdown_view::render(p, None, None, t)).into_any_element(),
-                    _ => div().min_w_0().child(text.clone()).into_any_element(),
-                },
-                Item::Tool(tool) => self.tool_card(at, tool, cx, t),
-                Item::Edit(e) => self.edit_card(at, e, cx, t),
-                Item::Notice { text, restart } => {
-                    let me = cx.entity();
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(space::S))
-                        .text_size(px(font::CALLOUT))
-                        .text_color(t.secondary)
-                        .child(icon("info", iconsize::XS, t.tertiary))
-                        .child(div().flex_1().min_w_0().child(text.clone()))
-                        .when(*restart, |d| d.child(Button::new(("ai-restart", at)).ghost().xsmall().label(tr("Neu starten")).on_click(move |_, _, cx| me.update(cx, |p, cx| { p.start(cx); cx.notify(); }))))
-                        .into_any_element()
-                }
-            };
-            out.push(el);
+                div().flex().flex_col().gap(px(space::XS)).p(px(space::M)).rounded(px(radius::CARD)).bg(t.ink.opacity(0.05)).child(div().child(text.clone())).when(!chips.is_empty(), |d| d.child(row)).into_any_element()
+            }
+            Item::Agent { text, parsed, parsed_len } => match parsed {
+                Some(p) if *parsed_len == text.len() || text.len() < *parsed_len + 400 => div().min_w_0().child(markdown_view::render(p, None, None, t)).into_any_element(),
+                _ => div().min_w_0().child(text.clone()).into_any_element(),
+            },
+            Item::Tool(tool) => self.tool_card(at, tool, cx, t),
+            Item::Edit(e) => self.edit_card(at, e, cx, t),
+            Item::Notice { text, restart } => {
+                let me = cx.entity();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S))
+                    .text_size(px(font::CALLOUT))
+                    .text_color(t.secondary)
+                    .child(icon("info", iconsize::XS, t.tertiary))
+                    .child(div().flex_1().min_w_0().child(text.clone()))
+                    .when(*restart, |d| d.child(Button::new(("ai-restart", at)).ghost().xsmall().label(tr("Neu starten")).on_click(move |_, _, cx| me.update(cx, |p, cx| { p.start(cx); cx.notify(); }))))
+                    .into_any_element()
+            }
         }
-        for w in ai::waiting(cx) {
-            out.push(self.ask_card(&w, t));
-        }
+    }
+
+    fn row(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let t = Theme::get(cx);
+        let items = self.items.len();
+        let (asks, status) = &self.tail;
+        let last = ix + 1 == items + asks.len() + usize::from(status.is_some());
+        let el = if ix < items {
+            self.item_element(ix, cx, &t)
+        } else if let Some(w) = asks.get(ix - items) {
+            self.ask_card(w, &t)
+        } else {
+            let label = status.clone().unwrap_or_default();
+            div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(motion::loading(iconsize::XS, t.secondary)).child(label).into_any_element()
+        };
+        div().px(px(space::L)).pt(px(space::M)).when(last, |d| d.pb(px(space::L))).child(el).into_any_element()
+    }
+
+    fn sync_list(&mut self, cx: &mut Context<Self>) {
+        let asks = ai::waiting(cx);
         let starting = self.session.as_ref().is_some_and(|s| !s.ready);
-        if starting || self.turn {
-            let label = if starting { tr("Startet …") } else { tr("Arbeitet …") };
-            out.push(div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(motion::loading(iconsize::XS, t.secondary)).child(label).into_any_element());
+        let status = (starting || self.turn).then(|| if starting { tr("Startet …") } else { tr("Arbeitet …") });
+        self.tail = (asks, status);
+        let items = self.items.len();
+        let tail = self.tail.0.len() + usize::from(self.tail.1.is_some());
+        let total = self.list.item_count();
+        let kept = self.listed.min(total).min(items);
+        for at in std::mem::take(&mut self.dirty) {
+            if at < kept {
+                self.list.splice(at..at + 1, 1);
+            }
         }
-        out
+        self.list.splice(kept..total, items - kept + tail);
+        self.listed = items;
     }
 
     fn composer(&self, cx: &mut Context<Self>, t: &Theme) -> Div {
@@ -1176,14 +1266,15 @@ impl Render for AiPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.take_requests(window, cx);
         let t = Theme::get(cx);
-        let at_end = {
-            let (offset, max) = (self.scroll.offset().y, self.scroll.max_offset().y);
-            -offset >= max - px(space::XL)
-        };
-        if std::mem::take(&mut self.stick) || at_end {
-            self.scroll.scroll_to_bottom();
+        let empty = self.items.is_empty() && ai::waiting(cx).is_empty();
+        if !empty {
+            self.sync_list(cx);
         }
-        let body: Vec<AnyElement> = if self.items.is_empty() && ai::waiting(cx).is_empty() { vec![self.empty(cx, &t).into_any_element()] } else { self.stream(cx, &t) };
+        let body = if empty {
+            div().id("ai-stream").flex_1().min_h_0().overflow_y_scroll().child(self.empty(cx, &t)).into_any_element()
+        } else {
+            div().flex_1().min_h_0().child(list(self.list.clone(), cx.processor(|this, ix, _, cx| this.row(ix, cx))).size_full()).into_any_element()
+        };
         let header = self.header(cx, &t);
         let composer = self.composer(cx, &t);
         div()
@@ -1205,7 +1296,7 @@ impl Render for AiPanel {
                 }
             }))
             .child(header)
-            .child(div().id("ai-stream").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.scroll).child(div().flex().flex_col().gap(px(space::M)).p(px(space::L)).children(body)))
+            .child(body)
             .child(composer)
     }
 }
@@ -1213,9 +1304,4 @@ impl Render for AiPanel {
 /// The context chip for a note or PDF, for menus that ask about a file.
 pub fn file_chip(path: &Path) -> Chip {
     if is_pdf(path) { Chip::Pdf(path.to_path_buf(), ai::pdf_focus(path).map_or(0, |f| f.page)) } else { Chip::Note(path.to_path_buf()) }
-}
-
-/// The runner the column would start, for the settings.
-pub fn runner_now() -> Option<Runner> {
-    agents::chosen(&prefs::with(|p| p.ai.clone()))
 }

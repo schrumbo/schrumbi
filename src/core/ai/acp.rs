@@ -121,7 +121,7 @@ impl<T> Drop for Reply<T> {
 
 /// What the connection reports to the column.
 pub enum Event {
-    Ready { agent: String },
+    Ready,
     Update(Update),
     Ask { ask: Ask, reply: Reply<bool> },
     Read { path: PathBuf, line: Option<u32>, limit: Option<u32>, reply: Reply<Result<String, String>> },
@@ -393,8 +393,7 @@ pub async fn run(transport: impl ConnectTo<Client> + 'static, setup: Setup, even
 
 async fn session(connection: ConnectionTo<Agent>, setup: Setup, events: async_channel::Sender<Event>, commands: async_channel::Receiver<Command>) -> Result<(), agent_client_protocol::Error> {
     let caps = ClientCapabilities::new().fs(FileSystemCapabilities::new().read_text_file(true).write_text_file(true));
-    let init = connection.send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(caps)).block_task().await?;
-    let agent = init.agent_info.map(|i| i.title.unwrap_or(i.name)).unwrap_or_default();
+    connection.send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(caps)).block_task().await?;
     let mut request = NewSessionRequest::new(setup.cwd).mcp_servers(setup.mcp.into_iter().map(McpServer::Stdio).collect());
     if let Some(meta) = setup.meta {
         request = request.meta(meta);
@@ -406,7 +405,7 @@ async fn session(connection: ConnectionTo<Agent>, setup: Setup, events: async_ch
     {
         connection.send_request(SetSessionModeRequest::new(id.clone(), mode)).block_task().await?;
     }
-    let _ = events.try_send(Event::Ready { agent });
+    let _ = events.try_send(Event::Ready);
     let mut queue = VecDeque::new();
     loop {
         let text = match queue.pop_front() {

@@ -1036,7 +1036,7 @@ impl NotesPage {
                     .on_click(click(row, me))
                     .context_menu(move |m, window, cx| {
                         let (r, m2, x) = (rename.clone(), rename_me.clone(), trash.clone());
-                        deadline_submenu(file_menu(m, menu.clone()).separator(), &menu, window, cx)
+                        let m = deadline_submenu(file_menu(m, menu.clone()).separator(), &menu, window, cx)
                             .separator()
                             .item(PopupMenuItem::new(format!("{}{}", tr("Umbenennen…"), crate::core::shortcuts::ShortcutAction::RenameNote.hint())).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
                                 let p = r.clone();
@@ -1045,7 +1045,8 @@ impl NotesPage {
                             .when_some(super::convention_rename::menu_item_or_hint(&menu, cx), |m, item| m.item(item))
                             .item(PopupMenuItem::new(tr("In den Papierkorb")).icon(menu_icon("trash-2")).on_click(move |_, _, cx| {
                                 state::trash(vec![x.clone()], cx);
-                            }))
+                            }));
+                        super::ai::file_submenu(m, &menu, window, cx)
                     })
                     .into_any_element()
             }

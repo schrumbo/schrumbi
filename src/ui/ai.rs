@@ -38,6 +38,7 @@ struct Server {
 
 struct Ask {
     id: u64,
+    session: String,
     tool: String,
     preview: Preview,
     reply: async_channel::Sender<Answer>,
@@ -242,13 +243,14 @@ pub fn waiting(cx: &App) -> Vec<Waiting> {
 }
 
 /// Asks the user about a change the agent wants to make, in the column or the floating card; `key` names the kind of change for „Immer heute“.
-pub fn ask_change(key: &str, preview: Preview, cx: &mut App) -> async_channel::Receiver<Answer> {
+pub fn ask_change(key: &str, preview: Preview, cx: &mut App) -> (Option<u64>, async_channel::Receiver<Answer>) {
     if allowed_today(key, cx) {
         let (tx, rx) = async_channel::bounded(1);
         let _ = tx.try_send(Answer::Allow);
-        return rx;
+        return (None, rx);
     }
-    ask(key, preview, cx)
+    let rx = ask(key, preview, cx);
+    (Some(cx.global::<Ai>().next), rx)
 }
 
 /// Runs a change for a column session as one step of its turn.
@@ -544,7 +546,7 @@ async fn run(session: &str, name: &str, args: &Value, cx: &mut AsyncApp) -> Resu
     if tools::is_write(name) {
         let preview = cx.update(|cx| state::read(cx, |l| tools::preview(l, name, args)))?;
         if !cx.update(|cx| allowed_today(name, cx)) {
-            let answer = cx.update(|cx| ask(name, preview, cx));
+            let answer = cx.update(|cx| ask_for(session, name, preview, cx));
             match answer.recv().await.unwrap_or(Answer::Decline) {
                 Answer::Allow | Answer::Today => {}
                 Answer::Decline => {
@@ -602,11 +604,23 @@ fn allowed_today(name: &str, cx: &App) -> bool {
 }
 
 fn ask(name: &str, preview: Preview, cx: &mut App) -> async_channel::Receiver<Answer> {
+    ask_for("", name, preview, cx)
+}
+
+/// Declines every waiting change of `session`, e.g. when its turn was stopped.
+pub fn decline_session(session: &str, cx: &mut App) {
+    let ids: Vec<u64> = cx.try_global::<Ai>().map(|ai| ai.asks.iter().filter(|a| a.session == session).map(|a| a.id).collect()).unwrap_or_default();
+    for id in ids {
+        answer_ask(id, Answer::Decline, cx);
+    }
+}
+
+fn ask_for(session: &str, name: &str, preview: Preview, cx: &mut App) -> async_channel::Receiver<Answer> {
     let (reply, answer) = async_channel::bounded(1);
     let ai = cx.global_mut::<Ai>();
     ai.next += 1;
     let id = ai.next;
-    ai.asks.push_back(Ask { id, tool: name.to_string(), preview, reply });
+    ai.asks.push_back(Ask { id, session: session.to_string(), tool: name.to_string(), preview, reply });
     cx.refresh_windows();
     cx.spawn(async move |cx| {
         cx.background_executor().timer(ASK_WAIT).await;

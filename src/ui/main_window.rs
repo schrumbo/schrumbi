@@ -600,8 +600,8 @@ impl Render for MainWindow {
                 let toast_motion = motion::timed(motion::SLOW, cx);
                 div()
                     .absolute()
-                    .left_0()
-                    .right_0()
+                    .left(px(left))
+                    .right(px(inspector_target))
                     .flex()
                     .justify_center()
                     .child(v)

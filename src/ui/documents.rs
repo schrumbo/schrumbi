@@ -4421,9 +4421,10 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                 } else {
                     close_button.when(!active && !is_dirty, |d| d.invisible().group_hover("doc-tab", Styled::visible)).into_any_element()
                 })
-                .context_menu(move |m, _, _| {
+                .context_menu(move |m, window, cx| {
                     let (a, b, c, d, beside, right, shown) = (menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone());
-                    m.when(!active && !is_beside, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.set_split(Some(beside.clone()))))))
+                    let ai_path = menu.clone();
+                    let m = m.when(!active && !is_beside, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.set_split(Some(beside.clone()))))))
                         .when(active && can_beside, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.drop_document(&shown, library::DocDrop::Beside, None)))))
                         .item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).on_click(move |_, _, cx| close_tab(&a, cx)))
                         .item(PopupMenuItem::new(tr("Andere Tabs schließen")).disabled(!others).on_click(move |_, _, cx| close_other_tabs(&b, cx)))
@@ -4431,7 +4432,8 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                         .item(PopupMenuItem::new(tr("Alle Tabs schließen")).on_click(|_, _, cx| close_all_tabs(cx)))
                         .separator()
                         .item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::reveal(&c)))
-                        .item(PopupMenuItem::new(tr("Mit Standard-App öffnen")).on_click(move |_, _, _| library::open_path(&d)))
+                        .item(PopupMenuItem::new(tr("Mit Standard-App öffnen")).on_click(move |_, _, _| library::open_path(&d)));
+                    super::ai::file_submenu(m, &ai_path, window, cx)
                 }),
         );
     }

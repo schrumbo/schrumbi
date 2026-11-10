@@ -49,11 +49,6 @@ pub fn append(file: &Path, entries: &[Entry]) -> std::io::Result<()> {
     out.flush()
 }
 
-/// The entries of a session file; unreadable lines are skipped.
-pub fn load(file: &Path) -> Vec<Entry> {
-    std::fs::read_to_string(file).map(|text| text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()).unwrap_or_default()
-}
-
 /// A session as a Markdown note: the user's messages as quotes, the answers as text, tool steps as a list.
 pub fn markdown(title: &str, entries: &[Entry]) -> String {
     let mut out = format!("# {title}\n");

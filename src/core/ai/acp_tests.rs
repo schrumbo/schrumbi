@@ -178,7 +178,7 @@ fn a_session_opens_with_schrumbis_server_and_asking_mode_and_streams_a_turn() {
     let log = session(false, |events, commands| async move {
         commands.send(Command::Prompt("hello".into())).await.unwrap();
         let stop = until_turn_end(&events, |e| match e {
-            Event::Ready { .. } => ready = true,
+            Event::Ready => ready = true,
             Event::Update(Update::Text(t)) => text.push_str(&t),
             Event::Update(Update::Tool { id, new, patch }) => tools.push((id, new, patch.status)),
             _ => {}
@@ -320,4 +320,29 @@ fn claude_sessions_block_its_own_file_edits_and_the_shell_unless_allowed() {
     let blocked = |allow: bool| super::agents::claude_meta(allow)["claudeCode"]["options"]["disallowedTools"].as_array().unwrap().iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>();
     assert!(blocked(false).contains(&"Edit".to_string()) && blocked(false).contains(&"Bash".to_string()));
     assert!(blocked(true).contains(&"Write".to_string()) && !blocked(true).contains(&"Bash".to_string()));
+}
+
+#[test]
+fn the_adapter_download_unpacks_inside_its_folder_and_refuses_escaping_entries() {
+    use std::io::Write;
+    let dir = root().join("unpack");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let make = |name: &str, entries: &[&str]| {
+        let path = dir.join(name);
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        for e in entries {
+            zip.start_file(*e, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(b"bin").unwrap();
+        }
+        zip.finish().unwrap();
+        path
+    };
+    let good = make("good.zip", &["claude-agent-acp.exe", "claude.exe"]);
+    super::install::unpack(&good, &dir.join("out")).unwrap();
+    assert_eq!(std::fs::read(dir.join("out").join("claude.exe")).unwrap(), b"bin");
+    assert_eq!(super::install::sha256_of(&dir.join("out").join("claude.exe")).unwrap(), "51a1f05af85e342e3c849b47d387086476282d5f50dc240c19216d6edfb1eb5a");
+    let bad = make("bad.zip", &["../escaped.exe"]);
+    assert!(super::install::unpack(&bad, &dir.join("bad")).is_err());
+    assert!(!dir.join("escaped.exe").exists());
 }
