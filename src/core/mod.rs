@@ -29,8 +29,10 @@ pub mod prefs;
 pub mod scanner;
 pub mod schedule;
 pub mod search_index;
+pub mod setup;
 pub mod shortcuts;
 pub mod text;
+pub mod tips;
 pub mod vault;
 pub mod workspace;
 #[cfg(test)]

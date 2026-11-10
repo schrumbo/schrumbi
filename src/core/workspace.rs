@@ -107,20 +107,44 @@ pub fn restore_latest<T: DeserializeOwned>(path: &Path) -> bool {
     false
 }
 
-/// Starter config for an empty folder: one semester around today, one module per top-level folder.
+/// Starter config for a folder without one: the current term as German universities usually hold it,
+/// and the folders that look like modules. A vault starts without modules and never gets folders made for it.
 pub fn starter_config(root: &Path) -> StudyConfig {
-    let monday = day::monday(Local::now().date_naive());
-    let end = monday + Days::new(7 * 15 - 1);
-    let semester = Semester { id: "s1".into(), name: semester_name(monday), start: day::format(monday), end: day::format(end), ..Default::default() };
-    let mut folders: Vec<String> = std::fs::read_dir(root)
-        .map(|d| d.filter_map(Result::ok).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
-        .unwrap_or_default();
-    folders.retain(|n| !n.starts_with('.') && !n.starts_with('_'));
-    folders.sort();
+    let semester = semester_guess(Local::now().date_naive());
+    let is_vault = root.join(".obsidian").is_dir();
+    let found = super::folders::all_folders(root);
+    let chosen = super::folders::suggested_modules(&found, is_vault);
     let mut taken = Vec::new();
-    let modules = folders.iter().enumerate().map(|(i, name)| module_for_folder(name, &semester.id, i, &mut taken)).collect();
+    let modules = chosen.iter().enumerate().map(|(i, folder)| module_for_folder(folder, &semester.id, i, &mut taken)).collect();
     let name = root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    StudyConfig::new(name, String::new(), vec![semester], modules)
+    let mut config = StudyConfig::new(name, String::new(), vec![semester], modules);
+    config.create_folders = !is_vault;
+    config
+}
+
+fn week_of(year: i32, month: u32, day_of_month: u32) -> chrono::NaiveDate {
+    day::monday(chrono::NaiveDate::from_ymd_opt(year, month, day_of_month).unwrap_or_default())
+}
+
+/// The lecture period most German universities keep around `date`: winter from the week of 15 October to the
+/// week of 7 February with the days around Christmas off, summer from the week of 15 April to the week of 18 July.
+/// A guess the user confirms or corrects; `is_guessed` tells it apart from entered dates.
+pub fn semester_guess(date: chrono::NaiveDate) -> Semester {
+    let (y, m) = (date.year(), date.month());
+    let name = semester_name(date);
+    if (3..=8).contains(&m) {
+        return Semester { id: "s1".into(), name, start: day::format(week_of(y, 4, 15)), end: day::format(week_of(y, 7, 18) + Days::new(4)), ..Default::default() };
+    }
+    let y = if m >= 9 { y } else { y - 1 };
+    let christmas = super::model::Break { name: "Weihnachten".into(), start: day::format(chrono::NaiveDate::from_ymd_opt(y, 12, 24).unwrap_or_default()), end: day::format(chrono::NaiveDate::from_ymd_opt(y + 1, 1, 6).unwrap_or_default()) };
+    Semester { id: "s1".into(), name, start: day::format(week_of(y, 10, 15)), end: day::format(week_of(y + 1, 2, 7) + Days::new(4)), breaks: vec![christmas], ..Default::default() }
+}
+
+/// Whether a semester still carries the dates `semester_guess` made up, so nobody has confirmed them.
+pub fn is_guessed(semester: &Semester) -> bool {
+    let Some(start) = semester.start_date() else { return false };
+    let guess = semester_guess(start);
+    guess.start == semester.start && guess.end == semester.end
 }
 
 /// A module for a folder at any depth, named after the folder's last part.
@@ -156,5 +180,22 @@ mod tests {
         assert_eq!(semester_name(chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()), "WS 2026/27");
         assert_eq!(semester_name(chrono::NaiveDate::from_ymd_opt(2027, 1, 1).unwrap()), "WS 2026/27");
         assert_eq!(semester_name(chrono::NaiveDate::from_ymd_opt(2027, 4, 1).unwrap()), "SS 2027");
+    }
+
+    #[test]
+    fn guesses_the_usual_german_terms_and_recognises_its_own_guess() {
+        let d = |y, m, d| chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        let winter = semester_guess(d(2026, 11, 10));
+        assert_eq!((winter.name.as_str(), winter.start.as_str(), winter.end.as_str()), ("WS 2026/27", "2026-10-12", "2027-02-05"));
+        assert_eq!(winter.breaks.len(), 1);
+        assert_eq!(semester_guess(d(2027, 1, 20)), winter);
+        let summer = semester_guess(d(2027, 5, 3));
+        assert_eq!((summer.name.as_str(), summer.start.as_str(), summer.end.as_str()), ("SS 2027", "2027-04-12", "2027-07-16"));
+        assert!(summer.breaks.is_empty());
+        assert!(is_guessed(&winter) && is_guessed(&summer));
+        let mut edited = winter.clone();
+        edited.end = "2027-02-12".into();
+        assert!(!is_guessed(&edited));
+        assert!(!is_guessed(&Semester::default()), "a semester without dates is not a guess");
     }
 }

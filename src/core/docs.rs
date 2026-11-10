@@ -179,7 +179,6 @@ pub fn split(source: &str) -> Doc {
 static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{(key|ui):([^{}\n]+)\}").expect("placeholder pattern"));
 
 /// Every `{key:…}` and `{ui:…}` in a text, in order.
-#[cfg(test)]
 pub fn placeholders(source: &str) -> Vec<(String, String)> {
     PLACEHOLDER.captures_iter(source).map(|c| (c[1].to_string(), c[2].to_string())).collect()
 }

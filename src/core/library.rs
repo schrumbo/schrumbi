@@ -341,6 +341,8 @@ pub struct Library {
     pub config_broken: bool,
     read_only: bool,
     pub needs_setup: bool,
+    /// The one page of the setup the next `needs_setup` shows alone, e.g. only the modules.
+    pub setup_only: Option<usize>,
     config_created: bool,
     /// A deck the flashcards page should open and start.
     pub cards_request: Option<String>,
@@ -525,6 +527,7 @@ impl Library {
             config_broken: false,
             read_only: false,
             needs_setup: false,
+            setup_only: None,
             config_created: false,
             cards_request: None,
             show_save_layout: false,
@@ -592,6 +595,7 @@ impl Library {
 
     /// Records an exported file as a step: undo removes it, or brings back the version it replaced. The export belongs to the deadlines its source belongs to.
     pub fn record_export(&mut self, target: &Path, replaced: Option<PathBuf>, source: &Path) {
+        prefs::mark_used("export_pdf");
         let mut changes = vec![match replaced {
             Some(backup) => Change::Replaced { path: target.to_path_buf(), backup },
             None => Change::Trash(target.to_path_buf()),
@@ -757,7 +761,6 @@ impl Library {
                 }
                 let _ = workspace::save(&c, &path);
                 self.config = Some(c);
-                self.needs_setup = true;
                 self.config_created = true;
                 self.last_error = None;
             }
@@ -2781,6 +2784,9 @@ impl Library {
             Some(s) => self.state.overrides.insert(id.into(), Override { status: s, date: Utc::now() }),
             None => self.state.overrides.remove(id),
         };
+        if status.is_some() {
+            prefs::mark_used("status");
+        }
         self.save_state();
         self.refresh();
         if !announce {
@@ -2811,6 +2817,7 @@ impl Library {
         if paths.is_empty() || assignment_id.as_deref().and_then(|id| self.assignment(id)).is_some_and(|a| !a.tracks_files()) {
             return;
         }
+        prefs::mark_used("filing");
         self.filing_request = Some(FilingRequest { paths, assignment_id });
         self.changed();
     }
@@ -3846,6 +3853,9 @@ impl Library {
     /// Shows an open document next to the current one, or ends that when `None`.
     pub fn set_split(&mut self, path: Option<PathBuf>) {
         self.split_document = path.filter(|p| self.open_documents.contains(p) && self.active_document.as_ref() != Some(p));
+        if self.split_document.is_some() {
+            prefs::mark_used("split");
+        }
         self.save_documents();
         self.changed();
     }

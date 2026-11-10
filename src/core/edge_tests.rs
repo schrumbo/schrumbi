@@ -95,11 +95,27 @@ fn stays_usable_with_many_deadlines() {
 }
 
 #[test]
-fn asks_for_setup_in_an_empty_folder() {
+fn an_empty_folder_works_without_the_wizard() {
     let mut lib = open(&folder("empty"));
-    assert!(lib.needs_setup);
+    assert!(!lib.needs_setup, "setup is offered in the overview, never forced");
     assert!(!lib.config_broken);
+    let semester = lib.semester().cloned().expect("a guessed semester");
+    assert!(super::workspace::is_guessed(&semester));
+    assert!(lib.semester_modules().is_empty());
     read_everything(&mut lib);
+}
+
+#[test]
+fn module_folders_become_modules_and_resource_folders_do_not() {
+    let root = folder("plain");
+    for name in ["Analysis", "Recht", "assets", ".git", "_Inbox"] {
+        std::fs::create_dir_all(root.join(name)).unwrap();
+    }
+    let lib = open(&root);
+    let mut codes: Vec<String> = lib.semester_modules().iter().map(|m| m.folder.clone()).collect();
+    codes.sort();
+    assert_eq!(codes, ["Analysis", "Recht"]);
+    assert!(lib.config.as_ref().is_some_and(|c| c.create_folders));
 }
 
 #[test]

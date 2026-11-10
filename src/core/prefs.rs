@@ -59,6 +59,21 @@ impl Default for GitPrefs {
     }
 }
 
+/// What the setup list in the overview remembers for one workspace on this device.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SetupPrefs {
+    pub collapsed: bool,
+    /// Closed with the X; the settings bring it back.
+    pub dismissed: bool,
+    /// Items the user passed over; they count as done.
+    pub skipped: BTreeSet<String>,
+    /// Items whose guessed values the user accepted as they are.
+    pub confirmed: BTreeSet<String>,
+    /// The list was complete once and said so; it stays hidden.
+    pub completed: bool,
+}
+
 /// How the file browser groups files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -220,6 +235,20 @@ pub struct Prefs {
     pub main_window: Option<[f32; 4]>,
     /// Last position of the upload panel: x, y.
     pub upload_window: Option<[f32; 2]>,
+    /// The setup list of each workspace, by its path.
+    pub setup: BTreeMap<String, SetupPrefs>,
+    /// A tip of the day shows once a day after the first start.
+    pub tips_enabled: bool,
+    /// The day the last tip was shown, `yyyy-MM-dd`.
+    pub tips_last: String,
+    /// Tips shown so far, oldest first.
+    pub tips_seen: Vec<String>,
+    /// Features the user has used, so tips about them stay away.
+    pub used_features: BTreeSet<String>,
+    /// How often the app was started on this device.
+    pub launches: u32,
+    /// The user chose how notes are written; the setup list no longer asks.
+    pub note_editor_chosen: bool,
 }
 
 impl Default for Prefs {
@@ -286,6 +315,13 @@ impl Default for Prefs {
             hidden_tabs: Vec::new(),
             main_window: None,
             upload_window: None,
+            setup: BTreeMap::new(),
+            tips_enabled: true,
+            tips_last: String::new(),
+            tips_seen: Vec::new(),
+            used_features: BTreeSet::new(),
+            launches: 0,
+            note_editor_chosen: false,
         }
     }
 }
@@ -353,6 +389,26 @@ pub fn update(f: impl FnOnce(&mut Prefs)) {
             }
         }
     }
+}
+
+/// Notes that a feature was used, so the tip about it is no longer offered.
+pub fn mark_used(feature: &str) {
+    if with(|p| p.used_features.contains(feature)) {
+        return;
+    }
+    update(|p| {
+        p.used_features.insert(feature.to_string());
+    });
+}
+
+/// The setup list state of the workspace at `root`.
+pub fn setup_of(root: &std::path::Path) -> SetupPrefs {
+    with(|p| p.setup.get(root.to_string_lossy().as_ref()).cloned().unwrap_or_default())
+}
+
+/// Changes the setup list state of the workspace at `root`.
+pub fn update_setup(root: &std::path::Path, f: impl FnOnce(&mut SetupPrefs)) {
+    update(|p| f(p.setup.entry(root.to_string_lossy().to_string()).or_default()));
 }
 
 /// Recently opened workspaces, most recent first, keeping eight.
