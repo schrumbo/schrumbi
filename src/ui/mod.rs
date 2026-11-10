@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod bar_fit;
 pub mod board;
 pub mod coach;

@@ -52,6 +52,7 @@ pages! {
     "markdown", "file-text", Notes;
     "karten", "layers", Notes;
     "sync", "cloud", More;
+    "ki", "bot", More;
     "einstellungen", "settings", More;
     "tastenkuerzel", "keyboard", More;
 }

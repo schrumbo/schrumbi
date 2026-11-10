@@ -34,6 +34,7 @@ enum Tab {
     Notes,
     Cards,
     Sync,
+    Ai,
     Shortcuts,
 }
 
@@ -111,6 +112,14 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("shortcut", "Tastenkürzel"),
     ("hotkey", "Tastenkürzel"),
     ("keybinding", "Tastenkürzel"),
+    ("ki", "KI-Assistent verwenden"),
+    ("ai", "KI-Assistent verwenden"),
+    ("assistent", "KI-Assistent verwenden"),
+    ("claude", "Programme"),
+    ("codex", "Programme"),
+    ("opencode", "Programme"),
+    ("mcp", "Für die Kommandozeile"),
+    ("terminal", "Im Terminal öffnen"),
 ];
 
 /// Settings shown only while there is a naming convention; search leads to its switch instead.
@@ -197,6 +206,12 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Verbindung", Tab::Notes),
     ("Vault", Tab::Notes),
     ("Tastenkürzel", Tab::Shortcuts),
+    ("KI-Assistent verwenden", Tab::Ai),
+    ("Programme", Tab::Ai),
+    ("Knopf in der Werkzeugleiste", Tab::Ai),
+    ("Für die Kommandozeile", Tab::Ai),
+    ("Befehl", Tab::Ai),
+    ("Im Terminal öffnen", Tab::Ai),
     ("Lernen", Tab::Cards),
     ("Erinnerungsziel", Tab::Cards),
     ("Neue Karten pro Tag", Tab::Cards),
@@ -592,6 +607,7 @@ fn tab_name(tab: Tab) -> String {
         Tab::Notes => tr("Notizen"),
         Tab::Cards => tr("Karten"),
         Tab::Sync => tr("Sync"),
+        Tab::Ai => tr("KI"),
         Tab::Shortcuts => tr("Tastenkürzel"),
     }
 }
@@ -631,6 +647,7 @@ impl Settings {
             cx.notify();
         })];
         let (semester, module) = state::read(cx, |l| (l.config.as_ref().and_then(|c| c.current_semester(l.now)).map(|s| s.id.clone()), l.config.as_ref().and_then(|c| c.modules.first()).map(|m| m.id.clone())));
+        super::ai::rescan(cx);
         Self {
             tab: Tab::General,
             fields: Fields::default(),
@@ -782,6 +799,7 @@ impl Settings {
             (Tab::Notes, tr("Notizen"), "square-pen"),
             (Tab::Cards, tr("Karten"), "layers"),
             (Tab::Sync, tr("Sync"), "cloud"),
+            (Tab::Ai, tr("KI"), "bot"),
             (Tab::Shortcuts, tr("Tastenkürzel"), "command"),
         ] {
             let active = tab == self.tab;
@@ -2159,6 +2177,77 @@ impl Settings {
         section(Some(tr("Eigenes Wörterbuch")), Some(tr("Diese Wörter markiert die Rechtschreibung nicht. Hinzufügen: in einer Notiz auf ein unterstrichenes Wort zeigen.")), rows, t)
     }
 
+    fn ai_tab(&mut self, cx: &mut Context<Self>, t: &Theme) -> Div {
+        use super::ai::{self, Registration};
+        use crate::core::ai::detect::{self, Agent};
+        let prefs = prefs::with(|p| p.ai.clone());
+        let found = detect::found();
+        let names = found.iter().map(|c| c.agent.label()).collect::<Vec<_>>().join(", ");
+        let rescan = Button::new("ai-rescan").label(tr("Erneut suchen")).on_click(|_, _, cx| ai::rescan(cx));
+        let programs = div().flex().items_center().gap(px(space::M)).child(caption(if found.is_empty() { tr("Keins gefunden") } else { names }, t)).child(rescan);
+        let mut sections = div().w_full().flex().flex_col().gap(px(space::L)).child(section(
+            None,
+            Some(if found.is_empty() {
+                tr("Schrumbi arbeitet mit Claude Code, Codex oder OpenCode zusammen, sobald eins davon installiert ist.")
+            } else {
+                tr("Das Programm nutzt dein eigenes Konto dort; was du ihm zeigst, geht an diesen Anbieter. Lesen darf es in deinem Studienordner, ändern nur mit deinem Ja, und jede Änderung ist rückgängig.")
+            }),
+            vec![
+                row(tr("KI-Assistent verwenden"), Switch::new("ai-on").checked(prefs.enabled).on_click(|v, _, cx| ai::set_enabled(*v, cx)), t),
+                row(tr("Programme"), programs, t),
+                row(tr("Knopf in der Werkzeugleiste"), Switch::new("ai-toolbar").checked(prefs.toolbar_button).disabled(!prefs.enabled).on_click(|v, _, cx| {
+                    let v = *v;
+                    prefs::update(|p| p.ai.toolbar_button = v);
+                    cx.refresh_windows();
+                }), t),
+            ],
+            t,
+        ));
+        if !ai::active() {
+            return sections;
+        }
+        let Some(exe) = detect::exe() else { return sections };
+        let mut rows = Vec::new();
+        for cli in found {
+            let text = detect::register_text(cli.agent, &exe);
+            let copy_text = text.clone();
+            let copy = Button::new(SharedString::from(format!("ai-copy-{:?}", cli.agent))).ghost().icon(menu_icon("copy")).tooltip(tr("Kopieren")).on_click(move |_, _, cx| super::drive::copy(copy_text.clone(), cx));
+            let mut controls = div().flex().items_center().gap(px(space::S)).child(copy);
+            let mut detail = text;
+            if detect::register_args(cli.agent, &exe).is_some() {
+                let state = ai::registration(cli.agent, cx);
+                if let Some(Registration::Failed(e)) = &state {
+                    detail = e.clone();
+                }
+                let label = match state {
+                    Some(Registration::Running) => tr("Trägt ein …"),
+                    Some(Registration::Done) => tr("Eingetragen"),
+                    Some(Registration::Failed(_)) => tr("Erneut versuchen"),
+                    None => tr("Eintragen"),
+                };
+                let busy = state == Some(Registration::Running);
+                let target = cli.clone();
+                controls = controls.child(Button::new(SharedString::from(format!("ai-register-{:?}", cli.agent))).label(label).loading(busy).disabled(busy || state == Some(Registration::Done)).on_click(move |_, _, cx| ai::register(target.clone(), cx)));
+            } else if cli.agent == Agent::OpenCode {
+                detail = format!("{} {detail}", tr("In opencode.json ergänzen:"));
+            }
+            rows.push(detail_row(cli.agent.label(), detail, controls, t));
+        }
+        let server = detect::server_text(&exe);
+        let server_copy = server.clone();
+        rows.push(detail_row(tr("Befehl"), server, Button::new("ai-copy-server").ghost().icon(menu_icon("copy")).tooltip(tr("Kopieren")).on_click(move |_, _, cx| super::drive::copy(server_copy.clone(), cx)), t));
+        let root = state::read(cx, |l| l.root.clone());
+        rows.push(row(tr("Im Terminal öffnen"), Button::new("ai-terminal").label(tr("Öffnen")).disabled(root.is_none()).on_click(move |_, _, _| {
+            if let Some(root) = root.clone()
+                && !crate::core::drive::fenced("terminal", root.display())
+            {
+                let _ = detect::open_terminal(&root);
+            }
+        }), t));
+        sections = sections.child(section(Some(tr("Für die Kommandozeile")), Some(tr("Danach kann dein Programm im Terminal deine Notizen, PDFs und Fristen nutzen, solange Schrumbi läuft. Jede Änderung fragt hier zuerst.")), rows, t));
+        sections
+    }
+
     fn cards_tab(&mut self, t: &Theme) -> Div {
         let p = prefs::get();
         let (retention, new, reviews) = (p.card_retention, p.card_new_per_day, p.card_reviews_per_day);
@@ -2525,6 +2614,10 @@ impl Render for Settings {
                 self.light_up(tr(&label), window, cx);
             }
         }
+        if cx.try_global::<OpenOnAi>().is_some_and(|o| o.0) {
+            cx.set_global(OpenOnAi(false));
+            self.tab = Tab::Ai;
+        }
         let t = Theme::get(cx);
         let config = state::read(cx, |l| l.config.clone());
         let tabs = self.tab_bar(&t, cx);
@@ -2535,6 +2628,7 @@ impl Render for Settings {
             (_, Tab::Notes) => div().id("notes-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.notes(window, cx, &t)).into_any_element(),
             (_, Tab::Cards) => div().id("cards-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.cards_tab(&t)).into_any_element(),
             (_, Tab::Sync) => div().id("sync-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.sync_tab(cx, &t)).into_any_element(),
+            (_, Tab::Ai) => div().id("ai-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.ai_tab(cx, &t)).into_any_element(),
             (_, Tab::Shortcuts) => self.shortcuts(&t, window, cx).into_any_element(),
             (None, _) => unavailable("folder", tr("Kein Ordner gewählt"), tr("Wähle zuerst im Hauptfenster deinen Studienordner."), &t).into_any_element(),
             (Some(c), Tab::General) => div().id("general-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.general(&c, window, cx, &t)).into_any_element(),
@@ -2618,6 +2712,17 @@ impl Global for OpenOnSync {}
 struct OpenLit(Option<String>);
 
 impl Global for OpenLit {}
+
+/// Opens the settings on the assistant's tab.
+pub fn open_ai(cx: &mut App) {
+    open(cx);
+    cx.set_global(OpenOnAi(true));
+    cx.refresh_windows();
+}
+
+struct OpenOnAi(bool);
+
+impl Global for OpenOnAi {}
 
 #[cfg(test)]
 mod tests {

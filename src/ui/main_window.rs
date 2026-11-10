@@ -302,6 +302,7 @@ impl MainWindow {
         let module2 = module.clone();
         let toolbar_padding = (if super::chrome::CUSTOM { space::M } else { (92. - left).max(space::M) }) + space::M;
         let search_width = if page_width < 760. { 200. } else { 325. };
+        let ai_room = if super::ai::toolbar_button_shown() { control::M + space::S } else { 0. };
         div()
             .h(px(control::BAR))
             .flex_none()
@@ -316,7 +317,7 @@ impl MainWindow {
             .child(Button::new("go-forward").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-right")).disabled(!lib.can_go_forward()).tooltip(tr("Vorwärts")).on_click(|_, _, cx| act(cx, |l| l.go_forward())))
             
             .child(match lib.route() {
-                Route::Doc(shown) => Self::crumbs(lib, lib.focused_document().unwrap_or(shown), total - toolbar_padding - crumb::TOOLBAR_BUTTONS * control::M - search_width - crumb::TOOLBAR_GAPS * space::S, window, t),
+                Route::Doc(shown) => Self::crumbs(lib, lib.focused_document().unwrap_or(shown), total - toolbar_padding - crumb::TOOLBAR_BUTTONS * control::M - search_width - crumb::TOOLBAR_GAPS * space::S - ai_room, window, t),
                 _ => div().flex_1().min_w(px(80.)).truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)),
             })
             .child(super::coach::anchor(div().id("coach-new")).child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().bg(t.ink.opacity(0.06)).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("plus")).tooltip(tr("Neu")).dropdown_menu(move |menu, _, _| {
@@ -327,6 +328,7 @@ impl MainWindow {
                         act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: m, folder: None }))
                     }))
             })))
+            .children(super::ai::toolbar_button())
             .child(
                 Button::new("toggle-inspector")
                     .ghost()
@@ -581,6 +583,7 @@ impl Render for MainWindow {
                 d.child(div().absolute().top(px(control::BAR)).bottom_0().right(px(inspector_w - INSPECTOR_WIDTH)).w(px(INSPECTOR_WIDTH)).border_l_1().border_color(t.separator).bg(t.content).child(self.inspector.clone()))
             })
             .children(super::link_card::overlay(cx))
+            .children(super::ai::ask_card(cx, &t))
             .children(slides)
             .children(toast.or(working).map(|v| {
                 let toast_motion = motion::timed(motion::SLOW, cx);

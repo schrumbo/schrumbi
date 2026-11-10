@@ -74,6 +74,31 @@ pub struct SetupPrefs {
     pub completed: bool,
 }
 
+/// The assistant: on by default once a supported program is installed, with the switches that keep it quiet.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AiPrefs {
+    pub enabled: bool,
+    /// The button in the toolbar while the assistant is active.
+    pub toolbar_button: bool,
+    /// The agent may run shell commands in the study folder.
+    pub allow_execute: bool,
+    /// Edits by the agent open the file and scroll to the change.
+    pub follow_edits: bool,
+    /// Minutes without a message before an agent process ends.
+    pub idle_minutes: u32,
+    /// The program to use when several are installed; empty picks the first found.
+    pub agent: String,
+    /// A command line for an agent Schrumbi does not know.
+    pub custom_command: String,
+}
+
+impl Default for AiPrefs {
+    fn default() -> Self {
+        Self { enabled: true, toolbar_button: true, allow_execute: false, follow_edits: true, idle_minutes: 30, agent: String::new(), custom_command: String::new() }
+    }
+}
+
 /// How the file browser groups files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -249,6 +274,7 @@ pub struct Prefs {
     pub launches: u32,
     /// The user chose how notes are written; the setup list no longer asks.
     pub note_editor_chosen: bool,
+    pub ai: AiPrefs,
 }
 
 impl Default for Prefs {
@@ -322,6 +348,7 @@ impl Default for Prefs {
             used_features: BTreeSet::new(),
             launches: 0,
             note_editor_chosen: false,
+            ai: AiPrefs::default(),
         }
     }
 }

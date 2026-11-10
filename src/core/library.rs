@@ -359,6 +359,7 @@ pub struct Library {
     rows_moved: bool,
     undo_steps: Vec<Step>,
     in_series: bool,
+    recorded: u64,
     redo_steps: Vec<Step>,
     /// The kind and time of the last edit that merges with the following ones, e.g. typing in a settings field.
     coalescing: Option<(String, std::time::Instant)>,
@@ -540,6 +541,7 @@ impl Library {
             rows_moved: false,
             undo_steps: Vec::new(),
             in_series: false,
+            recorded: 0,
             redo_steps: Vec::new(),
             coalescing: None,
             buffers: HashMap::new(),
@@ -2544,6 +2546,7 @@ impl Library {
         self.rows_moved = true;
         self.redo_steps.clear();
         self.coalescing = None;
+        self.recorded += 1;
         self.undo_steps.push(Step { label, changes, series: self.in_series });
         if self.undo_steps.len() > HISTORY_LIMIT {
             self.undo_steps.remove(0);
@@ -2593,6 +2596,21 @@ impl Library {
 
     pub fn can_undo(&self) -> bool {
         !self.undo_steps.is_empty()
+    }
+
+    /// How many steps were ever recorded; grows by one per step, also once the history is full.
+    pub fn recorded_steps(&self) -> u64 {
+        self.recorded
+    }
+
+    /// The name of the step undo would take back.
+    pub fn undo_label(&self) -> Option<&str> {
+        self.undo_steps.last().map(|s| s.label.as_str())
+    }
+
+    /// Whether files cannot be changed right now: a sync is running or a file is being moved away.
+    pub fn busy(&self) -> bool {
+        self.sync_gate || !self.leaving.is_empty()
     }
 
     pub fn can_redo(&self) -> bool {
@@ -3238,6 +3256,20 @@ impl Library {
         self.undo_steps.push(Step { label: message.clone(), changes, series: false });
         let undo = self.undo_latest();
         self.notify(message, "pencil", None, Some(undo));
+    }
+
+    /// Joins the latest `count` steps into one named `label` and offers to take them back at once.
+    pub fn join_latest(&mut self, count: usize, icon: &'static str, label: String) {
+        let count = count.min(self.undo_steps.len());
+        if count == 0 {
+            return;
+        }
+        let joined = self.undo_steps.split_off(self.undo_steps.len() - count);
+        let changes = joined.into_iter().flat_map(|s| s.changes).collect();
+        self.undo_steps.push(Step { label: label.clone(), changes, series: false });
+        self.coalescing = None;
+        let undo = self.undo_latest();
+        self.notify(label, icon, None, Some(undo));
     }
 
     /// Modules keep following their folder when it, or a folder above it, gets a new name.

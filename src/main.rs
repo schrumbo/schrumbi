@@ -32,6 +32,9 @@ fn main() {
     if let Some(code) = core::office::sheet::legacy_reader() {
         std::process::exit(code);
     }
+    if std::env::args().nth(1).as_deref() == Some("mcp") {
+        std::process::exit(core::ai::mcp::main(std::env::args().skip(2).collect()));
+    }
     core::drive::check();
     core::crash::install();
     core::i18n::init(&core::prefs::get().language);
@@ -61,6 +64,7 @@ fn main() {
         }
         ui::main_window::open(cx);
         ui::tray::init(cx);
+        ui::ai::init(cx);
         ui::drive::init(cx);
         for f in &files {
             ui::state::act(cx, |l| l.open_document(f));

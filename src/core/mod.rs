@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod calendar;
 pub mod calendar_server;
 pub mod calendar_sync;

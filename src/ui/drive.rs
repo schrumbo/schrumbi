@@ -11,6 +11,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use serde_json::{Value, json};
 
+use crate::core::ai::instance::alive;
 use crate::core::drive::{self, on};
 
 const KEPT_FRAMES: usize = 200_000;
@@ -306,33 +307,6 @@ fn watch(tx: &async_channel::Sender<Call>, last: &Mutex<Instant>) {
         std::thread::sleep(Duration::from_secs(10));
         std::process::exit(3);
     }
-}
-
-#[cfg(unix)]
-fn alive(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else { return false };
-    unsafe { libc::kill(pid, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
-}
-
-#[cfg(windows)]
-fn alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-    unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return false;
-        }
-        let mut code = 0;
-        let ok = GetExitCodeProcess(handle, &mut code) != 0;
-        CloseHandle(handle);
-        ok && code == STILL_ACTIVE as u32
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-fn alive(_: u32) -> bool {
-    true
 }
 
 async fn respond(body: &Value, cx: &mut AsyncApp) -> Value {
