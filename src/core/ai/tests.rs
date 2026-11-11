@@ -590,4 +590,26 @@ fn finder_path_gains_the_install_folders_that_exist() {
     assert!(!dirs.contains(&home.join(".bun/bin")));
     let again = std::env::join_paths(&dirs).unwrap();
     assert_eq!(super::detect::widened_path(&again, &home), None);
+    let empty = super::detect::widened_path(std::ffi::OsStr::new(""), &home).unwrap();
+    let dirs: Vec<PathBuf> = std::env::split_paths(&empty).collect();
+    assert_eq!(dirs[0], PathBuf::from("/usr/bin"));
+    assert!(dirs.iter().all(|d| !d.as_os_str().is_empty()));
+}
+
+#[test]
+#[cfg(unix)]
+fn nvm_default_comes_first_then_newest_by_number() {
+    let home = folder("nvm-home");
+    for v in ["v9.11.2", "v22.1.0", "v18.0.0", "v20.5.1"] {
+        std::fs::create_dir_all(home.join(".nvm/versions/node").join(v).join("bin")).unwrap();
+    }
+    let order = |path: std::ffi::OsString| -> Vec<String> {
+        std::env::split_paths(&path).filter_map(|d| d.strip_prefix(home.join(".nvm/versions/node")).ok().and_then(|r| r.components().next()).map(|c| c.as_os_str().to_string_lossy().to_string())).collect()
+    };
+    let path = super::detect::widened_path(std::ffi::OsStr::new("/usr/bin"), &home).unwrap();
+    assert_eq!(order(path), ["v22.1.0", "v20.5.1", "v18.0.0", "v9.11.2"]);
+    std::fs::create_dir_all(home.join(".nvm/alias")).unwrap();
+    std::fs::write(home.join(".nvm/alias/default"), "18\n").unwrap();
+    let path = super::detect::widened_path(std::ffi::OsStr::new("/usr/bin"), &home).unwrap();
+    assert_eq!(order(path), ["v18.0.0", "v22.1.0", "v20.5.1", "v9.11.2"]);
 }

@@ -66,17 +66,38 @@ pub fn which(name: &str) -> Option<PathBuf> {
 /// Folders where installers put command-line programs that a terminal finds through the shell profile.
 fn install_dirs(home: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = [".local/bin", ".claude/local", ".npm-global/bin", ".bun/bin", ".volta/bin", ".opencode/bin", ".cargo/bin", "Library/pnpm"].iter().map(|d| home.join(d)).collect();
+    dirs.extend(nvm_dirs(home));
     dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"].map(PathBuf::from));
-    let mut nvm: Vec<PathBuf> = std::fs::read_dir(home.join(".nvm/versions/node")).into_iter().flatten().flatten().map(|e| e.path().join("bin")).collect();
-    nvm.sort_by(|a, b| b.cmp(a));
-    dirs.extend(nvm);
     dirs
 }
 
-/// `PATH` with the usual install folders appended that exist and are missing.
+fn version_key(name: &str) -> Vec<u32> {
+    name.trim_start_matches('v').split('.').map(|p| p.parse().unwrap_or(0)).collect()
+}
+
+/// nvm's Node folders, the default alias first, then newest first.
+fn nvm_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut names: Vec<String> = std::fs::read_dir(home.join(".nvm/versions/node")).into_iter().flatten().flatten().filter_map(|e| e.file_name().to_str().map(String::from)).collect();
+    names.sort_by_key(|n| std::cmp::Reverse(version_key(n)));
+    let alias = std::fs::read_to_string(home.join(".nvm/alias/default")).unwrap_or_default();
+    let alias = alias.trim().trim_start_matches('v');
+    if !alias.is_empty() && alias.starts_with(|c: char| c.is_ascii_digit()) {
+        let wanted = version_key(alias);
+        if let Some(i) = names.iter().position(|n| version_key(n).starts_with(&wanted)) {
+            let name = names.remove(i);
+            names.insert(0, name);
+        }
+    }
+    names.into_iter().map(|n| home.join(".nvm/versions/node").join(n).join("bin")).collect()
+}
+
+/// `PATH` with the usual install folders appended that exist and are missing; an empty `PATH` starts from the system folders.
 pub fn widened_path(current: &std::ffi::OsStr, home: &Path) -> Option<std::ffi::OsString> {
-    let mut paths: Vec<PathBuf> = std::env::split_paths(current).collect();
-    let before = paths.len();
+    let mut paths: Vec<PathBuf> = std::env::split_paths(current).filter(|p| !p.as_os_str().is_empty()).collect();
+    if paths.is_empty() {
+        paths = vec![PathBuf::from("/usr/bin"), PathBuf::from("/bin"), PathBuf::from("/usr/sbin"), PathBuf::from("/sbin")];
+    }
+    let before = if current.is_empty() { 0 } else { paths.len() };
     for dir in install_dirs(home) {
         if !paths.contains(&dir) && dir.is_dir() {
             paths.push(dir);
