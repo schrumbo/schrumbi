@@ -1,6 +1,6 @@
 use std::sync::{LazyLock, RwLock};
 
-use chrono::{DateTime, Datelike, Days, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, Days, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike};
 use chrono_tz::Tz;
 use regex::Regex;
 
@@ -58,11 +58,16 @@ pub fn time(s: &str) -> NaiveTime {
     NaiveTime::from_hms_opt(h, m, 0).unwrap_or(NaiveTime::from_hms_opt(23, 59, 0).unwrap())
 }
 
+/// The instant of a wall-clock time in `zone`; a time skipped by the spring clock change is read one hour later.
+pub fn resolve<Z: TimeZone>(zone: &Z, naive: NaiveDateTime) -> Option<DateTime<Z>> {
+    zone.from_local_datetime(&naive).earliest().or_else(|| zone.from_local_datetime(&naive.checked_add_signed(Duration::hours(1))?).earliest())
+}
+
 /// The instant of wall-clock `t` on day `d` in the workspace zone.
 pub fn at(d: NaiveDate, t: NaiveTime) -> Option<DateTime<Local>> {
     match zone() {
-        Some(z) => z.from_local_datetime(&d.and_time(t)).earliest().map(|x| x.with_timezone(&Local)),
-        None => Local.from_local_datetime(&d.and_time(t)).earliest(),
+        Some(z) => resolve(&z, d.and_time(t)).map(|x| x.with_timezone(&Local)),
+        None => resolve(&Local, d.and_time(t)),
     }
 }
 
@@ -292,6 +297,19 @@ fn duration(s: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_time_in_the_spring_gap_is_read_one_hour_later() {
+        let berlin: Tz = "Europe/Berlin".parse().unwrap();
+        let d = NaiveDate::from_ymd_opt(2027, 3, 28).unwrap();
+        let t = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        assert_eq!(resolve(&berlin, d.and_time(t(2, 30))).unwrap().naive_local(), d.and_time(t(3, 30)));
+        assert_eq!(resolve(&berlin, d.and_time(t(1, 59))).unwrap().naive_local(), d.and_time(t(1, 59)));
+        assert_eq!(resolve(&berlin, d.and_time(t(3, 0))).unwrap().naive_local(), d.and_time(t(3, 0)));
+        let autumn = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let first = resolve(&berlin, autumn.and_time(t(2, 30))).unwrap();
+        assert_eq!(first.offset().to_string(), "CEST");
+    }
 
     #[test]
     fn parses_dates_in_names() {
