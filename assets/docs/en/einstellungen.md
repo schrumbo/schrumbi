@@ -4,7 +4,7 @@
 
 | Page | Here you set |
 |---|---|
-| {ui:Allgemein} | Appearance, language, naming pattern, sidebar, reminders |
+| {ui:Allgemein} | Appearance, custom themes, language, naming pattern, sidebar, reminders |
 | {ui:Semester} | Lecture period, breaks, holidays |
 | {ui:Module} | Codes, folders, links, recurring deadlines, timetable |
 | {ui:Notizen} | Editor, font size, personal dictionary, saving, PDF export, Obsidian |
@@ -34,11 +34,41 @@ A click in the search field or elsewhere ends recording. If something is in the 
 
 Choose a semester in the list, then the copy icon under the list: {ui:Folgesemester mit denselben Modulen und Regeln anlegen}. It starts two weeks after the last semester.
 
+## Custom Themes
+
+{ui:Design laden…} beside {ui:Erscheinungsbild} opens a JSON file. Schrumbi checks it, keeps a copy and switches at once. {ui:Entfernen} under {ui:Eigene Designs} deletes the copy, {ui:Rückgängig} brings it back. {key:CommandPalette} lists every theme by name and offers {ui:Design laden…}.
+
+```json
+{
+  "schemaVersion": 1,
+  "name": "My Theme",
+  "content": "#FDF6E3",
+  "ink": "#073642",
+  "accent": "#268BD2"
+}
+```
+
+Schrumbi fills in everything else from these three colours.
+
+| Key | Meaning |
+|---|---|
+| `content`, `ink`, `accent` | Required: surface, text, accent |
+| `dark` | `true` or `false`; if missing, the brightness decides |
+| `sidebar`, `secondaryBg`, `column`, `material` | Surfaces |
+| `primary`, `secondary`, `tertiary`, `separator`, `sidebarBorder` | Text and lines, also as `#RRGGBBAA` |
+| `accentText`, `onAccent`, `selection` | Accent as text, text on the accent, selection |
+| `green`, `blue`, `orange`, `red`, `gray`, `greenText`, `orangeText` | States |
+| `moduleColors` | Module colours: `blue`, `green`, `orange`, `purple`, `pink`, `teal`, `red`, `yellow`, `indigo`, `mint`, `brown`, `gray` |
+| `syntax` | Code colours: `keyword`, `string`, `comment`, `number`, `type`, `function` |
+
+Colours are written as `#RRGGBB`. On a mistake Schrumbi names the key and nothing changes; text needs 4.5 : 1 on `content` and `sidebar`. Edits to the copy in the `themes` folder apply when the window is in front again. Ready-made themes are in the `themes` folder of the source code.
+
 ## Where Settings Live
 
 | What | Where |
 |---|---|
 | Semesters, modules, rules, name, naming pattern | `schrumbi.json` in your folder |
 | Appearance, shortcuts, language | With Schrumbi on this device |
+| Loaded themes | Folder `themes` with Schrumbi on this device |
 
 Your files go only to your own sync storage. Only your folder and a connected Obsidian vault are read.

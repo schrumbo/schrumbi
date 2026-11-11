@@ -8,7 +8,7 @@ use gpui_kit::*;
 use super::markdown_view::{self, Folds, LinkFocus, ParsedNote};
 use super::motion::{self, Soft};
 use super::selectable::selectable;
-use super::theme::{Theme, control, font, iconsize, radius, space, syntax_palette};
+use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::tr;
 
@@ -63,7 +63,7 @@ fn segment(id: (&'static str, usize), label: String, on: bool, t: &Theme) -> Sta
 }
 
 fn highlighted(source: &str, t: &Theme) -> (String, Vec<(std::ops::Range<usize>, HighlightStyle)>) {
-    let colors = syntax_palette(t.kind);
+    let colors = t.syntax;
     let mut text = String::new();
     let mut marks = Vec::new();
     for (s, kind) in markdown_view::coloured(Some("markdown"), source).iter() {

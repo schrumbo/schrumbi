@@ -1,0 +1,4 @@
+{"schemaVersion":1,"name":"Nord","dark":true,"sidebar":"#292E39","sidebarBorder":"#ECEFF412","content":"#2E3440","secondaryBg":"#3B4252","column":"#2B313C","primary":"#ECEFF4EB","secondary":"#ECEFF4A8","tertiary":"#ECEFF480","separator":"#ECEFF41C","accent":"#5E81AC","accentText":"#A4CFDC","greenText":"#A3BE8C","onAccent":"#ECEFF4","selection":"#4C6A92","green":"#A3BE8C","blue":"#81A1C1","orange":"#D08770","orangeText":"#F5BCA8","red":"#BF616A","gray":"#8591A8","ink":"#ECEFF4","material":"#3B4252",
+ "moduleColors":{"blue":"#81A1C1","green":"#A3BE8C","orange":"#D08770","purple":"#B48EAD","pink":"#C98BA6","teal":"#8FBCBB","red":"#BF616A","yellow":"#EBCB8B","indigo":"#7E8FC9","mint":"#9FD1C7","brown":"#A58D76","gray":"#8591A8"},
+ "syntax":{"keyword":"#81A1C1","string":"#A3BE8C","comment":"#98A3B8","number":"#C9A8C2","type":"#8FBCBB","function":"#88C0D0"},
+ "author":"Arctic Ice Studio","license":"MIT","source":"https://www.nordtheme.com"}

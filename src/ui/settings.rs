@@ -23,6 +23,7 @@ use crate::core::ics;
 use crate::core::model::*;
 use crate::core::naming::Naming;
 use crate::core::prefs::{self, NoteSaveMode, Shortcut};
+use crate::core::themes;
 use crate::core::shortcuts::{Customized, Group, ShortcutAction};
 use crate::core::{clock, day, schedule};
 
@@ -59,6 +60,7 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("hell", "Erscheinungsbild"),
     ("nord", "Erscheinungsbild"),
     ("dracula", "Erscheinungsbild"),
+    ("json", "Erscheinungsbild"),
     ("farbe", "Erscheinungsbild"),
     ("color", "Erscheinungsbild"),
     ("font", "Schriftgröße"),
@@ -139,6 +141,7 @@ const NEEDS_CONVENTION: &[&str] = &["Matrikelnummer", "Mitautor:innen", "Muster"
 const SEARCHABLE: &[(&str, Tab)] = &[
     ("Darstellung", Tab::General),
     ("Erscheinungsbild", Tab::General),
+    ("Eigene Designs", Tab::General),
     ("Studium", Tab::General),
     ("Name", Tab::General),
     ("Kürzel in Dateinamen", Tab::General),
@@ -267,6 +270,12 @@ struct Notice {
     before: Customized,
 }
 
+/// What the appearance rows say about the last design that was loaded or removed.
+enum ThemeNote {
+    Problem(String),
+    Removed { id: String, name: String, bytes: Vec<u8>, was_active: bool, stamp: u64 },
+}
+
 /// The settings window: Allgemein, Semester, Module, Notizen, Tastenkürzel.
 pub struct Settings {
     tab: Tab,
@@ -287,6 +296,7 @@ pub struct Settings {
     last_changed: Option<ShortcutAction>,
     notice: Option<Notice>,
     notices: u64,
+    theme_note: Option<ThemeNote>,
     focus: FocusHandle,
     launch_at_login: bool,
     markdown_default: Option<bool>,
@@ -631,14 +641,8 @@ fn tab_name(tab: Tab) -> String {
     }
 }
 
-fn theme_label(choice: prefs::ThemeChoice) -> String {
-    match choice {
-        prefs::ThemeChoice::System => tr("System"),
-        prefs::ThemeChoice::Light => tr("Hell"),
-        prefs::ThemeChoice::Dark => tr("Dunkel"),
-        prefs::ThemeChoice::Nord => "Nord".to_string(),
-        prefs::ThemeChoice::Dracula => "Dracula".to_string(),
-    }
+fn theme_label(choice: prefs::ThemeChoice, file: &str, designs: &[themes::Installed]) -> String {
+    designs.iter().find(|d| d.id == file && d.problem.is_none()).map_or_else(|| theme::choice_label(choice), |d| d.name.clone())
 }
 
 impl Settings {
@@ -652,7 +656,16 @@ impl Settings {
             settings.update(cx, |s, cx| s.record_key(&e.keystroke, cx));
             cx.stop_propagation();
         });
-        let subs = vec![recorder, cx.observe(&lib, |_, _, cx| cx.notify()), cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()), cx.subscribe_in(&search, window, |s, _, e: &InputEvent, window, cx| {
+        let activation = cx.observe_window_activation(window, |s, window, cx| {
+            if window.is_window_active() {
+                themes::rescan();
+                if let Some(m) = theme::recheck(window, cx) {
+                    s.theme_note = Some(ThemeNote::Problem(m));
+                }
+                cx.notify();
+            }
+        });
+        let subs = vec![recorder, activation, cx.observe(&lib, |_, _, cx| cx.notify()), cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()), cx.subscribe_in(&search, window, |s, _, e: &InputEvent, window, cx| {
             match e {
                 InputEvent::PressEnter { .. } => {
                     let found = s.matches(cx);
@@ -684,6 +697,7 @@ impl Settings {
             last_changed: None,
             notice: None,
             notices: 0,
+            theme_note: None,
             focus: cx.focus_handle(),
             launch_at_login: super::platform::launches_at_login(),
             markdown_default: super::platform::markdown_is_default(),
@@ -979,18 +993,40 @@ impl Settings {
             "en" => "English".to_string(),
             _ => tr("Systemsprache"),
         };
-        let theme_choice = p.theme;
-        let language = section(
-            Some(tr("Darstellung")),
-            None,
-            vec![row(
+        let (theme_choice, theme_file) = (p.theme, p.theme_file.clone());
+        let designs = themes::installed();
+        let in_use = designs.iter().any(|d| d.id == theme_file && d.problem.is_none());
+        let theme_name = theme_label(theme_choice, &theme_file, &designs);
+        let menu_designs = designs.clone();
+        let me = cx.weak_entity();
+        let mut appearance_rows = vec![row(
                 tr("Erscheinungsbild"),
-                picker("g-theme", theme_label(theme_choice), move |mut m| {
-                    for choice in [prefs::ThemeChoice::System, prefs::ThemeChoice::Light, prefs::ThemeChoice::Dark, prefs::ThemeChoice::Nord, prefs::ThemeChoice::Dracula] {
-                        m = m.item(PopupMenuItem::new(theme_label(choice)).checked(choice == theme_choice).on_click(move |_, window, cx| theme::choose(choice, window, cx)));
-                    }
-                    m
-                }),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S))
+                    .child(picker("g-theme", theme_name, move |mut m| {
+                        for choice in [prefs::ThemeChoice::System, prefs::ThemeChoice::Light, prefs::ThemeChoice::Dark, prefs::ThemeChoice::Nord, prefs::ThemeChoice::Dracula] {
+                            m = m.item(PopupMenuItem::new(theme::choice_label(choice)).checked(!in_use && choice == theme_choice).on_click(move |_, window, cx| theme::choose(choice, window, cx)));
+                        }
+                        if !menu_designs.is_empty() {
+                            m = m.separator();
+                            for d in &menu_designs {
+                                let id = d.id.clone();
+                                m = m.item(PopupMenuItem::new(d.name.clone()).checked(d.id == theme_file).disabled(d.problem.is_some()).on_click(move |_, window, cx| theme::choose_file(&id, window, cx)));
+                            }
+                        }
+                        m
+                    }))
+                    .child(Button::new("g-theme-load").small().label(tr("Design laden…")).on_click(move |_, window, cx| {
+                        let me = me.clone();
+                        theme::pick_and_load(window.window_handle(), cx, move |result, cx| {
+                            let _ = me.update(cx, |s, cx| {
+                                s.theme_note = result.err().map(ThemeNote::Problem);
+                                cx.notify();
+                            });
+                        });
+                    })),
                 t,
             ), row(
                 tr("Sprache"),
@@ -1008,11 +1044,10 @@ impl Settings {
                         .item(PopupMenuItem::new("English").checked(lang == "en").on_click(set("en")))
                 }),
                 t,
-            )]
-            .into_iter()
-            .collect(),
-            t,
-        );
+            )];
+        appearance_rows.extend(self.theme_note_row(t, cx));
+        let language = section(Some(tr("Darstellung")), None, appearance_rows, t);
+        let own_designs = (!designs.is_empty()).then(|| section(Some(tr("Eigene Designs")), None, designs.iter().enumerate().map(|(i, d)| self.design_row(i, d, t, cx)).collect(), t));
         let enabled = p.reminders_enabled;
         let hours = p.reminder_hours;
         let reminders = section(
@@ -1188,7 +1223,7 @@ impl Settings {
             ],
             t,
         );
-        div().flex().flex_col().gap(px(space::XL)).child(language).child(studium).child(naming).child(filing).child(grades).child(sidebar).child(hints).child(reminders).child(incoming).child(calendar).child(system).child(search).child(storage)
+        div().flex().flex_col().gap(px(space::XL)).child(language).children(own_designs).child(studium).child(naming).child(filing).child(grades).child(sidebar).child(hints).child(reminders).child(incoming).child(calendar).child(system).child(search).child(storage)
     }
 }
 
@@ -2395,6 +2430,80 @@ impl Settings {
 
     fn key_button(&mut self, a: ShortcutAction, cx: &mut Context<Self>) -> FocusHandle {
         self.key_buttons.entry(a.id()).or_insert_with(|| cx.focus_handle().tab_stop(true)).clone()
+    }
+
+    fn design_row(&self, i: usize, d: &themes::Installed, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let (id, name) = (d.id.clone(), d.name.clone());
+        let (state, color) = match &d.problem {
+            Some(_) => (tr("Fehler in der Datei"), t.orange_text),
+            None if d.dark => (tr("Dunkel"), t.secondary),
+            None => (tr("Hell"), t.secondary),
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap(px(space::M))
+            .px(px(space::L))
+            .min_h(px(control::ROW))
+            .py(px(space::S))
+            .child(div().id(("g-theme-name", i)).flex_1().min_w_0().truncate().text_color(t.primary).tooltip(tip(d.name.clone())).child(d.name.clone()))
+            .child(div().id(("g-theme-state", i)).flex_none().text_size(px(font::CAPTION)).text_color(color).when_some(d.problem.clone(), |e, p| e.tooltip(tip(p))).child(state))
+            .child(Button::new(("g-theme-rm", i)).small().label(tr("Entfernen")).on_click(cx.listener(move |s, _, window, cx| {
+                let was_active = prefs::with(|p| p.theme_file == id);
+                s.theme_note = match theme::remove_file(&id, window, cx) {
+                    Ok(bytes) => {
+                        s.notices += 1;
+                        let stamp = s.notices;
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(motion::NOTICE).await;
+                            let _ = this.update(cx, |s, cx| {
+                                if matches!(&s.theme_note, Some(ThemeNote::Removed { stamp: n, .. }) if *n == stamp) {
+                                    s.theme_note = None;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                        .detach();
+                        Some(ThemeNote::Removed { id: id.clone(), name: name.clone(), bytes, was_active, stamp })
+                    }
+                    Err(m) => Some(ThemeNote::Problem(m)),
+                };
+                cx.notify();
+            })))
+            .into_any_element()
+    }
+
+    fn theme_note_row(&self, t: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let line = div().id("theme-note").w_full().min_w_0().flex().items_center().gap(px(space::S)).px(px(space::L)).min_h(px(control::ROW)).py(px(space::S)).text_size(px(font::CAPTION)).text_color(t.secondary);
+        Some(match self.theme_note.as_ref()? {
+            ThemeNote::Problem(m) => line
+                .aria_label(m.clone())
+                .child(div().flex_none().child(icon("circle-alert", iconsize::XS, t.orange_text)))
+                .child(div().id("theme-note-text").flex_1().min_w_0().truncate().tooltip(tip(m.clone())).child(m.clone()))
+                .child(Button::new("theme-note-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Schließen")).on_click(cx.listener(|s, _, _, cx| {
+                    s.theme_note = None;
+                    cx.notify();
+                })))
+                .into_any_element(),
+            ThemeNote::Removed { name, .. } => {
+                let text = trf("Design „%@“ entfernt", &[name]);
+                line.aria_label(text.clone())
+                    .child(div().flex_none().child(icon("check", iconsize::XS, t.green_text)))
+                    .child(div().id("theme-note-text").min_w_0().truncate().tooltip(tip(text.clone())).child(text))
+                    .child(div().flex_none().text_color(t.tertiary).child("·"))
+                    .child(div().flex_none().child(link_button("theme-undo", tr("Rückgängig"), t).on_click(cx.listener(|s, _, window, cx| {
+                        if let Some(ThemeNote::Removed { id, bytes, was_active, .. }) = s.theme_note.take() {
+                            match themes::restore(&id, &bytes) {
+                                Ok(()) if was_active => theme::choose_file(&id, window, cx),
+                                Ok(()) => {}
+                                Err(e) => s.theme_note = Some(ThemeNote::Problem(trf("Design konnte nicht gespeichert werden: %@", &[&e]))),
+                            }
+                        }
+                        cx.notify();
+                    }))))
+                    .into_any_element()
+            }
+        })
     }
 
     fn close_notice(&mut self, window: &mut Window, cx: &mut Context<Self>) {

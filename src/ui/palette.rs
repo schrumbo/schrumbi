@@ -14,7 +14,7 @@ use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Route;
 use crate::core::model::Status;
-use crate::core::prefs::Shortcut;
+use crate::core::prefs::{Shortcut, ThemeChoice};
 use crate::core::shortcuts::{Group, ShortcutAction as S};
 
 enum Run {
@@ -342,6 +342,36 @@ fn commands(cx: &App) -> Vec<Command> {
         let setup = crate::core::ai::prompts::Flow::Setup;
         add(&ki, setup.label(), setup.icon(), None, Run::Call(Rc::new(move |cx| super::ai::start_flow(setup, Vec::new(), cx))));
     }
+    let (choice, file) = crate::core::prefs::with(|p| (p.theme, p.theme_file.clone()));
+    let designs: Vec<_> = crate::core::themes::installed().into_iter().filter(|d| d.problem.is_none()).collect();
+    let active_file = designs.iter().any(|d| d.id == file);
+    let appearance = tr("theme farbe aussehen");
+    let mut theme_command = |label: String, run: Run| extra.push(Command { label: trf("Design: %@", &[&label]), group: view.clone(), icon: "palette", keys: None, run, aliases: appearance.clone() });
+    for built_in in [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark, ThemeChoice::Nord, ThemeChoice::Dracula] {
+        if !file.is_empty() || built_in != choice {
+            theme_command(super::theme::choice_label(built_in), Run::WindowCall(Rc::new(move |window, cx| super::theme::choose(built_in, window, cx))));
+        }
+    }
+    for design in designs {
+        if !(active_file && design.id == file) {
+            let id = design.id.clone();
+            theme_command(design.name, Run::WindowCall(Rc::new(move |window, cx| super::theme::choose_file(&id, window, cx))));
+        }
+    }
+    extra.push(Command {
+        label: tr("Design laden…"),
+        group: view.clone(),
+        icon: "palette",
+        keys: None,
+        run: Run::WindowCall(Rc::new(|window, cx| {
+            super::theme::pick_and_load(window.window_handle(), cx, |result, cx| {
+                if let Err(m) = result {
+                    act(cx, |l| l.notify(m, "circle-alert", None, None));
+                }
+            })
+        })),
+        aliases: appearance.clone(),
+    });
     list.extend(extra);
     list
 }

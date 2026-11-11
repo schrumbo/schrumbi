@@ -33,6 +33,7 @@ pub mod search_index;
 pub mod setup;
 pub mod shortcuts;
 pub mod text;
+pub mod themes;
 pub mod tips;
 pub mod vault;
 pub mod workspace;

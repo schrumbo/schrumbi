@@ -1,16 +1,14 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::{LazyLock, Mutex};
+use std::time::SystemTime;
+
 use gpui_kit::component::{Theme as ComponentTheme, ThemeMode};
-use gpui_kit::{App, Global, Hsla, Window, WindowAppearance, px, rgb, Rgba, black, white};
+use gpui_kit::{AnyWindowHandle, App, AppContext, Global, Hsla, Window, WindowAppearance, px, rgb, Rgba, black, white};
 
+use crate::core::i18n::trf;
 use crate::core::prefs::{self, ThemeChoice};
-
-/// The palettes the app can be drawn in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    Light,
-    Dark,
-    Nord,
-    Dracula,
-}
+use crate::core::themes::{self, MODULE_DEFAULTS, MODULE_NAMES, Palette};
 
 /// Spacing scale for padding, margins and gaps.
 pub mod space {
@@ -359,7 +357,8 @@ pub fn note_size(base: f32) -> f32 {
 /// Colors resolved for light or dark appearance, mirroring the SwiftUI semantic colors.
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
-    pub kind: Kind,
+    /// Tells two palettes apart for caches; changes when a design file changes.
+    pub id: u64,
     pub dark: bool,
     pub sidebar: Hsla,
     pub sidebar_border: Hsla,
@@ -387,6 +386,9 @@ pub struct Theme {
     pub gray: Hsla,
     pub ink: Hsla,
     pub material: Hsla,
+    /// The module colours of a design, in the order of `MODULE_NAMES`; `None` uses the standard table.
+    pub modules: Option<[u32; 12]>,
+    pub syntax: SyntaxPalette,
 }
 
 impl Global for Theme {}
@@ -396,18 +398,11 @@ fn c(hex: u32) -> Hsla {
 }
 
 impl Theme {
-    pub fn new(kind: Kind) -> Self {
-        match kind {
-            Kind::Light | Kind::Dark => Self::plain(kind == Kind::Dark),
-            Kind::Nord => Self::nord(),
-            Kind::Dracula => Self::dracula(),
-        }
-    }
-
-    fn plain(dark: bool) -> Self {
+    /// The built-in light or dark palette.
+    pub fn plain(dark: bool) -> Self {
         let ink = if dark { c(0xFFFFFF) } else { c(0x000000) };
         Self {
-            kind: if dark { Kind::Dark } else { Kind::Light },
+            id: if dark { 2 } else { 1 },
             dark,
             sidebar: if dark { c(0x1D1D1D) } else { c(0xF3F3F5) },
             sidebar_border: ink.opacity(if dark { 0.08 } else { 0.06 }),
@@ -431,68 +426,44 @@ impl Theme {
             gray: c(0x8E8E93),
             ink,
             material: if dark { c(0x303030) } else { c(0xFBFBFC) },
+            modules: None,
+            syntax: SyntaxPalette::from_keys(if dark { &themes::SYNTAX_DARK } else { &themes::SYNTAX_LIGHT }),
         }
     }
 
-    /// Nord: Polar Night for the surfaces, Snow Storm for the text, Frost for what can be used, Aurora for states.
-    fn nord() -> Self {
-        let ink = c(0xECEFF4);
+    /// The theme of a checked design; `id` tells it apart from the others.
+    pub fn from_palette(p: &Palette, id: u64) -> Self {
+        let col = |v: u32| -> Hsla {
+            let byte = |shift: u32| ((v >> shift) & 0xFF) as f32 / 255.;
+            Rgba { r: byte(24), g: byte(16), b: byte(8), a: byte(0) }.into()
+        };
         Self {
-            kind: Kind::Nord,
-            dark: true,
-            sidebar: c(0x292E39),
-            sidebar_border: ink.opacity(0.07),
-            content: c(0x2E3440),
-            secondary_bg: c(0x3B4252),
-            column: c(0x2B313C),
-            primary: ink.opacity(0.92),
-            secondary: ink.opacity(0.66),
-            tertiary: ink.opacity(0.5),
-            separator: ink.opacity(0.11),
-            accent: c(0x5E81AC),
-            accent_text: c(0xA4CFDC),
-            green_text: c(0xA3BE8C),
-            on_accent: c(0xECEFF4),
-            selection: c(0x4C6A92),
-            green: c(0xA3BE8C),
-            blue: c(0x81A1C1),
-            orange: c(0xD08770),
-            orange_text: c(0xF5BCA8),
-            red: c(0xBF616A),
-            gray: c(0x8591A8),
-            ink,
-            material: c(0x3B4252),
-        }
-    }
-
-    /// Dracula: its own background family, purple as the accent, the signature colours for states.
-    fn dracula() -> Self {
-        let ink = c(0xF8F8F2);
-        Self {
-            kind: Kind::Dracula,
-            dark: true,
-            sidebar: c(0x21222C),
-            sidebar_border: ink.opacity(0.07),
-            content: c(0x282A36),
-            secondary_bg: c(0x343746),
-            column: c(0x252733),
-            primary: ink.opacity(0.94),
-            secondary: ink.opacity(0.68),
-            tertiary: ink.opacity(0.5),
-            separator: ink.opacity(0.11),
-            accent: c(0xBD93F9),
-            accent_text: c(0xDBC4FC),
-            green_text: c(0x50FA7B),
-            on_accent: c(0x21222C),
-            selection: c(0x6A5A9C),
-            green: c(0x50FA7B),
-            blue: c(0x8BE9FD),
-            orange: c(0xFFB86C),
-            orange_text: c(0xFFC282),
-            red: c(0xFF5555),
-            gray: c(0x8A94B8),
-            ink,
-            material: c(0x3A3D4E),
+            id,
+            dark: p.dark,
+            sidebar: col(p.sidebar),
+            sidebar_border: col(p.sidebar_border),
+            content: col(p.content),
+            secondary_bg: col(p.secondary_bg),
+            column: col(p.column),
+            primary: col(p.primary),
+            secondary: col(p.secondary),
+            tertiary: col(p.tertiary),
+            separator: col(p.separator),
+            accent: col(p.accent),
+            accent_text: col(p.accent_text),
+            green_text: col(p.green_text),
+            on_accent: col(p.on_accent),
+            selection: col(p.selection),
+            green: col(p.green),
+            blue: col(p.blue),
+            orange: col(p.orange),
+            orange_text: col(p.orange_text),
+            red: col(p.red),
+            gray: col(p.gray),
+            ink: col(p.ink),
+            material: col(p.material),
+            modules: Some(std::array::from_fn(|i| p.modules[i] >> 8)),
+            syntax: SyntaxPalette::from_keys(&std::array::from_fn::<u32, 6, _>(|i| p.syntax[i] >> 8)),
         }
     }
 
@@ -515,6 +486,12 @@ impl Theme {
     /// Black or white, whichever reads on a solid fill of `color`.
     pub fn on_fill(&self, color: Hsla) -> Hsla {
         if luminance(over(color, color)) > 0.4 { black() } else { white() }
+    }
+
+    /// The glyph on the destructive red, such as the close button of a window under the pointer: white while it reads at 3:1, else the better of black and white.
+    pub fn on_danger(&self) -> Hsla {
+        let on_white = contrast(white(), self.red);
+        if on_white >= 3. || on_white >= contrast(black(), self.red) { white() } else { black() }
     }
 
     /// A highlight color deepened until it reads at 3:1 on the white page, for the line under the selected highlight.
@@ -549,57 +526,13 @@ impl Theme {
 
     /// Module color by palette name, as in the Swift `Palette`.
     pub fn palette(&self, name: &str) -> Hsla {
-        if let Some(color) = self.palette_of_theme(name) {
-            return c(color);
-        }
-        let (light, dark) = match name {
-            "green" => (0x34C759, 0x30D158),
-            "orange" => (0xFF9500, 0xFF9F0A),
-            "purple" => (0xAF52DE, 0xBF5AF2),
-            "pink" => (0xFF2D55, 0xFF375F),
-            "teal" => (0x30B0C7, 0x40C8E0),
-            "red" => (0xFF3B30, 0xFF453A),
-            "yellow" => (0xFFCC00, 0xFFD60A),
-            "indigo" => (0x5856D6, 0x5E5CE6),
-            "mint" => (0x00C7BE, 0x63E6E2),
-            "brown" => (0xA2845E, 0xAC8E68),
-            "gray" => (0x8E8E93, 0x8E8E93),
-            _ => (0x007AFF, 0x0A84FF),
-        };
-        c(if self.dark { dark } else { light })
-    }
-
-    fn palette_of_theme(&self, name: &str) -> Option<u32> {
-        match self.kind {
-            Kind::Light | Kind::Dark => None,
-            Kind::Nord => Some(match name {
-                "green" => 0xA3BE8C,
-                "orange" => 0xD08770,
-                "purple" => 0xB48EAD,
-                "pink" => 0xC98BA6,
-                "teal" => 0x8FBCBB,
-                "red" => 0xBF616A,
-                "yellow" => 0xEBCB8B,
-                "indigo" => 0x7E8FC9,
-                "mint" => 0x9FD1C7,
-                "brown" => 0xA58D76,
-                "gray" => 0x8591A8,
-                _ => 0x81A1C1,
-            }),
-            Kind::Dracula => Some(match name {
-                "green" => 0x50FA7B,
-                "orange" => 0xFFB86C,
-                "purple" => 0xBD93F9,
-                "pink" => 0xFF79C6,
-                "teal" => 0x8BE9FD,
-                "red" => 0xFF5555,
-                "yellow" => 0xF1FA8C,
-                "indigo" => 0x9A8CFF,
-                "mint" => 0x7AF0C8,
-                "brown" => 0xC9A58A,
-                "gray" => 0x8A94B8,
-                _ => 0x6CB6FF,
-            }),
+        let index = MODULE_NAMES.iter().position(|n| *n == name).unwrap_or(0);
+        match self.modules {
+            Some(colors) => c(colors[index]),
+            None => {
+                let (light, dark) = MODULE_DEFAULTS[index];
+                c(if self.dark { dark } else { light })
+            }
         }
     }
 
@@ -629,38 +562,200 @@ pub fn is_dark(appearance: WindowAppearance) -> bool {
     matches!(appearance, WindowAppearance::Dark | WindowAppearance::VibrantDark)
 }
 
-/// The palette the choice in the settings means right now.
-pub fn resolve(choice: ThemeChoice, system_dark: bool) -> Kind {
-    match choice {
-        ThemeChoice::System => if system_dark { Kind::Dark } else { Kind::Light },
-        ThemeChoice::Light => Kind::Light,
-        ThemeChoice::Dark => Kind::Dark,
-        ThemeChoice::Nord => Kind::Nord,
-        ThemeChoice::Dracula => Kind::Dracula,
+fn identity(tag: &str, bytes: &[u8]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    (tag, bytes).hash(&mut hasher);
+    hasher.finish()
+}
+
+fn bundled(json: &str, tag: &str) -> Theme {
+    themes::parse(json.as_bytes()).map(|d| Theme::from_palette(&d.palette, identity(tag, json.as_bytes()))).unwrap_or_else(|_| Theme::plain(true))
+}
+
+static NORD: LazyLock<Theme> = LazyLock::new(|| bundled(themes::NORD, "nord"));
+static DRACULA: LazyLock<Theme> = LazyLock::new(|| bundled(themes::DRACULA, "dracula"));
+
+struct FileState {
+    id: String,
+    name: String,
+    modified: SystemTime,
+    theme: Option<Theme>,
+    problem: Option<String>,
+    reported: bool,
+}
+
+static FILE: Mutex<Option<FileState>> = Mutex::new(None);
+
+fn file_state() -> std::sync::MutexGuard<'static, Option<FileState>> {
+    FILE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The theme of a loaded design file, read again only when the file changed; a broken edit keeps the colours from before.
+fn file_theme(id: &str) -> Option<Theme> {
+    let Some(modified) = themes::modified(id) else {
+        *file_state() = None;
+        return None;
+    };
+    {
+        let state = file_state();
+        if let Some(s) = state.as_ref().filter(|s| s.id == id && s.modified == modified) {
+            return s.theme;
+        }
     }
+    let Some((modified, bytes)) = themes::read(id) else {
+        return file_state().as_ref().filter(|s| s.id == id).and_then(|s| s.theme);
+    };
+    let mut state = file_state();
+    let before = state.take().filter(|s| s.id == id);
+    *state = Some(match themes::parse(&bytes) {
+        Ok(design) => FileState { id: id.to_string(), name: design.name, modified, theme: Some(Theme::from_palette(&design.palette, identity(id, &bytes))), problem: None, reported: false },
+        Err(problem) => FileState {
+            id: id.to_string(),
+            name: before.as_ref().map_or_else(|| id.to_string(), |s| s.name.clone()),
+            modified,
+            theme: before.and_then(|s| s.theme),
+            problem: Some(problem),
+            reported: false,
+        },
+    });
+    state.as_ref().and_then(|s| s.theme)
+}
+
+/// The name of a built-in choice in the settings.
+pub fn choice_label(choice: ThemeChoice) -> String {
+    use crate::core::i18n::tr;
+    match choice {
+        ThemeChoice::System => tr("System"),
+        ThemeChoice::Light => tr("Hell"),
+        ThemeChoice::Dark => tr("Dunkel"),
+        ThemeChoice::Nord => "Nord".to_string(),
+        ThemeChoice::Dracula => "Dracula".to_string(),
+    }
+}
+
+/// The palette the choice in the settings means right now; a loaded design wins while its file is there.
+pub fn resolve(choice: ThemeChoice, file: &str, system_dark: bool) -> Theme {
+    if !file.is_empty()
+        && let Some(t) = file_theme(file)
+    {
+        return t;
+    }
+    match choice {
+        ThemeChoice::System => Theme::plain(system_dark),
+        ThemeChoice::Light => Theme::plain(false),
+        ThemeChoice::Dark => Theme::plain(true),
+        ThemeChoice::Nord => *NORD,
+        ThemeChoice::Dracula => *DRACULA,
+    }
+}
+
+/// Whether native window parts are forced light or dark by the theme in use; `None` follows the system.
+pub fn native_appearance() -> Option<bool> {
+    let (choice, file) = prefs::with(|p| (p.theme, p.theme_file.clone()));
+    if !file.is_empty()
+        && let Some(t) = file_theme(&file)
+    {
+        return Some(t.dark);
+    }
+    match choice {
+        ThemeChoice::System => None,
+        ThemeChoice::Light => Some(false),
+        _ => Some(true),
+    }
+}
+
+fn current(window: &Window) -> Theme {
+    let (choice, file) = prefs::with(|p| (p.theme, p.theme_file.clone()));
+    resolve(choice, &file, is_dark(window.appearance()))
 }
 
 /// Draws the app in what the settings say, following the system where they ask for that.
 pub fn refresh(window: &mut Window, cx: &mut App) {
-    let kind = resolve(prefs::get().theme, is_dark(window.appearance()));
-    apply(kind, Some(window), cx);
+    apply(current(window), Some(window), cx);
 }
 
 /// Switches the theme now, in every window. Native parts of the window follow.
 pub fn choose(choice: ThemeChoice, window: &mut Window, cx: &mut App) {
-    prefs::update(|p| p.theme = choice);
-    super::platform::set_window_appearance(match choice {
-        ThemeChoice::System => None,
-        ThemeChoice::Light => Some(false),
-        _ => Some(true),
+    prefs::update(|p| {
+        p.theme = choice;
+        p.theme_file.clear();
     });
+    super::platform::set_window_appearance(native_appearance());
     refresh(window, cx);
     cx.refresh_windows();
 }
 
+/// Switches to a loaded design by its id.
+pub fn choose_file(id: &str, window: &mut Window, cx: &mut App) {
+    prefs::update(|p| {
+        p.theme = ThemeChoice::System;
+        p.theme_file = id.to_string();
+    });
+    super::platform::set_window_appearance(native_appearance());
+    refresh(window, cx);
+    cx.refresh_windows();
+}
+
+fn load(path: &std::path::Path) -> Result<String, String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).and_then(|f| f.take(65 * 1024).read_to_end(&mut bytes)).map_err(|_| crate::core::i18n::tr("Die Datei ließ sich nicht lesen."))?;
+    let design = themes::parse(&bytes)?;
+    if let Some(id) = themes::id_of(path) {
+        themes::rescan();
+        return Ok(id);
+    }
+    themes::install(&bytes, &design).map_err(|e| trf("Design konnte nicht gespeichert werden: %@", &[&e]))
+}
+
+/// Asks for a design file, checks it, keeps a copy and switches to it. `done` gets the id or the German reason.
+pub fn pick_and_load(handle: AnyWindowHandle, cx: &mut App, done: impl FnOnce(Result<String, String>, &mut App) + 'static) {
+    super::platform::choose_file(cx, move |path, cx| {
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let task = cx.background_spawn(async move { load(&path) });
+        cx.spawn(async move |cx| {
+            let result = task.await.map_err(|m| trf("%@ wurde nicht geladen: %@", &[&name, &m]));
+            cx.update(|cx| {
+                if let Ok(id) = &result {
+                    let _ = handle.update(cx, |_, window, cx| choose_file(id, window, cx));
+                }
+                done(result, cx);
+            });
+        })
+        .detach();
+    });
+}
+
+/// Deletes a loaded design and returns its bytes for undo; if it was in use the app falls back to the system theme.
+pub fn remove_file(id: &str, window: &mut Window, cx: &mut App) -> Result<Vec<u8>, String> {
+    let bytes = themes::remove(id).map_err(|e| trf("Design konnte nicht entfernt werden: %@", &[&e]))?;
+    if prefs::with(|p| p.theme_file == id) {
+        choose(ThemeChoice::System, window, cx);
+    }
+    Ok(bytes)
+}
+
+/// Looks at the design in use again, for when the window comes to the front. Returns what is wrong with its file, once per change.
+pub fn recheck(window: &mut Window, cx: &mut App) -> Option<String> {
+    let id = prefs::with(|p| p.theme_file.clone());
+    if id.is_empty() {
+        return None;
+    }
+    let next = current(window);
+    if next.id != Theme::get(cx).id {
+        super::platform::set_window_appearance(native_appearance());
+        apply(next, Some(window), cx);
+        cx.refresh_windows();
+    }
+    let mut state = file_state();
+    let s = state.as_mut().filter(|s| s.id == id && !s.reported)?;
+    let problem = s.problem.clone()?;
+    s.reported = true;
+    Some(trf("Design „%@“ hat einen Fehler, die Farben bleiben wie vorher: %@", &[&s.name, &problem]))
+}
+
 /// Sets the app palette and maps it onto the component library so its controls match.
-pub fn apply(kind: Kind, window: Option<&mut Window>, cx: &mut App) {
-    let t = Theme::new(kind);
+pub fn apply(t: Theme, window: Option<&mut Window>, cx: &mut App) {
     let dark = t.dark;
     cx.set_global(t);
     ring::set(t.accent);
@@ -674,7 +769,7 @@ pub fn apply(kind: Kind, window: Option<&mut Window>, cx: &mut App) {
     let mut highlight = (*ct.highlight_theme).clone();
     highlight.style.editor_background = Some(t.content);
     highlight.style.editor_active_line = Some(t.ink.opacity(0.05));
-    apply_syntax_colors(&mut highlight, kind);
+    apply_syntax_colors(&mut highlight, &t.syntax);
     ct.highlight_theme = std::sync::Arc::new(highlight);
     ct.motion.duration_slow = super::motion::SLOW;
     ct.scrollbar_mode = gpui_kit::base::ScrollbarMode::Hover;
@@ -722,6 +817,7 @@ pub fn apply(kind: Kind, window: Option<&mut Window>, cx: &mut App) {
     k.tab_bar = t.secondary_bg;
     k.tab_active = t.content;
     k.danger = t.red;
+    k.danger_foreground = t.on_danger();
     k.success = t.green;
     k.warning = t.orange;
     k.info = t.blue;
@@ -753,12 +849,59 @@ fn contrast(text: Hsla, background: Hsla) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui_kit::Rgba;
+
+    fn all() -> Vec<(String, Theme)> {
+        let mut out = vec![("light".to_string(), Theme::plain(false)), ("dark".to_string(), Theme::plain(true)), ("nord".to_string(), *NORD), ("dracula".to_string(), *DRACULA)];
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/themes");
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let design = themes::parse(&std::fs::read(&path).unwrap()).unwrap();
+            out.push((design.name, Theme::from_palette(&design.palette, 7)));
+        }
+        out
+    }
+
+    #[test]
+    fn the_close_button_glyph_reads_on_every_theme() {
+        for (name, t) in all() {
+            assert!(contrast(t.on_danger(), t.red) >= 3., "{name}: {}", contrast(t.on_danger(), t.red));
+        }
+        assert_eq!(Theme::plain(true).on_danger(), white());
+        assert_eq!(Theme::plain(false).on_danger(), white());
+    }
+
+    #[test]
+    fn bundled_nord_and_dracula_keep_their_colours() {
+        let nord = *NORD;
+        assert!(nord.dark);
+        assert_eq!(nord.content, c(0x2E3440));
+        assert_eq!(nord.accent, c(0x5E81AC));
+        assert_eq!(nord.accent_text, c(0xA4CFDC));
+        assert_eq!(nord.palette("purple"), c(0xB48EAD));
+        assert_eq!(nord.palette("unknown"), c(0x81A1C1));
+        assert_eq!(nord.syntax.keyword, 0x81A1C1);
+        let dracula = *DRACULA;
+        assert_eq!(dracula.content, c(0x282A36));
+        assert_eq!(dracula.accent_text, c(0xDBC4FC));
+        assert_eq!(dracula.palette("blue"), c(0x6CB6FF));
+        assert_eq!(dracula.syntax.function, 0x50FA7B);
+        assert_ne!(nord.id, dracula.id);
+    }
+
+    #[test]
+    fn a_missing_file_falls_back_to_the_system() {
+        assert_eq!(resolve(ThemeChoice::System, "no-such-design", true).id, Theme::plain(true).id);
+        assert_eq!(resolve(ThemeChoice::System, "no-such-design", false).id, Theme::plain(false).id);
+        assert_eq!(resolve(ThemeChoice::Nord, "no-such-design", false).id, NORD.id);
+        assert_eq!(resolve(ThemeChoice::Dark, "", false).id, Theme::plain(true).id);
+    }
 
     #[test]
     fn badge_digits_read_on_every_theme() {
-        for kind in [Kind::Light, Kind::Dark, Kind::Nord, Kind::Dracula] {
-            let t = Theme::new(kind);
+        for (kind, t) in all() {
             for color in [t.red, t.accent] {
                 assert!(contrast(white(), t.badge_fill(color)) >= 4.5, "{kind:?}");
             }
@@ -767,8 +910,7 @@ mod tests {
 
     #[test]
     fn a_selected_page_shows_against_every_panel() {
-        for kind in [Kind::Light, Kind::Dark, Kind::Nord, Kind::Dracula] {
-            let t = Theme::new(kind);
+        for (kind, t) in all() {
             for background in [t.content, t.sidebar, t.secondary_bg] {
                 let row = background.blend(t.accent.opacity(tint::SELECTED));
                 assert!(contrast(t.accent_text.opacity(tint::SELECTED_EDGE), background) >= 3., "edge on the panel, {kind:?}: {}", contrast(t.accent_text.opacity(tint::SELECTED_EDGE), background));
@@ -780,8 +922,7 @@ mod tests {
 
     #[test]
     fn selected_highlight_underline_shows_on_white_paper() {
-        for kind in [Kind::Light, Kind::Dark, Kind::Nord, Kind::Dracula] {
-            let t = Theme::new(kind);
+        for (kind, t) in all() {
             for name in ["yellow", "green", "blue", "pink"] {
                 assert!(contrast(t.mark_underline(name), white()) >= 3., "{name}, {kind:?}: {}", contrast(t.mark_underline(name), white()));
             }
@@ -790,9 +931,7 @@ mod tests {
 
     #[test]
     fn text_is_readable_on_every_background() {
-        for kind in [Kind::Light, Kind::Dark, Kind::Nord, Kind::Dracula] {
-            let dark = kind;
-            let t = Theme::new(kind);
+        for (dark, t) in all() {
             let ring = ring::of(t.accent);
             for background in [t.content, t.sidebar, t.secondary_bg, t.column] {
                 let focused = background.blend(ring);
@@ -812,7 +951,7 @@ mod tests {
                     assert!(contrast(t.readable(color), t.column.blend(color.opacity(0.12))) >= 4.5, "{name}, {dark:?}");
                 }
                 assert!(contrast(t.tertiary, background) >= 3., "tertiary, {dark:?}: {}", contrast(t.tertiary, background));
-                let p = syntax_palette(kind);
+                let p = t.syntax;
                 for color in [p.keyword, p.string, p.comment, p.number, p.kind, p.function] {
                     if background == t.content {
                         assert!(contrast(c(color), background) >= 4.5, "syntax {color:06x}, {dark:?}");
@@ -824,7 +963,8 @@ mod tests {
     }
 }
 
-/// The colours of written code, in light and dark. Each stays readable on the note's background.
+/// The colours of written code. Each stays readable on the note's background.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SyntaxPalette {
     pub keyword: u32,
     pub string: u32,
@@ -835,6 +975,11 @@ pub struct SyntaxPalette {
 }
 
 impl SyntaxPalette {
+    /// The colours in the order of `themes::SYNTAX_KEYS`.
+    pub fn from_keys(k: &[u32; 6]) -> Self {
+        Self { keyword: k[0], string: k[1], comment: k[2], number: k[3], kind: k[4], function: k[5] }
+    }
+
     /// The colour of a token, none for plain text.
     pub fn of(&self, kind: crate::core::markdown::TokenKind) -> Option<Hsla> {
         use crate::core::markdown::TokenKind;
@@ -851,18 +996,8 @@ impl SyntaxPalette {
     }
 }
 
-pub fn syntax_palette(kind: Kind) -> SyntaxPalette {
-    match kind {
-        Kind::Dark => SyntaxPalette { keyword: 0xB7A8F8, string: 0x8FCB9B, comment: 0x8E939B, number: 0xE5A76B, kind: 0x7CC7D6, function: 0x82AAF5 },
-        Kind::Light => SyntaxPalette { keyword: 0x6A4BC4, string: 0x2B7A4B, comment: 0x68707C, number: 0xA3560F, kind: 0x0B7285, function: 0x1F5FCC },
-        Kind::Nord => SyntaxPalette { keyword: 0x81A1C1, string: 0xA3BE8C, comment: 0x98A3B8, number: 0xC9A8C2, kind: 0x8FBCBB, function: 0x88C0D0 },
-        Kind::Dracula => SyntaxPalette { keyword: 0xFF79C6, string: 0xF1FA8C, comment: 0x8D9AD0, number: 0xBD93F9, kind: 0x8BE9FD, function: 0x50FA7B },
-    }
-}
-
-fn apply_syntax_colors(theme: &mut gpui_kit::component::highlighter::HighlightTheme, kind: Kind) {
+fn apply_syntax_colors(theme: &mut gpui_kit::component::highlighter::HighlightTheme, p: &SyntaxPalette) {
     use gpui_kit::component::highlighter::ThemeStyle;
-    let p = syntax_palette(kind);
     let paint = |color: u32| serde_json::from_value::<ThemeStyle>(serde_json::json!({ "color": format!("#{color:06x}") })).ok();
     let s = &mut theme.style.syntax;
     s.keyword = paint(p.keyword);

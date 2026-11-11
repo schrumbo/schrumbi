@@ -4,7 +4,7 @@
 
 | Seite | Hier stellst du ein |
 |---|---|
-| {ui:Allgemein} | Erscheinungsbild, Sprache, Namensmuster, Seitenleiste, Erinnerungen |
+| {ui:Allgemein} | Erscheinungsbild, eigene Designs, Sprache, Namensmuster, Seitenleiste, Erinnerungen |
 | {ui:Semester} | Vorlesungszeit, Pausen, Feiertage |
 | {ui:Module} | Kürzel, Ordner, Links, wiederkehrende Deadlines, Stundenplan |
 | {ui:Notizen} | Editor, Schriftgröße, eigenes Wörterbuch, Sichern, PDF-Export, Obsidian |
@@ -34,11 +34,41 @@ Ein Klick ins Suchfeld oder woandershin beendet das Aufnehmen. Steht etwas im Su
 
 Semester in der Liste wählen, dann das Kopier-Symbol unter der Liste: {ui:Folgesemester mit denselben Modulen und Regeln anlegen}. Es beginnt zwei Wochen nach dem letzten Semester.
 
+## Eigene Designs
+
+{ui:Design laden…} neben {ui:Erscheinungsbild} öffnet eine JSON-Datei. Schrumbi prüft sie, behält eine Kopie und wechselt sofort. {ui:Entfernen} unter {ui:Eigene Designs} löscht die Kopie, {ui:Rückgängig} bringt sie zurück. {key:CommandPalette} nennt jedes Design beim Namen und bietet {ui:Design laden…} an.
+
+```json
+{
+  "schemaVersion": 1,
+  "name": "Mein Design",
+  "content": "#FDF6E3",
+  "ink": "#073642",
+  "accent": "#268BD2"
+}
+```
+
+Alles andere ergänzt Schrumbi aus diesen drei Farben.
+
+| Schlüssel | Bedeutung |
+|---|---|
+| `content`, `ink`, `accent` | Pflicht: Fläche, Text, Akzent |
+| `dark` | `true` oder `false`; fehlt er, entscheidet die Helligkeit |
+| `sidebar`, `secondaryBg`, `column`, `material` | Flächen |
+| `primary`, `secondary`, `tertiary`, `separator`, `sidebarBorder` | Text und Linien, auch als `#RRGGBBAA` |
+| `accentText`, `onAccent`, `selection` | Akzent als Text, Schrift auf dem Akzent, Auswahl |
+| `green`, `blue`, `orange`, `red`, `gray`, `greenText`, `orangeText` | Zustände |
+| `moduleColors` | Farben der Module: `blue`, `green`, `orange`, `purple`, `pink`, `teal`, `red`, `yellow`, `indigo`, `mint`, `brown`, `gray` |
+| `syntax` | Farben von Code: `keyword`, `string`, `comment`, `number`, `type`, `function` |
+
+Farben stehen als `#RRGGBB`. Bei einem Fehler nennt Schrumbi den Schlüssel, und nichts ändert sich; Text braucht 4,5 : 1 auf `content` und `sidebar`. Änderungen an der Kopie im Ordner `themes` gelten, sobald das Fenster wieder vorn ist. Fertige Designs liegen im Ordner `themes` des Quellcodes.
+
 ## Wo die Einstellungen liegen
 
 | Was | Wo |
 |---|---|
 | Semester, Module, Regeln, Name, Namensmuster | `schrumbi.json` in deinem Ordner |
 | Darstellung, Kürzel, Sprache | Bei Schrumbi auf diesem Gerät |
+| Geladene Designs | Ordner `themes` bei Schrumbi auf diesem Gerät |
 
 Deine Dateien gehen nur an deinen eigenen Sync-Speicher. Gelesen werden nur dein Ordner und ein verbundener Obsidian-Vault.

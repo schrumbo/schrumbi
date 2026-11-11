@@ -54,6 +54,15 @@ fn files_only(multiple: bool) -> PathPromptOptions {
     PathPromptOptions { files: true, directories: false, multiple, prompt: None }
 }
 
+/// Shows an open panel for one file and hands its path to `then`.
+pub fn choose_file(cx: &mut App, then: impl FnOnce(PathBuf, &mut App) + 'static) {
+    pick(files_only(false), cx, move |mut p, cx| {
+        if let Some(path) = p.pop() {
+            then(path, cx);
+        }
+    });
+}
+
 pub fn choose_folder(cx: &mut App, then: impl FnOnce(PathBuf, &mut App) + 'static) {
     pick(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some(tr("Auswählen").into()) }, cx, move |mut p, cx| {
         if let Some(path) = p.pop() {
