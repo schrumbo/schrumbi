@@ -12,6 +12,8 @@ use crate::core::workspace::{CONFIG_NAME, STATE_NAME};
 /// Many apps empty a file before writing it; reading in between would show an empty note.
 const RELOAD_SETTLE: u64 = 150;
 
+const RESCAN_TICKS: u32 = 20;
+
 /// The shared library plus the background work that keeps it current.
 pub struct Store {
     pub lib: Entity<Library>,
@@ -28,6 +30,7 @@ pub struct Store {
     page_wants_focus: bool,
     shown_tab: std::cell::RefCell<Option<std::path::PathBuf>>,
     pending_reload: Option<Task<()>>,
+    ticks: u32,
 }
 
 impl Global for Store {}
@@ -53,11 +56,12 @@ pub fn init(cx: &mut App) {
         page_wants_focus: false,
         shown_tab: Default::default(),
         pending_reload: None,
+        ticks: 0,
     });
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(Duration::from_secs(30)).await;
-            cx.update(|cx| act(cx, |l| l.tick()));
+            cx.update(|cx| tick(cx));
         }
     })
     .detach();
@@ -68,6 +72,27 @@ pub fn init(cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// Moves the library's clock on and redraws only when something shown depends on it; the folders are rescanned every ten minutes.
+fn tick(cx: &mut App) {
+    let lib = lib(cx);
+    let changed = lib.update(cx, |l, cx| {
+        let changed = l.tick();
+        if changed {
+            cx.notify();
+        }
+        changed
+    });
+    let store = cx.global_mut::<Store>();
+    store.ticks += 1;
+    let rescan = store.ticks % RESCAN_TICKS == 0;
+    if rescan {
+        scan(cx);
+    }
+    if changed {
+        sync_reminders(cx);
+    }
 }
 
 /// Runs a change on the library, then rescans, schedules the toast timeout and syncs reminders.

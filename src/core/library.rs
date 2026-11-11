@@ -1677,9 +1677,17 @@ impl Library {
     // MARK: Refresh
 
     /// Re-evaluates with the current time; called every 30 seconds.
-    pub fn tick(&mut self) {
+    /// True when something shown depends on the time that passed: a status, the date, the hour, or the minute of a deadline within three hours.
+    pub fn tick(&mut self) -> bool {
+        let (before, evaluations, actions) = (self.now, self.evaluations.clone(), self.action_items.clone());
         self.now = Local::now();
         self.reevaluate();
+        let near = self.assignments.iter().any(|a| (a.due - self.now).num_seconds().abs() <= 3 * 3600);
+        self.evaluations != evaluations
+            || self.action_items != actions
+            || day::local_date(before) != day::local_date(self.now)
+            || before.timestamp() / 3600 != self.now.timestamp() / 3600
+            || (near && before.timestamp() / 60 != self.now.timestamp() / 60)
     }
 
     /// Regenerates assignments and re-evaluates with cached listings; follow with a background scan.
