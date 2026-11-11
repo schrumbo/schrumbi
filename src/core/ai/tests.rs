@@ -575,3 +575,19 @@ fn agent_errors_say_what_the_user_can_do() {
     assert_eq!(trouble("Claude AI usage limit reached"), Trouble::Busy);
     assert_eq!(trouble("Internal error"), Trouble::Other);
 }
+
+#[test]
+#[cfg(unix)]
+fn finder_path_gains_the_install_folders_that_exist() {
+    let home = folder("home");
+    std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+    std::fs::create_dir_all(home.join(".nvm/versions/node/v22.1.0/bin")).unwrap();
+    let path = super::detect::widened_path(std::ffi::OsStr::new("/usr/bin:/bin"), &home).unwrap();
+    let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    assert_eq!(&dirs[..2], &[PathBuf::from("/usr/bin"), PathBuf::from("/bin")]);
+    assert!(dirs.contains(&home.join(".local/bin")));
+    assert!(dirs.contains(&home.join(".nvm/versions/node/v22.1.0/bin")));
+    assert!(!dirs.contains(&home.join(".bun/bin")));
+    let again = std::env::join_paths(&dirs).unwrap();
+    assert_eq!(super::detect::widened_path(&again, &home), None);
+}

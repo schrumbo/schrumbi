@@ -63,6 +63,40 @@ pub fn which(name: &str) -> Option<PathBuf> {
     })
 }
 
+/// Folders where installers put command-line programs that a terminal finds through the shell profile.
+fn install_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = [".local/bin", ".claude/local", ".npm-global/bin", ".bun/bin", ".volta/bin", ".opencode/bin", ".cargo/bin", "Library/pnpm"].iter().map(|d| home.join(d)).collect();
+    dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"].map(PathBuf::from));
+    let mut nvm: Vec<PathBuf> = std::fs::read_dir(home.join(".nvm/versions/node")).into_iter().flatten().flatten().map(|e| e.path().join("bin")).collect();
+    nvm.sort_by(|a, b| b.cmp(a));
+    dirs.extend(nvm);
+    dirs
+}
+
+/// `PATH` with the usual install folders appended that exist and are missing.
+pub fn widened_path(current: &std::ffi::OsStr, home: &Path) -> Option<std::ffi::OsString> {
+    let mut paths: Vec<PathBuf> = std::env::split_paths(current).collect();
+    let before = paths.len();
+    for dir in install_dirs(home) {
+        if !paths.contains(&dir) && dir.is_dir() {
+            paths.push(dir);
+        }
+    }
+    (paths.len() > before).then(|| std::env::join_paths(paths).ok()).flatten()
+}
+
+/// Apps started from the Finder or a desktop launcher get a minimal `PATH` without the folders the shell profile adds,
+/// so `claude`, `npx` and `node` would be missing; call before any thread starts.
+pub fn widen_path() {
+    if !cfg!(unix) {
+        return;
+    }
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
+    if let Some(path) = widened_path(&std::env::var_os("PATH").unwrap_or_default(), &home) {
+        unsafe { std::env::set_var("PATH", path) };
+    }
+}
+
 /// Looks for the programs on `PATH`; a few file checks, no process starts.
 pub fn scan() -> Vec<Cli> {
     Agent::ALL.into_iter().filter_map(|agent| which(agent.command()).map(|path| Cli { agent, path })).collect()

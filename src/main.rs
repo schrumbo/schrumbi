@@ -29,6 +29,7 @@ impl AssetSource for Assets {
 }
 
 fn main() {
+    core::ai::detect::widen_path();
     if let Some(code) = core::office::sheet::legacy_reader() {
         std::process::exit(code);
     }
