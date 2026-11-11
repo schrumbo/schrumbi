@@ -295,12 +295,17 @@ pub(crate) fn resolve(lib: &Library, rel: &str) -> Result<PathBuf, String> {
     }
     let settled_root = settled(root);
     let given = Path::new(rel);
-    let candidate = if given.is_absolute() {
-        given.strip_prefix(root).or_else(|_| given.strip_prefix(&settled_root)).map_err(|_| OUTSIDE.to_string())?
-    } else if matches!(rel.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic()) {
-        return Err(OUTSIDE.to_string());
-    } else {
-        Path::new(rel.trim_start_matches(['/', '\\']))
+    let candidate = match given.strip_prefix(root).or_else(|_| given.strip_prefix(&settled_root)) {
+        Ok(inner) if given.is_absolute() => inner,
+        _ => {
+            let trimmed = rel.trim_start_matches(['/', '\\']);
+            let drive = matches!(trimmed.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic());
+            let host = given.is_absolute() && given.components().find_map(|c| if let Component::Normal(n) = c { Some(n) } else { None }).is_some_and(|n| Path::new("/").join(n).exists());
+            if drive || host {
+                return Err(OUTSIDE.to_string());
+            }
+            Path::new(trimmed)
+        }
     };
     if candidate.is_absolute() || candidate.components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir)) {
         return Err(OUTSIDE.to_string());

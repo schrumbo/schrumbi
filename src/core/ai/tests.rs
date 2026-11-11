@@ -135,11 +135,15 @@ fn paths_never_leave_the_study_folder() {
     let mut turns = Turns::default();
     let secret = root.parent().unwrap().join("geheim.md");
     std::fs::write(&secret, "geheim").unwrap();
-    for path in ["../geheim.md", "MA/../../geheim.md", secret.to_str().unwrap(), "C:/Windows/win.ini", "\\\\server\\share\\x.md"] {
+    for path in ["../geheim.md", "MA/../../geheim.md", secret.to_str().unwrap(), "C:/Windows/win.ini", "\\C:/Windows/win.ini", "\\\\server\\share\\x.md"] {
         assert!(turns.call(&mut lib, "s", "read_note", &json!({ "path": path })).is_err(), "{path}");
         assert!(turns.call(&mut lib, "s", "create_note", &json!({ "title": "X", "folder": path })).is_err(), "{path}");
     }
     assert!(turns.call(&mut lib, "s", "list_folder", &json!({ "path": ".." })).is_err());
+    assert!(turns.call(&mut lib, "s", "list_folder", &json!({ "path": "/" })).is_ok());
+    std::fs::create_dir_all(root.join("MA")).unwrap();
+    std::fs::write(root.join("MA/N.md"), "Hallo\n").unwrap();
+    assert!(turns.call(&mut lib, "s", "read_note", &json!({ "path": "/MA/N.md" })).is_ok());
 }
 
 #[test]
