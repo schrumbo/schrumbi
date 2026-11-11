@@ -169,7 +169,7 @@ pub struct DatePickerState {
     time_field: Entity<TimeFieldState>,
     time_field_pushed: bool,
     _subscriptions: Vec<Subscription>,
-    /// The first day of the week. Defaults to Sunday.
+    /// The first day of the week. Defaults to Monday.
     first_day_of_week: Weekday,
     bounds: Bounds<Pixels>,
 }
@@ -244,7 +244,7 @@ impl DatePickerState {
             time_field,
             time_field_pushed: false,
             _subscriptions,
-            first_day_of_week: Weekday::Sun,
+            first_day_of_week: Weekday::Mon,
             bounds: Bounds::default(),
         }
     }

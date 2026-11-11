@@ -339,6 +339,8 @@ def cli(args):
 
 
 def main():
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(prog="gate")
     parser.add_argument("--base", default="HEAD")
     parser.add_argument("--deep", action="store_true")

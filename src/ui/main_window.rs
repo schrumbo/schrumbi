@@ -45,6 +45,7 @@ pub struct MainWindow {
     ai_panel: Option<Entity<super::ai_panel::AiPanel>>,
     /// The right panel's width while its edge is dragged.
     resizing: Option<f32>,
+    today_scroll: ScrollHandle,
     _subs: Vec<Subscription>,
 }
 
@@ -162,6 +163,7 @@ impl MainWindow {
             slides: None,
             ai_panel: None,
             resizing: None,
+            today_scroll: ScrollHandle::new(),
             _subs: subs,
         }
     }
@@ -365,7 +367,7 @@ impl MainWindow {
                 Route::Doc(shown) => Self::crumbs(lib, lib.focused_document().unwrap_or(shown), total - toolbar_padding - crumb::TOOLBAR_BUTTONS * control::M - search_width - crumb::TOOLBAR_GAPS * space::S - ai_room, window, t),
                 _ => div().flex_1().min_w(px(80.)).truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)),
             })
-            .child(super::coach::anchor(div().id("coach-new")).child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().bg(t.ink.opacity(0.06)).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("plus")).tooltip(tr("Neu")).dropdown_menu(move |menu, _, _| {
+            .child(super::coach::anchor(div().id("coach-new").rounded_full()).child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().bg(t.ink.opacity(0.06)).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("plus")).tooltip(tr("Neu")).dropdown_menu(move |menu, _, _| {
                 let m = module2.clone();
                 menu.item(PopupMenuItem::new(format!("{}{}", tr("Neuer Eintrag…"), ShortcutAction::NewEntry.hint())).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)))
                     .item(PopupMenuItem::new(format!("{}{}", tr("Neue Notiz, Datei oder Ordner…"), ShortcutAction::NewFile.hint())).icon(menu_icon("file-plus")).on_click(move |_, _, cx| {
@@ -396,6 +398,7 @@ impl MainWindow {
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         super::perf::frame_start();
+        super::widgets::note_drag(cx.has_active_drag());
         if !std::mem::replace(&mut self.focused_once, true) && window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
         }
@@ -578,7 +581,10 @@ impl Render for MainWindow {
         let dialog_open = window.has_active_dialog(cx);
         let l = lib.read(cx);
         let page = match l.route() {
-            Route::Today => div().id("today-scroll").size_full().overflow_y_scrollbar().child(today::render(l, page_width, setup_card, covers_calendar, self.moodle.clone().into_any_element(), &t)).into_any_element(),
+            Route::Today => {
+                super::coach::scrolls("today", &self.today_scroll);
+                div().relative().size_full().child(div().id("today-scroll").size_full().overflow_y_scroll().track_scroll(&self.today_scroll).child(today::render(l, page_width, setup_card, covers_calendar, self.moodle.clone().into_any_element(), &t))).vertical_scrollbar(&self.today_scroll).into_any_element()
+            }
             _ => self.pages.clone().into_any_element(),
         };
         let page_key = {

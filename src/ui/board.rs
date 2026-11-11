@@ -43,12 +43,17 @@ impl RenderOnce for Board {
             CalendarView::Month => month(l, l.calendar_anchor(), self.narrow, &t),
         };
         let slide = f32::from(turn.1) * cal::SLIDE;
+        let page = if KEYED_TURN.get() == turn.0 {
+            div().child(page).into_any_element()
+        } else {
+            div().child(page).with_animation(("board-turn", turn.0 as usize), Animation::new(travel).with_easing(ease_out_quint()), move |d, p| d.opacity(0.3 + 0.7 * p).ml(px(slide * (1. - p))).mr(px(-slide * (1. - p)))).into_any_element()
+        };
         div()
             .flex()
             .flex_col()
             .gap(px(space::S))
             .child(header(l, view, segment, &t))
-            .child(div().child(page).with_animation(("board-turn", turn.0 as usize), Animation::new(travel).with_easing(ease_out_quint()), move |d, p| d.opacity(0.3 + 0.7 * p).ml(px(slide * (1. - p))).mr(px(-slide * (1. - p)))))
+            .child(page)
     }
 }
 
@@ -62,23 +67,34 @@ pub fn key(key: &str, cx: &mut App) -> bool {
         "m" => act(cx, |l| l.set_calendar_view(CalendarView::Month)),
         _ => return false,
     }
+    KEYED_TURN.set(state::read(cx, |l| l.calendar_turn.0));
     true
+}
+
+thread_local! {
+    static KEYED_TURN: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };
 }
 
 fn header(l: &Library, view: CalendarView, segment: f32, t: &Theme) -> Div {
     let today = l.today();
     let anchor = l.calendar_anchor;
     let at_today = calendar::at_home(view, anchor, today);
-    let caption = match view {
+    let (title, caption, hint) = match view {
         CalendarView::Week => {
             let days = calendar::page_days(anchor, today);
             let (a, b) = (days[0], days[6]);
             let lectures = [a, b].map(|d| l.lecture_week_containing(d).map(|w| w.index));
-            format!("{} · {}", day::span_codes(lectures, a, b), day::day_range(a, b, today))
+            let caption = match lectures {
+                [Some(x), Some(y)] if x != y => Some(trf("Vorlesungswochen %lld–%lld", &[&x, &y])),
+                [Some(w), _] | [None, Some(w)] => Some(trf("Vorlesungswoche %lld", &[&w])),
+                [None, None] => l.semester().and_then(|s| s.break_at(a).or_else(|| s.break_at(b))).map(|b| b.name.clone()),
+            };
+            (day::day_range(a, b, today), caption, day::calendar_weeks(a, b))
         }
         CalendarView::Month => {
-            let weeks = calendar::week_numbers(&calendar::month_grid(l.calendar_anchor()));
-            trf("KW%@–%@", &[&format!("{:02}", weeks[0]), &format!("{:02}", weeks[calendar::ROWS - 1])])
+            let grid = calendar::month_grid(l.calendar_anchor());
+            let hint = day::calendar_weeks(grid[0][0], grid[calendar::ROWS - 1][6]);
+            (day::month_year(calendar::named_month(view, anchor, today)), None, hint)
         }
     };
     let (back, forward) = match view {
@@ -106,8 +122,8 @@ fn header(l: &Library, view: CalendarView, segment: f32, t: &Theme) -> Div {
                 .flex()
                 .items_baseline()
                 .gap(px(space::S))
-                .child(section_title(day::month_year(calendar::named_month(view, anchor, today))))
-                .child(div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.secondary).child(caption)),
+                .child(div().id("board-title").flex_none().tooltip(tip(hint)).child(section_title(title)))
+                .children(caption.map(|c| div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.tertiary).child(c))),
         )
         .child(segmented(view, segment, t))
 }
@@ -491,7 +507,10 @@ fn column(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
     let weekend = day::is_weekend(d);
     let items = lib.assignments_on(d);
     let sessions = lib.sessions_on(d);
-    let break_name = lib.semester().and_then(|s| s.break_at(d)).map(|b| b.name.clone());
+    let semester = lib.semester();
+    let break_name = semester.and_then(|s| s.break_at(d)).map(|b| b.name.clone());
+    let free = semester.is_some_and(|s| !s.contains(d) || break_name.is_some());
+    let shade = if weekend { 0.02 } else { 0. } + if free { 0.03 } else { 0. };
     let open = items.iter().filter(|a| !lib.is_done(a)).count();
     let ink = t.ink;
 
@@ -520,8 +539,8 @@ fn column(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
         .rounded(px(radius::CARD))
         .bg(if is_today {
             t.content.blend(t.accent.opacity(0.12))
-        } else if weekend {
-            t.content.blend(ink.opacity(0.02))
+        } else if shade > 0. {
+            t.content.blend(ink.opacity(shade))
         } else {
             t.column
         })

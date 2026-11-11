@@ -40,38 +40,35 @@ pub fn icon(name: &str, size: f32, color: Hsla) -> Svg {
 
 /// File-type icon from the Material Icon Theme, as in VS Code.
 pub fn file_icon(path: &Path, size: f32) -> Img {
-    let name = if path.is_dir() {
-        "folder-base"
-    } else {
-        match extension(&path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()).to_lowercase().as_str() {
-            "md" | "markdown" | "mdown" => "markdown",
-            "pdf" => "pdf",
-            "doc" | "docx" | "pages" | "odt" | "rtf" | "rtfd" => "word",
-            "ppt" | "pptx" | "key" | "odp" => "powerpoint",
-            "xls" | "xlsx" | "numbers" | "ods" | "csv" | "tsv" => "table",
-            "png" | "jpg" | "jpeg" | "heic" | "gif" | "webp" | "tiff" | "bmp" => "image",
-            "svg" => "svg",
-            "mp4" | "mov" | "m4v" | "avi" => "video",
-            "mp3" | "m4a" | "wav" | "aiff" => "audio",
-            "zip" | "rar" | "7z" | "tar" | "gz" => "zip",
-            "json" => "json",
-            "html" | "htm" => "html",
-            "css" | "scss" => "css",
-            "js" | "jsx" | "mjs" => "javascript",
-            "ts" | "tsx" => "typescript",
-            "swift" => "swift",
-            "java" => "java",
-            "py" => "python",
-            "c" | "h" => "c",
-            "cpp" | "hpp" | "cc" => "cpp",
-            "yml" | "yaml" => "yaml",
-            "tex" | "bib" => "tex",
-            "xml" | "plist" => "xml",
-            "fig" => "figma",
-            "sketch" => "sketch",
-            "ttf" | "otf" | "woff" | "woff2" => "font",
-            _ => "document",
-        }
+    let name = match extension(&path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()).to_lowercase().as_str() {
+        "md" | "markdown" | "mdown" => "markdown",
+        "pdf" => "pdf",
+        "doc" | "docx" | "pages" | "odt" | "rtf" | "rtfd" => "word",
+        "ppt" | "pptx" | "key" | "odp" => "powerpoint",
+        "xls" | "xlsx" | "numbers" | "ods" | "csv" | "tsv" => "table",
+        "png" | "jpg" | "jpeg" | "heic" | "gif" | "webp" | "tiff" | "bmp" => "image",
+        "svg" => "svg",
+        "mp4" | "mov" | "m4v" | "avi" => "video",
+        "mp3" | "m4a" | "wav" | "aiff" => "audio",
+        "zip" | "rar" | "7z" | "tar" | "gz" => "zip",
+        "json" => "json",
+        "html" | "htm" => "html",
+        "css" | "scss" => "css",
+        "js" | "jsx" | "mjs" => "javascript",
+        "ts" | "tsx" => "typescript",
+        "swift" => "swift",
+        "java" => "java",
+        "py" => "python",
+        "c" | "h" => "c",
+        "cpp" | "hpp" | "cc" => "cpp",
+        "yml" | "yaml" => "yaml",
+        "tex" | "bib" => "tex",
+        "xml" | "plist" => "xml",
+        "fig" => "figma",
+        "sketch" => "sketch",
+        "ttf" | "otf" | "woff" | "woff2" => "font",
+        _ if path.is_dir() => "folder-base",
+        _ => "document",
     };
     img(SharedString::from(format!("fileicons/{name}.svg"))).size(px(size)).flex_none()
 }
@@ -590,10 +587,28 @@ pub fn assignment_row_with(lib: &Library, a: &Assignment, show_module: bool, sho
         .context_menu(move |menu, window, cx| super::ai::deadline_submenu(status_menu(menu, &menu_id, cx), &menu_id, window, cx))
 }
 
+thread_local! {
+    static DRAGGING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether something is being dragged in this frame, so drop targets build their highlight only then.
+pub fn note_drag(on: bool) {
+    DRAGGING.set(on);
+}
+
 /// Lets an assignment take files: from outside they are filed, from the file list they are linked where they are. Call it after the last child, the element must be relative.
 pub fn file_target(element: Stateful<Div>, a: &Assignment, t: &Theme) -> Stateful<Div> {
-    let group = SharedString::from(format!("drop-{}", a.id));
     let (outside, inside) = (a.id.clone(), a.id.clone());
+    let element = element
+        .on_drop(move |p: &ExternalPaths, _, cx| {
+            let paths = p.paths().to_vec();
+            act(cx, |l| l.request_filing(paths, Some(outside.clone())));
+        })
+        .on_drop(move |f: &DraggedFile, _, cx| link_dropped(&f.0, &inside, cx));
+    if !DRAGGING.get() {
+        return element;
+    }
+    let group = SharedString::from(format!("drop-{}", a.id));
     let overlay = |label: String| {
         div()
             .absolute()
@@ -616,11 +631,6 @@ pub fn file_target(element: Stateful<Div>, a: &Assignment, t: &Theme) -> Statefu
     };
     element
         .group(group.clone())
-        .on_drop(move |p: &ExternalPaths, _, cx| {
-            let paths = p.paths().to_vec();
-            act(cx, |l| l.request_filing(paths, Some(outside.clone())));
-        })
-        .on_drop(move |f: &DraggedFile, _, cx| link_dropped(&f.0, &inside, cx))
         .child(overlay(trf("In %@ ablegen", &[&a.title])).group_drag_over::<ExternalPaths>(group.clone(), |s| s.visible()))
         .child(overlay(trf("Zu %@ zuordnen", &[&library::deadline_label(a)])).group_drag_over::<DraggedFile>(group, |s| s.visible()))
 }

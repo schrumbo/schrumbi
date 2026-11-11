@@ -963,6 +963,8 @@
   "Vorlesungsbeginn": "Lectures start",
   "Vorlesungsende": "Lectures end",
   "Vorlesungsfrei": "No lectures",
+  "Vorlesungswoche %lld": "Lecture week %lld",
+  "Vorlesungswochen %lld–%lld": "Lecture weeks %1$lld–%2$lld",
   "Vorlesungswoche %lld von %lld · %lld von %lld Pflichtabgaben erledigt": "Lecture week %1$lld of %2$lld · %3$lld of %4$lld required done",
   "Vorlesungswoche %lld · KW%@": "Lecture week %1$lld · CW%2$@",
   "Vorlesungswochen": "Lecture weeks",

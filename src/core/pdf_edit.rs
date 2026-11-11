@@ -12,6 +12,7 @@ use super::i18n::tr;
 const INHERITED: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
 const DEPTH: usize = 64;
 const PIN_SIZE: f32 = 20.;
+const TRAILER_TAIL: usize = 64 * 1024;
 
 type Entry = (ObjectId, Dictionary);
 
@@ -79,6 +80,10 @@ fn mentions_encryption(data: &[u8]) -> bool {
     data.windows(8).any(|w| w == b"/Encrypt")
 }
 
+fn trailer_mentions_encryption(data: &[u8]) -> bool {
+    mentions_encryption(data.get(data.len().saturating_sub(TRAILER_TAIL)..).unwrap_or(data))
+}
+
 fn is_signed(doc: &Document) -> bool {
     let form = doc.catalog().ok().and_then(|c| c.get(b"AcroForm").ok()).and_then(|o| doc.dereference(o).ok()).and_then(|(_, o)| o.as_dict().ok());
     let flagged = form.and_then(|f| f.get(b"SigFlags").ok()).and_then(|o| doc.dereference(o).ok()).and_then(|(_, o)| o.as_i64().ok()).is_some_and(|flags| flags & 1 == 1);
@@ -110,7 +115,7 @@ fn read(data: &[u8]) -> Result<Document, EditError> {
         Err(_) if mentions_encryption(data) => return Err(EditError::Protected),
         Err(_) => return Err(EditError::Broken),
     };
-    if doc.is_encrypted() || doc.was_encrypted() {
+    if doc.is_encrypted() || doc.was_encrypted() || trailer_mentions_encryption(data) {
         return Err(EditError::Protected);
     }
     if is_signed(&doc) {
@@ -1079,6 +1084,7 @@ pub mod tests {
         assert!(insertable(&fixture()).is_ok_and(|n| n > 0));
         assert_eq!(insertable(b"kein pdf"), Err(EditError::Broken));
         assert_eq!(insertable(&encrypted(&fixture(), "geheim")), Err(EditError::Protected));
+        assert_eq!(insertable(include_bytes!("testdata/aes256.pdf")), Err(EditError::Protected), "AES-256 that the reader cannot decode");
     }
 
     #[test]

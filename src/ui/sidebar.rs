@@ -20,6 +20,10 @@ use crate::core::shortcuts::ShortcutAction;
 pub const BAND: f32 = if super::chrome::CUSTOM { 8. } else { 52. };
 /// Width of the sidebar: one column of icons.
 pub const RAIL: f32 = 48.;
+
+thread_local! {
+    static MODULES_SCROLL: ScrollHandle = ScrollHandle::new();
+}
 const ROW: f32 = 44.;
 
 fn is_active(lib: &Library, route: &Route) -> bool {
@@ -269,6 +273,8 @@ pub fn render(lib: &Library, update: Option<String>, t: &Theme, cx: &App) -> Div
             menu.separator().item(PopupMenuItem::new(format!("{}{}", tr("Anderen Ordner öffnen…"), ShortcutAction::OpenOtherWorkspace.hint())).on_click(|_, window, cx| window.dispatch_action(Box::new(super::app::OpenOtherWorkspace), cx)))
         }))))
         .child(tab("tab-settings".into(), false, true, icon("settings", iconsize::L, fg).into_any_element(), tr("Einstellungen"), None, format!("{}  {}", tr("Einstellungen"), shortcut_label(",")), t).on_click(|_, _, cx| super::settings::open(cx)));
+    let scroll = MODULES_SCROLL.with(Clone::clone);
+    super::coach::scrolls("modules", &scroll);
     div()
         .size_full()
         .flex()
@@ -276,7 +282,7 @@ pub fn render(lib: &Library, update: Option<String>, t: &Theme, cx: &App) -> Div
         .overflow_hidden()
         .child(top)
         .when(!modules.is_empty(), |d| d.child(div().mx(px(space::M)).my(px(space::S)).h(px(1.)).bg(t.separator)))
-        .child(div().id("tab-modules").flex_1().min_h_0().overflow_y_scrollbar().child(mods))
+        .child(div().flex_1().min_h_0().relative().child(div().id("tab-modules").size_full().overflow_y_scroll().track_scroll(&scroll).child(mods)).vertical_scrollbar(&scroll))
         .child(bottom)
 }
 

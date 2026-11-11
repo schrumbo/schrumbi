@@ -4414,6 +4414,8 @@ impl Render for PdfView {
                 .text_size(px(font::CAPTION))
                 .child(format!("{} / {}", self.current_page() + 1, self.page_count()))
         });
+        let status = self.page_status(window, cx, &t);
+        let (status_inside, status_over) = if floated.is_some() { (None, status) } else { (status, None) };
         let me = cx.entity();
         div()
             .id("pdf")
@@ -4525,10 +4527,10 @@ impl Render for PdfView {
                                 v.zoom_by(factor, Some(at), cx);
                             })
                         }))
-                        .children(self.page_status(window, cx, &t))
+                        .children(status_inside)
                         .children(self.pen_options(&cx.entity(), &t))
                         .children(badge),
-                ).children(floated),
+                ).children(floated).children(status_over),
             )
             .into_any_element()
     }

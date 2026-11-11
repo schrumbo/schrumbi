@@ -194,10 +194,15 @@ pub fn week_codes(lecture: Option<u32>, d: NaiveDate) -> String {
     span_codes([lecture, lecture], d, d)
 }
 
+/// "KW46–47": the calendar weeks of `a` and `b`, once when they agree.
+pub fn calendar_weeks(a: NaiveDate, b: NaiveDate) -> String {
+    let (ka, kb) = (iso_week(a), iso_week(b));
+    if ka == kb { super::i18n::trf("KW%@", &[&format!("{ka:02}")]) } else { super::i18n::trf("KW%@–%@", &[&format!("{ka:02}"), &format!("{kb:02}")]) }
+}
+
 /// "W07–08 · KW46–47": the lecture weeks of `a` and `b`, if any, and their calendar weeks, once when they agree.
 pub fn span_codes(lectures: [Option<u32>; 2], a: NaiveDate, b: NaiveDate) -> String {
-    let (ka, kb) = (iso_week(a), iso_week(b));
-    let kw = if ka == kb { super::i18n::trf("KW%@", &[&format!("{ka:02}")]) } else { super::i18n::trf("KW%@–%@", &[&format!("{ka:02}"), &format!("{kb:02}")]) };
+    let kw = calendar_weeks(a, b);
     match lectures {
         [Some(x), Some(y)] if x != y => format!("W{x:02}–{y:02} · {kw}"),
         [Some(w), _] | [None, Some(w)] => format!("W{w:02} · {kw}"),

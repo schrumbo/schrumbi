@@ -227,6 +227,11 @@ impl NoteBuffer {
             return Ok(());
         }
         write_atomic(&self.path, self.text.as_bytes())?;
+        if super::prefs::with(|p| !super::tips::WRITING.iter().all(|f| p.used_features.contains(*f))) {
+            for feature in super::tips::written_features(&self.text) {
+                super::prefs::mark_used(feature);
+            }
+        }
         self.missing = false;
         self.last_saved = self.text.clone();
         self.known = self.modified();

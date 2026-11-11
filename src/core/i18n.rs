@@ -24,7 +24,9 @@ pub enum Lang {
 /// Picks the UI language: the setting, else the system language, falling back to German.
 pub fn init(setting: &str) {
     let code = if setting.is_empty() { sys_locale::get_locale().unwrap_or_default() } else { setting.to_string() };
-    *LANG.write().unwrap() = if code.starts_with("en") { Lang::En } else { Lang::De };
+    let english = code.starts_with("en");
+    *LANG.write().unwrap() = if english { Lang::En } else { Lang::De };
+    gpui_kit::component::set_locale(if english { "en" } else { "de" });
 }
 
 /// Whether the app speaks English.

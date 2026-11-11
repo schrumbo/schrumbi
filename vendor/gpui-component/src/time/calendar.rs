@@ -52,7 +52,7 @@ impl Calendar {
             state: state.clone(),
             style: StyleRefinement::default(),
             number_of_months: 1,
-            first_day_of_week: Weekday::Sun,
+            first_day_of_week: Weekday::Mon,
         }
     }
     pub fn number_of_months(mut self, count: usize) -> Self {

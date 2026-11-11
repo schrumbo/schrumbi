@@ -4283,6 +4283,10 @@ fn word_count(words: Option<usize>, caption: Option<AnyElement>, t: &Theme) -> D
     div().flex_none().flex().items_center().justify_between().gap(px(space::M)).px(px(space::M)).py(px(space::XS)).border_t_1().border_color(t.separator).text_size(px(font::CAPTION)).text_color(t.secondary).children(caption).child(count.flex_none().ml_auto())
 }
 
+thread_local! {
+    static HOVERED_TAB: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
 /// A tab being moved along the tab bar or into the split view.
 #[derive(Clone)]
 pub struct DraggedTab {
@@ -4426,6 +4430,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
         }
     }
     let mut left = 0.;
+    let hovered = HOVERED_TAB.with_borrow(Clone::clone);
     let mut tabs = div().flex().gap(px(space::XXS)).py(px(space::S));
     for (i, doc) in docs.iter().enumerate() {
         let active = doc.as_path() == current;
@@ -4435,40 +4440,48 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
             tabs = tabs.child(div().flex_none().w(px(widths[i])));
             continue;
         }
-        let (open, close, menu, middle, target) = (doc.clone(), doc.clone(), doc.clone(), doc.clone(), doc.clone());
+        let (open, menu, middle, target) = (doc.clone(), doc.clone(), doc.clone(), doc.clone());
         let accent = t.accent;
         let is_dirty = dirty[i];
         let hover = t.ink.opacity(0.04);
-        let rel = state::read(cx, |l| l.relative_path(doc));
         let is_beside = beside.as_ref() == Some(doc);
-        let hint = if is_beside { format!("{rel}\n{}", tr("Rechts geöffnet")) } else { rel };
         let (others, rightwards) = (docs.len() > 1, docs.len() > i + 1);
         let squeezed = widths[i] + 0.5 < natural[i] && !is_dirty;
-        let close_button = div()
-            .id(SharedString::from(format!("tab-close-{}", doc.display())))
-            .flex_none()
-            .size(px(iconsize::M))
-            .rounded_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .soft(t.ink.opacity(0.1), radius::FULL)
-            .child(if is_dirty {
-                div().relative().size(px(iconsize::M)).flex().items_center().justify_center().child(div().size(px(space::S)).rounded_full().bg(t.secondary).group_hover("doc-tab", Styled::invisible)).child(div().absolute().invisible().group_hover("doc-tab", Styled::visible).child(icon("x", iconsize::XS, t.secondary))).into_any_element()
-            } else {
-                icon("x", iconsize::XS, t.secondary).into_any_element()
-            })
-            .tooltip(tip(format!("{}{}", if is_dirty { tr("Ungesicherte Änderungen – Tab schließen") } else { tr("Tab schließen") }, ShortcutAction::CloseTab.hint())))
-            .on_click(move |_, _, cx| {
-                cx.stop_propagation();
-                close_tab(&close, cx);
-            });
+        let pointed = hovered.as_ref() == Some(doc);
+        let close_shown = active || is_dirty || pointed;
+        let close_button = if close_shown {
+            let close = doc.clone();
+            div()
+                .id(SharedString::from(format!("tab-close-{}", doc.display())))
+                .flex_none()
+                .size(px(iconsize::M))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .soft(t.ink.opacity(0.1), radius::FULL)
+                .child(if is_dirty && !pointed { div().size(px(space::S)).rounded_full().bg(t.secondary).into_any_element() } else { icon("x", iconsize::XS, t.secondary).into_any_element() })
+                .tooltip(tip(format!("{}{}", if is_dirty { tr("Ungesicherte Änderungen – Tab schließen") } else { tr("Tab schließen") }, ShortcutAction::CloseTab.hint())))
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    close_tab(&close, cx);
+                })
+                .into_any_element()
+        } else {
+            div().flex_none().size(px(iconsize::M)).into_any_element()
+        };
+        let tab_path = doc.clone();
+        let hint = move |window: &mut Window, cx: &mut App| {
+            let rel = state::read(cx, |l| l.relative_path(&tab_path));
+            tip(if is_beside { format!("{rel}
+{}", tr("Rechts geöffnet")) } else { rel })(window, cx)
+        };
+        let hover_path = doc.clone();
         let under = t.content.blend(t.ink.opacity(if active { 0.1 } else { 0.05 }));
         tabs = tabs.child(
             div()
                 .id(SharedString::from(format!("tab-{}", doc.display())))
-                .group("doc-tab")
                 .relative()
                 .flex()
                 .flex_none()
@@ -4483,7 +4496,14 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                 .when(active, |d| d.bg(t.ink.opacity(0.1)))
                 .when(is_beside, |d| d.bg(t.ink.opacity(0.04)).soft(t.ink.opacity(0.02), radius::INNER))
                 .when(!active && !is_beside, |d| d.soft(hover, radius::INNER))
-                .tooltip(tip(hint))
+                .tooltip(hint)
+                .on_hover(move |on, _, _| HOVERED_TAB.with_borrow_mut(|h| {
+                    if *on {
+                        *h = Some(hover_path.clone());
+                    } else if h.as_ref() == Some(&hover_path) {
+                        *h = None;
+                    }
+                }))
                 .on_click(move |_, _, cx| act(cx, |l| l.open_document(&open)))
                 .on_mouse_down(MouseButton::Middle, move |_, _, cx| close_tab(&middle, cx))
                 .on_drag(DraggedTab { path: doc.clone(), title: titles[i].clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
@@ -4494,10 +4514,10 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                 })
                 .child(div().flex_none().child(if is_beside { icon("split-right", iconsize::M, t.secondary).into_any_element() } else { file_icon(doc, iconsize::M).into_any_element() }))
                 .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis_middle().text_size(px(font::CALLOUT)).text_color(if active || is_beside { t.primary } else { t.secondary }).child(titles[i].clone()))
-                .child(if squeezed {
-                    div().absolute().top_0().bottom_0().right_0().pl(px(space::XS)).pr(px(space::S)).rounded_r(px(radius::INNER)).flex().items_center().bg(under).when(!active, |d| d.invisible().group_hover("doc-tab", Styled::visible)).child(close_button).into_any_element()
-                } else {
-                    close_button.when(!active && !is_dirty, |d| d.invisible().group_hover("doc-tab", Styled::visible)).into_any_element()
+                .children(match (squeezed, close_shown) {
+                    (true, true) => Some(div().absolute().top_0().bottom_0().right_0().pl(px(space::XS)).pr(px(space::S)).rounded_r(px(radius::INNER)).flex().items_center().bg(under).child(close_button).into_any_element()),
+                    (true, false) => None,
+                    (false, _) => Some(close_button),
                 })
                 .context_menu(move |m, window, cx| {
                     let (a, b, c, d, beside, right, shown) = (menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone());

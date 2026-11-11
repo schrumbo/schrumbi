@@ -251,6 +251,8 @@ pub mod coach {
     pub const DIM_DARK: f32 = 0.5;
     /// How far the pulsing ring travels outward.
     pub const PULSE_REACH: f32 = 10.;
+    /// How often the ring pulses before it rests.
+    pub const PULSES: u32 = 3;
     pub const LABEL_WIDTH: f32 = 280.;
     /// The height a label needs below its element before it moves above it.
     pub const LABEL_ROOM: f32 = 96.;

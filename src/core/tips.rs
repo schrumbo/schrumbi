@@ -58,6 +58,46 @@ pub fn pick<'a>(available: &[&'a Tip], used: &BTreeSet<String>, seen: &[String])
     seen.iter().find_map(|id| fresh.iter().find(|t| t.id == id).copied())
 }
 
+/// The features `written_features` looks for.
+pub const WRITING: [&str; 4] = ["wikilink", "pdf_embed", "math", "tasks"];
+
+/// The writing features a note uses, so their tips retire once the user has written them: links, PDF embeds, formulas and tasks.
+pub fn written_features(text: &str) -> Vec<&'static str> {
+    let mut found = Vec::new();
+    if text.match_indices("[[").any(|(i, _)| i == 0 || text.as_bytes()[i - 1] != b'!') {
+        found.push("wikilink");
+    }
+    if text.split("![[").skip(1).any(|rest| rest.contains("]]") && rest.split("]]").next().is_some_and(|inner| inner.to_lowercase().contains(".pdf"))) {
+        found.push("pdf_embed");
+    }
+    if text.contains("$$") || text.lines().any(has_inline_math) {
+        found.push("math");
+    }
+    if text.lines().any(|l| {
+        let l = l.trim_start();
+        ["- [ ]", "- [x]", "- [X]", "* [ ]", "* [x]"].iter().any(|m| l.starts_with(m))
+    }) {
+        found.push("tasks");
+    }
+    found
+}
+
+fn has_inline_math(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut open = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b'$' || (i > 0 && bytes[i - 1] == b'\\') {
+            continue;
+        }
+        match open {
+            None if bytes.get(i + 1).is_some_and(|n| !n.is_ascii_whitespace() && !n.is_ascii_digit()) => open = Some(i),
+            Some(start) if i > start + 1 && !bytes[i - 1].is_ascii_whitespace() && !bytes.get(i + 1).is_some_and(u8::is_ascii_digit) => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Remembers that a tip was shown, newest last and only once.
 pub fn remember(seen: &mut Vec<String>, id: &str) {
     seen.retain(|s| s != id);
@@ -121,6 +161,18 @@ mod tests {
         assert_eq!(seen.last().map(String::as_str), Some("palette"));
         let few = vec![by_id("quick-open")];
         assert!(pick(&few, &used, &seen).is_none(), "a used feature is never taught");
+    }
+
+    #[test]
+    fn writing_a_feature_retires_its_tip() {
+        assert_eq!(written_features("Siehe [[Skript]] und ![[Blatt 3.PDF#page=2]]"), vec!["wikilink", "pdf_embed"]);
+        assert_eq!(written_features("Es gilt $x^2$ hier."), vec!["math"]);
+        assert_eq!(written_features("$$\na+b\n$$"), vec!["math"]);
+        assert_eq!(written_features("  - [ ] Blatt abgeben"), vec!["tasks"]);
+        assert!(written_features("Kostet 5$ oder 10$ und ![[Bild.png]]").is_empty());
+        for f in WRITING {
+            assert!(TIPS.iter().any(|t| t.feature == f), "{f}");
+        }
     }
 
     #[test]
