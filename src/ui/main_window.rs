@@ -29,8 +29,7 @@ pub struct MainWindow {
     search: Entity<InputState>,
     inspector: Entity<Inspector>,
     pages: Entity<Pages>,
-    setup: Entity<super::setup_card::SetupCard>,
-    moodle: Entity<super::setup_card::CalendarAsk>,
+    today: Entity<TodayView>,
     save_bounds: Option<Task<()>>,
     syncing_search: bool,
     /// What the search field says while empty: where it searches.
@@ -45,7 +44,6 @@ pub struct MainWindow {
     ai_panel: Option<Entity<super::ai_panel::AiPanel>>,
     /// The right panel's width while its edge is dragged.
     resizing: Option<f32>,
-    today_scroll: ScrollHandle,
     _subs: Vec<Subscription>,
 }
 
@@ -95,8 +93,7 @@ impl MainWindow {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Suchen")));
         let inspector = cx.new(|cx| Inspector::new(window, cx));
         let pages = cx.new(|cx| Pages::new(window, cx));
-        let setup = cx.new(super::setup_card::SetupCard::new);
-        let moodle = cx.new(|_| super::setup_card::CalendarAsk::new(false));
+        let today = cx.new(TodayView::new);
         let lib = state::lib(cx);
         let subs = vec![
             cx.observe_in(&lib, window, |this, lib, window, cx| {
@@ -150,8 +147,7 @@ impl MainWindow {
             search,
             inspector,
             pages,
-            setup,
-            moodle,
+            today,
             save_bounds: None,
             press_stamp: None,
             error_shown: false,
@@ -163,7 +159,6 @@ impl MainWindow {
             slides: None,
             ai_panel: None,
             resizing: None,
-            today_scroll: ScrollHandle::new(),
             _subs: subs,
         }
     }
@@ -395,6 +390,41 @@ impl MainWindow {
     }
 }
 
+/// The overview page in its own view, so changes elsewhere in the window, like a streaming answer beside it, do not lay it out again.
+pub struct TodayView {
+    setup: Entity<super::setup_card::SetupCard>,
+    moodle: Entity<super::setup_card::CalendarAsk>,
+    scroll: ScrollHandle,
+    width: f32,
+    _subs: Vec<Subscription>,
+}
+
+impl TodayView {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let lib = state::lib(cx);
+        Self {
+            setup: cx.new(super::setup_card::SetupCard::new),
+            moodle: cx.new(|_| super::setup_card::CalendarAsk::new(false)),
+            scroll: ScrollHandle::new(),
+            width: 0.,
+            _subs: vec![cx.observe(&lib, |_, _, cx| cx.notify())],
+        }
+    }
+}
+
+impl Render for TodayView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = Theme::get(cx);
+        let setup_shown = self.setup.read(cx).wanted(cx);
+        let covers_calendar = setup_shown && self.setup.read(cx).offers_calendar(cx);
+        let setup_card = setup_shown.then(|| self.setup.clone().into_any_element());
+        super::coach::scrolls("today", &self.scroll);
+        let lib = state::lib(cx);
+        let l = lib.read(cx);
+        div().relative().size_full().child(div().id("today-scroll").size_full().overflow_y_scroll().track_scroll(&self.scroll).child(today::render(l, self.width, setup_card, covers_calendar, self.moodle.clone().into_any_element(), &t))).vertical_scrollbar(&self.scroll)
+    }
+}
+
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         super::perf::frame_start();
@@ -575,15 +605,12 @@ impl Render for MainWindow {
         let slot_w = motion::follow("right-panel-width", inspector_target, if self.resizing.is_some() { std::time::Duration::ZERO } else { motion::MEDIUM }, window, cx);
         let page_width = width - left - reserved;
         self.pages.update(cx, |p, _| p.width = page_width);
-        let setup_shown = lib.read(cx).route() == &Route::Today && self.setup.read(cx).wanted(cx);
-        let covers_calendar = setup_shown && self.setup.read(cx).offers_calendar(cx);
-        let setup_card = setup_shown.then(|| self.setup.clone().into_any_element());
         let dialog_open = window.has_active_dialog(cx);
+        self.today.update(cx, |v, _| v.width = page_width);
         let l = lib.read(cx);
         let page = match l.route() {
             Route::Today => {
-                super::coach::scrolls("today", &self.today_scroll);
-                div().relative().size_full().child(div().id("today-scroll").size_full().overflow_y_scroll().track_scroll(&self.today_scroll).child(today::render(l, page_width, setup_card, covers_calendar, self.moodle.clone().into_any_element(), &t))).vertical_scrollbar(&self.today_scroll).into_any_element()
+                AnyView::from(self.today.clone()).cached(StyleRefinement::default().size_full()).into_any_element()
             }
             _ => self.pages.clone().into_any_element(),
         };

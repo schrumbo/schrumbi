@@ -171,6 +171,9 @@ pub struct AiPanel {
     list: ListState,
     listed: usize,
     dirty: BTreeSet<usize>,
+    counts: Vec<usize>,
+    rows: Vec<(usize, usize)>,
+    keep: HashMap<usize, usize>,
     tail: (Vec<ai::Waiting>, Option<String>),
     idle: Option<Task<()>>,
     reparse: Option<Task<()>>,
@@ -472,7 +475,7 @@ impl AiPanel {
             }),
         ];
         ai::set_panel(cx.entity().downgrade(), cx);
-        Self { input, items: Vec::new(), tools: HashMap::new(), expanded: HashSet::new(), session: None, turn: false, queued: 0, removed: HashSet::new(), extra: Vec::new(), last_prompt: None, list: Self::new_list(), listed: 0, dirty: BTreeSet::new(), tail: (Vec::new(), None), idle: None, reparse: None, focus_input: true, cancelling: false, asks: Vec::new(), pending: VecDeque::new(), recap: None, hint: None, logged: 0, log_task: None, row_edit: None, _subs: subs }
+        Self { input, items: Vec::new(), tools: HashMap::new(), expanded: HashSet::new(), session: None, turn: false, queued: 0, removed: HashSet::new(), extra: Vec::new(), last_prompt: None, list: Self::new_list(), listed: 0, dirty: BTreeSet::new(), counts: Vec::new(), rows: Vec::new(), keep: HashMap::new(), tail: (Vec::new(), None), idle: None, reparse: None, focus_input: true, cancelling: false, asks: Vec::new(), pending: VecDeque::new(), recap: None, hint: None, logged: 0, log_task: None, row_edit: None, _subs: subs }
     }
 
     fn new_list() -> ListState {
@@ -483,6 +486,22 @@ impl AiPanel {
 
     fn touch(&mut self, at: usize) {
         self.dirty.insert(at);
+        self.keep.remove(&at);
+    }
+
+    fn grow(&mut self, at: usize, keep: usize) {
+        if self.dirty.insert(at) {
+            self.keep.insert(at, keep);
+        } else if let Some(k) = self.keep.get_mut(&at) {
+            *k = (*k).min(keep);
+        }
+    }
+
+    fn parts(&self, at: usize) -> usize {
+        match self.items.get(at) {
+            Some(Item::Agent { text, parsed, parsed_len, .. }) => (parsed.as_ref().map_or(0, |p| p.rows().len()) + usize::from(parsed.is_none() || *parsed_len < text.len())).max(1),
+            _ => 1,
+        }
     }
 
     fn auto_chips(&self, cx: &App) -> Vec<Chip> {
@@ -700,7 +719,7 @@ impl AiPanel {
             }
         }
         self.dirty.extend(touched);
-        self.reparse_now();
+        self.reparse_now(cx);
         if !s.stopped {
             let full = match &result {
                 Some(Err(e)) => e.clone(),
@@ -835,7 +854,7 @@ impl AiPanel {
             ai::answer_ask(id, Answer::Decline, cx);
         }
         ai::decline_session(&session, cx);
-        self.reparse_now();
+        self.reparse_now(cx);
         self.notice(tr("Abgebrochen."), false);
         cx.notify();
     }
@@ -896,9 +915,10 @@ impl AiPanel {
             }
             Event::Update(Update::Text(text)) => {
                 match self.items.last_mut() {
-                    Some(Item::Agent { text: t, .. }) => {
+                    Some(Item::Agent { text: t, parsed, .. }) => {
                         t.push_str(&text);
-                        self.touch(self.items.len() - 1);
+                        let stable = parsed.as_ref().map_or(0, |p| p.rows().len());
+                        self.grow(self.items.len() - 1, stable);
                     }
                     _ => self.items.push(Item::Agent { text, parsed: None, parsed_len: 0, insert: None }),
                 }
@@ -1113,7 +1133,7 @@ impl AiPanel {
         }
         self.dirty.extend(touched);
         self.flush_log(cx);
-        self.reparse_now();
+        self.reparse_now(cx);
         if self.queued > 0 {
             self.queued -= 1;
             self.begin(cx);
@@ -1127,31 +1147,64 @@ impl AiPanel {
         if self.reparse.is_some() {
             return;
         }
-        let grown = self.items.last().map_or(0, |i| if let Item::Agent { text, .. } = i { text.len() } else { 0 });
-        let wait = REPARSE + Duration::from_millis(u64::try_from(grown / 40).unwrap_or(u64::MAX).min(600));
+        let at = self.items.len().saturating_sub(1);
+        let Some(Item::Agent { text, .. }) = self.items.get(at) else { return };
+        let wait = REPARSE + Duration::from_millis(u64::try_from(text.len() / 400).unwrap_or(u64::MAX).min(300));
         self.reparse = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(wait).await;
+            let Ok(Some(source)) = this.update(cx, |p, _| if let Some(Item::Agent { text, .. }) = p.items.get(at) { Some(text.clone()) } else { None }) else { return };
+            let snapshot = source.clone();
+            let fresh = cx.background_spawn(async move { markdown_view::parse(&source) }).await;
             let _ = this.update(cx, |p, cx| {
                 p.reparse = None;
-                p.reparse_now();
+                let mut more = false;
+                if let Some(Item::Agent { text, parsed, parsed_len, .. }) = p.items.get_mut(at)
+                    && snapshot.len() > *parsed_len
+                    && text.starts_with(snapshot.as_str())
+                {
+                    let old = parsed.as_ref().map_or(0, |o| o.rows().len());
+                    *parsed = Some(Rc::new(fresh));
+                    *parsed_len = snapshot.len();
+                    more = text.len() > snapshot.len();
+                    p.grow(at, old.saturating_sub(2));
+                }
+                if more && p.turn {
+                    p.schedule_reparse(cx);
+                }
                 cx.notify();
             });
         }));
     }
 
-    fn reparse_now(&mut self) {
+    fn reparse_now(&mut self, cx: &mut Context<Self>) {
         let count = self.items.len();
-        let mut touched = Vec::new();
-        for (back, item) in self.items.iter_mut().rev().take(4).enumerate() {
-            if let Item::Agent { text, parsed, parsed_len, .. } = item
-                && *parsed_len != text.len()
-            {
-                *parsed = Some(Rc::new(markdown_view::parse(text)));
-                *parsed_len = text.len();
-                touched.push(count - 1 - back);
-            }
+        let jobs: Vec<(usize, String)> = self.items.iter().enumerate().rev().take(4).filter_map(|(at, item)| match item {
+            Item::Agent { text, parsed_len, .. } if *parsed_len != text.len() => Some((at, text.clone())),
+            _ => None,
+        }).collect();
+        if jobs.is_empty() || count == 0 {
+            return;
         }
-        self.dirty.extend(touched);
+        self.reparse = Some(cx.spawn(async move |this, cx| {
+            let done = cx.background_spawn(async move { jobs.into_iter().map(|(at, text)| (at, text.len(), markdown_view::parse(&text))).collect::<Vec<_>>() }).await;
+            let _ = this.update(cx, |p, cx| {
+                p.reparse = None;
+                for (at, len, fresh) in done {
+                    let applied = match p.items.get_mut(at) {
+                        Some(Item::Agent { text, parsed, parsed_len, .. }) if text.len() == len && *parsed_len != len => {
+                            *parsed = Some(Rc::new(fresh));
+                            *parsed_len = len;
+                            true
+                        }
+                        _ => false,
+                    };
+                    if applied {
+                        p.touch(at);
+                    }
+                }
+                cx.notify();
+            });
+        }));
     }
 
     fn undo_edit(&mut self, at: usize, cx: &mut Context<Self>) {
@@ -1695,6 +1748,9 @@ impl AiPanel {
         self.list = Self::new_list();
         self.listed = 0;
         self.dirty.clear();
+        self.counts.clear();
+        self.rows.clear();
+        self.keep.clear();
         self.tools.clear();
         self.expanded.clear();
         self.extra.clear();
@@ -2021,7 +2077,7 @@ impl AiPanel {
             .into_any_element()
     }
 
-    fn item_element(&self, at: usize, cx: &mut Context<Self>, t: &Theme) -> AnyElement {
+    fn item_element(&self, at: usize, part: usize, cx: &mut Context<Self>, t: &Theme) -> AnyElement {
         let Some(item) = self.items.get(at) else { return div().into_any_element() };
         match item {
             Item::User { text, chips } => {
@@ -2040,10 +2096,14 @@ impl AiPanel {
                     .into_any_element()
             }
             Item::Agent { text, parsed, parsed_len, insert } => {
-                let body = match parsed {
-                    Some(p) if *parsed_len == text.len() || text.len() < *parsed_len + 400 => div().min_w_0().line_height(relative(1.5)).child(markdown_view::render(p, None, None, t)).into_any_element(),
-                    _ => div().min_w_0().line_height(relative(1.5)).child(text.clone()).into_any_element(),
+                let rows = parsed.as_ref().map_or(0, |p| p.rows().len());
+                let body = match parsed.as_ref().zip(parsed.as_ref().and_then(|p| p.rows().get(part))) {
+                    Some((p, row)) => div().min_w_0().line_height(relative(1.5)).pb(px(if part + 1 < rows { p.row_gap(part) } else { 0. })).child(markdown_view::render_row(p, row, None, None, None, None, t)).when(part + 1 == rows && *parsed_len == text.len(), |d| d.children(markdown_view::render_footnotes(p, None, t))).into_any_element(),
+                    None => div().min_w_0().line_height(relative(1.5)).when(rows > 0, |d| d.pt(px(space::M))).child(text.get(*parsed_len..).unwrap_or_default().trim_start().to_string()).into_any_element(),
                 };
+                if part + 1 < self.parts(at) {
+                    return body;
+                }
                 match insert {
                     Some(target) => {
                         let me = cx.entity();
@@ -2088,21 +2148,23 @@ impl AiPanel {
 
     fn row(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let t = Theme::get(cx);
-        let items = self.items.len();
+        let shown = self.rows.len();
         let (asks, status) = &self.tail;
-        let last = ix + 1 == items + asks.len() + usize::from(status.is_some());
-        let el = if ix < items {
-            self.item_element(ix, cx, &t)
-        } else if let Some(w) = asks.get(ix - items) {
+        let last = ix + 1 == shown + asks.len() + usize::from(status.is_some());
+        let (at, part) = self.rows.get(ix).copied().unwrap_or((usize::MAX, 0));
+        let el = if ix < shown {
+            self.item_element(at, part, cx, &t)
+        } else if let Some(w) = asks.get(ix - shown) {
             self.ask_card(w, &t)
         } else {
             let label = status.clone().unwrap_or_default();
             div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(motion::loading(iconsize::XS, t.secondary)).child(label).into_any_element()
         };
         let step = |i: usize| matches!(self.items.get(i), Some(Item::Tool(_) | Item::Edit(_)));
-        let top = match self.items.get(ix) {
-            Some(Item::User { .. }) if ix > 0 => space::XL,
-            _ if ix > 0 && step(ix) && step(ix - 1) => space::XXS,
+        let top = match self.items.get(at) {
+            _ if part > 0 => 0.,
+            Some(Item::User { .. }) if at > 0 => space::XL,
+            Some(_) if at > 0 && step(at) && step(at - 1) => space::XXS,
             _ => space::M,
         };
         div().px(px(space::L)).pt(px(top)).when(last, |d| d.pb(px(space::L))).child(el).into_any_element()
@@ -2115,15 +2177,31 @@ impl AiPanel {
         self.tail = (asks, status);
         let items = self.items.len();
         let tail = self.tail.0.len() + usize::from(self.tail.1.is_some());
-        let total = self.list.item_count();
-        let kept = self.listed.min(total).min(items);
-        for at in std::mem::take(&mut self.dirty) {
-            if at < kept {
-                self.list.splice(at..at + 1, 1);
-            }
+        let kept = self.listed.min(items).min(self.counts.len());
+        let mut starts = Vec::with_capacity(kept);
+        let mut sum = 0;
+        for count in &self.counts[..kept] {
+            starts.push(sum);
+            sum += count;
         }
-        self.list.splice(kept..total, items - kept + tail);
+        let keep = std::mem::take(&mut self.keep);
+        for at in std::mem::take(&mut self.dirty).into_iter().rev().filter(|at| *at < kept) {
+            let (old, new) = (self.counts[at], self.parts(at));
+            let stable = keep.get(&at).copied().unwrap_or(0).min(old).min(new);
+            self.list.splice(starts[at] + stable..starts[at] + old, new - stable);
+            self.counts[at] = new;
+        }
+        self.counts.truncate(kept);
+        let before: usize = self.counts.iter().sum();
+        for at in kept..items {
+            let n = self.parts(at);
+            self.counts.push(n);
+        }
+        let added: usize = self.counts[kept..].iter().sum();
+        let total = self.list.item_count();
+        self.list.splice(before.min(total)..total, added + tail);
         self.listed = items;
+        self.rows = self.counts.iter().enumerate().flat_map(|(at, n)| (0..*n).map(move |part| (at, part))).collect();
     }
 
     fn composer(&self, cx: &mut Context<Self>, t: &Theme) -> Div {
