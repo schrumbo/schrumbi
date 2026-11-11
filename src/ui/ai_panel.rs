@@ -570,10 +570,10 @@ impl AiPanel {
             _ => None,
         };
         match agents::trouble(message) {
-            agents::Trouble::SignIn => {
-                let label = agents::chosen(&prefs::with(|p| p.ai.clone())).map(|r| tr(r.label())).unwrap_or_default();
-                self.notice_fix(trf("Du bist bei %@ nicht angemeldet. Melde dich im Terminal an, dann starte neu.", &[&label]), Some(agent.map_or(Fix::Restart, Fix::SignIn)));
-            }
+            agents::Trouble::SignIn => match agent {
+                Some(a) => self.notice_fix(trf("Du bist bei %@ nicht angemeldet. Melde dich im Terminal an, dann starte neu.", &[&a.label()]), Some(Fix::SignIn(a))),
+                None => self.notice_fix(tr("Das Programm ist beim Anbieter nicht angemeldet. Melde dich dort an, dann starte neu."), Some(Fix::Restart)),
+            },
             agents::Trouble::Offline => self.notice_fix(tr("Keine Verbindung zum Anbieter. Prüf das Internet und versuch es noch einmal."), Some(fallback)),
             agents::Trouble::Busy => self.notice_fix(tr("Der Anbieter ist gerade ausgelastet oder dein Kontingent ist aufgebraucht. Versuch es später noch einmal."), Some(fallback)),
             agents::Trouble::Other => return false,
@@ -584,9 +584,10 @@ impl AiPanel {
     fn fix(&mut self, at: usize, fix: Fix, cx: &mut Context<Self>) {
         match fix {
             Fix::Restart => {
-                if self.session.is_none() {
-                    self.start(cx);
+                if self.session.is_some() {
+                    self.stop(cx);
                 }
+                self.start(cx);
             }
             Fix::Retry => {
                 if let Some(text) = self.last_prompt.clone() {
@@ -618,6 +619,9 @@ impl AiPanel {
         if crate::core::drive::fenced("start agent", launch.program.display()) && std::env::var_os("SCHRUMBI_AI_AGENT_OK").is_none() {
             self.notice(tr("In dieser Testumgebung startet kein Programm."), false);
             return;
+        }
+        if self.recap.is_none() && self.items.iter().any(|i| matches!(i, Item::User { .. })) {
+            self.recap = Some(transcript::recap(&self.entries(), RECAP_CHARS));
         }
         let id = uuid::Uuid::new_v4().simple().to_string();
         let mcp = detect::exe().map(|exe| {
@@ -1637,7 +1641,7 @@ impl AiPanel {
         cx.notify();
     }
 
-    fn save_as_note(&mut self, cx: &mut Context<Self>) {
+    fn entries(&self) -> Vec<transcript::Entry> {
         let mut entries = Vec::new();
         for item in &self.items {
             match item {
@@ -1648,6 +1652,11 @@ impl AiPanel {
                 _ => {}
             }
         }
+        entries
+    }
+
+    fn save_as_note(&mut self, cx: &mut Context<Self>) {
+        let entries = self.entries();
         if entries.is_empty() {
             return;
         }

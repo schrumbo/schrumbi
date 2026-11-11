@@ -8,7 +8,7 @@ Ist ein Programm installiert, ist die KI an. {ui:KI-Assistent verwenden} in {key
 
 ## Die Spalte
 
-{key:toggleAi} oder der Knopf {ui:KI einblenden} öffnet rechts die Spalte {ui:KI}. Sie teilt sich den Platz mit den Details: oben wechselst du zwischen {ui:Details} und {ui:KI}, {key:toggleInspector} springt zu den Details. Derselbe Knopf noch einmal schließt die Spalte. Ihren linken Rand ziehst du breiter oder schmaler, ein Doppelklick setzt die Breite zurück. In einem schmalen Fenster liegt die Spalte über der Seite; ein Klick auf die Seite oder {key:escape} schließt sie.
+{key:toggleAi} oder der Knopf {ui:KI einblenden} öffnet rechts die Spalte {ui:KI}. Sie teilt sich den Platz mit den Details: oben wechselst du zwischen {ui:Details} und {ui:KI}, {key:toggleInspector} springt zu den Details. Derselbe Knopf noch einmal schließt die Spalte. Ihren linken Rand ziehst du breiter oder schmaler, ein Doppelklick setzt die Breite zurück. In einem schmalen Fenster liegt die Spalte über der Seite; ein Klick auf die Seite oder {key:escape} schließt die KI, {key:escape} auch die Details.
 
 1. Öffne eine Notiz oder ein PDF.
 2. {key:toggleAi}

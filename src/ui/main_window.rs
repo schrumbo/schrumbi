@@ -630,7 +630,7 @@ impl Render for MainWindow {
                     .flex_col()
                     .child(self.toolbar(l, left, page_width + reserved, width - left - crumb::BORDER, search_open, window, &t))
                     .child(div().id("page-area").flex_1().min_h_0().mr(px(reserved))
-                        .when(floating, |d| d.on_mouse_down(MouseButton::Left, |_, _, cx| super::ai::close_panel(cx)))
+                        .when(floating && column, |d| d.on_mouse_down(MouseButton::Left, |_, _, cx| super::ai::close_panel(cx)))
                         .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, window, cx| {
                             this.press_stamp = (!window.default_prevented()).then(|| (state::read(cx, Library::selection_stamp), e.position));
                         }))

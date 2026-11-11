@@ -8,7 +8,7 @@ When a program is installed, the AI is on. {ui:KI-Assistent verwenden} in {key:O
 
 ## The column
 
-{key:toggleAi} or the button {ui:KI einblenden} opens the column {ui:KI} on the right. It shares its place with the details: at the top you switch between {ui:Details} and {ui:KI}, {key:toggleInspector} jumps to the details. The same button again closes the column. Drag its left edge to make it wider or narrower; a double click resets the width. In a narrow window the column lies over the page; a click on the page or {key:escape} closes it.
+{key:toggleAi} or the button {ui:KI einblenden} opens the column {ui:KI} on the right. It shares its place with the details: at the top you switch between {ui:Details} and {ui:KI}, {key:toggleInspector} jumps to the details. The same button again closes the column. Drag its left edge to make it wider or narrower; a double click resets the width. In a narrow window the column lies over the page; a click on the page or {key:escape} closes the AI, {key:escape} also the details.
 
 1. Open a note or a PDF.
 2. {key:toggleAi}
