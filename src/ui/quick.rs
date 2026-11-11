@@ -163,7 +163,10 @@ impl Render for QuickAdd {
                     .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
                     .child(icon(k.icon(), iconsize::S, if active { t.primary } else { t.secondary }))
                     .child(k.label())
-                    .on_click(move |_, window, cx| e.update(cx, |q, cx| q.set_kind(k, window, cx))),
+                    .on_click(move |_, window, cx| e.update(cx, |q, cx| {
+                        q.set_kind(k, window, cx);
+                        q.title.update(cx, |s, cx| s.focus(window, cx));
+                    })),
             );
         }
         let e = me.clone();
@@ -196,17 +199,15 @@ impl Render for QuickAdd {
             .gap(px(space::M))
             .child(row(tr("Modul"), module_menu, &t))
             .child(row(if self.kind == Kind::Exam { tr("Termin") } else { tr("Fällig") }, div().flex().flex_col().gap(px(space::S)).child(div().w(px(240.)).child(DatePicker::new(&self.due))).child(chips).child(caption(countdown, &t)), &t));
-        if self.kind == Kind::Submission {
-            let e2 = me.clone();
-            grid = grid
-                .child(row(String::new(), Switch::new("qa-optional").label(tr("Optional")).checked(self.optional).on_click(move |v, _, cx| {
-                    let v = *v;
-                    e2.update(cx, |q, cx| {
-                        q.optional = v;
-                        cx.notify();
-                    })
-                }), &t));
-        }
+        let e2 = me.clone();
+        let submission = self.kind == Kind::Submission;
+        grid = grid.child(row(String::new(), Switch::new("qa-optional").label(tr("Optional")).checked(self.optional).disabled(!submission).on_click(move |v, _, cx| {
+            let v = *v;
+            e2.update(cx, |q, cx| {
+                q.optional = v;
+                cx.notify();
+            })
+        }), &t).when(!submission, |d| d.invisible()));
         let hint = match self.kind {
             Kind::Exam => tr("Erscheint mit Countdown in der Übersicht."),
             Kind::Task => tr("Zum Abhaken, ohne Datei."),

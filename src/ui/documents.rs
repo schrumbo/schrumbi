@@ -1375,6 +1375,16 @@ impl NoteView {
     }
 
     /// Takes the note back to what it was before the last burst of typing, wherever that was.
+    fn app_history_when_unchanged(&self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = self.editor.clone();
+        let before = editor.read(cx).text().clone();
+        window.defer(cx, move |_, cx| {
+            if *editor.read(cx).text() == before {
+                act(cx, if back { library::Library::undo } else { library::Library::redo });
+            }
+        });
+    }
+
     fn step_history(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some((text, line)) = (if back { self.history.pop() } else { self.future.pop() }) else { return };
         let here = self.live.as_ref().map_or(line, |l| l.first_line);
@@ -3649,13 +3659,29 @@ impl NoteView {
                 }
             }))
             .capture_action(cx.listener(|n, _: &gpui_kit::component::input::Undo, w, cx| {
-                if n.live.is_some() {
+                if !n.target().read(cx).focus_handle(cx).is_focused(w) {
+                    return;
+                }
+                if n.live.is_none() {
+                    n.app_history_when_unchanged(true, w, cx);
+                } else if n.history.is_empty() {
+                    cx.stop_propagation();
+                    act(cx, library::Library::undo);
+                } else {
                     cx.stop_propagation();
                     n.step_history(true, w, cx);
                 }
             }))
             .capture_action(cx.listener(|n, _: &gpui_kit::component::input::Redo, w, cx| {
-                if n.live.is_some() {
+                if !n.target().read(cx).focus_handle(cx).is_focused(w) {
+                    return;
+                }
+                if n.live.is_none() {
+                    n.app_history_when_unchanged(false, w, cx);
+                } else if n.future.is_empty() {
+                    cx.stop_propagation();
+                    act(cx, library::Library::redo);
+                } else {
                     cx.stop_propagation();
                     n.step_history(false, w, cx);
                 }

@@ -23,6 +23,8 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Details ein-/ausblenden} | {key:toggleInspector} |
 | {ui:KI ein-/ausblenden} | {key:toggleAi} |
 
+{key:Undo} also takes back renaming, moving and filing in a note once there is nothing left to undo in the text. While a window such as {ui:Neuer Eintrag} is open, the other shortcuts do nothing.
+
 ## Navigation
 
 | Command | Shortcut |
@@ -104,4 +106,4 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Schrift kleiner} | {key:zoomOut} |
 | {ui:Schriftgröße zurücksetzen} | {key:zoomReset} |
 
-In the editor, the editor shortcut applies when one is used twice.
+In the editor, the editor shortcut applies. {ui:Tastenkürzel} does not take a shortcut the editor already uses for another command.

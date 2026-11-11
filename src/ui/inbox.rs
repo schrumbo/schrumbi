@@ -232,7 +232,8 @@ impl Render for InboxPage {
                 let paths = paths.paths().to_vec();
                 act(cx, |l| l.import_to_inbox(&paths));
             });
-        let content: AnyElement = if inbox.is_empty() {
+        let empty_inbox = inbox.is_empty();
+        let content: AnyElement = if empty_inbox {
             let hint = trf("Zieh Dateien hierher oder lege sie in „%@“ ab. Die App schlägt Abgabe, Titel und Namen vor.", &[&inbox_name]);
             let travel = motion::timed(motion::SLOW, cx);
             if self.cleared > 0 {
@@ -387,7 +388,7 @@ impl Render for InboxPage {
                 .child(div().flex_1().min_w_0().h_full().children(self.form.as_ref().map(|(_, f, _)| f.clone())))
                 .into_any_element()
         };
-        base.child(content).child(
+        base.child(div().size_full().when(empty_inbox, |d| d.track_focus(&self.focus)).child(content)).child(
                 div()
                     .absolute()
                     .inset(px(10.))

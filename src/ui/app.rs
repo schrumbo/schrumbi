@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use gpui_kit::component::WindowExt;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -8,7 +9,7 @@ use crate::core::i18n::{key_name, tr};
 use crate::core::library::{Library, NewNoteRequest, Route};
 use crate::core::prefs;
 use crate::core::text::end_ellipsis;
-use crate::core::shortcuts::{Bound, ShortcutAction, released_bindings};
+use crate::core::shortcuts::{Bound, Group, ShortcutAction, released_bindings};
 
 actions!(
     schrumbi,
@@ -89,6 +90,12 @@ fn route(r: Route) -> impl Fn(&mut App) {
 
 pub fn init(cx: &mut App) {
     gpui_kit::component::kbd::set_relabel(key_name);
+    cx.intercept_keystrokes(|e, window, cx| {
+        if window.has_active_dialog(cx) && acts_behind_dialog(&e.keystroke, window) {
+            cx.stop_propagation();
+        }
+    })
+    .detach();
     cx.on_action(|_: &Quit, cx| quit(cx));
     cx.on_action(|_: &OpenSettings, cx| super::settings::open(cx));
     cx.on_action(|_: &About, cx| super::settings::open_about(cx));
@@ -428,14 +435,33 @@ pub fn cmd(k: &str) -> String {
 
 static BOUND: std::sync::Mutex<std::collections::BTreeSet<Bound>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
 
-fn bound_pairs(bindings: &[KeyBinding]) -> std::collections::BTreeSet<Bound> {
-    let os = if cfg!(target_os = "macos") {
+fn host_os() -> OperatingSystem {
+    if cfg!(target_os = "macos") {
         OperatingSystem::Mac
     } else if cfg!(windows) {
         OperatingSystem::Windows
     } else {
         OperatingSystem::Linux
-    };
+    }
+}
+
+/// Keys that would act on the page behind an open dialog: the app's shortcuts, and undo while no field has the keyboard.
+fn acts_behind_dialog(k: &Keystroke, window: &Window) -> bool {
+    let os = host_os();
+    let same = |keys: &str| Keystroke::parse_with_os(keys, os).is_ok_and(|p| p.modifiers == k.modifiers && p.key == k.key);
+    if !super::sheets::typing(window) && [cmd("z"), cmd("shift-z"), cmd("y")].iter().any(|keys| same(keys)) {
+        return true;
+    }
+    [cmd("p"), cmd("shift-p"), cmd("shift-7"), cmd("/"), "f1".to_string()].iter().any(|keys| same(keys))
+        || ShortcutAction::ALL
+            .into_iter()
+            .filter(|a| a.group() != Group::Editor)
+            .filter_map(ShortcutAction::active_shortcut)
+            .any(|s| (s.command || s.option || s.control || (s.key.len() > 1 && s.key.starts_with('f') && s.key[1..].chars().all(|c| c.is_ascii_digit()))) && same(&s.keystroke()))
+}
+
+fn bound_pairs(bindings: &[KeyBinding]) -> std::collections::BTreeSet<Bound> {
+    let os = host_os();
     bindings
         .iter()
         .map(|b| (b.keystrokes().iter().map(|k| k.inner().unparse(os)).collect::<Vec<_>>().join(" "), b.action().name().to_string()))
@@ -448,9 +474,8 @@ pub fn bind_keys(cx: &mut App) {
     let mut b: Vec<KeyBinding> = Vec::new();
     b.extend([
         kb(cmd("q"), Quit, None),
-        kb(cmd("k"), CommandPalette, None),
-        kb(cmd("p"), CommandPalette, None),
         kb(cmd("shift-p"), CommandPalette, None),
+        kb(cmd("p"), CommandPalette, None),
         kb(cmd("shift-7"), ShowShortcuts, None),
         kb(cmd("/"), ShowShortcuts, None),
         kb("f1".into(), ShowHelp, None),

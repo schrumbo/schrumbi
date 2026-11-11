@@ -23,6 +23,8 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Details ein-/ausblenden} | {key:toggleInspector} |
 | {ui:KI ein-/ausblenden} | {key:toggleAi} |
 
+{key:Undo} nimmt auch in einer Notiz Umbenennen, Verschieben und Ablegen zurück, sobald es im Text nichts mehr zurückzunehmen gibt. Solange ein Fenster wie {ui:Neuer Eintrag} offen ist, wirken die übrigen Kürzel nicht.
+
 ## Navigation
 
 | Befehl | Kürzel |
@@ -104,4 +106,4 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Schrift kleiner} | {key:zoomOut} |
 | {ui:Schriftgröße zurücksetzen} | {key:zoomReset} |
 
-Im Editor gilt das Editor-Kürzel, wenn eines doppelt belegt ist.
+Im Editor gilt das Editor-Kürzel. Ein Kürzel, das der Editor schon nutzt, nimmt {ui:Tastenkürzel} für andere Befehle nicht an.

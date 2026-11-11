@@ -106,6 +106,12 @@ impl FolderPicker {
         cx.notify();
     }
 
+    /// Puts the cursor in the filter field.
+    pub fn focus_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cursor = None;
+        self.filter.update(cx, |f, cx| f.focus(window, cx));
+    }
+
     fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let lines = self.lines(cx);
         let current = self.cursor.and_then(|i| lines.get(i)).cloned();
