@@ -1,6 +1,8 @@
 pub mod acp;
 pub mod agents;
 pub mod detect;
+pub mod guard;
+pub mod hunks;
 pub mod inbox;
 pub mod install;
 pub mod instance;

@@ -160,6 +160,8 @@ pub struct AiPanel {
     pending: VecDeque<TurnInfo>,
     recap: Option<String>,
     hint: Option<&'static str>,
+    logged: usize,
+    log_task: Option<Task<()>>,
     _subs: Vec<Subscription>,
 }
 
@@ -276,6 +278,10 @@ pub fn changed_lines(before: &str, after: &str) -> Vec<(usize, usize)> {
         }
     }
     out
+}
+
+fn edit_line(e: &Edit) -> String {
+    trf("+%lld −%lld in %@", &[&e.added, &e.removed, &name_of(&e.path)])
 }
 
 fn missing_text(m: &Missing) -> String {
@@ -439,7 +445,7 @@ impl AiPanel {
             }),
         ];
         ai::set_panel(cx.entity().downgrade(), cx);
-        Self { input, items: Vec::new(), tools: HashMap::new(), expanded: HashSet::new(), session: None, turn: false, queued: 0, removed: HashSet::new(), extra: Vec::new(), last_prompt: None, list: Self::new_list(), listed: 0, dirty: BTreeSet::new(), tail: (Vec::new(), None), idle: None, reparse: None, focus_input: true, cancelling: false, asks: Vec::new(), pending: VecDeque::new(), recap: None, hint: None, _subs: subs }
+        Self { input, items: Vec::new(), tools: HashMap::new(), expanded: HashSet::new(), session: None, turn: false, queued: 0, removed: HashSet::new(), extra: Vec::new(), last_prompt: None, list: Self::new_list(), listed: 0, dirty: BTreeSet::new(), tail: (Vec::new(), None), idle: None, reparse: None, focus_input: true, cancelling: false, asks: Vec::new(), pending: VecDeque::new(), recap: None, hint: None, logged: 0, log_task: None, _subs: subs }
     }
 
     fn new_list() -> ListState {
@@ -546,7 +552,8 @@ impl AiPanel {
             McpServerStdio::new(acp::OWN_SERVER, exe).args(args).env(env.into_iter().map(|(k, v)| EnvVariable::new(k, v)).collect())
         });
         let setup = acp::Setup { cwd: root.clone(), mcp, meta: launch.claude.then(|| agents::claude_meta(p.allow_execute)), modes: launch.modes.clone(), require_mode: launch.require_mode, policy: acp::Policy { root: root.clone(), allow_execute: p.allow_execute, client_edits: launch.claude } };
-        let agent = AcpAgent::new(AcpAgentConfig::new(launch.program.clone()).args(launch.args.clone()).envs(launch.env.clone()));
+        let (program, args) = crate::core::ai::guard::wrap(&launch.program, &launch.args).unwrap_or_else(|| (launch.program.clone(), launch.args.clone()));
+        let agent = AcpAgent::new(AcpAgentConfig::new(program).args(args).envs(launch.env.clone()));
         let (events_tx, events_rx) = async_channel::unbounded::<Event>();
         let (commands_tx, commands_rx) = async_channel::unbounded::<Command>();
         let outcome: Arc<Mutex<Option<Result<(), String>>>> = Arc::default();
@@ -585,6 +592,7 @@ impl AiPanel {
 
     /// Ends the agent process: its input closes and it quits on its own.
     pub fn stop(&mut self, cx: &mut Context<Self>) {
+        self.flush_log(cx);
         if let Some(mut s) = self.session.take() {
             s.stopped = true;
             ai::close_session(&s.id, cx);
@@ -597,6 +605,7 @@ impl AiPanel {
     }
 
     fn ended(&mut self, result: Option<Result<(), String>>, cx: &mut Context<Self>) {
+        self.flush_log(cx);
         let Some(s) = self.session.take() else { return };
         ai::close_session(&s.id, cx);
         self.turn = false;
@@ -729,9 +738,34 @@ impl AiPanel {
         cx.notify();
     }
 
-    fn log(&self, entries: Vec<transcript::Entry>, cx: &mut Context<Self>) {
+    fn log(&mut self, entries: Vec<transcript::Entry>, cx: &mut Context<Self>) {
         let Some(file) = self.session.as_ref().and_then(|s| s.file.clone()) else { return };
-        cx.background_executor().spawn(async move { transcript::append(&file, &entries) }).detach();
+        if entries.is_empty() {
+            return;
+        }
+        let before = self.log_task.take();
+        self.log_task = Some(cx.background_executor().spawn(async move {
+            if let Some(before) = before {
+                before.await;
+            }
+            let _ = transcript::append(&file, &entries);
+        }));
+    }
+
+    /// Writes the steps, answers and changes shown since the last time to the session file, in the order the column shows them.
+    fn flush_log(&mut self, cx: &mut Context<Self>) {
+        let now = chrono::Utc::now().timestamp();
+        let entries: Vec<transcript::Entry> = self.items[self.logged.min(self.items.len())..]
+            .iter()
+            .filter_map(|item| match item {
+                Item::Agent { text, .. } if !text.trim().is_empty() => Some(transcript::Entry { role: transcript::Role::Agent, text: text.clone(), at: now }),
+                Item::Tool(t) => Some(transcript::Entry { role: transcript::Role::Tool, text: t.title.clone(), at: now }),
+                Item::Edit(e) => Some(transcript::Entry { role: transcript::Role::Tool, text: edit_line(e), at: now }),
+                _ => None,
+            })
+            .collect();
+        self.logged = self.items.len();
+        self.log(entries, cx);
     }
 
     fn apply(&mut self, event: Event, cx: &mut Context<Self>) {
@@ -743,6 +777,7 @@ impl AiPanel {
             }
             Event::TurnEnded(_) if self.cancelling => {
                 self.cancelling = false;
+                self.flush_log(cx);
                 if let Some(id) = self.session.as_ref().map(|s| s.id.clone()) {
                     ai::end_turn(&id, cx);
                 }
@@ -920,7 +955,6 @@ impl AiPanel {
                 l.open_file(&target);
             });
         }
-        self.log(vec![transcript::Entry { role: transcript::Role::Tool, text: trf("+%lld −%lld in %@", &[&added, &removed, &name_of(&path)]), at: chrono::Utc::now().timestamp() }], cx);
         self.items.push(Item::Edit(Edit { path, before, after, added, removed, undone: false, stale: false }));
         cx.notify();
     }
@@ -962,18 +996,7 @@ impl AiPanel {
             }
         }
         self.dirty.extend(touched);
-        let mut entries: Vec<transcript::Entry> = Vec::new();
-        let now = chrono::Utc::now().timestamp();
-        for item in self.items.iter().rev() {
-            match item {
-                Item::User { .. } => break,
-                Item::Agent { text, .. } => entries.push(transcript::Entry { role: transcript::Role::Agent, text: text.clone(), at: now }),
-                Item::Tool(t) => entries.push(transcript::Entry { role: transcript::Role::Tool, text: t.title.clone(), at: now }),
-                _ => {}
-            }
-        }
-        entries.reverse();
-        self.log(entries, cx);
+        self.flush_log(cx);
         self.reparse_now();
         if self.queued > 0 {
             self.queued -= 1;
@@ -1322,6 +1345,7 @@ impl AiPanel {
                 transcript::Role::Tool => self.items.push(Item::Tool(Tool { name: None, title: e.text.clone(), kind: Kind::Other, status: Status::Done, input: None, output: None, denied: false })),
             }
         }
+        self.logged = self.items.len();
         self.recap = Some(transcript::recap(&entries, RECAP_CHARS));
         self.focus_input = true;
         cx.notify();
@@ -1334,7 +1358,7 @@ impl AiPanel {
                 Item::User { text, .. } => entries.push(transcript::Entry { role: transcript::Role::User, text: text.clone(), at: 0 }),
                 Item::Agent { text, .. } => entries.push(transcript::Entry { role: transcript::Role::Agent, text: text.clone(), at: 0 }),
                 Item::Tool(t) if !t.denied => entries.push(transcript::Entry { role: transcript::Role::Tool, text: t.title.clone(), at: 0 }),
-                Item::Edit(e) => entries.push(transcript::Entry { role: transcript::Role::Tool, text: trf("+%lld −%lld in %@", &[&e.added, &e.removed, &name_of(&e.path)]), at: 0 }),
+                Item::Edit(e) => entries.push(transcript::Entry { role: transcript::Role::Tool, text: edit_line(e), at: 0 }),
                 _ => {}
             }
         }
@@ -1372,6 +1396,7 @@ impl AiPanel {
         self.pending.clear();
         self.recap = None;
         self.items.clear();
+        self.logged = 0;
         self.list = Self::new_list();
         self.listed = 0;
         self.dirty.clear();

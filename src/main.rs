@@ -35,6 +35,9 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("mcp") {
         std::process::exit(core::ai::mcp::main(std::env::args().skip(2).collect()));
     }
+    if std::env::args().nth(1).as_deref() == Some(core::ai::guard::SUBCOMMAND) {
+        std::process::exit(core::ai::guard::main(std::env::args().skip(2).collect()));
+    }
     core::drive::check();
     core::crash::install();
     core::i18n::init(&core::prefs::get().language);
