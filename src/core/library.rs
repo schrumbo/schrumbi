@@ -1677,9 +1677,12 @@ impl Library {
     // MARK: Refresh
 
     /// Re-evaluates with the current time; called every 30 seconds.
-    pub fn tick(&mut self) {
+    /// True when something shown can have changed: a status, or the minute, which countdowns and card waits count in.
+    pub fn tick(&mut self) -> bool {
+        let (before, evaluations, actions) = (self.now, self.evaluations.clone(), self.action_items.clone());
         self.now = Local::now();
         self.reevaluate();
+        self.evaluations != evaluations || self.action_items != actions || before.timestamp() / 60 != self.now.timestamp() / 60
     }
 
     /// Regenerates assignments and re-evaluates with cached listings; follow with a background scan.
@@ -3583,6 +3586,7 @@ impl Library {
     /// Takes over what a subscribed calendar says, quietly when nothing changed.
     pub fn refresh_events(&mut self, text: &str) -> usize {
         let events = ics::parse(text);
+        self.adopt_occurrence_ids(&events);
         let modules: Vec<Module> = self.semester_modules().into_iter().cloned().collect();
         let now = Utc::now();
         let items: Vec<(CalendarEvent, String, Kind)> = events
@@ -3604,8 +3608,24 @@ impl Library {
         count
     }
 
+    /// Older versions named the dates of a repeating event by their time stamp, which moves with the clock change; a date within a day under the old name takes the new one, so none appears twice.
+    fn adopt_occurrence_ids(&mut self, events: &[CalendarEvent]) {
+        for event in events {
+            let Some((base, _)) = event.uid.rsplit_once('#') else { continue };
+            if self.state.manual.iter().any(|m| m.external_id.as_deref() == Some(event.uid.as_str())) {
+                continue;
+            }
+            let prefix = format!("{base}#");
+            let taken = |id: &str| events.iter().any(|e| e.uid == id);
+            if let Some(m) = self.state.manual.iter_mut().find(|m| m.external_id.as_deref().is_some_and(|id| id.starts_with(&prefix) && !taken(id)) && (m.due - event.due).abs() <= Duration::days(1)) {
+                m.external_id = Some(event.uid.clone());
+            }
+        }
+    }
+
     pub fn import_events(&mut self, items: Vec<(CalendarEvent, String, Kind)>) -> (usize, usize) {
         let (Some(_), Some(config)) = (self.root.as_ref(), self.config.clone()) else { return (0, 0) };
+        self.adopt_occurrence_ids(&items.iter().map(|(e, _, _)| e.clone()).collect::<Vec<_>>());
         let (mut added, mut updated) = (0, 0);
         let before = self.state_snapshot();
         for (event, module_id, kind) in items {

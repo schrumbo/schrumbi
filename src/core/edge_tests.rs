@@ -2711,3 +2711,15 @@ fn marks_made_during_a_sync_that_locks_the_files_wait_for_the_lock_to_lift() {
     assert_eq!(highlights::load(&root).marks["m"], vec![pdf_noted(1, 0, "Unterwegs")], "written when the lock lifted");
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn repeating_dates_imported_before_the_naming_change_are_not_added_twice() {
+    use super::model::ManualAssignment;
+    let mut lib = Library::new();
+    let old_due = chrono::DateTime::parse_from_rfc3339("2026-11-02T09:00:00Z").unwrap().with_timezone(&chrono::Utc);
+    lib.state.manual.push(ManualAssignment { title: "VL".into(), due: old_due, external_id: Some("v#1793610000".into()), ..Default::default() });
+    let ics = "BEGIN:VEVENT\nUID:v\nSUMMARY:VL\nDTSTART;TZID=Europe/Berlin:20261019T100000\nRRULE:FREQ=WEEKLY;COUNT=3\nEND:VEVENT\n";
+    lib.refresh_events(ics);
+    let ids: Vec<_> = lib.state.manual.iter().map(|m| m.external_id.clone()).collect();
+    assert_eq!(ids, vec![Some("v#20261102".to_string())]);
+}

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use regex::Regex;
 
@@ -75,34 +75,66 @@ pub fn parse(text: &str) -> Vec<CalendarEvent> {
     events
 }
 
-/// An event with all its dates: `RRULE` by day or week, what a course calendar uses. A cancelled one has none.
-fn occurrences(f: &HashMap<String, (String, String)>) -> Vec<CalendarEvent> {
-    if f.get("STATUS").is_some_and(|s| s.1.eq_ignore_ascii_case("CANCELLED")) {
-        return Vec::new();
-    }
-    let Some(first) = event(f) else { return Vec::new() };
-    let Some(rule) = f.get("RRULE").map(|r| r.1.to_uppercase()) else { return vec![first] };
-    let part = |name: &str| rule.split(';').find_map(|p| p.strip_prefix(&format!("{name}=")).map(str::to_string));
-    let step = match part("FREQ").as_deref() {
-        Some("DAILY") => 1,
-        Some("WEEKLY") => 7,
-        _ => return vec![first],
-    } * part("INTERVAL").and_then(|i| i.parse::<i64>().ok()).unwrap_or(1).max(1);
-    let count = part("COUNT").and_then(|c| c.parse::<usize>().ok()).unwrap_or(60).min(60);
-    let until = part("UNTIL").and_then(|u| date(&u, ""));
-    let skipped: Vec<i64> = f.get("EXDATE").map_or(Vec::new(), |e| e.1.split(',').filter_map(|d| date(d, &e.0)).map(|d| d.timestamp()).collect());
-    (0..count as i64)
-        .map(|n| first.due + Duration::days(n * step))
-        .take_while(|due| until.is_none_or(|u| *due <= u))
-        .filter(|due| !skipped.contains(&due.timestamp()))
-        .map(|due| CalendarEvent { uid: format!("{}#{}", first.uid, due.timestamp()), due, ..first.clone() })
-        .collect()
+const MAX_OCCURRENCES: usize = 366;
+const OPEN_ENDED_OCCURRENCES: usize = 60;
+const MAX_INTERVAL: i64 = 1000;
+
+#[derive(Clone, Copy)]
+enum Zone {
+    Utc,
+    Named(Tz),
+    Workspace,
 }
 
-fn event(f: &HashMap<String, (String, String)>) -> Option<CalendarEvent> {
+#[derive(Clone, Copy)]
+struct Stamp {
+    local: NaiveDateTime,
+    zone: Zone,
+    all_day: bool,
+}
+
+struct Times {
+    start: Stamp,
+    due: Stamp,
+}
+
+fn stamp(value: &str, params: &str) -> Option<Stamp> {
+    static TZID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"TZID=([^;:]+)").unwrap());
+    let digits: String = value.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() < 8 {
+        return None;
+    }
+    let d = NaiveDate::from_ymd_opt(digits[..4].parse().ok()?, digits[4..6].parse().ok()?, digits[6..8].parse().ok()?)?;
+    let all_day = digits.len() < 12;
+    let t = if all_day { NaiveTime::from_hms_opt(23, 59, 0)? } else { NaiveTime::from_hms_opt(digits[8..10].parse().ok()?, digits[10..12].parse().ok()?, 0)? };
+    let zone = if value.ends_with('Z') {
+        Zone::Utc
+    } else {
+        TZID.captures(params).and_then(|c| c[1].parse::<Tz>().ok()).map_or(Zone::Workspace, Zone::Named)
+    };
+    Some(Stamp { local: d.and_time(t), zone, all_day })
+}
+
+fn instant(local: NaiveDateTime, zone: Zone) -> Option<DateTime<Utc>> {
+    match zone {
+        Zone::Utc => Some(Utc.from_utc_datetime(&local)),
+        Zone::Named(z) => day::resolve(&z, local).map(|x| x.with_timezone(&Utc)),
+        Zone::Workspace => day::at(local.date(), local.time()).map(|x| x.with_timezone(&Utc)),
+    }
+}
+
+fn times(f: &HashMap<String, (String, String)>) -> Option<Times> {
+    let at = |name: &str| f.get(name).and_then(|r| stamp(&r.1, &r.0));
+    let start = at("DTSTART");
+    let mut due = at("DUE").or_else(|| at("DTEND")).or(start)?;
+    if f.get("DUE").is_none() && due.all_day && start.is_some_and(|s| s.all_day && s.local.date() < due.local.date()) {
+        due.local -= Duration::days(1);
+    }
+    Some(Times { start: start.unwrap_or(due), due })
+}
+
+fn event_at(f: &HashMap<String, (String, String)>, due: DateTime<Utc>) -> Option<CalendarEvent> {
     let summary = f.get("SUMMARY").map(|v| v.1.clone()).filter(|s| !s.is_empty())?;
-    let raw = f.get("DUE").or_else(|| f.get("DTEND")).or_else(|| f.get("DTSTART"))?;
-    let due = date(&raw.1, &raw.0)?;
     Some(CalendarEvent {
         uid: f.get("UID").map(|v| v.1.clone()).unwrap_or_else(|| format!("{summary}-{}", due.timestamp())),
         summary,
@@ -111,22 +143,74 @@ fn event(f: &HashMap<String, (String, String)>) -> Option<CalendarEvent> {
     })
 }
 
+fn event(f: &HashMap<String, (String, String)>) -> Option<CalendarEvent> {
+    let t = times(f)?;
+    event_at(f, instant(t.due.local, t.due.zone)?)
+}
+
+fn weekday_offset(code: &str) -> Option<i64> {
+    let letters: String = code.chars().filter(char::is_ascii_alphabetic).collect();
+    ["MO", "TU", "WE", "TH", "FR", "SA", "SU"].iter().position(|d| *d == letters).map(|i| i as i64)
+}
+
+/// An event with all its dates: `RRULE` by day or week with `BYDAY`, `COUNT` and `UNTIL`, what a course calendar uses.
+/// Every date is a wall clock time in the event's own zone, so a lecture keeps its hour across the clock change. A cancelled event has none.
+fn occurrences(f: &HashMap<String, (String, String)>) -> Vec<CalendarEvent> {
+    if f.get("STATUS").is_some_and(|s| s.1.eq_ignore_ascii_case("CANCELLED")) {
+        return Vec::new();
+    }
+    let Some(t) = times(f) else { return Vec::new() };
+    let Some(first) = instant(t.due.local, t.due.zone).and_then(|due| event_at(f, due)) else { return Vec::new() };
+    let Some(rule) = f.get("RRULE").map(|r| r.1.to_uppercase()) else { return vec![first] };
+    let part = |name: &str| rule.split(';').find_map(|p| p.strip_prefix(&format!("{name}=")).map(str::to_string));
+    let weekly = match part("FREQ").as_deref() {
+        Some("DAILY") => false,
+        Some("WEEKLY") => true,
+        _ => return vec![first],
+    };
+    let interval = part("INTERVAL").and_then(|i| i.parse::<i64>().ok()).unwrap_or(1).clamp(1, MAX_INTERVAL);
+    let until = part("UNTIL").and_then(|u| date(&u, ""));
+    let count = part("COUNT").and_then(|c| c.parse::<usize>().ok()).map_or(if until.is_some() { MAX_OCCURRENCES } else { OPEN_ENDED_OCCURRENCES }, |c| c.min(MAX_OCCURRENCES));
+    let skipped: Vec<i64> = f.get("EXDATE").map_or(Vec::new(), |e| e.1.split(',').filter_map(|d| date(d, &e.0)).map(|d| d.timestamp()).collect());
+    let first_day = t.start.local.date();
+    let days: Vec<NaiveDate> = if weekly {
+        let mut wanted: Vec<i64> = part("BYDAY").map_or(Vec::new(), |b| b.split(',').filter_map(weekday_offset).collect());
+        if wanted.is_empty() {
+            wanted.push(i64::from(first_day.weekday().num_days_from_monday()));
+        }
+        wanted.sort_unstable();
+        wanted.dedup();
+        let monday = day::monday(first_day);
+        (0..MAX_OCCURRENCES as i64)
+            .flat_map(|week| wanted.iter().map(move |o| (week, *o)))
+            .filter_map(|(week, o)| monday.checked_add_signed(Duration::days(week * 7 * interval + o)))
+            .filter(|d| *d >= first_day)
+            .collect()
+    } else {
+        (0..MAX_OCCURRENCES as i64).filter_map(|n| first_day.checked_add_signed(Duration::days(n * interval))).collect()
+    };
+    let span = (t.due.local.date() - first_day).num_days();
+    let mut out = Vec::new();
+    for d in days {
+        let Some(start) = instant(d.and_time(t.start.local.time()), t.start.zone) else { continue };
+        if until.is_some_and(|u| start > u) {
+            break;
+        }
+        if out.len() >= count {
+            break;
+        }
+        let Some(due) = d.checked_add_signed(Duration::days(span)).and_then(|dd| instant(dd.and_time(t.due.local.time()), t.due.zone)) else { continue };
+        out.push((start, due, d));
+    }
+    out.into_iter()
+        .filter(|(start, _, _)| !skipped.contains(&start.timestamp()))
+        .map(|(_, due, d)| CalendarEvent { uid: format!("{}#{}", first.uid, d.format("%Y%m%d")), due, ..first.clone() })
+        .collect()
+}
+
 pub fn date(value: &str, params: &str) -> Option<DateTime<Utc>> {
-    static TZID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"TZID=([^;:]+)").unwrap());
-    let digits: String = value.chars().filter(char::is_ascii_digit).collect();
-    if digits.len() < 8 {
-        return None;
-    }
-    let d = NaiveDate::from_ymd_opt(digits[..4].parse().ok()?, digits[4..6].parse().ok()?, digits[6..8].parse().ok()?)?;
-    let t = if digits.len() >= 12 { NaiveTime::from_hms_opt(digits[8..10].parse().ok()?, digits[10..12].parse().ok()?, 0)? } else { NaiveTime::from_hms_opt(23, 59, 0)? };
-    let naive = d.and_time(t);
-    if value.ends_with('Z') {
-        return Some(Utc.from_utc_datetime(&naive));
-    }
-    if let Some(z) = TZID.captures(params).and_then(|c| c[1].parse::<Tz>().ok()) {
-        return z.from_local_datetime(&naive).earliest().map(|x| x.with_timezone(&Utc));
-    }
-    day::at(d, t).map(|x| x.with_timezone(&Utc))
+    let s = stamp(value, params)?;
+    instant(s.local, s.zone)
 }
 
 fn unescape(s: &str) -> String {
@@ -188,7 +272,6 @@ pub fn export(assignments: &[&Assignment], config: &StudyConfig, alarm_hours: i6
 
 /// A module's weekly sessions for its semester, at the same wall clock time all along, without breaks and holidays.
 fn session_events(module: &Module, semester: &super::model::Semester, stamp: &str) -> Vec<String> {
-    use chrono::Datelike;
     let (Some(start), Some(end)) = (day::parse(&semester.start), day::parse(&semester.end)) else { return Vec::new() };
     let mut out = Vec::new();
     for session in &module.sessions {
@@ -299,5 +382,63 @@ mod tests {
         assert_eq!(e[0].due, Utc.with_ymd_and_hms(2026, 11, 2, 17, 0, 0).unwrap());
         let m = Module { code: "P1".into(), ..Default::default() };
         assert!(module_for(&e[0].course, std::slice::from_ref(&m)).is_some());
+    }
+
+    fn event_text(lines: &[&str]) -> String {
+        format!("BEGIN:VEVENT\r\nUID:v\r\nSUMMARY:VL\r\n{}\r\nEND:VEVENT\r\n", lines.join("\r\n"))
+    }
+
+    fn berlin(due: DateTime<Utc>) -> NaiveDateTime {
+        due.with_timezone(&"Europe/Berlin".parse::<Tz>().unwrap()).naive_local()
+    }
+
+    fn wall(month: u32, d: u32, h: u32) -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, month, d).unwrap().and_hms_opt(h, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn weekly_lectures_keep_their_wall_clock_hour_across_the_clock_change() {
+        let found = parse(&event_text(&["DTSTART;TZID=Europe/Berlin:20261019T100000", "DTEND;TZID=Europe/Berlin:20261019T100000", "RRULE:FREQ=WEEKLY;COUNT=3"]));
+        assert_eq!(found.iter().map(|e| berlin(e.due)).collect::<Vec<_>>(), vec![wall(10, 19, 10), wall(10, 26, 10), wall(11, 2, 10)]);
+        assert_eq!(found[0].due, Utc.with_ymd_and_hms(2026, 10, 19, 8, 0, 0).unwrap());
+        assert_eq!(found[1].due, Utc.with_ymd_and_hms(2026, 10, 26, 9, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn byday_lists_every_weekday_of_each_week() {
+        let found = parse(&event_text(&["DTSTART;TZID=Europe/Berlin:20261019T100000", "RRULE:FREQ=WEEKLY;BYDAY=WE,MO;COUNT=4"]));
+        assert_eq!(found.iter().map(|e| berlin(e.due)).collect::<Vec<_>>(), vec![wall(10, 19, 10), wall(10, 21, 10), wall(10, 26, 10), wall(10, 28, 10)]);
+    }
+
+    #[test]
+    fn byday_before_the_first_day_of_the_series_is_skipped() {
+        let found = parse(&event_text(&["DTSTART;TZID=Europe/Berlin:20261021T100000", "RRULE:FREQ=WEEKLY;BYDAY=MO,WE;COUNT=3"]));
+        assert_eq!(found.iter().map(|e| berlin(e.due)).collect::<Vec<_>>(), vec![wall(10, 21, 10), wall(10, 26, 10), wall(10, 28, 10)]);
+    }
+
+    #[test]
+    fn count_up_to_366_and_until_are_honoured() {
+        let rule = |r: &str| parse(&event_text(&["DTSTART:20261019T100000Z", &format!("RRULE:{r}")]));
+        assert_eq!(rule("FREQ=DAILY;COUNT=100").len(), 100);
+        assert_eq!(rule("FREQ=DAILY;COUNT=5000").len(), 366);
+        assert_eq!(rule("FREQ=WEEKLY").len(), 60);
+        assert_eq!(rule("FREQ=WEEKLY;UNTIL=20261130T235959Z").len(), 7);
+        assert_eq!(rule("FREQ=DAILY;INTERVAL=99999999999999999;COUNT=3").len(), 3);
+    }
+
+    #[test]
+    fn all_day_events_end_on_the_last_day() {
+        let found = |lines: &[&str]| parse(&event_text(lines)).iter().map(|e| day::local_date(local(e.due))).collect::<Vec<_>>();
+        let d = |m, dd| NaiveDate::from_ymd_opt(2026, m, dd).unwrap();
+        assert_eq!(found(&["DTSTART;VALUE=DATE:20261224", "DTEND;VALUE=DATE:20261227"]), vec![d(12, 26)]);
+        assert_eq!(found(&["DTSTART;VALUE=DATE:20261225", "DTEND;VALUE=DATE:20261226"]), vec![d(12, 25)]);
+        assert_eq!(found(&["DTSTART;VALUE=DATE:20261224"]), vec![d(12, 24)]);
+    }
+
+    #[test]
+    fn exdates_remove_the_start_of_an_occurrence() {
+        let found = parse(&event_text(&["DTSTART;TZID=Europe/Berlin:20261019T101500", "DTEND;TZID=Europe/Berlin:20261019T114500", "RRULE:FREQ=WEEKLY;COUNT=3", "EXDATE;TZID=Europe/Berlin:20261026T101500"]));
+        assert_eq!(found.len(), 2);
+        assert_eq!(berlin(found[1].due), wall(11, 2, 11) + Duration::minutes(45));
     }
 }

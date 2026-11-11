@@ -155,8 +155,25 @@ pub fn now() -> i64 {
     Local::now().timestamp()
 }
 
+fn study_day_in<Z: TimeZone>(zone: &Z, at: i64) -> Option<NaiveDate> {
+    zone.timestamp_opt(at, 0).single().map(|d| (d.naive_local() - Duration::hours(DAY_STARTS_AT)).date())
+}
+
+fn study_day_start_in<Z: TimeZone>(zone: &Z, day: NaiveDate) -> Option<i64> {
+    zone.from_local_datetime(&day.and_hms_opt(DAY_STARTS_AT as u32, 0, 0)?).earliest().map(|d| d.timestamp())
+}
+
 fn day_of(at: i64) -> NaiveDate {
-    Local.timestamp_opt(at - DAY_STARTS_AT * 3600, 0).single().map_or_else(|| Local::now().date_naive(), |d| d.date_naive())
+    study_day_in(&Local, at).unwrap_or_else(|| Local::now().date_naive())
+}
+
+fn review_due_in<Z: TimeZone>(zone: &Z, at: i64, days: i64) -> Option<i64> {
+    study_day_start_in(zone, study_day_in(zone, at)? + Duration::days(days.clamp(1, 100_000)))
+}
+
+/// The start of the study day `days` after the one containing `at`, so DST days keep their cut-off at 04:00.
+fn review_due(at: i64, days: i64) -> i64 {
+    review_due_in(&Local, at, days).unwrap_or_else(|| next_day_start(at) + (days - 1).max(0) * 86400)
 }
 
 /// Whole days between two moments, the way a person counts them.
@@ -725,7 +742,7 @@ pub fn options(id: &str, state: Option<&CardState>, note: &str, question: &str, 
     };
     let set_review = |s: &mut CardState, days: i64| {
         graduate(s);
-        s.due = next_day_start(at) + (days - 1).max(0) * 86400;
+        s.due = review_due(at, days);
     };
     match base.phase {
         Phase::New | Phase::Learning => {
@@ -1242,6 +1259,21 @@ mod tests {
 
     fn ask(state: Option<&CardState>, moment: i64) -> [CardState; 4] {
         options("abc", state, "n.md", "Frage", moment)
+    }
+
+    #[test]
+    fn study_days_cut_at_four_on_clock_change_days() {
+        let berlin: chrono_tz::Tz = "Europe/Berlin".parse().unwrap();
+        let utc = |y, m, d, h, min| chrono::Utc.with_ymd_and_hms(y, m, d, h, min, 0).unwrap().timestamp();
+        let day = |y, m, d| NaiveDate::from_ymd_opt(y, m, d);
+        assert_eq!(study_day_in(&berlin, utc(2026, 10, 25, 2, 30)), day(2026, 10, 24));
+        assert_eq!(study_day_in(&berlin, utc(2026, 10, 25, 3, 0)), day(2026, 10, 25));
+        assert_eq!(study_day_in(&berlin, utc(2027, 3, 28, 1, 30)), day(2027, 3, 27));
+        assert_eq!(study_day_in(&berlin, utc(2027, 3, 28, 2, 0)), day(2027, 3, 28));
+        assert_eq!(review_due_in(&berlin, utc(2026, 10, 23, 10, 0), 3), Some(utc(2026, 10, 26, 3, 0)));
+        assert_eq!(review_due_in(&berlin, utc(2026, 10, 23, 10, 0), 1), Some(utc(2026, 10, 24, 2, 0)));
+        assert_eq!(review_due_in(&berlin, utc(2027, 3, 26, 10, 0), 3), Some(utc(2027, 3, 29, 2, 0)));
+        assert_eq!(review_due_in(&berlin, utc(2026, 10, 23, 10, 0), i64::MAX), review_due_in(&berlin, utc(2026, 10, 23, 10, 0), 100_000));
     }
 
     #[test]

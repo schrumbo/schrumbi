@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use gpui_kit::RenderImage;
 
@@ -14,6 +15,8 @@ pub type PageKey = (usize, u16);
 /// The most search hits kept for one query.
 const HIT_LIMIT: usize = 5000;
 const RENDER_THREADS: usize = 2;
+const RENDER_TIMEOUT: Duration = Duration::from_secs(20);
+const RENDER_POLL: Duration = Duration::from_millis(100);
 
 /// One search hit with its marks on the page.
 pub struct Hit {
@@ -65,6 +68,7 @@ pub enum TextJob {
 struct Queue {
     wanted: Vec<PageKey>,
     running: HashSet<PageKey>,
+    abandoned: HashSet<usize>,
     closed: bool,
 }
 
@@ -107,6 +111,27 @@ impl RenderQueue {
         }
     }
 
+    /// Marks a page whose render ran past the timeout, so no second render of it starts while the first still holds memory.
+    fn abandon(&self, page: usize) {
+        if let Ok(mut q) = self.state.lock() {
+            q.abandoned.insert(page);
+        }
+    }
+
+    fn is_abandoned(&self, page: usize) -> bool {
+        self.state.lock().map(|q| q.abandoned.contains(&page)).unwrap_or(true)
+    }
+
+    fn release(&self, page: usize) {
+        if let Ok(mut q) = self.state.lock() {
+            q.abandoned.remove(&page);
+        }
+    }
+
+    fn is_closed(&self) -> bool {
+        self.state.lock().map(|q| q.closed).unwrap_or(true)
+    }
+
     fn next(&self) -> Option<PageKey> {
         let mut q = self.state.lock().ok()?;
         loop {
@@ -145,11 +170,41 @@ fn to_image(p: PagePixels) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
 }
 
+/// Renders on a helper thread so a panic or a page that never finishes only fails that page; `None` also when the queue closes meanwhile.
+fn render_guarded(doc: &Arc<PdfDoc>, queue: &Arc<RenderQueue>, page: usize, scale: f32, timeout: Duration) -> Option<PagePixels> {
+    if queue.is_abandoned(page) {
+        return None;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (doc, queue_of_helper) = (doc.clone(), queue.clone());
+    std::thread::Builder::new()
+        .spawn(move || {
+            let rendered = crate::core::crash::caught(|| doc.render_pixels(page, scale)).flatten();
+            let _ = tx.send(rendered);
+            queue_of_helper.release(page);
+        })
+        .ok()?;
+    let mut waited = Duration::ZERO;
+    while waited < timeout && !queue.is_closed() {
+        match rx.recv_timeout(RENDER_POLL) {
+            Ok(rendered) => return rendered,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => waited += RENDER_POLL,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+    queue.abandon(page);
+    if rx.try_recv().is_ok() {
+        queue.release(page);
+    }
+    None
+}
+
 fn render_thread(data: Arc<Vec<u8>>, queue: Arc<RenderQueue>, results: async_channel::Sender<Message>) {
-    let Some(doc) = PdfDoc::from_data(data) else { return };
+    let Some(doc) = PdfDoc::from_data(data).map(Arc::new) else { return };
     while let Some(key) = queue.next() {
-        let scale = f32::from(key.1) / 4.;
-        let rendered = doc.render_pixels(key.0, scale);
+        let requested = f32::from(key.1) / 4.;
+        let scale = doc.fit_scale(key.0, requested).unwrap_or(requested);
+        let rendered = render_guarded(&doc, &queue, key.0, scale, RENDER_TIMEOUT);
         let marks = queue.marks();
         let page_marks = marks.get(&key.0).map(Vec::as_slice).unwrap_or_default();
         let baked = marks_hash(page_marks);
@@ -316,5 +371,58 @@ mod tests {
         queue.set_marks(layer(3, [9, 9, 9]));
         queue.finished((0, 8), 0);
         assert!(queue.state.lock().unwrap().wanted.is_empty());
+    }
+
+    fn sized_page_data(content: &str) -> Arc<Vec<u8>> {
+        use lopdf::{Document, Object, Stream, dictionary};
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let contents = doc.add_object(Stream::new(dictionary! {}, content.as_bytes().to_vec()));
+        let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()], "Contents" => contents });
+        doc.objects.insert(pages_id, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }));
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog);
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        Arc::new(out)
+    }
+
+    #[test]
+    fn a_failing_page_does_not_stop_the_queue() {
+        let data = sized_page_data("[0.0000001] 0 d 1000 w 0 0 m 600 700 l S");
+        let queue = Arc::new(RenderQueue::new());
+        let (tx, rx) = async_channel::unbounded();
+        let q = queue.clone();
+        let worker = std::thread::spawn(move || render_thread(data, q, tx));
+        queue.replace(vec![(0, 4), (0, 8), (5, 4)]);
+        for _ in 0..3 {
+            assert!(matches!(rx.recv_blocking().unwrap(), Message::PageFailed(..)));
+        }
+        queue.close();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn a_page_that_never_finishes_times_out_and_closing_stops_waiting() {
+        let doc = Arc::new(PdfDoc::from_data(sized_page_data("0 0 m 10 10 l S")).unwrap());
+        let queue = Arc::new(RenderQueue::new());
+        assert!(render_guarded(&doc, &queue, 0, 1., Duration::from_secs(10)).is_some());
+        assert!(render_guarded(&doc, &queue, 0, 1., Duration::ZERO).is_none());
+        while queue.is_abandoned(0) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(render_guarded(&doc, &queue, 0, 1., Duration::from_secs(10)).is_some());
+        queue.close();
+        assert!(render_guarded(&doc, &queue, 0, 1., Duration::from_secs(10)).is_none());
+    }
+
+    #[test]
+    fn a_page_still_rendering_after_the_timeout_is_not_started_again() {
+        let doc = Arc::new(PdfDoc::from_data(sized_page_data("0 0 m 10 10 l S")).unwrap());
+        let queue = Arc::new(RenderQueue::new());
+        queue.abandon(0);
+        assert!(render_guarded(&doc, &queue, 0, 1., Duration::from_secs(10)).is_none());
+        queue.release(0);
+        assert!(render_guarded(&doc, &queue, 0, 1., Duration::from_secs(10)).is_some());
     }
 }

@@ -2131,5 +2131,6 @@
   "„name“ ist zu lang, höchstens 40 Zeichen.": "“name” is too long, 40 characters at most.",
   "„schemaVersion“ muss 1 sein.": "“schemaVersion” must be 1.",
   "Dieses Design braucht eine neuere Schrumbi-Version.": "This theme needs a newer version of Schrumbi.",
-  "„%@“ ist auf „%@“ schwer lesbar: Kontrast %@ : 1, nötig sind 4,5 : 1.": "“%@” is hard to read on “%@”: contrast %@ : 1, 4.5 : 1 needed."
+  "„%@“ ist auf „%@“ schwer lesbar: Kontrast %@ : 1, nötig sind 4,5 : 1.": "“%@” is hard to read on “%@”: contrast %@ : 1, 4.5 : 1 needed.",
+  "Diese Seite konnte nicht angezeigt werden.": "This page could not be shown."
 }
