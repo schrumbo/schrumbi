@@ -44,6 +44,33 @@ impl Runner {
     }
 }
 
+/// What went wrong with an agent, read from its error text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trouble {
+    /// The user is not signed in with the provider.
+    SignIn,
+    /// The provider cannot be reached.
+    Offline,
+    /// The provider is overloaded or the account hit its limit for now.
+    Busy,
+    Other,
+}
+
+/// Sorts an agent's error message into what the user can do about it.
+pub fn trouble(message: &str) -> Trouble {
+    let m = message.to_lowercase();
+    let any = |words: &[&str]| words.iter().any(|w| m.contains(w));
+    if any(&["auth_required", "authentication required", "not logged in", "not authenticated", "please log in", "please login", "/login", "unauthorized", "invalid api key", "401"]) {
+        Trouble::SignIn
+    } else if any(&["enotfound", "econnrefused", "econnreset", "etimedout", "eai_again", "fetch failed", "network", "getaddrinfo", "connection refused", "connection error", "socket hang up", "offline"]) {
+        Trouble::Offline
+    } else if any(&["rate limit", "rate_limit", "overloaded", "usage limit", "too many requests", "429", "529", "quota"]) {
+        Trouble::Busy
+    } else {
+        Trouble::Other
+    }
+}
+
 /// How to start an agent process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {

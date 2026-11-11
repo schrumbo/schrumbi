@@ -36,6 +36,17 @@ pub fn run(cx: &mut App) {
             let (a, b, c) = (note.clone(), note.clone(), note.clone());
             vec![
                 Box::new(move |cx| act(cx, |l| l.open_document(&a))),
+                Box::new(|cx| {
+                    crate::core::prefs::update(|p| {
+                        p.ai.custom_command = "schrumbi-smoke-no-agent".into();
+                        p.ai.agent = "custom".into();
+                    });
+                    super::ai::set_enabled(true, cx);
+                    super::ai::open_column(cx);
+                }),
+                Box::new(super::ai::toggle_details),
+                Box::new(super::ai::open_column),
+                Box::new(super::ai::close_panel),
                 Box::new(super::settings::open),
                 Box::new(super::settings::open_about),
                 Box::new(move |cx| super::note_window::open(&b, cx)),

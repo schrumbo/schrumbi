@@ -10,7 +10,8 @@ use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::dialog::DialogEntrance;
-use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::date_picker::{DatePicker, DatePickerEvent, DatePickerState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::prelude::*;
@@ -80,7 +81,7 @@ enum Item {
     Agent { text: String, parsed: Option<Rc<ParsedNote>>, parsed_len: usize, insert: Option<Insert> },
     Tool(Tool),
     Edit(Edit),
-    Notice { text: String, restart: bool },
+    Notice { text: String, fix: Option<Fix> },
     Setup(SetupCard),
     Inbox(InboxCard),
 }
@@ -92,6 +93,24 @@ struct InboxCard {
     edited: HashSet<usize>,
     state: CardState,
     error: Option<String>,
+}
+
+/// What a notice in the stream offers to do about it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fix {
+    Restart,
+    Retry,
+    SignIn(crate::core::ai::detect::Agent),
+}
+
+/// The inbox row being changed in the table, with its fields.
+struct RowEdit {
+    at: usize,
+    row: usize,
+    title: Entity<InputState>,
+    date: Entity<DatePickerState>,
+    error: Option<String>,
+    _subs: Vec<Subscription>,
 }
 
 /// Where an explanation can go when the user wants it in a note.
@@ -132,6 +151,7 @@ struct Session {
     seen: HashMap<PathBuf, String>,
     granted: HashSet<PathBuf>,
     stopped: bool,
+    events: async_channel::Receiver<Event>,
     _run: Task<()>,
     _pump: Task<()>,
 }
@@ -162,6 +182,7 @@ pub struct AiPanel {
     hint: Option<&'static str>,
     logged: usize,
     log_task: Option<Task<()>>,
+    row_edit: Option<RowEdit>,
     _subs: Vec<Subscription>,
 }
 
@@ -278,6 +299,12 @@ pub fn changed_lines(before: &str, after: &str) -> Vec<(usize, usize)> {
         }
     }
     out
+}
+
+fn first_line(text: &str) -> String {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default().trim_end_matches(['{', ':', ' ']);
+    let cut: String = line.chars().take(160).collect();
+    if line.chars().count() > 160 { format!("{cut}…") } else { cut }
 }
 
 fn edit_line(e: &Edit) -> String {
@@ -445,7 +472,7 @@ impl AiPanel {
             }),
         ];
         ai::set_panel(cx.entity().downgrade(), cx);
-        Self { input, items: Vec::new(), tools: HashMap::new(), expanded: HashSet::new(), session: None, turn: false, queued: 0, removed: HashSet::new(), extra: Vec::new(), last_prompt: None, list: Self::new_list(), listed: 0, dirty: BTreeSet::new(), tail: (Vec::new(), None), idle: None, reparse: None, focus_input: true, cancelling: false, asks: Vec::new(), pending: VecDeque::new(), recap: None, hint: None, logged: 0, log_task: None, _subs: subs }
+        Self { input, items: Vec::new(), tools: HashMap::new(), expanded: HashSet::new(), session: None, turn: false, queued: 0, removed: HashSet::new(), extra: Vec::new(), last_prompt: None, list: Self::new_list(), listed: 0, dirty: BTreeSet::new(), tail: (Vec::new(), None), idle: None, reparse: None, focus_input: true, cancelling: false, asks: Vec::new(), pending: VecDeque::new(), recap: None, hint: None, logged: 0, log_task: None, row_edit: None, _subs: subs }
     }
 
     fn new_list() -> ListState {
@@ -496,7 +523,8 @@ impl AiPanel {
     fn chips(&self, cx: &App) -> Vec<Chip> {
         let mut out = self.extra.clone();
         for c in self.auto_chips(cx) {
-            if !self.removed.contains(&c) && !out.contains(&c) {
+            let covered = matches!(&c, Chip::Pdf(p, _) if out.iter().any(|o| matches!(o, Chip::Pages(q, ..) | Chip::Pdf(q, _) if q == p)));
+            if !self.removed.contains(&c) && !out.contains(&c) && !covered {
                 out.push(c);
             }
         }
@@ -528,7 +556,52 @@ impl AiPanel {
     }
 
     fn notice(&mut self, text: String, restart: bool) {
-        self.items.push(Item::Notice { text, restart });
+        self.notice_fix(text, restart.then_some(Fix::Restart));
+    }
+
+    fn notice_fix(&mut self, text: String, fix: Option<Fix>) {
+        self.items.push(Item::Notice { text, fix });
+    }
+
+    /// The notice for an agent's error, with what the user can do about it; `fallback` handles the rest.
+    fn trouble_notice(&mut self, message: &str, fallback: Fix) -> bool {
+        let agent = match agents::chosen(&prefs::with(|p| p.ai.clone())) {
+            Some(agents::Runner::Known(a)) => Some(a),
+            _ => None,
+        };
+        match agents::trouble(message) {
+            agents::Trouble::SignIn => {
+                let label = agents::chosen(&prefs::with(|p| p.ai.clone())).map(|r| tr(r.label())).unwrap_or_default();
+                self.notice_fix(trf("Du bist bei %@ nicht angemeldet. Melde dich im Terminal an, dann starte neu.", &[&label]), Some(agent.map_or(Fix::Restart, Fix::SignIn)));
+            }
+            agents::Trouble::Offline => self.notice_fix(tr("Keine Verbindung zum Anbieter. Prüf das Internet und versuch es noch einmal."), Some(fallback)),
+            agents::Trouble::Busy => self.notice_fix(tr("Der Anbieter ist gerade ausgelastet oder dein Kontingent ist aufgebraucht. Versuch es später noch einmal."), Some(fallback)),
+            agents::Trouble::Other => return false,
+        }
+        true
+    }
+
+    fn fix(&mut self, at: usize, fix: Fix, cx: &mut Context<Self>) {
+        match fix {
+            Fix::Restart => {
+                if self.session.is_none() {
+                    self.start(cx);
+                }
+            }
+            Fix::Retry => {
+                if let Some(text) = self.last_prompt.clone() {
+                    self.send(text, cx);
+                }
+            }
+            Fix::SignIn(agent) => {
+                ai::login(agent, cx);
+                if let Some(Item::Notice { fix, .. }) = self.items.get_mut(at) {
+                    *fix = Some(Fix::Restart);
+                }
+                self.touch(at);
+            }
+        }
+        cx.notify();
     }
 
     fn start(&mut self, cx: &mut Context<Self>) {
@@ -564,6 +637,7 @@ impl AiPanel {
             *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(result);
             drop(keep);
         });
+        let events = events_rx.clone();
         let pump = cx.spawn(async move |this, cx| {
             while let Ok(first) = events_rx.recv().await {
                 let mut batch = vec![first];
@@ -586,7 +660,7 @@ impl AiPanel {
             let _ = this.update(cx, |p, cx| p.ended(result, cx));
         });
         let file = transcript::file_for(&root, &id);
-        self.session = Some(Session { id, commands: commands_tx, ready: false, file, seen: HashMap::new(), granted: HashSet::new(), stopped: false, _run: run, _pump: pump });
+        self.session = Some(Session { id, commands: commands_tx, ready: false, file, seen: HashMap::new(), granted: HashSet::new(), stopped: false, events, _run: run, _pump: pump });
         self.schedule_idle(cx);
     }
 
@@ -610,12 +684,33 @@ impl AiPanel {
         ai::close_session(&s.id, cx);
         self.turn = false;
         self.queued = 0;
+        self.pending.clear();
+        self.cancelling = false;
+        let mut touched = Vec::new();
+        for (at, item) in self.items.iter_mut().enumerate() {
+            if let Item::Tool(t) = item
+                && matches!(t.status, Status::Pending | Status::Running)
+            {
+                t.status = Status::Failed;
+                touched.push(at);
+            }
+        }
+        self.dirty.extend(touched);
+        self.reparse_now();
         if !s.stopped {
-            let why = match result {
-                Some(Err(e)) => e.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().chars().take(200).collect::<String>(),
+            let full = match &result {
+                Some(Err(e)) => e.clone(),
                 _ => String::new(),
             };
-            self.notice(if why.is_empty() { tr("Das Programm wurde beendet.") } else { trf("Das Programm wurde beendet: %@", &[&why]) }, true);
+            if !self.trouble_notice(&full, Fix::Restart) {
+                let code = full.split("exit code: ").nth(1).map(|r| r.chars().take_while(|c| c.is_ascii_digit() || *c == '-').collect::<String>()).filter(|c| !c.is_empty());
+                let text = match code {
+                    Some(code) => trf("Das Programm wurde unerwartet beendet (Code %@).", &[&code]),
+                    None if full.trim().is_empty() => tr("Das Programm wurde unerwartet beendet."),
+                    None => trf("Das Programm wurde unerwartet beendet: %@", &[&first_line(&full)]),
+                };
+                self.notice(text, true);
+            }
         }
         cx.notify();
     }
@@ -627,6 +722,9 @@ impl AiPanel {
             let _ = this.update(cx, |p, cx| {
                 if !p.turn && p.session.is_some() {
                     p.stop(cx);
+                    if p.items.is_empty() {
+                        return;
+                    }
                     p.notice(trf("Nach %lld Minuten Pause beendet. Die nächste Nachricht startet neu.", &[&minutes]), false);
                 }
             });
@@ -935,11 +1033,20 @@ impl AiPanel {
         .detach();
     }
 
+    /// Applies what the agent streamed but the column has not shown yet, so a card from a tool lands after the steps before it.
+    fn drain(&mut self, cx: &mut Context<Self>) {
+        let Some(events) = self.session.as_ref().map(|s| s.events.clone()) else { return };
+        while let Ok(e) = events.try_recv() {
+            self.apply(e, cx);
+        }
+    }
+
     /// Shows a change the agent made in this session as a card, and follows it when „Folgen“ is on.
     pub fn record_edit(&mut self, session: &str, path: PathBuf, before: Option<String>, after: String, cx: &mut Context<Self>) {
         if self.session.as_ref().is_none_or(|s| s.id != session) {
             return;
         }
+        self.drain(cx);
         let (added, removed) = counts(before.as_deref().unwrap_or_default(), &after);
         if added == 0 && removed == 0 {
             return;
@@ -982,7 +1089,12 @@ impl AiPanel {
             Ok(Stop::Cancelled) => self.notice(tr("Abgebrochen."), false),
             Ok(Stop::Refused) => self.notice(tr("Die KI hat das abgelehnt."), false),
             Ok(Stop::Limit) => self.notice(tr("Die Antwort wurde unterwegs gekürzt."), false),
-            Err(e) => self.notice(trf("Das hat nicht geklappt: %@", &[&e.chars().take(200).collect::<String>()]), false),
+            Err(e) if e.contains("transport_closed") || e.contains("transport closed") => {}
+            Err(e) => {
+                if !self.trouble_notice(&e, Fix::Retry) {
+                    self.notice_fix(trf("Das hat nicht geklappt: %@", &[&first_line(&e)]), Some(Fix::Retry));
+                }
+            }
         }
         let shell_off = !prefs::with(|p| p.ai.allow_execute);
         let mut touched = Vec::new();
@@ -1039,8 +1151,18 @@ impl AiPanel {
     }
 
     fn undo_edit(&mut self, at: usize, cx: &mut Context<Self>) {
+        let Some(Item::Edit(Edit { before: Some(before), .. })) = self.items.get(at) else { return };
+        let before = before.clone();
+        self.apply_hunks(at, before, cx);
+    }
+
+    /// Replaces the agent's change with `text`, the change with some or all of its parts taken back, as one undoable step.
+    fn apply_hunks(&mut self, at: usize, text: String, cx: &mut Context<Self>) {
         let Some(Item::Edit(e)) = self.items.get(at) else { return };
         let (Some(before), path, after) = (e.before.clone(), e.path.clone(), e.after.clone()) else { return };
+        if text == after {
+            return;
+        }
         self.touch(at);
         let now = state::read(cx, |l| tools::text_now(l, &path));
         if now.as_deref() != Some(after.as_str()) {
@@ -1050,13 +1172,23 @@ impl AiPanel {
             cx.notify();
             return;
         }
+        let whole = text == before;
+        let label = if whole { trf("KI-Änderung an %@ zurückgenommen", &[&name_of(&path)]) } else { trf("KI-Änderung an %@ teilweise zurückgenommen", &[&name_of(&path)]) };
+        let written = text.clone();
         let done = act(cx, |l| {
             let key = l.buffer_key(&path);
             let kind = format!("ai-undo:{}", key.display());
-            l.edit_note(&key, &kind, trf("KI-Änderung an %@ zurückgenommen", &[&name_of(&path)]), |_| before)
+            l.edit_note(&key, &kind, label, |_| written)
         });
         if done && let Some(Item::Edit(e)) = self.items.get_mut(at) {
-            e.undone = true;
+            if whole {
+                e.undone = true;
+            } else {
+                let (added, removed) = counts(&before, &text);
+                e.after = text;
+                e.added = added;
+                e.removed = removed;
+            }
         }
         cx.notify();
     }
@@ -1066,6 +1198,7 @@ impl AiPanel {
         if self.session.as_ref().is_none_or(|s| s.id != session) {
             return;
         }
+        self.drain(cx);
         let Ok(plan) = state::read(cx, |l| setup::plan(l, &proposal)) else { return };
         let mut touched = Vec::new();
         for (at, item) in self.items.iter_mut().enumerate() {
@@ -1087,6 +1220,7 @@ impl AiPanel {
         if self.session.as_ref().is_none_or(|s| s.id != session) || rows.is_empty() {
             return;
         }
+        self.drain(cx);
         let mut touched = Vec::new();
         for (at, item) in self.items.iter_mut().enumerate() {
             if let Item::Inbox(card) = item
@@ -1108,6 +1242,9 @@ impl AiPanel {
             return;
         }
         let rows: Vec<crate::core::ai::inbox::Row> = card.rows.iter().enumerate().filter(|(i, _)| card.chosen.contains(i) && !card.edited.contains(i)).map(|(_, r)| r.clone()).collect();
+        if self.row_edit.as_ref().is_some_and(|e| e.at == at) {
+            self.row_edit = None;
+        }
         if rows.is_empty() {
             return;
         }
@@ -1125,6 +1262,151 @@ impl AiPanel {
             }
         }
         cx.notify();
+    }
+
+    fn begin_row_edit(&mut self, at: usize, row: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Item::Inbox(card)) = self.items.get(at) else { return };
+        let Some(r) = card.rows.get(row) else { return };
+        if let Some(old) = self.row_edit.take() {
+            self.dirty.insert(old.at);
+        }
+        let title = cx.new(|cx| InputState::new(window, cx).default_value(r.title.clone()));
+        let format = if crate::core::i18n::lang() == crate::core::i18n::Lang::En { "%m/%d/%Y" } else { "%d.%m.%Y" };
+        let date = cx.new(|cx| DatePickerState::new(window, cx).date_format(format));
+        if let Some(d) = r.date {
+            date.update(cx, |s, cx| s.set_date(d, window, cx));
+        }
+        let me = cx.entity().downgrade();
+        let (me2, me3) = (me.clone(), me.clone());
+        let app: &mut App = cx;
+        let subs = vec![
+            app.subscribe(&title, move |s, e: &InputEvent, cx| match e {
+                InputEvent::Change => {
+                    let value = s.read(cx).value().to_string();
+                    let _ = me.update(cx, |p, cx| p.revise_row(crate::core::ai::inbox::Change::Title(value), cx));
+                }
+                InputEvent::PressEnter { .. } => {
+                    let _ = me2.update(cx, |p, cx| p.end_row_edit(cx));
+                }
+                _ => {}
+            }),
+            app.subscribe(&date, move |_, e: &DatePickerEvent, cx| {
+                let DatePickerEvent::Change(v) = e;
+                let day = v.start().map(|d| d.date());
+                let _ = me3.update(cx, |p, cx| p.revise_row(crate::core::ai::inbox::Change::Date(day), cx));
+            }),
+        ];
+        let focus = title.clone();
+        window.defer(cx, move |window, cx| focus.update(cx, |s, cx| s.focus(window, cx)));
+        self.row_edit = Some(RowEdit { at, row, title, date, error: None, _subs: subs });
+        self.dirty.insert(at);
+        cx.notify();
+    }
+
+    fn end_row_edit(&mut self, cx: &mut Context<Self>) {
+        if let Some(e) = self.row_edit.take() {
+            self.dirty.insert(e.at);
+            cx.notify();
+        }
+    }
+
+    fn revise_row(&mut self, change: crate::core::ai::inbox::Change, cx: &mut Context<Self>) {
+        let Some(edit) = self.row_edit.as_mut() else { return };
+        let (at, row) = (edit.at, edit.row);
+        let Some(Item::Inbox(card)) = self.items.get_mut(at) else { return };
+        if card.state != CardState::Open {
+            return;
+        }
+        let Some(r) = card.rows.get(row).cloned() else { return };
+        match state::read(cx, |l| crate::core::ai::inbox::revise(l, &r, change)) {
+            Ok(next) => {
+                card.rows[row] = next;
+                edit.error = None;
+            }
+            Err(e) => edit.error = Some(e),
+        }
+        self.dirty.insert(at);
+        cx.notify();
+    }
+
+    fn row_editor(&self, at: usize, i: usize, r: &crate::core::ai::inbox::Row, edit: &RowEdit, cx: &mut Context<Self>, t: &Theme) -> Div {
+        use crate::core::ai::inbox::{Change, FileKind};
+        let me = cx.entity();
+        let (modules, deadlines) = state::read(cx, |l| {
+            let modules: Vec<(String, String)> = l.semester_modules().into_iter().map(|m| (m.id.clone(), m.code.clone())).collect();
+            let mut deadlines: Vec<(String, String, chrono::DateTime<chrono::Local>)> = l.semester_assignments().into_iter().filter(|a| r.module.as_deref() == Some(a.module_id.as_str())).map(|a| (a.id.clone(), a.title.clone(), a.due)).collect();
+            deadlines.sort_by_key(|d| ((d.2 - chrono::Local::now()).num_minutes().abs(), d.0.clone()));
+            deadlines.truncate(12);
+            deadlines.sort_by_key(|d| d.2);
+            (modules, deadlines)
+        });
+        let module_label = r.module.as_deref().and_then(|m| modules.iter().find(|(id, _)| id == m).map(|(_, c)| c.clone())).unwrap_or_else(|| tr("Modul wählen"));
+        let current = r.module.clone();
+        let me_m = me.clone();
+        let module = Button::new(("ai-inbox-module", i)).xsmall().label(module_label).tooltip(tr("Modul")).dropdown_menu(move |mut menu, _, _| {
+            for (id, code) in modules.clone() {
+                let me = me_m.clone();
+                let on = current.as_deref() == Some(id.as_str());
+                menu = menu.item(PopupMenuItem::new(code).checked(on).on_click(move |_, _, cx| {
+                    let id = id.clone();
+                    me.update(cx, |p, cx| p.revise_row(Change::Module(id), cx));
+                }));
+            }
+            menu
+        });
+        let kind_now = r.kind;
+        let me_k = me.clone();
+        let kind = Button::new(("ai-inbox-kind", i)).xsmall().label(kind_now.label()).tooltip(tr("Art")).dropdown_menu(move |mut menu, _, _| {
+            for k in FileKind::ALL {
+                let me = me_k.clone();
+                menu = menu.item(PopupMenuItem::new(k.label()).checked(k == kind_now).on_click(move |_, _, cx| me.update(cx, |p, cx| p.revise_row(Change::Kind(k), cx))));
+            }
+            menu
+        });
+        let deadline = r.kind.for_deadline().then(|| {
+            let shown = r.deadline.as_deref().and_then(|id| deadlines.iter().find(|d| d.0 == id).map(|d| d.1.clone())).or_else(|| r.deadline.as_deref().and_then(|id| state::read(cx, |l| l.assignment(id).map(|a| a.title.clone())))).map(|d| trf("Frist: %@", &[&d])).or_else(|| r.new_deadline.as_ref().map(|n| trf("Neue Frist: %@", &[&n.title]))).unwrap_or_else(|| tr("Keine Frist"));
+            let chosen = r.deadline.clone();
+            let me_d = me.clone();
+            Button::new(("ai-inbox-deadline", i)).xsmall().label(shown).tooltip(tr("Frist")).dropdown_menu(move |mut menu, _, _| {
+                let me = me_d.clone();
+                menu = menu.item(PopupMenuItem::new(tr("Keine Frist")).checked(chosen.is_none()).on_click(move |_, _, cx| me.update(cx, |p, cx| p.revise_row(Change::Deadline(None), cx))));
+                for (id, title, due) in deadlines.clone() {
+                    let me = me_d.clone();
+                    let on = chosen.as_deref() == Some(id.as_str());
+                    menu = menu.item(PopupMenuItem::new(format!("{title} · {}", crate::core::day::short_date(due.date_naive()))).checked(on).on_click(move |_, _, cx| {
+                        let id = id.clone();
+                        me.update(cx, |p, cx| p.revise_row(Change::Deadline(Some(id)), cx));
+                    }));
+                }
+                menu
+            })
+        });
+        let target = format!("→ {}/{}", state::read(cx, |l| l.relative_path(&r.folder)), r.name);
+        let (me_done, me_more) = (me.clone(), me.clone());
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(space::S))
+            .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(name_of(&r.path)))
+            .child(div().flex().flex_wrap().gap(px(space::XS)).child(module).child(kind).children(deadline))
+            .child(Input::new(&edit.title).small())
+            .child(div().w(px(160.)).child(DatePicker::new(&edit.date).small()))
+            .child(div().min_w_0().truncate().font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.tertiary).child(target))
+            .children(edit.error.clone().map(|e| div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(e)))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_end()
+                    .gap(px(space::S))
+                    .child(Button::new(("ai-inbox-more", i)).ghost().xsmall().label(tr("Im Ablegen-Fenster")).tooltip(tr("Alle Felder im Ablegen-Fenster")).on_click(move |_, _, cx| me_more.update(cx, |p, cx| {
+                        p.end_row_edit(cx);
+                        p.edit_inbox_row(at, i, cx);
+                    })))
+                    .child(Button::new(("ai-inbox-done", i)).primary().xsmall().label(tr("Schließen")).on_click(move |_, _, cx| me_done.update(cx, |p, cx| p.end_row_edit(cx)))),
+            )
     }
 
     fn edit_inbox_row(&mut self, at: usize, row: usize, cx: &mut Context<Self>) {
@@ -1162,6 +1444,21 @@ impl AiPanel {
             }
             let deadline = r.deadline.as_deref().and_then(|id| state::read(cx, |l| l.assignment(id).map(|a| a.title.clone()))).map(|d| trf("Frist: %@", &[&d])).or_else(|| r.new_deadline.as_ref().map(|n| trf("Neue Frist: %@ bis %@", &[&n.title, &n.due.format("%d.%m. %H:%M").to_string()])));
             let target = format!("{}/{}", state::read(cx, |l| l.relative_path(&r.folder)), r.name);
+            let editing = self.row_edit.as_ref().filter(|e| open && e.at == at && e.row == i && !edited);
+            let column = match editing {
+                Some(edit) => self.row_editor(at, i, r, edit, cx, t),
+                None => div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::XXS))
+                    .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(name_of(&r.path)))
+                    .child(div().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(facts.join(" · ")))
+                    .children(deadline.map(|d| div().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(d)))
+                    .child(div().min_w_0().truncate().font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.tertiary).child(if edited { tr("Im Ablegen-Fenster") } else { format!("→ {target}") })),
+            };
+            let in_edit = editing.is_some();
             rows = rows.child(
                 div()
                     .flex()
@@ -1182,19 +1479,8 @@ impl AiPanel {
                             cx.notify();
                         });
                     }))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(space::XXS))
-                            .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).child(name_of(&r.path)))
-                            .child(div().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(facts.join(" · ")))
-                            .children(deadline.map(|d| div().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(d)))
-                            .child(div().min_w_0().truncate().font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.tertiary).child(if edited { tr("Im Ablegen-Fenster") } else { format!("→ {target}") })),
-                    )
-                    .when(open && !edited, |d| d.child(Button::new(SharedString::from(format!("ai-inbox-edit-{at}-{i}"))).ghost().xsmall().label(tr("Bearbeiten")).tooltip(tr("Im Ablegen-Fenster ändern")).on_click(move |_, _, cx| me_edit.update(cx, |p, cx| p.edit_inbox_row(at, i, cx))))),
+                    .child(column)
+                    .when(open && !edited && !in_edit, |d| d.child(Button::new(SharedString::from(format!("ai-inbox-edit-{at}-{i}"))).ghost().xsmall().label(tr("Ändern")).tooltip(tr("Modul, Art, Titel, Datum und Frist hier ändern")).on_click(move |_, window, cx| me_edit.update(cx, |p, cx| p.begin_row_edit(at, i, window, cx))))),
             );
         }
         let chosen = card.rows.iter().enumerate().filter(|(i, _)| card.chosen.contains(i) && !card.edited.contains(i)).count();
@@ -1584,8 +1870,8 @@ impl AiPanel {
                 let me = me.clone();
                 move |_, window, cx| {
                     let me = me.clone();
-                    let discard: Option<Rc<dyn Fn(&mut App)>> = can_undo.then(|| Rc::new(move |cx: &mut App| me.update(cx, |p, cx| p.undo_edit(at, cx))) as Rc<dyn Fn(&mut App)>);
-                    show_diff(&path, &before, &after, discard, window, cx);
+                    let apply: Option<Rc<dyn Fn(String, &mut App)>> = can_undo.then(|| Rc::new(move |text: String, cx: &mut App| me.update(cx, |p, cx| p.apply_hunks(at, text, cx))) as Rc<dyn Fn(String, &mut App)>);
+                    show_diff(&path, &before, &after, apply, window, cx);
                 }
             }))
             .child(Button::new(("ai-edit-undo", at)).ghost().xsmall().label(tr("Rückgängig")).disabled(!can_undo).tooltip(undo_tip).on_click(move |_, _, cx| me.update(cx, |p, cx| p.undo_edit(at, cx))))
@@ -1767,8 +2053,16 @@ impl AiPanel {
             Item::Inbox(card) => self.inbox_card(at, card, cx, t),
             Item::Tool(tool) => self.tool_card(at, tool, cx, t),
             Item::Edit(e) => self.edit_card(at, e, cx, t),
-            Item::Notice { text, restart } => {
+            Item::Notice { text, fix } => {
                 let me = cx.entity();
+                let action = fix.map(|f| {
+                    let label = match f {
+                        Fix::Restart => tr("Neu starten"),
+                        Fix::Retry => tr("Noch einmal"),
+                        Fix::SignIn(_) => tr("Anmelden"),
+                    };
+                    Button::new(("ai-fix", at)).ghost().xsmall().label(label).on_click(move |_, _, cx| me.update(cx, |p, cx| p.fix(at, f, cx)))
+                });
                 div()
                     .flex()
                     .items_center()
@@ -1777,7 +2071,7 @@ impl AiPanel {
                     .text_color(t.secondary)
                     .child(icon("info", iconsize::XS, t.tertiary))
                     .child(div().flex_1().min_w_0().child(text.clone()))
-                    .when(*restart, |d| d.child(Button::new(("ai-restart", at)).ghost().xsmall().label(tr("Neu starten")).on_click(move |_, _, cx| me.update(cx, |p, cx| { p.start(cx); cx.notify(); }))))
+                    .children(action)
                     .into_any_element()
             }
         }
@@ -1937,8 +2231,9 @@ impl AiPanel {
     }
 }
 
-/// Shows a change side by side: before on the left, after on the right; with `discard` the user keeps it or takes it back.
-pub fn show_diff(path: &Path, before: &str, after: &str, discard: Option<Rc<dyn Fn(&mut App)>>, window: &mut Window, cx: &mut App) {
+/// Shows a change in one column; with `apply` every change can be kept or taken back, and `apply` gets the text with the kept ones.
+pub fn show_diff(path: &Path, before: &str, after: &str, apply: Option<Rc<dyn Fn(String, &mut App)>>, window: &mut Window, cx: &mut App) {
+    use gpui_kit::component::diff::{DiffAnnotation, DiffLinePosition, DiffSide};
     let name = name_of(path);
     let closed = |t: &str| if t.ends_with('\n') || t.is_empty() { t.to_string() } else { format!("{t}\n") };
     let (old, new) = (closed(before), closed(after));
@@ -1947,25 +2242,88 @@ pub fn show_diff(path: &Path, before: &str, after: &str, discard: Option<Rc<dyn 
     if window.has_active_dialog(cx) {
         return;
     }
+    let file = files.first().map(|f| f.path().clone()).unwrap_or_default();
+    let marks: Vec<DiffLinePosition> = crate::core::ai::hunks::hunks(before, after)
+        .iter()
+        .map(|h| if h.new.is_empty() { DiffLinePosition::new(file.clone(), DiffSide::Original, h.old.end) } else { DiffLinePosition::new(file.clone(), DiffSide::Modified, h.new.end) })
+        .collect();
+    let keep: Rc<std::cell::RefCell<Vec<bool>>> = Rc::new(std::cell::RefCell::new(vec![true; marks.len()]));
+    let (before, after) = (before.to_string(), after.to_string());
     let state = cx.new(|cx| gpui_kit::component::diff::DiffState::new(files, cx).with_mode(gpui_kit::component::diff::DiffMode::Unified));
-    window.open_dialog(cx, move |d, _, cx| {
+    window.open_dialog(cx, move |d, window, cx| {
         let t = Theme::get(cx);
-        d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().on_ok(super::sheets::pass_enter).child(
+        let total = marks.len();
+        let per_hunk = apply.is_some() && total > 1;
+        let dropped = keep.borrow().iter().filter(|k| !**k).count();
+        let mut diff = gpui_kit::component::diff::Diff::new(&state).header_visible(false).hunk_separator(gpui_kit::component::diff::DiffHunkSeparator::Simple);
+        if per_hunk {
+            let (keep, places) = (keep.clone(), marks.clone());
+            diff = diff.annotations(marks.iter().enumerate().map(|(i, m)| DiffAnnotation::line(("ai-hunk", i), m.clone()))).render_annotation(move |a, _, cx| {
+                let t = Theme::get(cx);
+                let Some(i) = a.position().and_then(|p| places.iter().position(|m| m == p)) else { return div().into_any_element() };
+                let kept = keep.borrow().get(i).copied().unwrap_or(true);
+                let keep = keep.clone();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S))
+                    .text_size(px(font::CALLOUT))
+                    .child(div().flex_1().min_w_0().truncate().text_color(if kept { t.secondary } else { t.primary }).child(if kept { trf("Änderung %lld von %lld", &[&(i + 1), &total]) } else { trf("Änderung %lld von %lld wird zurückgenommen", &[&(i + 1), &total]) }))
+                    .child(Button::new(("ai-hunk-toggle", i)).xsmall().when(kept, |b| b.ghost()).label(if kept { tr("Verwerfen") } else { tr("Behalten") }).on_click(move |_, window, _| {
+                        if let Some(k) = keep.borrow_mut().get_mut(i) {
+                            *k = !*k;
+                        }
+                        window.refresh();
+                    }))
+                    .into_any_element()
+            });
+        }
+        let footer = div().flex_none().p(px(space::M)).flex().items_center().gap(px(space::S)).border_t_1().border_color(t.separator);
+        let footer = match apply.clone() {
+            Some(apply) if per_hunk => {
+                let (all, chosen) = (keep.clone(), keep.clone());
+                let (b1, a1, b2, a2) = (before.clone(), after.clone(), before.clone(), after.clone());
+                let apply_all = apply.clone();
+                let note = if dropped == 0 { tr("Jede Änderung lässt sich einzeln verwerfen.") } else if dropped == 1 { tr("1 Änderung wird zurückgenommen.") } else { trf("%lld Änderungen werden zurückgenommen.", &[&dropped]) };
+                footer
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(note))
+                    .child(Button::new("ai-diff-discard").small().ghost().label(tr("Alle verwerfen")).tooltip(tr("Nimmt die ganze Änderung zurück")).on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                        let none = vec![false; all.borrow().len()];
+                        apply_all(crate::core::ai::hunks::merge(&b1, &a1, &none), cx);
+                    }))
+                    .child(Button::new("ai-diff-keep").small().primary().label(if dropped == 0 { tr("Alle behalten") } else { tr("Übernehmen") }).on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                        let chosen = chosen.borrow().clone();
+                        if chosen.iter().any(|k| !*k) {
+                            apply(crate::core::ai::hunks::merge(&b2, &a2, &chosen), cx);
+                        }
+                    }))
+            }
+            Some(apply) => {
+                let b = before.clone();
+                footer
+                    .justify_end()
+                    .child(Button::new("ai-diff-discard").small().ghost().label(tr("Verwerfen")).tooltip(tr("Nimmt nur diese Änderung zurück")).on_click(move |_, window, cx| {
+                        window.close_dialog(cx);
+                        apply(b.clone(), cx);
+                    }))
+                    .child(Button::new("ai-diff-keep").small().primary().label(tr("Behalten")).on_click(|_, window, cx| window.close_dialog(cx)))
+            }
+            None => footer.justify_end().child(Button::new("ai-diff-close").small().primary().label(tr("Schließen")).on_click(|_, window, cx| window.close_dialog(cx))),
+        };
+        let viewport = window.viewport_size();
+        let width = (f32::from(viewport.width) - 2. * space::XL).clamp(320., 760.);
+        let height = (f32::from(viewport.height) - 180.).clamp(220., 480.);
+        let count = (total > 1).then(|| div().flex_none().font_weight(FontWeight::NORMAL).child(trf("%lld Änderungen", &[&total])));
+        d.entrance(DialogEntrance::FadeSlide).w(px(width)).p_0().on_ok(super::sheets::pass_enter).child(
             div()
-                .h(px(480.))
+                .h(px(height))
                 .flex()
                 .flex_col()
-                .child(div().flex_none().py(px(space::M)).px(px(space::L)).flex().border_b_1().border_color(t.separator).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.secondary).child(name.clone()))
-                .child(div().flex_1().min_h_0().child(gpui_kit::component::diff::Diff::new(&state).header_visible(false).hunk_separator(gpui_kit::component::diff::DiffHunkSeparator::Simple)))
-                .child(match discard.clone() {
-                    Some(discard) => div().flex_none().p(px(space::M)).flex().justify_end().gap(px(space::S)).border_t_1().border_color(t.separator)
-                        .child(Button::new("ai-diff-discard").small().ghost().label(tr("Verwerfen")).tooltip(tr("Nimmt nur diese Änderung zurück")).on_click(move |_, window, cx| {
-                            window.close_dialog(cx);
-                            discard(cx);
-                        }))
-                        .child(Button::new("ai-diff-keep").small().primary().label(tr("Behalten")).on_click(|_, window, cx| window.close_dialog(cx))),
-                    None => div().flex_none().p(px(space::M)).flex().justify_end().border_t_1().border_color(t.separator).child(Button::new("ai-diff-close").small().primary().label(tr("Schließen")).on_click(|_, window, cx| window.close_dialog(cx))),
-                }),
+                .child(div().flex_none().py(px(space::M)).pl(px(space::L)).pr(px(space::XXL + space::L)).flex().gap(px(space::S)).border_b_1().border_color(t.separator).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.secondary).child(div().flex_1().min_w_0().truncate().child(name.clone())).children(count))
+                .child(div().flex_1().min_h_0().child(diff))
+                .child(footer),
         )
     });
 }

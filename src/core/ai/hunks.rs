@@ -14,7 +14,7 @@ fn closed(text: &str) -> String {
 /// The changes from `before` to `after`, in order; lines that only differ by a missing final line break count as equal.
 pub fn hunks(before: &str, after: &str) -> Vec<Hunk> {
     let (old, new) = (closed(before), closed(after));
-    let diff = similar::TextDiff::from_lines(&old, &new);
+    let diff = similar::TextDiff::configure().timeout(std::time::Duration::from_secs(2)).diff_lines(&old, &new);
     let mut out: Vec<Hunk> = Vec::new();
     let mut open = false;
     for op in diff.ops() {

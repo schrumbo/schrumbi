@@ -52,7 +52,8 @@ const INSPECTOR_WIDTH: f32 = 340.;
 const AI_WIDTH: f32 = 400.;
 const PANEL_MIN: f32 = 280.;
 const PANEL_MAX: f32 = 640.;
-const PAGE_KEEPS: f32 = 420.;
+const PAGE_KEEPS: f32 = 480.;
+const FLOAT_GAP: f32 = 48.;
 const EDGE_GRIP: f32 = 6.;
 
 /// The edge of the right panel being dragged.
@@ -65,11 +66,27 @@ impl Render for PanelEdge {
     }
 }
 
+fn wanted_width(ki: bool) -> f32 {
+    crate::core::prefs::with(|p| if ki { p.ai.width } else { p.inspector_width }).unwrap_or(if ki { AI_WIDTH } else { INSPECTOR_WIDTH })
+}
+
+fn docked_width(ki: bool, window_width: f32) -> f32 {
+    wanted_width(ki).clamp(PANEL_MIN, PANEL_MAX.min((window_width - sidebar::RAIL - PAGE_KEEPS).max(PANEL_MIN)))
+}
+
+/// Whether the right panel floats over the page because beside it the page would get too narrow.
+fn panel_floats(ki: bool, window_width: f32) -> bool {
+    window_width - sidebar::RAIL - docked_width(ki, window_width) < PAGE_KEEPS
+}
+
+fn panel_max(ki: bool, window_width: f32) -> f32 {
+    let keeps = if panel_floats(ki, window_width) { FLOAT_GAP } else { PAGE_KEEPS };
+    PANEL_MAX.min((window_width - sidebar::RAIL - keeps).max(PANEL_MIN))
+}
+
 /// How wide the right panel is on a tab: what the user dragged it to, within what the window leaves.
 fn panel_width(ki: bool, window_width: f32) -> f32 {
-    let stored = crate::core::prefs::with(|p| if ki { p.ai.width } else { p.inspector_width });
-    let wanted = stored.unwrap_or(if ki { AI_WIDTH } else { INSPECTOR_WIDTH });
-    wanted.clamp(PANEL_MIN, PANEL_MAX.min((window_width - sidebar::RAIL - PAGE_KEEPS).max(PANEL_MIN)))
+    wanted_width(ki).clamp(PANEL_MIN, panel_max(ki, window_width))
 }
 
 impl MainWindow {
@@ -550,8 +567,10 @@ impl Render for MainWindow {
         let panel_open = column || inspector_open;
         let full = self.resizing.unwrap_or_else(|| panel_width(column, width));
         let inspector_target = if panel_open { full } else { 0. };
+        let floating = panel_open && panel_floats(column, width);
+        let reserved = if floating { 0. } else { inspector_target };
         let slot_w = motion::follow("right-panel-width", inspector_target, if self.resizing.is_some() { std::time::Duration::ZERO } else { motion::MEDIUM }, window, cx);
-        let page_width = width - left - inspector_target;
+        let page_width = width - left - reserved;
         self.pages.update(cx, |p, _| p.width = page_width);
         let setup_shown = lib.read(cx).route() == &Route::Today && self.setup.read(cx).wanted(cx);
         let covers_calendar = setup_shown && self.setup.read(cx).offers_calendar(cx);
@@ -609,8 +628,9 @@ impl Render for MainWindow {
                     .border_color(t.separator)
                     .flex()
                     .flex_col()
-                    .child(self.toolbar(l, left, page_width + inspector_target, width - left - crumb::BORDER, search_open, window, &t))
-                    .child(div().id("page-area").flex_1().min_h_0().mr(px(inspector_target))
+                    .child(self.toolbar(l, left, page_width + reserved, width - left - crumb::BORDER, search_open, window, &t))
+                    .child(div().id("page-area").flex_1().min_h_0().mr(px(reserved))
+                        .when(floating, |d| d.on_mouse_down(MouseButton::Left, |_, _, cx| super::ai::close_panel(cx)))
                         .on_mouse_down(MouseButton::Left, cx.listener(|this, e: &MouseDownEvent, window, cx| {
                             this.press_stamp = (!window.default_prevented()).then(|| (state::read(cx, Library::selection_stamp), e.position));
                         }))
@@ -666,13 +686,19 @@ impl Render for MainWindow {
                         .w(px(slot_w))
                         .overflow_hidden()
                         .bg(t.content)
+                        .when(floating, |d| d.occlude().shadow_lg().capture_key_down(|e: &KeyDownEvent, _, cx| {
+                            if e.keystroke.key == "escape" {
+                                super::ai::close_panel(cx);
+                                cx.stop_propagation();
+                            }
+                        }))
                         .child(div().absolute().top_0().bottom_0().right_0().w(px(shown)).child(content))
                         .child(div().absolute().top_0().bottom_0().left_0().w(px(1.)).bg(t.separator))
                         .child(edge),
                 )
                 .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<PanelEdge>, window, cx| {
                     let total = f32::from(window.viewport_size().width);
-                    let max = PANEL_MAX.min((total - sidebar::RAIL - PAGE_KEEPS).max(PANEL_MIN));
+                    let max = panel_max(column, total);
                     let w = (total - f32::from(e.event.position.x)).round().clamp(PANEL_MIN, max);
                     if this.resizing != Some(w) {
                         this.resizing = Some(w);
@@ -688,14 +714,14 @@ impl Render for MainWindow {
                 div()
                     .absolute()
                     .left(px(left))
-                    .right(px(inspector_target))
+                    .right(px(reserved))
                     .flex()
                     .justify_center()
                     .child(v)
                     .with_animation(("toast", toast_id), Animation::new(toast_motion).with_easing(ease_out_quint()), move |d, p| d.bottom(px(10. + notice_room + bar_room + 12. * p)).opacity(p))
             }));
-        if error.is_none() && !dialog_open {
-            root = root.children(super::tips::card(inspector_target + space::L, space::L + notice_room + bar_room, &t, cx));
+        if error.is_none() && !dialog_open && !floating {
+            root = root.children(super::tips::card(reserved + space::L, space::L + notice_room + bar_room, &t, cx));
         }
         root = root.children(super::coach::overlay(window, cx, &t));
         if let Some(message) = error {

@@ -537,3 +537,37 @@ fn inbox_files_read_by_the_agent_file_through_the_app_with_new_deadlines_as_one_
     let outside = json!({ "files": [{ "path": "../x.pdf", "kind": "other", "module": "MA" }] });
     assert!(turns.call(&mut lib, "s", "propose_inbox", &outside).is_err());
 }
+
+#[test]
+fn an_inbox_row_edited_in_the_table_finds_its_place_again() {
+    use crate::core::ai::inbox::{self, Change, FileKind};
+    let root = folder("inbox-edit");
+    std::fs::create_dir_all(root.join("_Inbox")).unwrap();
+    std::fs::create_dir_all(root.join("MA")).unwrap();
+    std::fs::write(root.join("_Inbox").join("scan.md"), "# Notizen
+").unwrap();
+    let lib = open(&root);
+    let rows = inbox::plan(&lib, &json!({ "files": [{ "path": "_Inbox/scan.md", "module": "MA", "kind": "notes", "title": "Reihen", "name": "VL04 Reihen.md" }] })).unwrap();
+    let row = &rows[0];
+    let dated = inbox::revise(&lib, row, Change::Date(chrono::NaiveDate::from_ymd_opt(2026, 11, 3))).unwrap();
+    assert_eq!(dated.name, "VL04 Reihen.md", "a name the agent chose stays when only the date changes");
+    assert_eq!(dated.folder, row.folder);
+    let titled = inbox::revise(&lib, &dated, Change::Title("Potenzreihen".into())).unwrap();
+    assert_eq!(titled.name, "Potenzreihen.md");
+    assert!(inbox::revise(&lib, &titled, Change::Title("  ".into())).is_err(), "an empty title is refused");
+    let lecture = inbox::revise(&lib, &titled, Change::Kind(FileKind::Lecture)).unwrap();
+    assert_eq!(lecture.kind, FileKind::Lecture);
+    assert!(lecture.deadline.is_none() && lecture.new_deadline.is_none());
+    assert!(root.join("_Inbox").join("scan.md").exists(), "editing a row moves nothing");
+}
+
+#[test]
+fn agent_errors_say_what_the_user_can_do() {
+    use crate::core::ai::agents::{Trouble, trouble};
+    assert_eq!(trouble("Authentication required"), Trouble::SignIn);
+    assert_eq!(trouble("Invalid API key · Please run /login"), Trouble::SignIn);
+    assert_eq!(trouble("TypeError: fetch failed (getaddrinfo ENOTFOUND api.anthropic.com)"), Trouble::Offline);
+    assert_eq!(trouble("API Error: 529 Overloaded"), Trouble::Busy);
+    assert_eq!(trouble("Claude AI usage limit reached"), Trouble::Busy);
+    assert_eq!(trouble("Internal error"), Trouble::Other);
+}

@@ -141,6 +141,109 @@ fn row_of(lib: &Library, v: &Value) -> Result<Row, String> {
     Ok(row)
 }
 
+/// One field of an inbox row the user changes in the table.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Change {
+    Module(String),
+    Kind(FileKind),
+    Title(String),
+    Date(Option<NaiveDate>),
+    /// An existing deadline by id, or none.
+    Deadline(Option<String>),
+}
+
+impl FileKind {
+    /// Every kind, in the order the table offers them.
+    pub const ALL: [FileKind; 5] = [FileKind::Lecture, FileKind::Exercise, FileKind::Submission, FileKind::Notes, FileKind::Other];
+
+    fn key(self) -> &'static str {
+        match self {
+            FileKind::Lecture => "lecture",
+            FileKind::Exercise => "exercise",
+            FileKind::Submission => "submission",
+            FileKind::Notes => "notes",
+            FileKind::Other => "other",
+        }
+    }
+}
+
+/// The row with one field changed, its target folder and name worked out again the way the agent's proposal was.
+pub fn revise(lib: &Library, row: &Row, change: Change) -> Result<Row, String> {
+    let mut next = row.clone();
+    let mut refile = false;
+    let mut rename = false;
+    match change {
+        Change::Module(m) => {
+            if next.module.as_deref() != Some(m.as_str()) {
+                if next.deadline.as_deref().and_then(|id| lib.assignment(id)).is_some_and(|a| a.module_id != m) {
+                    next.deadline = None;
+                }
+                next.module = Some(m);
+                refile = true;
+                rename = true;
+            }
+        }
+        Change::Kind(k) => {
+            if !k.for_deadline() {
+                next.deadline = None;
+                next.new_deadline = None;
+            }
+            next.kind = k;
+            refile = true;
+            rename = true;
+        }
+        Change::Title(t) => {
+            let t = t.trim().to_string();
+            if t.is_empty() {
+                return Err(tr("Der Titel darf nicht leer sein."));
+            }
+            next.title = t;
+            rename = true;
+        }
+        Change::Date(d) => {
+            next.date = d;
+            rename = true;
+        }
+        Change::Deadline(id) => {
+            if let Some(a) = id.as_deref().and_then(|id| lib.assignment(id)) {
+                next.module = Some(a.module_id.clone());
+            }
+            next.new_deadline = None;
+            next.deadline = id;
+            refile = true;
+            rename = true;
+        }
+    }
+    let mut v = json!({ "path": lib.relative_path(&next.path), "kind": next.kind.key(), "title": next.title });
+    if let Some(m) = &next.module {
+        v["module"] = json!(m);
+    }
+    if let Some(d) = next.date {
+        v["date"] = json!(d.format("%Y-%m-%d").to_string());
+    }
+    if let Some(w) = next.week {
+        v["week"] = json!(w);
+    }
+    if let Some(id) = &next.deadline {
+        v["deadline"] = json!(id);
+    } else if let Some(n) = &next.new_deadline {
+        v["new_deadline"] = json!({ "title": n.title, "due": n.due.format("%Y-%m-%dT%H:%M").to_string() });
+    }
+    if !refile {
+        v["folder"] = json!(lib.relative_path(&next.folder));
+    }
+    let custom = !next.kind.for_deadline() && next.name != file_name(&next.path);
+    if !rename || custom {
+        let name = match crate::core::naming::extension(&next.name) {
+            _ if !custom || next.title == row.title => next.name.clone(),
+            "" => crate::core::text::safe_file_stem(&next.title),
+            ext => format!("{}.{ext}", crate::core::text::safe_file_stem(&next.title)),
+        };
+        v["name"] = json!(name);
+    }
+    row_of(lib, &v)
+}
+
 /// Checks the agent's reading of inbox files; nothing is moved or created.
 pub fn plan(lib: &Library, proposal: &Value) -> Result<Vec<Row>, String> {
     let files = proposal.get("files").and_then(Value::as_array).ok_or("`files` is required")?;
