@@ -829,7 +829,8 @@ pub fn pdf_embeds(pages: &[usize], link: impl Fn(&str) -> String) -> String {
 /// `[[…]]` from a note outside a vault to a file nearby: the path relative to the note's folder, spaces and umlauts kept. A file on another drive keeps its full path.
 pub fn folder_link(note: &Path, target: &Path, subpath: &str) -> String {
     let slashes = |p: &Path| p.to_string_lossy().replace('\\', "/");
-    let folder = note.parent().map(slashes).unwrap_or_default();
+    let note = slashes(note);
+    let folder = note.rsplit_once('/').map_or("", |(dir, _)| dir);
     let full = slashes(target);
     let from: Vec<&str> = folder.split('/').filter(|p| !p.is_empty()).collect();
     let to: Vec<&str> = full.split('/').filter(|p| !p.is_empty()).collect();

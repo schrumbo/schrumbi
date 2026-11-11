@@ -343,6 +343,7 @@ mod tests {
         assert_eq!(titles(build(&files(then), &dir, &config)), [Some("Alt".to_string()), Some("Bleibt".to_string())]);
         let kept = std::fs::metadata(&b).unwrap().modified().unwrap();
         std::fs::write(&a, "# Neu\n").unwrap();
+        std::fs::File::options().write(true).open(&a).unwrap().set_modified(kept + std::time::Duration::from_secs(5)).unwrap();
         std::fs::write(&b, "# Anders\n").unwrap();
         std::fs::File::options().write(true).open(&b).unwrap().set_modified(kept).unwrap();
         let later = then + chrono::Duration::seconds(5);

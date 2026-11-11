@@ -293,13 +293,19 @@ pub(crate) fn resolve(lib: &Library, rel: &str) -> Result<PathBuf, String> {
     if rel.starts_with("//") || rel.starts_with("\\\\") {
         return Err(OUTSIDE.to_string());
     }
-    let rel = rel.trim_start_matches(['/', '\\']);
-    let candidate = Path::new(rel);
+    let settled_root = settled(root);
+    let given = Path::new(rel);
+    let candidate = if given.is_absolute() {
+        given.strip_prefix(root).or_else(|_| given.strip_prefix(&settled_root)).map_err(|_| OUTSIDE.to_string())?
+    } else if matches!(rel.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic()) {
+        return Err(OUTSIDE.to_string());
+    } else {
+        Path::new(rel.trim_start_matches(['/', '\\']))
+    };
     if candidate.is_absolute() || candidate.components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir)) {
         return Err(OUTSIDE.to_string());
     }
     let full = root.join(candidate);
-    let settled_root = settled(root);
     if !anchored(&full).starts_with(&settled_root) {
         return Err(OUTSIDE.to_string());
     }
