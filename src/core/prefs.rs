@@ -181,6 +181,8 @@ pub struct Prefs {
     pub pdf_properties: bool,
     pub editor_font_size: f32,
     pub theme: ThemeChoice,
+    /// A loaded design by its id, the stem of its file in `themes`; wins over `theme` while that file is there. `theme` keeps a value older versions can read.
+    pub theme_file: String,
     /// The chance of remembering a card that reviews aim for.
     pub card_retention: f64,
     pub card_new_per_day: u32,
@@ -298,6 +300,7 @@ impl Default for Prefs {
             pdf_properties: false,
             editor_font_size: 13.,
             theme: ThemeChoice::System,
+            theme_file: String::new(),
             card_retention: 0.9,
             card_new_per_day: 30,
             card_reviews_per_day: 200,
@@ -488,8 +491,19 @@ pub fn remember_coauthors(names: &[String]) {
 
 #[cfg(test)]
 mod tests {
-    use super::remember_capped;
+    use super::{Prefs, ThemeChoice, remember_capped};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn old_settings_keep_their_theme() {
+        let old: Prefs = serde_json::from_str(r#"{"theme":"nord"}"#).unwrap();
+        assert_eq!(old.theme, ThemeChoice::Nord);
+        assert!(old.theme_file.is_empty());
+        let new = Prefs { theme_file: "tokyo-night".into(), ..Prefs::default() };
+        let json = serde_json::to_value(&new).unwrap();
+        assert_eq!(json["theme"], "system");
+        assert_eq!(json["themeFile"], "tokyo-night");
+    }
 
     #[test]
     fn the_entry_just_stored_is_never_the_one_dropped() {

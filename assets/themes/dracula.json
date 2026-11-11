@@ -1,0 +1,4 @@
+{"schemaVersion":1,"name":"Dracula","dark":true,"sidebar":"#21222C","sidebarBorder":"#F8F8F212","content":"#282A36","secondaryBg":"#343746","column":"#252733","primary":"#F8F8F2F0","secondary":"#F8F8F2AD","tertiary":"#F8F8F280","separator":"#F8F8F21C","accent":"#BD93F9","accentText":"#DBC4FC","greenText":"#50FA7B","onAccent":"#21222C","selection":"#6A5A9C","green":"#50FA7B","blue":"#8BE9FD","orange":"#FFB86C","orangeText":"#FFC282","red":"#FF5555","gray":"#8A94B8","ink":"#F8F8F2","material":"#3A3D4E",
+ "moduleColors":{"blue":"#6CB6FF","green":"#50FA7B","orange":"#FFB86C","purple":"#BD93F9","pink":"#FF79C6","teal":"#8BE9FD","red":"#FF5555","yellow":"#F1FA8C","indigo":"#9A8CFF","mint":"#7AF0C8","brown":"#C9A58A","gray":"#8A94B8"},
+ "syntax":{"keyword":"#FF79C6","string":"#F1FA8C","comment":"#8D9AD0","number":"#BD93F9","type":"#8BE9FD","function":"#50FA7B"},
+ "author":"Dracula Theme","license":"MIT","source":"https://draculatheme.com"}

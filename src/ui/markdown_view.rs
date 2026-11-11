@@ -2158,7 +2158,7 @@ pub(super) fn coloured(lang: Option<&str>, code: &str) -> Rc<Vec<(String, TokenK
 
 fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
     let t = cx.t;
-    let colors = super::theme::syntax_palette(t.kind);
+    let colors = t.syntax;
     let mut text = String::new();
     let mut highlights = Vec::new();
     for (s, kind) in coloured(lang, code).iter() {

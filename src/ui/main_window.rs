@@ -136,6 +136,9 @@ impl MainWindow {
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active() {
                     state::came_back(cx);
+                    if let Some(m) = theme::recheck(window, cx) {
+                        act(cx, |l| l.notify(m, "circle-alert", None, None));
+                    }
                 }
             }),
             cx.observe_window_appearance(window, |_, window, cx| {
@@ -829,11 +832,7 @@ pub fn open(cx: &mut App) {
     };
     let options = super::chrome::window_options(options, "Schrumbi");
     if let Ok((handle, _)) = super::chrome::open_window(options, cx, |window, cx| {
-        super::platform::set_window_appearance(match crate::core::prefs::get().theme {
-            crate::core::prefs::ThemeChoice::System => None,
-            crate::core::prefs::ThemeChoice::Light => Some(false),
-            _ => Some(true),
-        });
+        super::platform::set_window_appearance(theme::native_appearance());
         theme::refresh(window, cx);
         cx.new(|cx| MainWindow::new(window, cx))
     }) {

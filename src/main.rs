@@ -11,6 +11,7 @@ use rust_embed::RustEmbed;
 #[derive(RustEmbed)]
 #[folder = "assets"]
 #[exclude = "i18n/*"]
+#[exclude = "themes/*"]
 struct Assets;
 
 impl AssetSource for Assets {
@@ -52,7 +53,7 @@ fn main() {
     app.on_reopen(|cx| ui::main_window::show(cx));
     app.run(move |cx: &mut App| {
         gpui_kit::init(cx);
-        ui::theme::apply(ui::theme::Kind::Light, None, cx);
+        ui::theme::apply(ui::theme::Theme::plain(false), None, cx);
         ui::state::init(cx);
         ui::notifications::init(cx);
         ui::apple_calendar::init(cx);

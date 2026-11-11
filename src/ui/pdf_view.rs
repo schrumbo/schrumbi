@@ -17,7 +17,7 @@ use gpui_kit::*;
 
 use super::motion::{self, Soft};
 use super::pdf_worker::{self, Hit, Message, PageKey, RenderQueue, TextJob};
-use super::theme::{Kind, Theme, annot, control, font, iconsize, pages, radius, space, tint};
+use super::theme::{Theme, annot, control, font, iconsize, pages, radius, space, tint};
 use super::widgets::*;
 use crate::core::highlights::{self, Highlight, HighlightPart, InkLine, Pin};
 use crate::core::library::{Library, PdfWriteError, WrittenPdf};
@@ -516,7 +516,7 @@ pub struct PdfView {
     cache: HashMap<PageKey, Cached>,
     page_marks: Arc<HashMap<usize, Vec<MarkPaint>>>,
     marks_dirty: bool,
-    marks_theme: Option<Kind>,
+    marks_theme: Option<u64>,
     underlines: HashMap<u64, Hsla>,
     removed_mark: Option<u64>,
     failed_pages: HashMap<PageKey, u64>,
@@ -1118,7 +1118,7 @@ impl PdfView {
 
     /// Re-reads the highlights when the library or the document changed and hands the render threads their paint.
     fn sync_marks(&mut self, cx: &mut Context<Self>, t: &Theme) {
-        if !self.marks_dirty && self.marks_theme == Some(t.kind) {
+        if !self.marks_dirty && self.marks_theme == Some(t.id) {
             return;
         }
         if self.marks_dirty
@@ -1156,7 +1156,7 @@ impl PdfView {
                 self.mark_scroll.scroll_to_item(at, ScrollStrategy::Nearest);
             }
         }
-        self.marks_theme = Some(t.kind);
+        self.marks_theme = Some(t.id);
         self.underlines = self.marks.iter().filter(|h| !h.parts.is_empty()).map(|h| (h.id, t.mark_underline(&h.color))).collect();
         let mut layer: HashMap<usize, Vec<MarkPaint>> = HashMap::new();
         for h in &self.marks {

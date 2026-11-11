@@ -437,9 +437,13 @@ async fn run(b: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
             capture(handle, std::path::Path::new(b["path"].as_str().ok_or("path missing")?), b["full"].as_bool().unwrap_or(false), cx)
         }
         "theme" => {
-            let choice: crate::core::prefs::ThemeChoice = serde_json::from_value(b["name"].clone()).map_err(|e| e.to_string())?;
             let handle = one_window(b, cx)?;
-            handle.update(cx, |_, window, cx| super::theme::choose(choice, window, cx)).map_err(|e| e.to_string())?;
+            if let Some(id) = b["file"].as_str() {
+                handle.update(cx, |_, window, cx| super::theme::choose_file(id, window, cx)).map_err(|e| e.to_string())?;
+            } else {
+                let choice: crate::core::prefs::ThemeChoice = serde_json::from_value(b["name"].clone()).map_err(|e| e.to_string())?;
+                handle.update(cx, |_, window, cx| super::theme::choose(choice, window, cx)).map_err(|e| e.to_string())?;
+            }
             settle(handle, cx).await;
             Ok(json!({}))
         }
