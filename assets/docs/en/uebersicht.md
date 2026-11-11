@@ -87,7 +87,8 @@ The week starts today and shows the next seven days. From there ‹ and › page
 
 - In the month, every entry is a chip in its module colour, exams with a cap. If not all fit into a day, the last line opens the whole list.
 - Clicking the day number opens that week. Chips can be dragged to another day.
-- Weekends and lecture-free time from the semester are tinted lightly.
+- Weekends and lecture-free time from the semester are tinted lightly, in week and month.
+- The top shows the date range, beside it in small type the lecture week or the break. The calendar week is in the tooltip over the range.
 
 ## Add for a Day
 

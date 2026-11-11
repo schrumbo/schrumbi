@@ -87,7 +87,8 @@ Die Woche beginnt heute und zeigt die nächsten sieben Tage. ‹ und › blätte
 
 - Im Monat steht jeder Eintrag als Chip in der Modulfarbe, Prüfungen mit Hut. Passen nicht alle in den Tag, öffnet die letzte Zeile die ganze Liste.
 - Klick auf die Tageszahl öffnet diese Woche. Chips lassen sich auf einen anderen Tag ziehen.
-- Wochenenden und vorlesungsfreie Zeit aus dem Semester sind leicht getönt.
+- Wochenenden und vorlesungsfreie Zeit aus dem Semester sind leicht getönt, in Woche und Monat.
+- Oben steht der Zeitraum, daneben klein die Vorlesungswoche oder die Pause. Die Kalenderwoche zeigt der Tooltip über dem Zeitraum.
 
 ## Für einen Tag eintragen
 
