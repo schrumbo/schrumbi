@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use hayro::hayro_interpret::font::{GlyphRun, Glyph};
 use hayro::hayro_interpret::util::TransformExt;
 use hayro::hayro_interpret::{BlendMode, ClipPath, Context, Device, DrawMode, DrawProps, Image, ImageDrawProps, InterpreterCache, InterpreterSettings, SoftMask, interpret_page};
 use hayro::hayro_syntax::Pdf;
-use hayro::kurbo::{Affine, BezPath, Point, Rect, Shape};
+use hayro::kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape};
 use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::{PixmapSettings, RenderCache, RenderSettings};
 
@@ -387,8 +387,64 @@ pub fn page_png(path: &Path, index: usize, scale: f32) -> Option<Vec<u8>> {
     PdfDoc::open(path)?.render_png(index, scale)
 }
 
+const MAX_SIDE_PX: f32 = 16384.;
+const MAX_AREA_PX: f32 = 64_000_000.;
+const MIN_SCALE: f32 = 0.01;
+const MAX_DASHES: f64 = 2_000_000.;
+
+/// Finds strokes whose dash pattern would cut a path into millions of pieces.
+#[derive(Default)]
+struct DashProbe {
+    heavy: bool,
+}
+
+fn control_length(path: &BezPath) -> f64 {
+    let (mut start, mut at, mut total) = (Point::ZERO, Point::ZERO, 0.);
+    let mut step = |from: &mut Point, to: Point| {
+        total += (to - *from).hypot();
+        *from = to;
+    };
+    for el in path.elements() {
+        match *el {
+            PathEl::MoveTo(p) => {
+                start = p;
+                at = p;
+            }
+            PathEl::LineTo(p) => step(&mut at, p),
+            PathEl::QuadTo(a, b) => {
+                step(&mut at, a);
+                step(&mut at, b);
+            }
+            PathEl::CurveTo(a, b, c) => {
+                step(&mut at, a);
+                step(&mut at, b);
+                step(&mut at, c);
+            }
+            PathEl::ClosePath => step(&mut at, start),
+        }
+    }
+    total
+}
+
+impl<'a> Device<'a> for DashProbe {
+    fn draw_path(&mut self, path: &BezPath, _: DrawProps<'a>, mode: &DrawMode) {
+        let (DrawMode::Stroke(stroke) | DrawMode::FillAndStroke(_, stroke)) = mode else { return };
+        let period: f64 = stroke.dash_array.iter().map(|d| f64::from(d.abs())).sum();
+        if !stroke.dash_array.is_empty() && !(period > 1e-12 && control_length(path) / period <= MAX_DASHES) {
+            self.heavy = true;
+        }
+    }
+    fn push_clip_path(&mut self, _: &ClipPath) {}
+    fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+    fn draw_glyph_run(&mut self, _: &GlyphRun<'_, 'a>, _: DrawProps<'a>, _: &DrawMode) {}
+    fn draw_image(&mut self, _: Image<'a, '_>, _: ImageDrawProps<'a>) {}
+    fn pop_clip(&mut self) {}
+    fn pop_transparency_group(&mut self) {}
+}
+
 pub struct PdfDoc {
     pdf: Pdf,
+    heavy: Mutex<HashMap<usize, bool>>,
 }
 
 impl PdfDoc {
@@ -398,7 +454,7 @@ impl PdfDoc {
 
     /// Opens shared bytes, so several worker threads can read one file without copying it.
     pub fn from_data(data: Arc<Vec<u8>>) -> Option<Self> {
-        Some(Self { pdf: Pdf::new(data).ok()? })
+        Some(Self { pdf: Pdf::new(data).ok()?, heavy: Mutex::new(HashMap::new()) })
     }
 
     pub fn page_count(&self) -> usize {
@@ -410,9 +466,40 @@ impl PdfDoc {
         self.pdf.pages().get(index).map(|p| p.render_dimensions())
     }
 
+    /// The largest scale up to `scale` at which the page stays within the pixel limits; `None` when it would be below 1 % or the page has no size.
+    pub fn fit_scale(&self, index: usize, scale: f32) -> Option<f32> {
+        let (w, h) = self.page_size(index)?;
+        if !(w > 0. && h > 0. && scale > 0.) {
+            return None;
+        }
+        let fitted = scale.min(MAX_SIDE_PX / w).min(MAX_SIDE_PX / h).min((MAX_AREA_PX / (w * h)).sqrt());
+        (fitted >= MIN_SCALE.min(scale)).then_some(fitted)
+    }
+
+    /// Whether a stroke on the page has a dash pattern that would make rendering it run out of memory.
+    pub fn is_heavy(&self, index: usize) -> bool {
+        if let Some(known) = self.heavy.lock().ok().and_then(|m| m.get(&index).copied()) {
+            return known;
+        }
+        let Some(page) = self.pdf.pages().get(index) else { return false };
+        let cache = InterpreterCache::new();
+        let (w, h) = page.render_dimensions();
+        let mut context = Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0., 0., f64::from(w), f64::from(h)), &cache, page.xref(), InterpreterSettings::default());
+        let mut probe = DashProbe::default();
+        interpret_page(page, &mut context, &mut probe);
+        if let Ok(mut m) = self.heavy.lock() {
+            m.insert(index, probe.heavy);
+        }
+        probe.heavy
+    }
+
     /// PNG of one page at `scale` pixels per point, on white.
     pub fn render_png(&self, index: usize, scale: f32) -> Option<Vec<u8>> {
         let page = self.pdf.pages().get(index)?;
+        let scale = self.fit_scale(index, scale)?;
+        if self.is_heavy(index) {
+            return None;
+        }
         let cache = RenderCache::new();
         let pixmap = hayro::render(page, &cache, &InterpreterSettings::default(), &RenderSettings::default(), &PixmapSettings { x_scale: scale, y_scale: scale, bg_color: WHITE });
         pixmap.into_png().ok()
@@ -421,6 +508,10 @@ impl PdfDoc {
     /// One page at `scale` pixels per point, on white.
     pub fn render_pixels(&self, index: usize, scale: f32) -> Option<PagePixels> {
         let page = self.pdf.pages().get(index)?;
+        let scale = self.fit_scale(index, scale)?;
+        if self.is_heavy(index) {
+            return None;
+        }
         let cache = RenderCache::new();
         let pixmap = hayro::render(page, &cache, &InterpreterSettings::default(), &RenderSettings::default(), &PixmapSettings { x_scale: scale, y_scale: scale, bg_color: WHITE });
         let (width, height) = (u32::from(pixmap.width()), u32::from(pixmap.height()));
@@ -764,5 +855,55 @@ mod tests {
         let t = std::time::Instant::now();
         let meta = doc.meta(&data);
         println!("meta {:?} ({} outline, {} pages with links)", t.elapsed(), meta.outline.len(), meta.links.len());
+    }
+
+    fn sized_page(w: i64, h: i64, content: &str) -> PdfDoc {
+        use lopdf::{Document, Stream, dictionary};
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let contents = doc.add_object(Stream::new(dictionary! {}, content.as_bytes().to_vec()));
+        let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), w.into(), h.into()], "Contents" => contents });
+        doc.objects.insert(pages_id, lopdf::Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }));
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog);
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        PdfDoc::from_data(Arc::new(out)).unwrap()
+    }
+
+    #[test]
+    fn tall_and_wide_pages_render_within_the_pixel_limits() {
+        for (w, h, scale) in [(595, 12000, 6.), (595, 12000, 171.), (70000, 400, 1.), (200, 20000, 1.)] {
+            let doc = sized_page(w, h, "0 0 m 10 10 l S");
+            let p = doc.render_pixels(0, scale).unwrap_or_else(|| panic!("{w}x{h} at {scale}"));
+            assert!(p.width <= 16384 && p.height <= 16384, "{}x{}", p.width, p.height);
+            assert!(u64::from(p.width) * u64::from(p.height) <= 64_000_000);
+        }
+    }
+
+    #[test]
+    fn fit_scale_refuses_hopeless_pages() {
+        let doc = sized_page(595, 842, "");
+        assert_eq!(doc.fit_scale(0, 2.), Some(2.));
+        assert_eq!(doc.fit_scale(0, 0.), None);
+        assert_eq!(doc.fit_scale(1, 1.), None);
+        let huge = sized_page(14_400_000, 100, "");
+        assert_eq!(huge.fit_scale(0, 1.), None);
+        assert!(huge.render_pixels(0, 1.).is_none());
+    }
+
+    #[test]
+    fn degenerate_dash_patterns_are_refused_not_rendered() {
+        let doc = sized_page(612, 792, "[0.0000001] 0 d 1000 w 0 0 m 600 700 l S");
+        assert!(doc.is_heavy(0));
+        assert!(doc.render_pixels(0, 1.).is_none());
+        assert!(doc.render_png(0, 1.).is_none());
+    }
+
+    #[test]
+    fn ordinary_dash_patterns_still_render() {
+        let doc = sized_page(612, 792, "[3 2] 0 d 1 w 0 0 m 600 700 l S [1 1] 0 d 10 10 m 500 500 l S");
+        assert!(!doc.is_heavy(0));
+        assert!(doc.render_pixels(0, 1.).is_some());
     }
 }

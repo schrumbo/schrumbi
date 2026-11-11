@@ -50,6 +50,7 @@ const TOOL_GAP: f32 = space::XXS;
 const MARK_UNDERLINE: f32 = 2.;
 const PREVIEW: u16 = 2;
 const MAX_SHARP_WIDTH: f32 = 4096.;
+const MAX_SHARP_HEIGHT: f32 = 8192.;
 const SHARP_BUDGET: usize = 128 * 1024 * 1024;
 const PREVIEW_BUDGET: usize = 48 * 1024 * 1024;
 const TEXT_PAGES_KEPT: usize = 32;
@@ -1041,8 +1042,8 @@ impl PdfView {
     }
 
     fn sharp_quarters(&self, page: usize, window: &Window) -> u16 {
-        let (w, _) = self.sizes[page];
-        let pixels_per_point = (self.geo.scale * window.scale_factor()).min(MAX_SHARP_WIDTH / w.max(1.));
+        let (w, h) = self.sizes[page];
+        let pixels_per_point = (self.geo.scale * window.scale_factor()).min(MAX_SHARP_WIDTH / w.max(1.)).min(MAX_SHARP_HEIGHT / h.max(1.));
         ((pixels_per_point * 4.).ceil() as u16).max(1)
     }
 
