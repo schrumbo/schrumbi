@@ -23,9 +23,15 @@ fn weekday(word: &str) -> Option<Weekday> {
     })
 }
 
-fn next_weekday(today: NaiveDate, target: Weekday) -> NaiveDate {
-    let ahead = (7 + target.num_days_from_monday() as u64 - today.weekday().num_days_from_monday() as u64) % 7;
-    today + Days::new(if ahead == 0 { 7 } else { ahead })
+const MAX_AHEAD_DAYS: u64 = 3650;
+
+fn ahead(today: NaiveDate, days: u64) -> Option<NaiveDate> {
+    today.checked_add_days(Days::new(days))
+}
+
+fn next_weekday(today: NaiveDate, target: Weekday) -> Option<NaiveDate> {
+    let days = (7 + target.num_days_from_monday() as u64 - today.weekday().num_days_from_monday() as u64) % 7;
+    ahead(today, if days == 0 { 7 } else { days })
 }
 
 fn clock(word: &str) -> Option<NaiveTime> {
@@ -64,11 +70,11 @@ pub fn parse(input: &str, today: NaiveDate) -> Option<NaturalDate> {
                 end -= 2;
             }
             (Some("in"), Some(n), Some("tag" | "tagen" | "day" | "days")) if date.is_none() => {
-                date = Some(today + Days::new(n.parse().ok()?));
+                date = Some(ahead(today, n.parse::<u64>().ok().filter(|n| *n <= MAX_AHEAD_DAYS)?)?);
                 end -= 3;
             }
             (Some("in"), Some(n), Some("woche" | "wochen" | "week" | "weeks")) if date.is_none() => {
-                date = Some(today + Days::new(7 * n.parse::<u64>().ok()?));
+                date = Some(ahead(today, n.parse::<u64>().ok()?.checked_mul(7).filter(|d| *d <= MAX_AHEAD_DAYS)?)?);
                 end -= 3;
             }
             (_, _, Some(word)) => {
@@ -77,9 +83,9 @@ pub fn parse(input: &str, today: NaiveDate) -> Option<NaturalDate> {
                 } else if date.is_none() {
                     date = match word {
                         "heute" | "today" => Some(today),
-                        "morgen" | "tomorrow" => Some(today + Days::new(1)),
-                        "übermorgen" => Some(today + Days::new(2)),
-                        _ => weekday(word).map(|w| next_weekday(today, w)).or_else(|| calendar_date(word, today)),
+                        "morgen" | "tomorrow" => ahead(today, 1),
+                        "übermorgen" => ahead(today, 2),
+                        _ => weekday(word).and_then(|w| next_weekday(today, w)).or_else(|| calendar_date(word, today)),
                     };
                     if date.is_none() {
                         break;
@@ -139,5 +145,15 @@ mod tests {
     fn nonsense_numbers_are_not_dates() {
         assert_eq!(parse("X 45.13.", saturday()), None);
         assert_eq!(parse("X 25 Uhr", saturday()), None);
+    }
+
+    #[test]
+    fn huge_offsets_are_not_dates() {
+        for title in ["X in 100000000 Tagen", "X in 99999999999 Tagen", "X in 3000000000000000000 Wochen", "X in 3651 days", "X in 18446744073709551615 Wochen"] {
+            assert_eq!(parse(title, saturday()), None, "{title}");
+        }
+        assert!(parse("X in 3650 Tagen", saturday()).is_some());
+        assert!(parse("X morgen", NaiveDate::MAX).is_none());
+        assert!(parse("X Montag", NaiveDate::MAX).is_none());
     }
 }
