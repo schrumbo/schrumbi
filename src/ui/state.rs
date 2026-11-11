@@ -74,7 +74,7 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
-/// Moves the library's clock on and redraws only when something shown depends on it; the folders are rescanned every ten minutes.
+/// Moves the library's clock on and redraws once a minute or when a status changed; the folders are rescanned every ten minutes.
 fn tick(cx: &mut App) {
     let lib = lib(cx);
     let changed = lib.update(cx, |l, cx| {

@@ -68,6 +68,7 @@ pub enum TextJob {
 struct Queue {
     wanted: Vec<PageKey>,
     running: HashSet<PageKey>,
+    abandoned: HashSet<usize>,
     closed: bool,
 }
 
@@ -107,6 +108,23 @@ impl RenderQueue {
             q.closed = true;
             q.wanted.clear();
             self.ready.notify_all();
+        }
+    }
+
+    /// Marks a page whose render ran past the timeout, so no second render of it starts while the first still holds memory.
+    fn abandon(&self, page: usize) {
+        if let Ok(mut q) = self.state.lock() {
+            q.abandoned.insert(page);
+        }
+    }
+
+    fn is_abandoned(&self, page: usize) -> bool {
+        self.state.lock().map(|q| q.abandoned.contains(&page)).unwrap_or(true)
+    }
+
+    fn release(&self, page: usize) {
+        if let Ok(mut q) = self.state.lock() {
+            q.abandoned.remove(&page);
         }
     }
 
@@ -153,12 +171,17 @@ fn to_image(p: PagePixels) -> Option<Arc<RenderImage>> {
 }
 
 /// Renders on a helper thread so a panic or a page that never finishes only fails that page; `None` also when the queue closes meanwhile.
-fn render_guarded(doc: &Arc<PdfDoc>, queue: &RenderQueue, page: usize, scale: f32, timeout: Duration) -> Option<PagePixels> {
+fn render_guarded(doc: &Arc<PdfDoc>, queue: &Arc<RenderQueue>, page: usize, scale: f32, timeout: Duration) -> Option<PagePixels> {
+    if queue.is_abandoned(page) {
+        return None;
+    }
     let (tx, rx) = std::sync::mpsc::channel();
-    let doc = doc.clone();
+    let (doc, queue_of_helper) = (doc.clone(), queue.clone());
     std::thread::Builder::new()
         .spawn(move || {
-            let _ = tx.send(crate::core::crash::caught(|| doc.render_pixels(page, scale)).flatten());
+            let rendered = crate::core::crash::caught(|| doc.render_pixels(page, scale)).flatten();
+            let _ = tx.send(rendered);
+            queue_of_helper.release(page);
         })
         .ok()?;
     let mut waited = Duration::ZERO;
@@ -168,6 +191,10 @@ fn render_guarded(doc: &Arc<PdfDoc>, queue: &RenderQueue, page: usize, scale: f3
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => waited += RENDER_POLL,
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
         }
+    }
+    queue.abandon(page);
+    if rx.try_recv().is_ok() {
+        queue.release(page);
     }
     None
 }
@@ -378,10 +405,24 @@ mod tests {
     #[test]
     fn a_page_that_never_finishes_times_out_and_closing_stops_waiting() {
         let doc = Arc::new(PdfDoc::from_data(sized_page_data("0 0 m 10 10 l S")).unwrap());
-        let queue = RenderQueue::new();
+        let queue = Arc::new(RenderQueue::new());
         assert!(render_guarded(&doc, &queue, 0, 1., Duration::from_secs(10)).is_some());
         assert!(render_guarded(&doc, &queue, 0, 1., Duration::ZERO).is_none());
+        while queue.is_abandoned(0) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(render_guarded(&doc, &queue, 0, 1., Duration::from_secs(10)).is_some());
         queue.close();
         assert!(render_guarded(&doc, &queue, 0, 1., Duration::from_secs(10)).is_none());
+    }
+
+    #[test]
+    fn a_page_still_rendering_after_the_timeout_is_not_started_again() {
+        let doc = Arc::new(PdfDoc::from_data(sized_page_data("0 0 m 10 10 l S")).unwrap());
+        let queue = Arc::new(RenderQueue::new());
+        queue.abandon(0);
+        assert!(render_guarded(&doc, &queue, 0, 1., Duration::from_secs(10)).is_none());
+        queue.release(0);
+        assert!(render_guarded(&doc, &queue, 0, 1., Duration::from_secs(10)).is_some());
     }
 }

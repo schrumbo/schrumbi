@@ -1035,15 +1035,16 @@ pub fn compile(source: &str, files: Vec<(String, Vec<u8>)>) -> Result<Vec<u8>, S
 /// Whether a PDF came from this export. Anything else may be a submission and must not be replaced.
 pub fn is_export(path: &Path) -> bool {
     use std::io::{Read, Seek, SeekFrom};
-    const EDGE: u64 = 64 * 1024;
+    const HEAD: u64 = 64 * 1024;
+    const TAIL: u64 = 4 * 1024 * 1024;
     let Ok(mut file) = std::fs::File::open(path) else { return false };
     let Ok(len) = file.metadata().map(|m| m.len()) else { return false };
     let mut head = Vec::new();
-    if file.by_ref().take(EDGE).read_to_end(&mut head).is_err() {
+    if file.by_ref().take(HEAD).read_to_end(&mut head).is_err() {
         return false;
     }
     let mut tail = Vec::new();
-    if len > EDGE && (file.seek(SeekFrom::Start((len - EDGE).max(EDGE))).is_err() || file.take(EDGE).read_to_end(&mut tail).is_err()) {
+    if len > HEAD && (file.seek(SeekFrom::Start(len.saturating_sub(TAIL).max(HEAD))).is_err() || file.take(TAIL).read_to_end(&mut tail).is_err()) {
         return false;
     }
     [head, tail].iter().any(|part| part.windows(5).any(|w| w == b"Typst"))
@@ -1122,7 +1123,7 @@ mod tests {
         std::fs::write(&big, [b"%PDF-1.4 ".as_slice(), &vec![b'x'; 5 << 20], b"Typst".as_slice()].concat()).unwrap();
         assert!(super::is_export(&big));
         let middle = dir.join("d.pdf");
-        std::fs::write(&middle, [vec![b'x'; 1 << 20], b"Typst".to_vec(), vec![b'x'; 1 << 20]].concat()).unwrap();
+        std::fs::write(&middle, [vec![b'x'; 6 << 20], b"Typst".to_vec(), vec![b'x'; 6 << 20]].concat()).unwrap();
         assert!(!super::is_export(&middle));
     }
 

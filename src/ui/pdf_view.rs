@@ -1082,8 +1082,9 @@ impl PdfView {
             let thumbs: Vec<PageKey> = self.thumb_range.clone().map(|page| (page, PREVIEW)).filter(|k| self.is_stale(*k)).collect();
             stale.extend(thumbs);
         }
+        let failed = |key: PageKey| self.failed_pages.get(&key) == Some(&self.page_hash(key.0));
         let mut add = |key: PageKey, cache: &HashMap<PageKey, Cached>| {
-            if (!cache.contains_key(&key) || stale.contains(&key)) && !wanted.contains(&key) {
+            if (!cache.contains_key(&key) || stale.contains(&key)) && !wanted.contains(&key) && !failed(key) {
                 wanted.push(key);
             }
         };
@@ -2546,6 +2547,9 @@ impl PdfView {
         let image = shown.map(|c| c.image.clone());
         let mark = |r: PageRect, color: Hsla| div().absolute().left(px(r.x * scale)).top(px(r.y * scale)).w(px(r.w * scale)).h(px(r.h * scale)).bg(color);
         let mut el = div().absolute().left(px(left)).top(px(top)).w(px(w)).h(px(h)).bg(white()).shadow_md().children(image.map(|i| img(i).size_full()));
+        if shown.is_none() && self.failed_pages.keys().any(|k| k.0 == page) {
+            el = el.child(div().size_full().flex().items_center().justify_center().text_size(px(font::CAPTION)).text_color(gpui_kit::black().opacity(0.55)).child(tr("Diese Seite konnte nicht angezeigt werden.")));
+        }
         let (yellow, orange) = (t.palette("yellow").opacity(annot::MATCH), t.orange.opacity(annot::MATCH_CURRENT));
         for m in self.page_marks.get(&page).into_iter().flatten().filter(|m| !shown.is_some_and(|c| c.baked_sigs.contains(&m.sig))) {
             let color = Theme::document(u32::from_be_bytes([0, m.color[0], m.color[1], m.color[2]])).opacity(MARK_OPACITY);

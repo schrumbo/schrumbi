@@ -200,11 +200,11 @@ fn occurrences(f: &HashMap<String, (String, String)>) -> Vec<CalendarEvent> {
             break;
         }
         let Some(due) = d.checked_add_signed(Duration::days(span)).and_then(|dd| instant(dd.and_time(t.due.local.time()), t.due.zone)) else { continue };
-        out.push((start, due));
+        out.push((start, due, d));
     }
     out.into_iter()
-        .filter(|(start, due)| !skipped.contains(&start.timestamp()) && !skipped.contains(&due.timestamp()))
-        .map(|(_, due)| CalendarEvent { uid: format!("{}#{}", first.uid, due.timestamp()), due, ..first.clone() })
+        .filter(|(start, _, _)| !skipped.contains(&start.timestamp()))
+        .map(|(_, due, d)| CalendarEvent { uid: format!("{}#{}", first.uid, d.format("%Y%m%d")), due, ..first.clone() })
         .collect()
 }
 
