@@ -187,6 +187,7 @@ fn commands(cx: &App) -> Vec<Command> {
         for (action, icon_name, run) in configurable {
             add(&edit, action.label(), icon_name, keys(action), Run::NoteAction(run));
         }
+        add(&edit, tr("Formelblock einfügen"), "sigma", None, Run::NoteAction(Box::new(d::MathBlock)));
         let fixed: [(&str, &'static str, String, Box<dyn Action>); 9] = [
             ("Durchgestrichen", "strikethrough", chord("x", true, false), Box::new(d::Strike)),
             ("Markiert", "highlighter", chord("h", true, false), Box::new(d::Mark)),

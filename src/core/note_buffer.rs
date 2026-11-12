@@ -17,7 +17,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn words(&self) -> usize {
-        *self.words.get_or_init(|| self.text.split_whitespace().count())
+        *self.words.get_or_init(|| self.text.split_whitespace().filter(|w| w.chars().any(char::is_alphanumeric)).count())
     }
 
     pub fn fingerprint(&self) -> u64 {
@@ -343,6 +343,12 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markdown_marks_are_not_words() {
+        let snapshot = Snapshot { text: Arc::from("# U1\n\n- [ ] Text / mehr — 42 **fett**"), words: OnceLock::new(), fingerprint: OnceLock::new() };
+        assert_eq!(snapshot.words(), 5);
+    }
 
     fn note(name: &str, text: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("schrumbi-note-{}-{name}", std::process::id()));

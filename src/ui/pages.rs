@@ -14,7 +14,7 @@ use super::motion::Soft;
 use super::theme::{Theme, control, font, space, iconsize, radius, tab};
 use super::widgets::*;
 use crate::core::day;
-use crate::core::i18n::{tr, trf};
+use crate::core::i18n::tr;
 use crate::core::library::{DocDrop, Library, Route};
 use crate::core::text::fold;
 
@@ -732,10 +732,7 @@ impl Render for Pages {
                 }
                 page.into_any_element()
             }
-            Route::Notes => unavailable("book-open", tr("Keine Notiz offen"), match crate::core::shortcuts::ShortcutAction::NewFile.active_shortcut() {
-                    Some(s) => trf("Wähle links eine Notiz oder lege mit %@ eine neue an.", &[&s.display()]),
-                    None => tr("Wähle links eine Notiz oder lege eine neue an."),
-                }, &t).into_any_element(),
+            Route::Notes => super::notes_page::no_note_open(self.notes_page.as_ref().is_some_and(|p| p.read(cx).holds_nothing()), &t),
             Route::Today => div().into_any_element(),
         };
         fields.prune();

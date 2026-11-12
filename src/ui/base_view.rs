@@ -45,6 +45,7 @@ pub struct BaseView {
     cursor: (usize, usize),
     editing: Option<(usize, usize, Entity<InputState>)>,
     closed_groups: std::collections::BTreeSet<String>,
+    pinned: std::collections::BTreeSet<PathBuf>,
     focus: FocusHandle,
     list: UniformListScrollHandle,
     version: u64,
@@ -76,11 +77,15 @@ impl BaseView {
         let source = std::fs::read_to_string(&path).unwrap_or_default();
         let parsed = Base::parse(&source);
         let sort = bases::view_sort(&source, 0);
-        Self { path, source, parsed, view: 0, table: None, built: None, sort, filters_open: false, filter_rows: Vec::new(), filter_error: None, cursor: (0, 0), editing: None, closed_groups: Default::default(), focus: cx.focus_handle(), list: UniformListScrollHandle::new(), version: 0, seen_generation: index::current().generation, task: None, _subs: Vec::new() }
+        Self { path, source, parsed, view: 0, table: None, built: None, sort, filters_open: false, filter_rows: Vec::new(), filter_error: None, cursor: (0, 0), editing: None, closed_groups: Default::default(), pinned: Default::default(), focus: cx.focus_handle(), list: UniformListScrollHandle::new(), version: 0, seen_generation: index::current().generation, task: None, _subs: Vec::new() }
     }
 
     /// Gives the keyboard to the table.
     pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.pinned.is_empty() {
+            self.pinned.clear();
+            self.version += 1;
+        }
         window.focus(&self.focus, cx);
     }
 
@@ -96,6 +101,7 @@ impl BaseView {
             return;
         }
         self.parsed = Base::parse(&self.source);
+        self.pinned.clear();
         self.version += 1;
         let path = self.path.clone();
         act(cx, |l| l.record_edit("base", label, Change::Bytes { path, bytes: before.into_bytes() }));
@@ -129,6 +135,7 @@ impl BaseView {
             return;
         };
         let view_index = self.view;
+        let pinned = self.pinned.clone();
         let this_path = self.path.clone();
         let sort = self.sort.clone();
         let task = cx.background_spawn(async move {
@@ -138,6 +145,16 @@ impl BaseView {
             match base.rows(&view, &vault, Some(&this_path), now) {
                 Err(e) => Rendered { columns, rows: Arc::default(), groups: None, kind: view.kind.clone(), summaries: Vec::new(), error: Some(e) },
                 Ok(mut rows) => {
+                    if !pinned.is_empty() {
+                        let shown: std::collections::BTreeSet<PathBuf> = rows.iter().map(|r| r.path.clone()).collect();
+                        let mut wide = view.clone();
+                        wide.filter = None;
+                        wide.limit = None;
+                        let open = Base { filter: None, ..base.clone() };
+                        if let Ok(all) = open.rows(&wide, &vault, Some(&this_path), now) {
+                            rows = all.into_iter().filter(|r| shown.contains(&r.path) || pinned.contains(&r.path)).collect();
+                        }
+                    }
                     if let Some((column, ascending)) = &sort {
                         let at = |r: &ResultRow| r.cells.iter().find(|(c, _)| c == column).map(|(_, v)| v.clone()).unwrap_or(Value::Null);
                         rows.sort_by(|a, b| {
@@ -249,13 +266,14 @@ impl BaseView {
         input.update(cx, |s, cx| {
             let end = s.value().len();
             s.focus(window, cx);
-            s.set_selected_range(0..end, cx);
+            s.set_selected_range(end..end, cx);
         });
         self._subs.retain(|_| false);
-        self._subs.push(cx.subscribe(&input, |this, input, e: &InputEvent, cx| match e {
+        self._subs.push(cx.subscribe_in(&input, window, |this, input, e: &InputEvent, window, cx| match e {
             InputEvent::PressEnter { .. } => {
                 let value = input.read(cx).value().to_string();
                 this.commit_edit(value, cx);
+                window.focus(&this.focus, cx);
             }
             InputEvent::Blur => {
                 this.editing = None;
@@ -271,10 +289,23 @@ impl BaseView {
         let Some((row, col, _)) = self.editing.take() else { return };
         let Some(table) = &self.table else { return };
         let (Some(row), Some((_, column))) = (table.rows.get(row), table.columns.get(col)) else { return };
+        let unchanged = row.cells.get(col).is_some_and(|(_, v)| v.display() == value);
         let (path, column) = (row.path.clone(), column.clone());
-        act(cx, |l| {
-            l.edit_note(&path, "cell", tr("Eigenschaft geändert"), |text| bases::write_cell(text, &column, &value).unwrap_or_else(|| text.to_string()));
-        });
+        if !unchanged {
+            let kind = format!("cell:{}", path.display());
+            let changed = act(cx, |l| {
+                let changed = l.edit_note(&path, &kind, tr("Eigenschaft geändert"), |text| bases::write_cell(text, &column, &value).unwrap_or_else(|| text.to_string()));
+                if changed {
+                    let undo = l.undo_latest();
+                    l.notify(tr("Eigenschaft geändert"), "square-pen", None, Some(undo));
+                }
+                changed
+            });
+            if changed {
+                self.pinned.insert(path);
+                self.version += 1;
+            }
+        }
         state::reindex(cx);
         window_focus_after(self, cx);
         cx.notify();
@@ -429,6 +460,7 @@ impl Render for BaseView {
                             v.view = i;
                             v.sort = bases::view_sort(&v.source, i);
                             v.cursor = (0, 0);
+                            v.pinned.clear();
                             v.table = None;
                             cx.notify();
                         });
@@ -522,6 +554,15 @@ impl Render for BaseView {
             .size_full()
             .flex()
             .flex_col()
+            .key_context("BaseView")
+            .on_action(cx.listener(|_, _: &super::app::Undo, _, cx| {
+                act(cx, |l| l.undo());
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|_, _: &super::app::Redo, _, cx| {
+                act(cx, |l| l.redo());
+                cx.stop_propagation();
+            }))
             .on_key_down(cx.listener(Self::on_key))
             .child(tabs)
             .child(bar)

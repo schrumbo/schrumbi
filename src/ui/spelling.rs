@@ -1,5 +1,8 @@
 use std::ops::Range;
 
+/// Whether this system has a spell checker Schrumbi can ask.
+pub const SUPPORTED: bool = cfg!(target_os = "macos");
+
 /// Words the system spell checker does not know, as byte ranges. Code, links, tags and addresses are left alone.
 #[cfg(target_os = "macos")]
 pub fn misspelled(text: &str) -> Vec<Range<usize>> {

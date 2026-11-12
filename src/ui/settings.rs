@@ -2118,11 +2118,11 @@ impl Settings {
         let editor = section(
             Some(tr("Editor")),
             Some(tr("Doppelklick auf .md-Dateien in Schrumbi öffnet immer den eigenen Editor.")),
-            vec![editor_row, markdown_row, row(tr("Rechtschreibung prüfen"), Switch::new("n-spell").checked(p.spell_check).on_click(|v, _, cx| {
+            vec![editor_row, markdown_row, row(tr("Rechtschreibung prüfen"), if super::spelling::SUPPORTED { Switch::new("n-spell").checked(p.spell_check).on_click(|v, _, cx| {
                 let on = *v;
                 prefs::update(|p| p.spell_check = on);
                 cx.refresh_windows();
-            }), t), row(
+            }).into_any_element() } else { div().text_size(px(font::CAPTION)).text_color(t.secondary).child(tr("Gibt es bisher nur auf dem Mac")).into_any_element() }, t), row(
                 tr("Schriftgröße"),
                 stepper(
                     "n-size",

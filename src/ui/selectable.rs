@@ -133,6 +133,13 @@ impl SelectableStyled {
             let (element, size) = match slot.kind {
                 InlineKind::Math(formula, scale) => match super::embeds::inline_math(&formula, scale, cx) {
                     Some((image, w, h)) => (Some(img(image).w(px(w)).h(px(h)).into_any_element()), size(px(w), px(h))),
+                    None if !super::embeds::inline_math_pending(&formula, cx) => {
+                        let shown: SharedString = format!("${formula}$").into();
+                        let color = super::theme::Theme::get(cx).orange_text;
+                        let run = TextRun { len: shown.len(), font: style.font(), color, background_color: None, underline: None, strikethrough: None };
+                        let w = system.shape_line(shown.clone(), font_size, &[run], None).width.ceil();
+                        (Some(div().text_color(color).whitespace_nowrap().child(shown).into_any_element()), size(w, line))
+                    }
                     None => (None, size(px(formula.len() as f32 * 7.), line)),
                 },
                 InlineKind::Sized(element, w, h) => (Some(element), size(px(w), px(h))),

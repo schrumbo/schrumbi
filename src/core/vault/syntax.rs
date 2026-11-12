@@ -29,7 +29,7 @@ fn linked_embeds(text: &str) -> std::borrow::Cow<'_, str> {
 /// Removes `%%comments%%` and rewrites `^[inline footnotes]` so a Markdown parser understands the note.
 /// Line numbers stay as they were, ticking a task relies on them. An unclosed comment hides the rest of the note.
 pub fn prepare(text: &str) -> String {
-    let linked = linked_embeds(text);
+    let linked = linked_embeds(text.strip_prefix('\u{feff}').unwrap_or(text));
     let text: &str = &linked;
     let code = code_ranges(text);
     let is_code = |at: usize| code.iter().any(|r| r.contains(&at));

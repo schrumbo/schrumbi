@@ -292,7 +292,10 @@ pub fn live_is_on() -> bool {
 
 /// Switches between the Live view and the source editor for notes; the menu follows.
 pub fn toggle_live(cx: &mut App) {
-    prefs::update(|p| p.note_editor = if p.note_editor == prefs::NoteEditor::Live { prefs::NoteEditor::Code } else { prefs::NoteEditor::Live });
+    prefs::update(|p| {
+        p.note_editor = if p.note_editor == prefs::NoteEditor::Live { prefs::NoteEditor::Code } else { prefs::NoteEditor::Live };
+        p.note_editor_chosen = true;
+    });
     rebuild_menus(cx);
     cx.refresh_windows();
 }

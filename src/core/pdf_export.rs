@@ -551,11 +551,11 @@ impl<'a> Converter<'a> {
                     self.out().push_str(&s);
                 }
                 Event::InlineMath(m) => {
-                    let s = vault::render::math_markup(m, false).unwrap_or_else(|_| format!("#raw({})", str_arg(m)));
+                    let s = vault::render::math_markup(m, false).unwrap_or_else(|_| format!("#text(fill: rgb(\"#b45309\"), raw({}))", str_arg(m)));
                     self.out().push_str(&s);
                 }
                 Event::DisplayMath(m) => {
-                    let s = vault::render::math_markup(m, true).unwrap_or_else(|_| format!("#raw({})", str_arg(m)));
+                    let s = vault::render::math_markup(m, true).unwrap_or_else(|_| format!("#text(fill: rgb(\"#b45309\"), raw({}))", str_arg(m)));
                     self.out().push_str(&s);
                 }
                 Event::SoftBreak if std::mem::take(&mut self.after_head) => {}
@@ -1095,6 +1095,14 @@ mod tests {
         assert!(markup.contains('$'));
         assert!(markup.contains("#fitimg"), "{markup}");
         assert!(render("Sicht %%geheim%%bar\n\n$\\frac{a}{b}$\n\n> [!tip] Tipp\n> x\n\n```mermaid\ngraph TD; A-->B\n```\n", Path::new("/tmp"), None, &opts()).is_ok());
+    }
+
+    #[test]
+    fn a_formula_with_an_unknown_command_shows_its_source_in_warning_colour() {
+        let (markup, _) = super::source("Ein $\\foo{x}$ und\n\n$$\\fraq{1}{2}$$\n\nund $\\frac{a}{b}$\n", Path::new("/tmp"), None, &opts());
+        assert_eq!(markup.matches("#text(fill: rgb(\"#b45309\"), raw(").count(), 2, "{markup}");
+        assert!(markup.contains("\\\\foo{x}") && markup.contains("\\\\fraq{1}{2}"), "{markup}");
+        assert!(render("Ein $\\foo{x}$\n\n$$\\fraq{1}{2}$$\n", Path::new("/tmp"), None, &opts()).is_ok());
     }
 
     const SAMPLE: &str = "# Titel \"mit\" #Zeichen\n\nText mit **fett**, *kursiv*, `code`, ==mark==, [Link](https://a.b) und $5 \\ Backslash.[^1]\n\n## Aufgaben\n\n- [x] fertig\n- [ ] offen\n  - verschachtelt\n\n1. eins\n2. zwei\n\n| A | B |\n|:-:|--:|\n| 1 | 2 |\n| 3 | 4 |\n\n> Zitat\n\n```rust\nfn main() {}\n```\n\n---\n\n<!-- Kommentar --><br>\n\n![fehlt](nicht-da.png)\n\n[^1]: Fußnote.\n";

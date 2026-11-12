@@ -993,12 +993,19 @@ fn a_file_filed_into_a_fallback_folder_still_counts_and_undo_takes_both_back() {
 }
 
 #[test]
-fn older_settings_read_notes_in_full_width() {
-    let old: super::prefs::Prefs = serde_json::from_value(json!({ "spellCheck": false, "editorFontSize": 15.0 })).unwrap();
-    assert!(old.reader_full_width);
-    assert!(super::prefs::Prefs::default().reader_full_width);
-    let off: super::prefs::Prefs = serde_json::from_value(json!({ "readerFullWidth": false })).unwrap();
-    assert!(!off.reader_full_width);
+fn notes_open_live_in_the_reading_column_until_the_user_chooses() {
+    use super::prefs::{settle_unchosen, NoteEditor, Prefs};
+    let fresh = Prefs::default();
+    assert_eq!(fresh.note_editor, NoteEditor::Live);
+    assert!(!fresh.reader_full_width);
+    let mut old: Prefs = serde_json::from_value(json!({ "noteEditorMode": "code", "readerFullWidth": true })).unwrap();
+    settle_unchosen(&mut old);
+    assert_eq!(old.note_editor, NoteEditor::Live);
+    assert!(!old.reader_full_width);
+    let mut chosen: Prefs = serde_json::from_value(json!({ "noteEditorMode": "code", "noteEditorChosen": true, "readerFullWidth": true, "readerWidthChosen": true })).unwrap();
+    settle_unchosen(&mut chosen);
+    assert_eq!(chosen.note_editor, NoteEditor::Code);
+    assert!(chosen.reader_full_width);
 }
 
 #[test]
@@ -1375,6 +1382,8 @@ fn undo_waits_for_a_running_trash_and_then_takes_it_back() {
     assert!(!made.exists() && !file.exists());
     lib.undo();
     assert!(made.exists() && file.exists(), "the trash itself is taken back");
+    assert!(lib.open_documents.contains(&dunce::canonicalize(&made).unwrap()), "its tab comes back");
+    assert_eq!(lib.open_documents.len(), 1, "a file that had no tab gets none");
     lib.undo();
     assert!(!made.exists(), "and only then the step before it");
 }

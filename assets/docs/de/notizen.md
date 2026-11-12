@@ -7,7 +7,7 @@ Notizen sind Markdown-Dateien in deinem Ordner. Obsidian liest sie genauso.
 1. {key:newFile} oder {ui:Neue Notiz}. Schrumbi legt `Unbenannt.md` an.
 2. Namen tippen, {key:return}.
 
-{key:escape} lässt den Namen `Unbenannt.md`. Auf einer Modulseite öffnet {key:newFile} ein Fenster, in dem du Art und Ort wählst.
+Ist in Obsidian ein fester Ordner für neue Notizen eingestellt, landet sie dort. {key:escape} lässt den Namen `Unbenannt.md`. Auf einer Modulseite öffnet {key:newFile} ein Fenster, in dem du Art und Ort wählst.
 
 ## Dateien
 
@@ -151,9 +151,11 @@ Links in {ui:Seiten}, der Seitenliste. {key:pageList} blendet sie ein und aus. E
 | {ui:Lesen} / {ui:Bearbeiten} | {key:togglePreview} |
 | {ui:Geteilte Ansicht}, nur im Quelltext | {key:splitPreview} |
 
-Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} oder {ui:Quelltext: Text mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} im Menü {ui:Darstellung} oder die {key:CommandPalette} wechselt sofort.
+Notizen öffnen in der Live-Ansicht, in einer Spalte gut lesbarer Breite. Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} oder {ui:Quelltext: Text mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} im Menü {ui:Darstellung} oder die {key:CommandPalette} wechselt sofort. {ui:Text in voller Breite} im Menü {ui:Mehr} der Notiz nutzt die ganze Fläche.
 
-Beim Wechsel bleibt die Stelle im Text, und {key:Undo} nimmt auch Änderungen vor dem Wechsel zurück. Die Knöpfe bleiben an ihrem Platz; die {ui:Geteilte Ansicht} ist im Live-Editor ausgegraut.
+Beim Wechsel bleibt der Cursor an seiner Stelle im Text, und {key:Undo} nimmt auch Änderungen vor dem Wechsel zurück. Die Knöpfe bleiben an ihrem Platz; die {ui:Geteilte Ansicht} ist im Live-Editor ausgegraut.
+
+`/` am Zeilenanfang öffnet eine Liste zum Einfügen: Überschriften, Listen, Aufgaben, Tabelle, Formel, {ui:Hinweisbox}, {ui:Notiz einbetten} und mehr. Tippen filtert, rechts steht das Markdown-Zeichen dazu.
 
 ## In der Notiz suchen
 
@@ -172,7 +174,7 @@ Alle Treffer sind markiert, der aktuelle kräftiger. Groß- und Kleinschreibung 
 
 ## Rechtschreibung
 
-Unbekannte Wörter sind unterstrichen. Zeige auf eins, dann {ui:Zum Wörterbuch hinzufügen}, auch im Rechtsklick-Menü. Ohne Maus: {ui:Zum Wörterbuch hinzufügen} in der {key:CommandPalette} nimmt das Wort an der Schreibmarke auf.
+Nur auf dem Mac. Unbekannte Wörter sind unterstrichen. Zeige auf eins, dann {ui:Zum Wörterbuch hinzufügen}, auch im Rechtsklick-Menü. Ohne Maus: {ui:Zum Wörterbuch hinzufügen} in der {key:CommandPalette} nimmt das Wort an der Schreibmarke auf.
 
 Die Wörter stehen in den Einstellungen unter {ui:Eigenes Wörterbuch}; das Kreuz nimmt eins wieder heraus. Alle offenen Notizen übernehmen das sofort.
 

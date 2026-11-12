@@ -123,16 +123,24 @@ fn line_ending(text: &str) -> &'static str {
 }
 
 fn quote(value: &str) -> String {
-    let needs = value.is_empty() || value.starts_with(['[', '{', '#', '&', '*', '!', '|', '>', '\'', '"', '%', '@', '`', '-', ' ']) || value.ends_with(' ') || value.contains(": ") || value.contains(" #") || matches!(value, "true" | "false" | "null" | "~") || value.parse::<f64>().is_ok();
+    quote_in(value, false)
+}
+
+fn quote_in(value: &str, flow: bool) -> String {
+    let needs = (flow && value.contains([',', '[', ']', '{', '}'])) || value.is_empty() || value.starts_with(['[', '{', '#', '&', '*', '!', '|', '>', '\'', '"', '%', '@', '`', '-', ' ']) || value.ends_with(' ') || value.contains(": ") || value.contains(" #") || matches!(value, "true" | "false" | "null" | "~") || value.parse::<f64>().is_ok();
     if needs { format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")) } else { value.to_string() }
 }
 
 /// How a property is written for its kind.
-fn render(name: &str, kind: PropertyKind, values: &[String], nl: &str) -> String {
+fn render(name: &str, kind: PropertyKind, values: &[String], nl: &str, flow: bool) -> String {
     match kind {
         PropertyKind::List | PropertyKind::Tags => {
             if values.is_empty() {
                 return format!("{name}: []{nl}");
+            }
+            if flow {
+                let items: Vec<String> = values.iter().map(|v| quote_in(v, true)).collect();
+                return format!("{name}: [{}]{nl}", items.join(", "));
             }
             let mut out = format!("{name}:{nl}");
             for v in values {
@@ -163,16 +171,23 @@ fn property_lines(text: &str, block: &Range<usize>, name: &str) -> Option<Range<
     found
 }
 
-/// Sets a property and touches only its lines. Creates the block if the note has none.
+fn is_flow_list(text: &str, lines: &Range<usize>, name: &str) -> bool {
+    text[lines.clone()].lines().next().and_then(|l| l.strip_prefix(name)).and_then(|l| l.strip_prefix(':')).is_some_and(|l| l.trim_start().starts_with('['))
+}
+
+/// Sets a property and touches only its lines. Creates the block if the note has none. A list written as `[a, b]` stays in that style.
 pub fn set(text: &str, name: &str, kind: PropertyKind, values: &[String]) -> String {
     let nl = line_ending(text);
-    let rendered = render(name, kind, values, nl);
     match range(text) {
         Some(block) => match property_lines(text, &block, name) {
-            Some(lines) => format!("{}{rendered}{}", &text[..lines.start], &text[lines.end..]),
-            None => format!("{}{rendered}{}", &text[..block.end], &text[block.end..]),
+            Some(lines) => {
+                let rendered = render(name, kind, values, nl, is_flow_list(text, &lines, name));
+                format!("{}{rendered}{}", &text[..lines.start], &text[lines.end..])
+            }
+            None => format!("{}{}{}", &text[..block.end], render(name, kind, values, nl, false), &text[block.end..]),
         },
         None => {
+            let rendered = render(name, kind, values, nl, false);
             let start = text.strip_prefix('\u{feff}').map_or(0, |_| '\u{feff}'.len_utf8());
             format!("{}---{nl}{rendered}---{nl}{}", &text[..start], &text[start..])
         }
@@ -275,5 +290,21 @@ mod tests {
             let read = properties(&note).unwrap();
             assert_eq!(read[0].values, [v], "{note}");
         }
+    }
+
+    #[test]
+    fn flow_lists_stay_flow_and_block_lists_stay_block() {
+        let flow = "---\ntags: [uni/analysis, math]\nstatus: offen\n---\nText\n";
+        let items: Vec<String> = ["uni/analysis", "math", "neu"].iter().map(|s| s.to_string()).collect();
+        let changed = set(flow, "tags", PropertyKind::Tags, &items);
+        assert_eq!(changed, "---\ntags: [uni/analysis, math, neu]\nstatus: offen\n---\nText\n");
+        assert_eq!(tags(&changed), ["uni/analysis", "math", "neu"]);
+        assert_eq!(set(flow, "tags", PropertyKind::Tags, &[]), "---\ntags: []\nstatus: offen\n---\nText\n");
+        let tricky = set(flow, "tags", PropertyKind::List, &["a, b".to_string(), "c]".to_string()]);
+        assert_eq!(properties(&tricky).unwrap()[0].values, ["a, b", "c]"]);
+        let block = "---\ntags:\n  - a\n---\n";
+        assert_eq!(set(block, "tags", PropertyKind::Tags, &["a".to_string(), "b".to_string()]), "---\ntags:\n  - a\n  - b\n---\n");
+        let crlf = "---\r\ntags: [a]\r\n---\r\n";
+        assert_eq!(set(crlf, "tags", PropertyKind::Tags, &["a".to_string(), "b".to_string()]), "---\r\ntags: [a, b]\r\n---\r\n");
     }
 }

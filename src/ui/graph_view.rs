@@ -6,16 +6,19 @@ use std::time::Duration;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{Disableable, Sizable};
+use gpui_kit::component::{Disableable, Icon, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
-use super::theme::{Theme, font, space};
+use super::theme::{Theme, font, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
+use crate::core::shortcuts::ShortcutAction;
 use crate::core::vault::graph::{Graph, Layout, NodeKind, Options};
 use crate::core::vault::index;
+
+const HIT_MIN: f32 = 8.;
 
 /// Positions stay for the whole session, so returning to the graph looks the same.
 #[derive(Default)]
@@ -210,7 +213,7 @@ impl GraphView {
         for (i, p) in self.positions.iter().enumerate() {
             let s = self.to_screen(*p);
             let d = (s.0 - x).powi(2) + (s.1 - y).powi(2);
-            let r = (self.radius(i as u32) * self.zoom.max(0.5)).max(6.) + 2.;
+            let r = (self.radius(i as u32) * self.zoom.clamp(0.25, 1.5) + 2.).max(HIT_MIN);
             if d < r * r && d < distance {
                 distance = d;
                 best = Some(i as u32);
@@ -267,7 +270,9 @@ impl GraphView {
     /// A filter in the menu.
     fn filter_item(menu: gpui_kit::component::menu::PopupMenu, me: &Entity<Self>, label: String, on: bool, set: fn(&mut Options, bool)) -> gpui_kit::component::menu::PopupMenu {
         let me = me.clone();
-        menu.item(PopupMenuItem::new(label).checked(on).on_click(move |_, _, cx| {
+        let item = PopupMenuItem::new(label).checked(on);
+        let item = if on { item } else { item.icon(Icon::empty()) };
+        menu.item(item.on_click(move |_, _, cx| {
             me.update(cx, |g, cx| {
                 set(&mut g.options, !on);
                 cx.notify();
@@ -333,7 +338,9 @@ impl Render for GraphView {
             }))
             .children((missing_total > 0).then(|| {
                 let names = missing_names.clone();
-                Button::new("graph-missing-list").ghost().small().label(trf("Fehlt noch: %@", &[&missing_total.to_string()])).dropdown_menu(move |mut menu, _, _| {
+                let (me, shown) = (cx.entity(), self.options.missing);
+                Button::new("graph-missing-list").ghost().small().label(trf("Nicht aufgelöst: %@", &[&missing_total.to_string()])).tooltip(tr("Links auf Notizen, die es nicht gibt")).dropdown_menu(move |menu, _, _| {
+                    let mut menu = Self::filter_item(menu, &me, tr("Im Graph zeigen"), shown, |o, v| o.missing = v).separator();
                     for (name, count) in &names {
                         let target = name.clone();
                         menu = menu.item(PopupMenuItem::new(format!("{name} · {count}")).on_click(move |_, _, cx| act(cx, |l| l.create_link_target(&target, None))));
@@ -341,9 +348,9 @@ impl Render for GraphView {
                     menu
                 })
             }))
-            .child(Button::new("graph-zoom-out").ghost().small().icon(menu_icon("minus")).tooltip(tr("Verkleinern")).on_click(cx.listener(|v, _, _, cx| v.zoom_by(0.75, cx))))
-            .child(Button::new("graph-zoom-in").ghost().small().icon(menu_icon("plus")).tooltip(tr("Vergrößern")).on_click(cx.listener(|v, _, _, cx| v.zoom_by(1.33, cx))))
-            .child(Button::new("graph-fit").ghost().small().icon(menu_icon("maximize")).tooltip(tr("Einpassen")).on_click(cx.listener(|v, _, _, cx| {
+            .child(Button::new("graph-zoom-out").ghost().small().icon(menu_icon("minus")).accessibility_label(tr("Verkleinern")).tooltip(tr("Verkleinern")).on_click(cx.listener(|v, _, _, cx| v.zoom_by(0.75, cx))))
+            .child(Button::new("graph-zoom-in").ghost().small().icon(menu_icon("plus")).accessibility_label(tr("Vergrößern")).tooltip(tr("Vergrößern")).on_click(cx.listener(|v, _, _, cx| v.zoom_by(1.33, cx))))
+            .child(Button::new("graph-fit").ghost().small().icon(menu_icon("maximize")).accessibility_label(tr("Einpassen")).tooltip(format!("{}{}", tr("Einpassen"), ShortcutAction::ZoomReset.default_shortcut().map_or_else(String::new, |s| format!(" ({})", s.display())))).on_click(cx.listener(|v, _, _, cx| {
                 v.hand_moved = false;
                 v.fit();
                 cx.notify();
@@ -370,7 +377,6 @@ impl Render for GraphView {
         let neighbors: std::collections::HashSet<u32> = highlight.map_or_else(Default::default, |h| graph.neighbors(h).into_iter().collect());
         let tints = self.tints.clone();
         let order = self.order.clone();
-        let cluster_tints = self.cluster_tints.clone();
         let colors = (t.secondary, t.accent, t.ink, t.separator, t.content);
         let view = canvas(
             move |b, _, _| measured.set(b),
@@ -436,45 +442,34 @@ impl Render for GraphView {
                         let border = if hollow { secondary } else { transparent_black() };
                         window.paint_quad(PaintQuad { bounds: area, corner_radii: Corners::all(px(r)), background: color.into(), border_widths: Edges::all(px(if hollow { 1. } else { 0. })), border_color: border, border_style: BorderStyle::Solid });
                     }
-                    let room_key = |x: Pixels, y: Pixels, dx: i32, dy: i32| ((f32::from(x) / 110.) as i32 + dx, (f32::from(y) / 18.) as i32 + dy);
-                    let mut taken = std::collections::HashSet::new();
-                    let mut label = |window: &mut Window, cx: &mut App, text: String, at: Point<Pixels>, color: Hsla, bold: bool, force: bool| {
-                        let free = (-1..=1).all(|dx| !taken.contains(&room_key(at.x, at.y, dx, 0)));
-                        if !force && !free {
+                    let mut taken: Vec<(f32, f32, f32, f32)> = Vec::new();
+                    let mut label = |window: &mut Window, cx: &mut App, text: String, at: Point<Pixels>, color: Hsla, bold: bool, force: bool, pill: bool| {
+                        let text_size = if bold { font::CALLOUT } else { font::CAPTION };
+                        let (x, y) = (f32::from(at.x), f32::from(at.y));
+                        let (pad_x, pad_y) = if pill { (space::S, space::XXS) } else { (space::XS, 0.) };
+                        let area = |w: f32| (x - w / 2. - pad_x, y - pad_y, x + w / 2. + pad_x, y + 16. + pad_y);
+                        let clear = |r: (f32, f32, f32, f32), taken: &[(f32, f32, f32, f32)]| !taken.iter().any(|t| r.0 < t.2 && r.2 > t.0 && r.1 < t.3 && r.3 > t.1);
+                        if !force && !clear(area(text.chars().count() as f32 * text_size * 0.4), &taken) {
                             return false;
                         }
-                        taken.insert(room_key(at.x, at.y, 0, 0));
                         let mut font = window.text_style().font();
                         if bold {
                             font.weight = FontWeight::SEMIBOLD;
                         }
                         let text: SharedString = text.into();
                         let run = TextRun { len: text.len(), font, color, background_color: None, underline: None, strikethrough: None };
-                        let shaped = window.text_system().shape_line(text, px(if bold { font::CALLOUT } else { font::CAPTION }), &[run], None);
+                        let shaped = window.text_system().shape_line(text, px(text_size), &[run], None);
+                        let rect = area(f32::from(shaped.width));
+                        if !force && !clear(rect, &taken) {
+                            return false;
+                        }
+                        taken.push(rect);
+                        if pill {
+                            window.paint_quad(fill(Bounds::new(point(px(rect.0), px(rect.1)), size(px(rect.2 - rect.0), px(rect.3 - rect.1))), bg).corner_radii(px(radius::SMALL)));
+                        }
                         let _ = shaped.paint(point(at.x - shaped.width / 2., at.y), px(16.), TextAlign::Left, None, window, cx);
                         true
                     };
-                    if let Some(h) = highlight {
-                        let near_first = order.iter().copied().filter(|i| neighbors.contains(i)).take(40);
-                        for i in std::iter::once(h).chain(near_first) {
-                            let (Some(p), Some(node)) = (positions.get(i as usize), graph.nodes.get(i as usize)) else { continue };
-                            let c = screen(*p);
-                            label(window, cx, node.name.clone(), point(c.x, c.y + px(10.)), ink, i == h, i == h);
-                        }
-                    } else if zoom >= 0.3 {
-                        let budget = if zoom >= 0.8 { 140 } else { 40 };
-                        let mut shown = 0;
-                        for &i in order.iter() {
-                            if shown >= budget {
-                                break;
-                            }
-                            let (Some(p), Some(node)) = (positions.get(i as usize), graph.nodes.get(i as usize)) else { continue };
-                            let c = screen(*p);
-                            if bounds.contains(&c) && label(window, cx, node.name.clone(), point(c.x, c.y + px(8.)), secondary, false, false) {
-                                shown += 1;
-                            }
-                        }
-                    }
                     if zoom < 0.8 && highlight.is_none() {
                         let mut sums = vec![(0_f32, 0_f32, 0_u32); graph.clusters.len()];
                         for (i, node) in graph.nodes.iter().enumerate() {
@@ -485,14 +480,36 @@ impl Render for GraphView {
                                 s.2 += 1;
                             }
                         }
-                        for (c, s) in sums.iter().enumerate() {
-                            if s.2 >= 2 && !graph.clusters[c].is_empty() {
-                                let center = screen((s.0 / s.2 as f32, s.1 / s.2 as f32));
-                                let text = format!("{} · {}", graph.clusters[c], s.2);
-                                let width = px(text.chars().count() as f32 * 7.2 + 16.);
-                                window.paint_quad(fill(Bounds::new(point(center.x - width / 2., center.y - px(3.)), size(width, px(22.))), bg.opacity(0.8)).corner_radii(px(6.)));
-                                let _ = &cluster_tints;
-                                label(window, cx, text, center, ink, true, true);
+                        let mut titled: Vec<usize> = (0..sums.len()).filter(|&c| sums[c].2 >= 2 && !graph.clusters[c].is_empty()).collect();
+                        titled.sort_by_key(|&c| std::cmp::Reverse(sums[c].2));
+                        for c in titled {
+                            let s = &sums[c];
+                            let center = screen((s.0 / s.2 as f32, s.1 / s.2 as f32));
+                            label(window, cx, format!("{} · {}", graph.clusters[c], s.2), center, ink, true, false, true);
+                        }
+                    }
+                    if let Some(h) = highlight {
+                        let near_first = order.iter().copied().filter(|i| neighbors.contains(i)).take(40);
+                        for i in std::iter::once(h).chain(near_first) {
+                            let (Some(p), Some(node)) = (positions.get(i as usize), graph.nodes.get(i as usize)) else { continue };
+                            let c = screen(*p);
+                            label(window, cx, node.name.clone(), point(c.x, c.y + px(space::S + space::XXS)), ink, i == h, i == h, false);
+                        }
+                    } else if zoom >= 0.3 {
+                        let budget = if zoom >= 0.8 { 140 } else { 40 };
+                        let (mut shown, mut tried) = (0, 0);
+                        for &i in order.iter() {
+                            if shown >= budget || tried >= 600 {
+                                break;
+                            }
+                            let (Some(p), Some(node)) = (positions.get(i as usize), graph.nodes.get(i as usize)) else { continue };
+                            let c = screen(*p);
+                            if !bounds.contains(&c) {
+                                continue;
+                            }
+                            tried += 1;
+                            if label(window, cx, node.name.clone(), point(c.x, c.y + px(space::S)), secondary, false, false, false) {
+                                shown += 1;
                             }
                         }
                     }
@@ -501,6 +518,7 @@ impl Render for GraphView {
         )
         .size_full();
         let empty = count == 0;
+        let unlinked_hidden = !self.options.orphans && self.focus_note.is_none() && count < 3 && vault.notes.keys().filter(|p| crate::core::markdown::is_markdown(p)).nth(count).is_some();
         let surface = div()
             .id("graph-surface")
             .track_focus(&self.focus)
@@ -511,6 +529,7 @@ impl Render for GraphView {
             .cursor(if self.hover.is_some() { CursorStyle::PointingHand } else { CursorStyle::Arrow })
             .child(view)
             .when(empty, |d| d.child(div().absolute().inset_0().flex().items_center().justify_center().child(unavailable("waypoints", tr("Noch keine Verknüpfungen"), tr("Sobald Notizen sich verlinken, erscheinen sie hier."), &t))))
+            .when(unlinked_hidden, |d| d.child(div().absolute().left_0().right_0().bottom(px(space::L)).flex().justify_center().child(caption(tr("Notizen ohne Verknüpfung: Anzeigen → Ohne Links"), &t))))
             .on_scroll(cx.listener(|v, e: &ScrollEvent, window, cx| {
                 let delta = e.delta.pixel_delta(px(20.));
                 v.hand_moved = true;
@@ -608,7 +627,7 @@ impl Render for GraphView {
                             v.open(s, cx);
                         }
                     }
-                    "0" if e.keystroke.modifiers.platform => {
+                    "0" if e.keystroke.modifiers.platform || e.keystroke.modifiers.control => {
                         v.hand_moved = false;
                         v.fit();
                     }
