@@ -33,6 +33,8 @@ pub struct ImageView {
     vector: Option<(f32, Arc<Image>)>,
     drawing: Option<(f32, Task<()>)>,
     size: String,
+    /// The decoded picture, let go of when the view closes.
+    images: Entity<RetainAllImageCache>,
 }
 
 /// The factor a wheel or trackpad movement zooms by.
@@ -73,7 +75,7 @@ fn is_vector(path: &Path) -> bool {
 
 impl ImageView {
     pub fn new(path: PathBuf, cx: &mut Context<Self>) -> Self {
-        Self { size: super::upload::size_label(&path), path, zoom: None, origin: (0., 0.), view: Bounds::default(), grab: None, focus: cx.focus_handle(), vector: None, drawing: None }
+        Self { size: super::upload::size_label(&path), path, zoom: None, origin: (0., 0.), view: Bounds::default(), grab: None, focus: cx.focus_handle(), vector: None, drawing: None, images: RetainAllImageCache::new(cx) }
     }
 
     /// Takes the keyboard, so ⌘+, ⌘- and ⌘0 work right away.
@@ -122,7 +124,7 @@ impl ImageView {
     /// The image's own size in points, once loaded.
     fn natural(&self, window: &mut Window, cx: &mut App) -> Result<Option<(f32, f32)>, ()> {
         let resource = Resource::Path(Arc::from(self.path.as_path()));
-        match window.use_asset::<ImgResourceLoader>(&resource, cx) {
+        match self.images.update(cx, |images, cx| images.load(&resource, window, cx)) {
             None => Ok(None),
             Some(Err(_)) => Err(()),
             Some(Ok(image)) => {
@@ -199,7 +201,7 @@ impl Render for ImageView {
         let movable = w > vw || h > vh;
         let picture: AnyElement = match &self.vector {
             Some((_, drawn)) => img(drawn.clone()).w_full().h_full().into_any_element(),
-            None => img(self.path.clone()).w_full().h_full().into_any_element(),
+            None => image_cache(self.images.clone()).size_full().child(img(self.path.clone()).w_full().h_full()).into_any_element(),
         };
         let (m1, m2, m3, m4, m5) = (me.clone(), me.clone(), me.clone(), me.clone(), me.clone());
         let fitted = self.zoom.is_none();

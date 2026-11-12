@@ -37,6 +37,8 @@ pub struct FilePreview {
     pdf: Option<Entity<super::pdf_view::PdfView>>,
     sheet: Option<Entity<super::sheet_view::SheetView>>,
     raw: bool,
+    rows: ListState,
+    measured: (f32, bool),
     /// Shows the header with title, path and actions.
     pub header: bool,
 }
@@ -47,7 +49,7 @@ fn ext(path: &Path) -> String {
 
 impl FilePreview {
     pub fn new(header: bool) -> Self {
-        Self { path: None, content: Content::Other, load: None, pdf: None, sheet: None, raw: false, header }
+        Self { path: None, content: Content::Other, load: None, pdf: None, sheet: None, raw: false, rows: ListState::new(0, ListAlignment::Top, px(1000.)), measured: (0., false), header }
     }
 
     /// Gives the keyboard to an image, so its zoom keys work.
@@ -131,6 +133,9 @@ impl FilePreview {
         self.load = Some(cx.spawn(async move |this, cx| {
             let content = task.await;
             let _ = this.update(cx, |p, cx| {
+                if let Content::Markdown(note) = &content {
+                    p.rows.reset(note.rows().len() + 1);
+                }
                 p.content = content;
                 cx.notify();
             });
@@ -153,13 +158,34 @@ impl Render for FilePreview {
         } else {
             match &self.content {
             Content::Loading => div().size_full().flex().items_center().justify_center().child(super::motion::loading(iconsize::L, t.secondary)).into_any_element(),
-            Content::Markdown(text) => div()
-                .id("preview-md")
-                .size_full()
-                .overflow_y_scrollbar()
-                .child(super::image_view::wheel_zoom(|factor, _, _, cx| super::documents::scale_font(factor, cx)))
-                .child(div().w_full().flex().justify_center().child(div().w_full().when(!crate::core::prefs::get().reader_full_width, |d| d.max_w(px(680.))).p(px(space::XL)).child(super::markdown_view::render(text, self.path.as_deref().and_then(Path::parent), None, &t))))
-                .into_any_element(),
+            Content::Markdown(note) => {
+                let measured = (super::theme::note_scale(), crate::core::prefs::get().reader_full_width);
+                if std::mem::replace(&mut self.measured, measured) != measured {
+                    self.rows.remeasure();
+                }
+                let (note, base, full) = (note.clone(), self.path.as_deref().and_then(Path::parent).map(Path::to_path_buf), measured.1);
+                let last = note.rows().len();
+                let footnotes = note.has_footnotes();
+                let column = move |inner: AnyElement| div().w_full().flex().justify_center().child(div().w_full().when(!full, |d| d.max_w(px(680.))).px(px(space::XL)).child(inner)).into_any_element();
+                let rows = list(self.rows.clone(), move |i, _, cx| {
+                    let t = Theme::get(cx);
+                    let item = if i == last {
+                        div().pb(px(space::XL)).children(super::markdown_view::render_footnotes(&note, None, &t))
+                    } else {
+                        let Some(row) = note.rows().get(i).copied() else { return div().into_any_element() };
+                        div().when(i == 0, |d| d.pt(px(space::XL))).pb(px(if i + 1 == last && !footnotes { 0. } else { note.row_gap(i) })).child(super::markdown_view::render_row(&note, &row, base.as_deref(), None, None, None, &t))
+                    };
+                    column(item.into_any_element())
+                });
+                div()
+                    .id("preview-md")
+                    .relative()
+                    .size_full()
+                    .child(rows.size_full())
+                    .vertical_scrollbar(&self.rows)
+                    .child(super::image_view::wheel_zoom(|factor, _, _, cx| super::documents::scale_font(factor, cx)))
+                    .into_any_element()
+            }
             Content::Text(text) => div()
                 .relative()
                 .size_full()
