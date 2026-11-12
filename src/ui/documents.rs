@@ -1951,7 +1951,7 @@ impl NoteView {
                 Some(formula) => format!("$${formula}$$"),
                 None => {
                     let line = self.live?.first_line;
-                    live_text::open_formula(&self.source_lines, line)?
+                    live_text::open_formula(&self.source_lines, line, value)?
                 }
             }
         } else {
@@ -3677,13 +3677,6 @@ impl NoteView {
                 if k.modifiers.platform || k.modifiers.control || !n.target().read(cx).focus_handle(cx).is_focused(w) {
                     return;
                 }
-                if k.key == "escape" {
-                    let (s, r) = n.with_text(cx);
-                    if r.is_empty() && s[..r.start].ends_with("[[") && s[r.start..].starts_with("]]") {
-                        n.apply(Edit { range: r.start - 2..r.start + 2, text: String::new(), select: r.start - 2..r.start - 2 }, w, cx);
-                    }
-                    return;
-                }
                 if !n.target().read(cx).completion_menu_state().open
                     && let Some(typed) = k.key_char.as_deref().filter(|t| *t == "$")
                 {
@@ -3798,12 +3791,12 @@ impl NoteView {
                 }
             }))
             .on_action(cx.listener(|n, _: &ListTab, w, cx| {
-                if n.live.is_some_and(|l| l.cell.is_some()) {
-                    n.step_cell(false, false, w, cx);
-                    return;
-                }
                 if n.target().read(cx).completion_menu_state().open {
                     cx.propagate();
+                    return;
+                }
+                if n.live.is_some_and(|l| l.cell.is_some()) {
+                    n.step_cell(false, false, w, cx);
                     return;
                 }
                 let (s, r) = n.with_text(cx);
@@ -3905,7 +3898,17 @@ impl NoteView {
                     n.leave_block(w, cx);
                 }
             }))
-            .capture_action(cx.listener(|n, _: &gpui_kit::component::input::Escape, w, cx| n.leave_block(w, cx)))
+            .capture_action(cx.listener(|n, _: &gpui_kit::component::input::Escape, w, cx| {
+                let (s, r) = n.with_text(cx);
+                if n.target().read(cx).focus_handle(cx).is_focused(w) && n.target().read(cx).completion_menu_state().open && r.is_empty() && s[..r.start].ends_with("[[") && s[r.start..].starts_with("]]") {
+                    n.last_snapshot = None;
+                    n.apply(Edit { range: r.start - 2..r.start + 2, text: String::new(), select: r.start - 2..r.start - 2 }, w, cx);
+                    n.target().update(cx, |s, cx| s.dismiss_lsp_overlays(cx));
+                    cx.stop_propagation();
+                    return;
+                }
+                n.leave_block(w, cx)
+            }))
             .capture_action(cx.listener(|n, _: &gpui_kit::base::actions::SelectUp, w, cx| {
                 if n.at_block_edge_selecting(false, cx) {
                     cx.stop_propagation();
