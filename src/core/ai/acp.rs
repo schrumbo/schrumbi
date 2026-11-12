@@ -227,11 +227,41 @@ pub fn decide(request: &RequestPermissionRequest, policy: &Policy) -> Decision {
         Kind::Execute | Kind::Delete | Kind::Move => Decision::Reject,
         Kind::Edit if !policy.client_edits => Decision::Reject,
         Kind::Read | Kind::Search | Kind::Think => {
-            let places = call.fields.locations.as_deref().unwrap_or_default();
-            if places.iter().all(|l| inside(&policy.root, &l.path)) { Decision::Allow } else { Decision::Ask }
+            let mut places: Vec<PathBuf> = call.fields.locations.as_deref().unwrap_or_default().iter().map(|l| l.path.clone()).collect();
+            places.extend(named_paths(call.fields.raw_input.as_ref()));
+            let known = !places.is_empty() || kind != Kind::Read;
+            if known && places.iter().all(|p| inside(&policy.root, &policy.root.join(p)) && !hidden_in(&policy.root, &policy.root.join(p))) { Decision::Allow } else { Decision::Ask }
         }
         _ => Decision::Ask,
     }
+}
+
+/// Whether `path` inside `root` passes through a folder or file whose name starts with a dot, such as `.git` or `.obsidian`.
+fn hidden_in(root: &Path, path: &Path) -> bool {
+    let real = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let base = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let inner = real.strip_prefix(&base).or_else(|_| path.strip_prefix(root)).unwrap_or(path);
+    inner.components().any(|c| matches!(c, std::path::Component::Normal(n) if n.to_string_lossy().starts_with('.')))
+}
+
+/// The paths a tool's input names: its path fields, and patterns that start at a root or step up; relative ones count from the study folder.
+fn named_paths(input: Option<&Value>) -> Vec<PathBuf> {
+    let Some(input) = input.and_then(Value::as_object) else { return Vec::new() };
+    let expand = |s: &str| match s.strip_prefix('~') {
+        Some(rest) => dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")).join(rest.trim_start_matches(['/', '\\'])),
+        None => PathBuf::from(s),
+    };
+    let mut out: Vec<PathBuf> = ["path", "file_path", "notebook_path", "directory", "dir"].iter().filter_map(|k| input.get(*k).and_then(Value::as_str)).filter(|s| !s.trim().is_empty()).map(expand).collect();
+    for key in ["pattern", "glob"] {
+        if let Some(p) = input.get(key).and_then(Value::as_str) {
+            let path = Path::new(p);
+            let rooted = path.has_root() || p.starts_with('~') || matches!(p.as_bytes(), [l, b':', ..] if l.is_ascii_alphabetic());
+            if rooted || path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+                out.push(expand(p));
+            }
+        }
+    }
+    out
 }
 
 /// The answer to send: allow once, never „always“ (Claude would write that rule into the user's folder), or reject.

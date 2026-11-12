@@ -66,15 +66,52 @@ pub fn all() -> Vec<Instance> {
     out
 }
 
-/// The instance a call from `cwd` belongs to: the forced pid, else the one whose folder holds `cwd`, else the youngest.
+/// The instance a call from `cwd` belongs to: the forced pid, else the one whose folder holds `cwd`;
+/// the youngest only while no instance has a folder open, so a terminal elsewhere never reaches the study folder.
 pub fn pick(cwd: &Path, forced: Option<u32>) -> Option<Instance> {
-    let all = all();
+    pick_from(all(), cwd, forced)
+}
+
+fn pick_from(all: Vec<Instance>, cwd: &Path, forced: Option<u32>) -> Option<Instance> {
     if let Some(pid) = forced {
         return all.into_iter().find(|i| i.pid == pid);
     }
     let cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let holds = |i: &Instance| i.root.as_ref().is_some_and(|r| cwd.starts_with(dunce::canonicalize(r).unwrap_or_else(|_| r.clone())));
-    all.iter().find(|i| holds(i)).cloned().or_else(|| all.into_iter().next())
+    if let Some(found) = all.iter().find(|i| holds(i)) {
+        return Some(found.clone());
+    }
+    if all.iter().any(|i| i.root.is_some()) {
+        return None;
+    }
+    all.into_iter().next()
+}
+
+/// The study folders running instances have open, for telling a terminal where the tools work.
+pub fn roots() -> Vec<PathBuf> {
+    all().into_iter().filter_map(|i| i.root).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(pid: u32, root: Option<&Path>, started: i64) -> Instance {
+        Instance { pid, port: 1, token: String::new(), root: root.map(Path::to_path_buf), started }
+    }
+
+    #[test]
+    fn a_terminal_outside_every_study_folder_reaches_no_instance() {
+        let base = std::env::temp_dir().join(format!("schrumbi-pick-{}", std::process::id()));
+        let (study, elsewhere) = (base.join("Studium"), base.join("Downloads"));
+        std::fs::create_dir_all(&study).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let both = vec![at(2, Some(&study), 20), at(1, None, 10)];
+        assert_eq!(pick_from(both.clone(), &study.join("MA"), None).map(|i| i.pid), Some(2));
+        assert_eq!(pick_from(both.clone(), &elsewhere, None), None);
+        assert_eq!(pick_from(both, &elsewhere, Some(1)).map(|i| i.pid), Some(1));
+        assert_eq!(pick_from(vec![at(1, None, 10)], &elsewhere, None).map(|i| i.pid), Some(1));
+    }
 }
 
 #[cfg(unix)]

@@ -35,10 +35,19 @@ fn prompt_list() -> Vec<Prompt> {
     prompts::mcp_prompts().into_iter().map(|(name, description, args)| Prompt::new(name, Some(description), Some(args.into_iter().map(|(n, d)| PromptArgument::new(n).with_description(d).with_required(false)).collect()))).collect()
 }
 
+/// Why no instance takes a call: none runs, or the terminal is outside the study folders that are open.
+pub fn elsewhere(roots: &[std::path::PathBuf]) -> String {
+    if roots.is_empty() {
+        return NOT_RUNNING.to_string();
+    }
+    let list: Vec<String> = roots.iter().map(|r| r.display().to_string()).collect();
+    format!("Schrumbi's tools work only inside a study folder that is open in Schrumbi: {}. Ask the user to start this session inside that folder.", list.join(", "))
+}
+
 /// Sends one tool call to the running app and waits for its answer.
 pub fn forward(session: &str, forced: Option<u32>, name: &str, args: &Value) -> Result<Value, String> {
     let cwd = std::env::current_dir().unwrap_or_default();
-    let target = instance::pick(&cwd, forced).ok_or(NOT_RUNNING)?;
+    let target = instance::pick(&cwd, forced).ok_or_else(|| elsewhere(&instance::roots()))?;
     let addr = SocketAddr::from(([127, 0, 0, 1], target.port));
     let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).map_err(|_| NOT_RUNNING.to_string())?;
     let _ = stream.set_read_timeout(Some(if tools::is_write(name) { WRITE_WAIT } else { READ_WAIT }));

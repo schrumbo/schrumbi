@@ -303,6 +303,24 @@ fn reads_outside_the_folder_and_parent_steps_are_not_inside() {
 }
 
 #[test]
+fn searches_and_reads_without_locations_are_judged_by_their_input() {
+    let root = root();
+    let policy = Policy { root: root.clone(), allow_execute: false, client_edits: true };
+    let with = |name: &str, kind: ToolKind, input: serde_json::Value| RequestPermissionRequest::new("s", ToolCallUpdate::new("g", ToolCallUpdateFields::new().kind(kind).name(name.to_string()).raw_input(input)), options());
+    let outside = root.parent().unwrap().to_string_lossy().to_string();
+    assert_eq!(acp::decide(&with("Grep", ToolKind::Search, serde_json::json!({ "pattern": "x", "path": outside })), &policy), Decision::Ask);
+    assert_eq!(acp::decide(&with("Glob", ToolKind::Search, serde_json::json!({ "pattern": format!("{outside}/**/*.md") })), &policy), Decision::Ask);
+    assert_eq!(acp::decide(&with("Glob", ToolKind::Search, serde_json::json!({ "pattern": "../**/*" })), &policy), Decision::Ask);
+    assert_eq!(acp::decide(&with("Glob", ToolKind::Search, serde_json::json!({ "pattern": "~/.ssh/*" })), &policy), Decision::Ask);
+    assert_eq!(acp::decide(&with("Read", ToolKind::Read, serde_json::json!({})), &policy), Decision::Ask, "a read that names nothing asks");
+    assert_eq!(acp::decide(&with("Grep", ToolKind::Search, serde_json::json!({ "pattern": "Grenzwert", "path": "MA" })), &policy), Decision::Allow);
+    assert_eq!(acp::decide(&with("Grep", ToolKind::Search, serde_json::json!({ "pattern": "Grenzwert" })), &policy), Decision::Allow, "no path searches the study folder");
+    assert_eq!(acp::decide(&with("Grep", ToolKind::Search, serde_json::json!({ "pattern": "https://", "path": ".git" })), &policy), Decision::Ask, "hidden folders ask");
+    assert_eq!(acp::decide(&with("Read", ToolKind::Read, serde_json::json!({ "file_path": "MA/../.obsidian/app.json" })), &policy), Decision::Ask);
+    assert_eq!(acp::decide(&with("Read", ToolKind::Read, serde_json::json!({ "file_path": "MA/.trash/x.md" })), &policy), Decision::Ask);
+}
+
+#[test]
 fn an_allow_never_picks_always_so_no_rule_lands_in_the_users_folder() {
     let only_always = vec![PermissionOption::new("always", "Always", PermissionOptionKind::AllowAlways)];
     assert_eq!(outcome(&acp::answer(&only_always, true).outcome), "cancelled");

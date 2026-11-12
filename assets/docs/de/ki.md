@@ -4,7 +4,15 @@ Schrumbi arbeitet mit Claude Code, Codex oder OpenCode zusammen, wenn eins davon
 
 ## Ein und aus
 
-Ist ein Programm installiert, ist die KI an. {ui:KI-Assistent verwenden} in {key:OpenSettings} → {ui:KI} schaltet sie aus, {ui:Knopf in der Werkzeugleiste} blendet den Knopf aus.
+Ist ein Programm installiert, ist die KI an. {ui:KI-Assistent verwenden} in {key:OpenSettings} → {ui:KI} schaltet sie aus, {ui:Knopf in der Werkzeugleiste} unter {ui:Für Fortgeschrittene} blendet den Knopf aus.
+
+Noch keins installiert? Du brauchst ein Konto bei Claude oder ChatGPT.
+
+1. Befehlssuche → {ui:KI-Assistent einrichten}
+2. {ui:Claude Code installieren} öffnet die offizielle Anleitung.
+3. Danach {ui:Erneut suchen}. Ist das Programm nicht angemeldet, steht dort {ui:Anmeldung prüfen}.
+
+Der erste Start kann eine Minute dauern; {ui:Abbrechen} hält ihn an, {ui:Noch einmal} versucht es neu.
 
 ## Die Spalte
 
@@ -18,7 +26,7 @@ Unten stehen Kärtchen mit dem, was die KI mitbekommt: offene Notiz, PDF-Seite, 
 
 | Knopf | Was passiert |
 |---|---|
-| {ui:Folgen} | Geänderte Dateien öffnen sich und zeigen die Stelle |
+| {ui:Folgen} | Geänderte Dateien öffnen sich und zeigen die Stelle; aus, bis du es einschaltest |
 | {ui:Ansehen} | Vorher und nachher untereinander |
 | {ui:Rückgängig} | Nur diese eine Änderung zurück |
 | {ui:Stopp} | Bricht den Auftrag ab |
@@ -47,11 +55,11 @@ Im Ablegen-Fenster füllt {ui:Mit KI ausfüllen} die Felder aus der Datei aus. W
 
 ## Im Terminal
 
-1. {key:OpenSettings} → {ui:KI} → {ui:Für die Kommandozeile}
+1. {key:OpenSettings} → {ui:KI} → {ui:Für Fortgeschrittene} → {ui:Für die Kommandozeile}
 2. {ui:Eintragen} neben deinem Programm.
-3. Starte es im Terminal, etwa über {ui:Im Terminal öffnen}.
+3. Starte es in deinem Studienordner, etwa über {ui:Im Terminal öffnen}.
 
-Solange Schrumbi läuft, liest es deine Notizen, PDFs, Fristen und Karten. Frag zum Beispiel: Welche Abgaben habe ich in den nächsten 7 Tagen?
+Solange Schrumbi diesen Ordner offen hat, liest es deine Notizen, PDFs, Fristen und Karten. In einem anderen Ordner gestartet, bekommt es nur die Antwort, wo es starten soll. Frag zum Beispiel: Welche Abgaben habe ich in den nächsten 7 Tagen?
 
 Die Abläufe der Spalte gibt es dort als Befehle:
 
@@ -68,11 +76,14 @@ Vor jeder Änderung fragt Schrumbi in der Spalte, bei geschlossener Spalte unten
 | Knopf | Was passiert |
 |---|---|
 | {ui:Erlauben} | Diese eine Änderung |
-| {ui:Immer heute} | Diese Art Änderung bis Mitternacht ohne Nachfrage |
+| {ui:In dieser Notiz heute erlauben} | Dieselbe Änderung in dieser Notiz bis Mitternacht ohne Nachfrage, nur für das Programm, das gefragt hat; bei neuen Notizen {ui:In diesem Ordner heute erlauben} |
 | {ui:Ablehnen} | Nichts wird geschrieben |
+| {ui:Ansehen} | Die ganze Änderung, bevor du entscheidest |
 
-Die Änderungen eines Auftrags sind ein Schritt: {key:Undo} nimmt sie zusammen zurück. Hast du die Notiz inzwischen geändert, schreibt die KI nichts und liest sie neu.
+Lange Änderungen zeigen die ersten Zeilen, jede Zeile mit einem Link und wie viele Zeilen fehlen. Ablegen, Inbox, Einrichten, Status und Fristen fragen immer. Mehrere gleiche Änderungen kommen als eine Karte: {ui:Alle erlauben}, {ui:Alle ablehnen} oder {ui:Einzeln ansehen}.
+
+Die Änderungen eines Auftrags in der Spalte sind ein Schritt: {key:Undo} nimmt sie zusammen zurück. Aus dem Terminal ist jede Änderung ein eigener Schritt. Hast du die Notiz inzwischen geändert, schreibt die KI nichts und liest sie neu.
 
 ## Was die KI nie tut
 
-Sie löscht nichts, benennt nichts um und bewertet keine Karten. Codex läuft nur in seinem Nur-Lesen-Modus, OpenCode ohne eigene Dateiänderungen; beide ändern nur über Schrumbi. Ungesicherten Text überschreibt sie nicht. Befehle startet sie nur, wenn du {ui:Befehle ausführen erlauben} einschaltest.
+Sie löscht nichts, benennt nichts um und bewertet keine Karten. Codex läuft nur in seinem Nur-Lesen-Modus, OpenCode ohne eigene Dateiänderungen; beide ändern nur über Schrumbi. Ungesicherten Text überschreibt sie nicht. Versteckte Dateien und Ordner, deren Name mit einem Punkt beginnt, und Schrumbis eigene Dateien liest und ändert sie nicht. Anweisungen, die in deinen Notizen oder PDFs stehen, befolgt sie nicht, sondern sagt dir davon. Befehle startet sie nur, wenn du {ui:Befehle ausführen erlauben} einschaltest.

@@ -99,7 +99,7 @@ pub struct AiPrefs {
 
 impl Default for AiPrefs {
     fn default() -> Self {
-        Self { enabled: true, toolbar_button: true, allow_execute: false, follow_edits: true, idle_minutes: 30, agent: String::new(), custom_command: String::new(), column_open: false, width: None }
+        Self { enabled: true, toolbar_button: true, allow_execute: false, follow_edits: false, idle_minutes: 30, agent: String::new(), custom_command: String::new(), column_open: false, width: None }
     }
 }
 

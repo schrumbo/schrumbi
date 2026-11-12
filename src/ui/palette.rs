@@ -339,6 +339,7 @@ fn commands(cx: &App) -> Vec<Command> {
     add(&general, tr("Tastenkürzel anzeigen"), "keyboard", Some(fixed_keys("/")), Run::Action(Box::new(app::ShowShortcuts)));
     add(&general, tr("Nach Updates suchen…"), "download", None, Run::Action(Box::new(app::CheckForUpdates)));
     add(&general, tr("Über Schrumbi"), "info", None, Run::Action(Box::new(app::About)));
+    add(&general, tr("KI-Assistent einrichten"), "bot", None, Run::Call(Rc::new(super::settings::open_ai)));
     if super::ai::active() {
         let ki = tr("KI");
         add(&ki, tr("Frag die KI…"), "bot", keys(S::ToggleAi), Run::Call(Rc::new(super::ai::open_column)));

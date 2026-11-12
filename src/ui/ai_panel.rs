@@ -35,6 +35,8 @@ use crate::core::library::Route;
 use crate::core::prefs;
 
 const FRAME: Duration = Duration::from_millis(16);
+const SLOW_START: Duration = Duration::from_secs(20);
+const GIVE_UP: Duration = Duration::from_secs(90);
 const REPARSE: Duration = Duration::from_millis(120);
 const SELECTION_CHARS: usize = 4000;
 const SHOWN_OUTPUT: usize = 4000;
@@ -100,6 +102,9 @@ struct InboxCard {
 enum Fix {
     Restart,
     Retry,
+    Again,
+    FetchAdapter,
+    Fetching,
     SignIn(crate::core::ai::detect::Agent),
 }
 
@@ -151,9 +156,12 @@ struct Session {
     seen: HashMap<PathBuf, String>,
     granted: HashSet<PathBuf>,
     stopped: bool,
+    slow: bool,
+    patient: bool,
     events: async_channel::Receiver<Event>,
     _run: Task<()>,
     _pump: Task<()>,
+    _watch: Task<()>,
 }
 
 /// The column „KI“: the conversation with the user's agent, its tool steps, its changes and the input.
@@ -174,7 +182,7 @@ pub struct AiPanel {
     counts: Vec<usize>,
     rows: Vec<(usize, usize)>,
     keep: HashMap<usize, usize>,
-    tail: (Vec<ai::Waiting>, Option<String>),
+    tail: (Vec<Vec<ai::Waiting>>, Option<String>),
     idle: Option<Task<()>>,
     reparse: Option<Task<()>>,
     focus_input: bool,
@@ -316,7 +324,7 @@ fn edit_line(e: &Edit) -> String {
 
 fn missing_text(m: &Missing) -> String {
     match m {
-        Missing::Adapter => tr("Für Claude fehlt noch ein Baustein. Hol ihn in Einstellungen → KI."),
+        Missing::Adapter => tr("Für Claude fehlt noch ein Zusatzprogramm. Schrumbi kann es jetzt holen."),
         Missing::Node => tr("Codex braucht Node.js. Installiere es und versuch es noch einmal."),
         Missing::Program => tr("Das Programm ist nicht mehr installiert."),
         Missing::Command => tr("Der eigene Befehl ist leer."),
@@ -437,23 +445,15 @@ fn context_lines(chips: &[Chip], cx: &App) -> Vec<String> {
         .collect()
 }
 
-fn diff_lines(diffs: &[acp::Diff]) -> Vec<String> {
-    let mut out = Vec::new();
+fn diff_preview(lib: &crate::core::library::Library, title: String, diffs: &[acp::Diff]) -> Preview {
+    let mut preview = Preview { title, ..Preview::default() };
     for d in diffs {
-        let old = d.old.clone().unwrap_or_default();
-        for change in similar::TextDiff::from_lines(&old, &d.new).iter_all_changes() {
-            let sign = match change.tag() {
-                similar::ChangeTag::Insert => "+ ",
-                similar::ChangeTag::Delete => "− ",
-                similar::ChangeTag::Equal => continue,
-            };
-            out.push(format!("{sign}{}", change.value().trim_end()));
-            if out.len() >= 8 {
-                return out;
-            }
-        }
+        let part = tools::change_preview(lib, &d.path, d.old.as_deref().unwrap_or_default(), &d.new);
+        preview.lines.extend(part.lines);
+        preview.hidden += part.hidden;
+        preview.full = if diffs.len() == 1 { part.full } else { None };
     }
-    out
+    preview
 }
 
 impl AiPanel {
@@ -602,7 +602,15 @@ impl AiPanel {
 
     fn fix(&mut self, at: usize, fix: Fix, cx: &mut Context<Self>) {
         match fix {
-            Fix::Restart => {
+            Fix::FetchAdapter => {
+                ai::install_claude(cx);
+                if let Some(Item::Notice { text, fix }) = self.items.get_mut(at) {
+                    *text = tr("Das Zusatzprogramm wird geholt. Danach startet die KI mit „Noch einmal“.");
+                    *fix = Some(Fix::Fetching);
+                }
+                self.touch(at);
+            }
+            Fix::Restart | Fix::Again | Fix::Fetching => {
                 if self.session.is_some() {
                     self.stop(cx);
                 }
@@ -631,7 +639,8 @@ impl AiPanel {
         let launch = match agents::launch(runner, &p) {
             Ok(l) => l,
             Err(m) => {
-                self.notice(missing_text(&m), false);
+                let fix = matches!(m, Missing::Adapter).then_some(Fix::FetchAdapter);
+                self.notice_fix(missing_text(&m), fix);
                 return;
             }
         };
@@ -649,7 +658,11 @@ impl AiPanel {
         });
         let setup = acp::Setup { cwd: root.clone(), mcp, meta: launch.claude.then(|| agents::claude_meta(p.allow_execute)), modes: launch.modes.clone(), require_mode: launch.require_mode, policy: acp::Policy { root: root.clone(), allow_execute: p.allow_execute, client_edits: launch.claude } };
         let (program, args) = crate::core::ai::guard::wrap(&launch.program, &launch.args).unwrap_or_else(|| (launch.program.clone(), launch.args.clone()));
-        let agent = AcpAgent::new(AcpAgentConfig::new(program).args(args).envs(launch.env.clone()));
+        let mut env = launch.env.clone();
+        if let Some(path) = detect::child_path() {
+            env.push(("PATH".into(), path.to_string_lossy().to_string()));
+        }
+        let agent = AcpAgent::new(AcpAgentConfig::new(program).args(args).envs(env));
         let (events_tx, events_rx) = async_channel::unbounded::<Event>();
         let (commands_tx, commands_rx) = async_channel::unbounded::<Command>();
         let outcome: Arc<Mutex<Option<Result<(), String>>>> = Arc::default();
@@ -683,8 +696,63 @@ impl AiPanel {
             let _ = this.update(cx, |p, cx| p.ended(result, cx));
         });
         let file = transcript::file_for(&root, &id);
-        self.session = Some(Session { id, commands: commands_tx, ready: false, file, seen: HashMap::new(), granted: HashSet::new(), stopped: false, events, _run: run, _pump: pump });
+        let watched = id.clone();
+        let patient = launch.program.file_stem().is_some_and(|s| s.eq_ignore_ascii_case("npx"));
+        let watch = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SLOW_START).await;
+            let waiting = this.update(cx, |p, cx| p.mark_slow(&watched, cx)).unwrap_or(false);
+            if !waiting {
+                return;
+            }
+            cx.background_executor().timer(GIVE_UP - SLOW_START).await;
+            let _ = this.update(cx, |p, cx| p.give_up(&watched, cx));
+        });
+        self.session = Some(Session { id, commands: commands_tx, ready: false, file, seen: HashMap::new(), granted: HashSet::new(), stopped: false, slow: false, patient, events, _run: run, _pump: pump, _watch: watch });
         self.schedule_idle(cx);
+    }
+
+    fn mark_slow(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
+        let Some(s) = self.session.as_mut().filter(|s| s.id == id && !s.ready) else { return false };
+        s.slow = true;
+        cx.notify();
+        true
+    }
+
+    fn give_up(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.session.as_ref().is_some_and(|s| s.id == id && !s.ready && !s.patient) {
+            return;
+        }
+        self.stop(cx);
+        self.notice_fix(tr("Das KI-Programm antwortet nicht. Prüf das Internet oder wähl in Einstellungen → KI ein anderes Programm."), Some(Fix::Again));
+        cx.notify();
+    }
+
+    fn cancel_start(&mut self, cx: &mut Context<Self>) {
+        self.stop(cx);
+        self.notice_fix(tr("Start abgebrochen."), Some(Fix::Again));
+        cx.notify();
+    }
+
+    fn starting_label(&self) -> Option<String> {
+        let s = self.session.as_ref().filter(|s| !s.ready)?;
+        Some(if s.slow { tr("Das erste Mal dauert etwas länger …") } else { tr("Startet …") })
+    }
+
+    fn slow_start(&self) -> bool {
+        self.session.as_ref().is_some_and(|s| !s.ready && s.slow)
+    }
+
+    fn starting_row(&self, label: String, cx: &mut Context<Self>, t: &Theme) -> Div {
+        let me = cx.entity();
+        div()
+            .flex()
+            .items_center()
+            .gap(px(space::S))
+            .text_size(px(font::CALLOUT))
+            .text_color(t.secondary)
+            .child(motion::loading(iconsize::XS, t.secondary))
+            .child(div().flex_1().min_w_0().child(label))
+            .when(self.slow_start(), |d| d.child(Button::new("ai-start-cancel").ghost().xsmall().label(tr("Abbrechen")).on_click(move |_, _, cx| me.update(cx, |p, cx| p.cancel_start(cx)))))
     }
 
     /// Ends the agent process: its input closes and it quits on its own.
@@ -993,10 +1061,16 @@ impl AiPanel {
         let name = ask.patch.name.clone();
         let input = ask.patch.input.clone().or_else(|| self.tools.get(&ask.tool).and_then(|i| if let Some(Item::Tool(t)) = self.items.get(*i) { t.input.clone() } else { None }));
         let title = title_for(name.as_deref(), kind, input.as_ref(), ask.patch.title.as_deref().unwrap_or_default());
-        let lines = ask.patch.diffs.as_deref().map(diff_lines).unwrap_or_default();
+        let preview = state::read(cx, |l| diff_preview(l, title, ask.patch.diffs.as_deref().unwrap_or_default()));
         let key = name.unwrap_or_else(|| format!("{kind:?}"));
         let places: Vec<PathBuf> = ask.patch.locations.iter().flatten().map(|(p, _)| p.clone()).chain(ask.patch.diffs.iter().flatten().map(|d| d.path.clone())).collect();
-        let (ask_id, answer) = ai::ask_change(&key, Preview { title, lines }, cx);
+        let mut distinct = places.clone();
+        distinct.dedup();
+        let scope = match (kind, distinct.as_slice()) {
+            (Kind::Edit, [one]) => Some(ai::Scope::of(&key, one, false)),
+            _ => None,
+        };
+        let (ask_id, answer) = ai::ask_change(&key, scope, preview, cx);
         self.asks.extend(ask_id);
         cx.spawn(async move |this, cx| {
             let allow = matches!(answer.recv().await, Ok(Answer::Allow | Answer::Today));
@@ -1030,7 +1104,7 @@ impl AiPanel {
             let _ = tx.try_send(Answer::Allow);
             rx
         } else {
-            let (ask_id, rx) = ai::ask_change("write_file", preview, cx);
+            let (ask_id, rx) = ai::ask_change("write_file", Some(ai::Scope::of("write_file", &path, false)), preview, cx);
             self.asks.extend(ask_id);
             rx
         };
@@ -1836,7 +1910,7 @@ impl AiPanel {
                     }),
             );
         }
-        let starting = self.session.as_ref().is_some_and(|s| !s.ready);
+        let starting = self.starting_label().map(|label| self.starting_row(label, cx, t));
         div()
             .flex()
             .flex_col()
@@ -1844,7 +1918,7 @@ impl AiPanel {
             .p(px(space::L))
             .child(div().text_color(t.secondary).child(tr("Frag etwas zu deinen Notizen, PDFs oder Fristen. Ändern darf die KI nur mit deinem Ja, und alles ist rückgängig.")))
             .child(list)
-            .when(starting, |d| d.child(div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.tertiary).child(motion::loading(iconsize::XS, t.tertiary)).child(tr("Startet …"))))
+            .children(starting)
     }
 
     fn tool_card(&self, at: usize, tool: &Tool, cx: &mut Context<Self>, t: &Theme) -> AnyElement {
@@ -2045,35 +2119,15 @@ impl AiPanel {
             .into_any_element()
     }
 
-    fn ask_card(&self, w: &ai::Waiting, t: &Theme) -> AnyElement {
-        let id = w.id;
-        let mut lines = div().flex().flex_col().gap(px(space::XXS)).font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.secondary);
-        for line in &w.preview.lines {
-            lines = lines.child(div().truncate().child(line.clone()));
-        }
-        let shown = !w.preview.lines.is_empty();
+    fn ask_card(&self, group: &[ai::Waiting], cx: &App, t: &Theme) -> AnyElement {
+        let id = group.first().map_or(0, |w| w.id);
         super::drive::marked(div().id(("ai-ask-inline", id)), "dialog")
-            .flex()
-            .flex_col()
-            .gap(px(space::S))
             .p(px(space::M))
             .rounded(px(radius::CARD))
             .border_1()
             .border_color(t.accent.opacity(0.5))
             .bg(t.accent.opacity(0.04))
-            .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).child(tr("Die KI möchte etwas ändern")))
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(w.preview.title.clone()))
-            .when(shown, |d| d.child(div().p(px(space::S)).rounded(px(radius::INNER)).bg(t.ink.opacity(0.05)).child(lines)))
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .justify_end()
-                    .gap(px(space::S))
-                    .child(Button::new(("ai-inline-decline", id)).ghost().small().label(tr("Ablehnen")).on_click(move |_, _, cx| ai::answer_ask(id, Answer::Decline, cx)))
-                    .child(Button::new(("ai-inline-today", id)).small().label(tr("Immer heute")).tooltip(tr("Erlaubt diese Art Änderung bis Mitternacht ohne Nachfrage")).on_click(move |_, _, cx| ai::answer_ask(id, Answer::Today, cx)))
-                    .child(Button::new(("ai-inline-allow", id)).primary().small().label(tr("Erlauben")).on_click(move |_, _, cx| ai::answer_ask(id, Answer::Allow, cx))),
-            )
+            .children(ai::ask_body(group, cx, t))
             .into_any_element()
     }
 
@@ -2124,14 +2178,20 @@ impl AiPanel {
             Item::Edit(e) => self.edit_card(at, e, cx, t),
             Item::Notice { text, fix } => {
                 let me = cx.entity();
-                let action = fix.map(|f| {
-                    let label = match f {
-                        Fix::Restart => tr("Neu starten"),
-                        Fix::Retry => tr("Noch einmal"),
-                        Fix::SignIn(_) => tr("Anmelden"),
-                    };
-                    Button::new(("ai-fix", at)).ghost().xsmall().label(label).on_click(move |_, _, cx| me.update(cx, |p, cx| p.fix(at, f, cx)))
-                });
+                let download = if *fix == Some(Fix::Fetching) { ai::download(cx) } else { None };
+                let action: Option<AnyElement> = match download {
+                    Some(ai::Download::Running(p)) => Some(div().flex_none().text_size(px(font::CAPTION)).text_color(t.tertiary).child(trf("Lädt … %@", &[&format!("{} %", (p * 100.).round() as i64)])).into_any_element()),
+                    Some(ai::Download::Failed(_)) => Some(Button::new(("ai-fix", at)).ghost().xsmall().label(tr("Erneut versuchen")).tooltip(tr("Das Zusatzprogramm ließ sich nicht laden")).on_click(move |_, _, cx| me.update(cx, |p, cx| p.fix(at, Fix::FetchAdapter, cx))).into_any_element()),
+                    None => fix.map(|f| {
+                        let label = match f {
+                            Fix::Restart => tr("Neu starten"),
+                            Fix::Retry | Fix::Again | Fix::Fetching => tr("Noch einmal"),
+                            Fix::FetchAdapter => tr("Holen"),
+                            Fix::SignIn(_) => tr("Anmelden"),
+                        };
+                        Button::new(("ai-fix", at)).ghost().xsmall().label(label).on_click(move |_, _, cx| me.update(cx, |p, cx| p.fix(at, f, cx))).into_any_element()
+                    }),
+                };
                 div()
                     .flex()
                     .items_center()
@@ -2155,10 +2215,10 @@ impl AiPanel {
         let el = if ix < shown {
             self.item_element(at, part, cx, &t)
         } else if let Some(w) = asks.get(ix - shown) {
-            self.ask_card(w, &t)
+            self.ask_card(w, cx, &t)
         } else {
             let label = status.clone().unwrap_or_default();
-            div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(motion::loading(iconsize::XS, t.secondary)).child(label).into_any_element()
+            self.starting_row(label, cx, &t).into_any_element()
         };
         let step = |i: usize| matches!(self.items.get(i), Some(Item::Tool(_) | Item::Edit(_)));
         let top = match self.items.get(at) {
@@ -2171,9 +2231,8 @@ impl AiPanel {
     }
 
     fn sync_list(&mut self, cx: &mut Context<Self>) {
-        let asks = ai::waiting(cx);
-        let starting = self.session.as_ref().is_some_and(|s| !s.ready);
-        let status = (starting || self.turn).then(|| if starting { tr("Startet …") } else { tr("Arbeitet …") });
+        let asks = ai::waiting_groups(cx);
+        let status = self.starting_label().or_else(|| self.turn.then(|| tr("Arbeitet …")));
         self.tail = (asks, status);
         let items = self.items.len();
         let tail = self.tail.0.len() + usize::from(self.tail.1.is_some());
