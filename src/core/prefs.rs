@@ -545,6 +545,37 @@ pub fn update(f: impl FnOnce(&mut Prefs)) {
     }
 }
 
+type Later = Box<dyn FnOnce(&mut Prefs) + Send>;
+
+static LATER: Mutex<Vec<Later>> = Mutex::new(Vec::new());
+static FLUSH: Mutex<()> = Mutex::new(());
+
+/// Changes the settings on a background thread, for frequent changes nothing waits for; `flush` writes what is still queued.
+pub fn update_later(f: impl FnOnce(&mut Prefs) + Send + 'static) {
+    let first = {
+        let mut queued = LATER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        queued.push(Box::new(f));
+        queued.len() == 1
+    };
+    if first {
+        std::thread::spawn(flush);
+    }
+}
+
+/// Writes the changes `update_later` queued, in order.
+pub fn flush() {
+    let _guard = FLUSH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let queued = std::mem::take(&mut *LATER.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    if queued.is_empty() {
+        return;
+    }
+    update(|p| {
+        for f in queued {
+            f(p);
+        }
+    });
+}
+
 /// Notes that a feature was used, so the tip about it is no longer offered.
 pub fn mark_used(feature: &str) {
     if with(|p| p.used_features.contains(feature)) {

@@ -240,6 +240,57 @@ impl IndexJob {
     }
 }
 
+/// Work for an index update after edits to files already known: only those files are read again.
+pub struct ChangeJob {
+    pub job: IndexJob,
+    pub paths: Vec<PathBuf>,
+}
+
+impl ChangeJob {
+    /// The file count and the changed catalog entries; `None` when only a full scan can tell.
+    pub fn run(self) -> Option<(usize, Vec<CatalogFile>)> {
+        let IndexJob { index, root, config, vault, .. } = self.job;
+        let canonical = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        if vault.as_ref().is_some_and(|v| canonical(v).starts_with(canonical(&root)) || canonical(&root).starts_with(canonical(v))) {
+            return None;
+        }
+        let mut bases = vec![(canonical(&root), root.clone())];
+        bases.extend(vault.iter().map(|v| (canonical(v), v.clone())));
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for p in &self.paths {
+            if p.is_dir() {
+                continue;
+            }
+            let found = bases.iter().find_map(|(c, raw)| p.strip_prefix(c).or_else(|_| p.strip_prefix(raw)).ok().map(|rel| raw.join(rel)))?;
+            if !paths.contains(&found) {
+                paths.push(found);
+            }
+        }
+        if paths.is_empty() {
+            return Some((index.count(), Vec::new()));
+        }
+        let files = index.update_paths(&paths)?;
+        let vault_root = vault.as_ref().unwrap_or(&root);
+        let vault_canonical = canonical(vault_root);
+        let notes: Vec<PathBuf> = paths.iter().filter_map(|p| p.strip_prefix(vault_root).ok().map(|rel| vault_canonical.join(rel))).collect();
+        if !super::vault::index::refresh(&notes) {
+            return None;
+        }
+        let mut catalog = catalog::rebuild_some(&files, &root, &config);
+        if let Some(vault) = &vault {
+            let mut mapped = config.clone();
+            for module in &mut mapped.modules {
+                module.folder = module.notes_folder.clone().unwrap_or_else(|| module.folder.clone());
+            }
+            catalog.extend(catalog::rebuild_some(&files, vault, &mapped));
+        }
+        super::cards::open(&vault_canonical);
+        super::cards::reconcile();
+        super::cards::settle(super::cards::now());
+        Some((index.count(), catalog))
+    }
+}
+
 const IN_APP_TYPES: [&str; 57] = [
     "base", "canvas", "md", "markdown", "mdown", "pdf", "txt", "rtf", "rtfd", "csv", "json", "html", "htm", "xml", "css", "js", "ts", "swift", "java", "py", "c", "cpp", "h", "yml", "yaml", "tex", "doc", "docx", "docm", "ppt",
     "pptx", "pptm", "xls", "xlsx", "xlsm", "xlsb", "pages", "key", "numbers", "odt", "ods", "odp", "png", "jpg", "jpeg", "heic", "gif", "webp", "tiff", "svg", "bmp", "mp4", "mov", "m4v", "mp3", "m4a", "wav",
@@ -263,7 +314,7 @@ pub struct Library {
     pub index_count: usize,
     pub index_version: u64,
     pub is_indexing: bool,
-    pub catalog: Vec<CatalogFile>,
+    pub catalog: Arc<Vec<CatalogFile>>,
     pub search_index: Arc<SearchIndex>,
     highlights: Highlights,
     highlights_lock: Option<String>,
@@ -463,7 +514,7 @@ impl Library {
             index_count: 0,
             index_version: 0,
             is_indexing: false,
-            catalog: Vec::new(),
+            catalog: Arc::default(),
             search_index: Arc::new(SearchIndex::open()),
             highlights: Highlights::new(),
             highlights_lock: None,
@@ -731,7 +782,7 @@ impl Library {
         self.evaluations.clear();
         self.inbox.clear();
         self.index_count = 0;
-        self.catalog.clear();
+        self.catalog = Arc::default();
         self.listings.clear();
         self.action_items.clear();
         self.buffers.clear();
@@ -1793,11 +1844,50 @@ impl Library {
         Some(IndexJob { vault: self.external_vault(), index: self.search_index.clone(), root, exclude: config.search_exclude.clone(), config })
     }
 
-    pub fn apply_index(&mut self, count: usize, catalog: Vec<CatalogFile>) {
-        if catalog != self.catalog {
-            self.catalog = catalog;
+    /// Starts an update for edits to `paths` only; `None` while another update runs.
+    pub fn change_job(&mut self, paths: Vec<PathBuf>) -> Option<ChangeJob> {
+        Some(ChangeJob { job: self.index_job()?, paths })
+    }
+
+    /// A `ChangeJob` could not tell; a full update may start.
+    pub fn index_abandoned(&mut self) {
+        self.is_indexing = false;
+    }
+
+    /// Takes in what a `ChangeJob` found: each entry replaces the one of its file.
+    pub fn apply_changes(&mut self, count: usize, entries: Vec<CatalogFile>) {
+        let mut fresh: Vec<CatalogFile> = Vec::new();
+        let mut changed = false;
+        for entry in entries {
+            match self.catalog.iter().position(|c| c.file.path == entry.file.path) {
+                Some(i) if self.catalog[i] == entry => {}
+                Some(i) => {
+                    Arc::make_mut(&mut self.catalog)[i] = entry;
+                    changed = true;
+                }
+                None => fresh.push(entry),
+            }
+        }
+        if !fresh.is_empty() {
+            fresh.extend(Arc::unwrap_or_clone(std::mem::take(&mut self.catalog)));
+            self.catalog = Arc::new(fresh);
+            changed = true;
+        }
+        if changed {
             self.index_version += 1;
         }
+        self.indexed(count);
+    }
+
+    pub fn apply_index(&mut self, count: usize, catalog: Vec<CatalogFile>) {
+        if catalog != *self.catalog {
+            self.catalog = Arc::new(catalog);
+            self.index_version += 1;
+        }
+        self.indexed(count);
+    }
+
+    fn indexed(&mut self, count: usize) {
         self.hide_leaving();
         self.index_count = count;
         self.is_indexing = false;
@@ -3679,9 +3769,8 @@ impl Library {
         for files in self.listings.values_mut() {
             files.retain(|f| !gone(&f.path));
         }
-        let count = self.catalog.len();
-        self.catalog.retain(|c| !gone(&c.file.path));
-        if self.catalog.len() != count {
+        if self.catalog.iter().any(|c| gone(&c.file.path)) {
+            Arc::make_mut(&mut self.catalog).retain(|c| !gone(&c.file.path));
             self.index_version += 1;
         }
         self.leaving = leaving;
@@ -4049,6 +4138,7 @@ impl Library {
 
     fn load_documents(&mut self) {
         let Some(root) = self.root.clone() else { return };
+        prefs::flush();
         let rels = prefs::get().open_documents.get(&self.documents_key()).cloned().unwrap_or_default();
         let canonical = |p: PathBuf| dunce::canonicalize(&p).unwrap_or(p);
         let mut seen = HashSet::new();
@@ -4064,7 +4154,7 @@ impl Library {
         let rels: Vec<String> = self.open_documents.iter().map(|p| self.relative_path(p)).collect();
         let split = self.split_document.as_ref().map(|p| self.relative_path(p));
         let active = self.active_document.as_ref().map(|p| self.relative_path(p));
-        prefs::update(|p| {
+        prefs::update_later(move |p| {
             p.open_documents.insert(key.clone(), rels);
             match active {
                 Some(active) => p.active_documents.insert(key.clone(), active),

@@ -126,6 +126,11 @@ pub fn init(cx: &mut App) {
         }
     });
     quit_on_terminate(cx);
+    cx.on_app_quit(|_| {
+        crate::core::prefs::flush();
+        async {}
+    })
+    .detach();
     cx.on_action(|_: &Undo, cx| act(cx, |l| l.undo()));
     cx.on_action(|_: &Redo, cx| act(cx, |l| l.redo()));
     cx.on_action(|_: &ShowGraph, cx| {

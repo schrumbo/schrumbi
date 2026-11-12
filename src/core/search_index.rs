@@ -146,6 +146,48 @@ impl SearchIndex {
         seen.len()
     }
 
+    /// Re-reads `paths` after an edit, without walking the folders, and returns them as stored now.
+    /// `None` when one of them is not indexed yet, so only a full `update_all` knows whether it belongs.
+    pub fn update_paths(&self, paths: &[PathBuf]) -> Option<Vec<IndexedFile>> {
+        let keys: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
+        let known: Vec<Option<f64>> = self.with(|c| {
+            let mut s = c.prepare("SELECT modified FROM files WHERE path = ?1")?;
+            keys.iter().map(|k| s.query_row([k], |r| r.get::<_, f64>(0)).map(Some).or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })).collect()
+        });
+        if known.len() != keys.len() || known.iter().any(Option::is_none) {
+            return None;
+        }
+        let changed: Vec<(String, String, f64, String)> = paths
+            .par_iter()
+            .zip(keys.par_iter())
+            .zip(known.par_iter())
+            .filter_map(|((file, path), old)| {
+                let meta = std::fs::metadata(file).ok()?;
+                let modified = meta.modified().ok().map_or(0., |t| t.duration_since(std::time::UNIX_EPOCH).map_or(0., |d| d.as_secs_f64()));
+                if old.is_some_and(|old| (old - modified).abs() < 0.5) {
+                    return None;
+                }
+                let name = file.file_name()?.to_string_lossy().to_string();
+                let body = if meta.len() <= MAX_BYTES { extract(file) } else { String::new() };
+                Some((path.clone(), name, modified, body))
+            })
+            .collect();
+        self.with(|c| {
+            let tx = c.unchecked_transaction()?;
+            for (path, name, modified, body) in &changed {
+                tx.execute("DELETE FROM fts WHERE rowid = (SELECT id FROM files WHERE path = ?1)", [path])?;
+                tx.execute("DELETE FROM files WHERE path = ?1", [path])?;
+                tx.execute("INSERT INTO files(path, name, modified) VALUES(?1, ?2, ?3)", params![path, name, modified])?;
+                tx.execute("INSERT INTO fts(rowid, name, body) VALUES(last_insert_rowid(), ?1, ?2)", params![name, body])?;
+            }
+            tx.commit()
+        });
+        Some(self.with(|c| {
+            let mut s = c.prepare("SELECT path, name, modified FROM files WHERE path = ?1")?;
+            keys.iter().map(|k| s.query_row([k], file)).collect()
+        }))
+    }
+
     /// Clears the index, e.g. when switching workspaces.
     pub fn reset(&self) {
         self.with(|c| c.execute_batch("DELETE FROM files; DELETE FROM fts;"));

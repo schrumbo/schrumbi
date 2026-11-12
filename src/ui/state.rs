@@ -24,6 +24,8 @@ pub struct Store {
     reminders: Vec<Reminder>,
     pending_refresh: Option<Task<()>>,
     pending_index: Option<Task<()>>,
+    index_full: bool,
+    edited: Vec<std::path::PathBuf>,
     pending_config: Option<Task<()>>,
     pending_notes: Option<Task<()>>,
     tab_scroll: ScrollHandle,
@@ -50,6 +52,8 @@ pub fn init(cx: &mut App) {
         reminders: Vec::new(),
         pending_refresh: None,
         pending_index: None,
+        index_full: false,
+        edited: Vec::new(),
         pending_config: None,
         pending_notes: None,
         tab_scroll: ScrollHandle::new(),
@@ -211,6 +215,36 @@ pub fn reindex(cx: &mut App) {
     .detach();
 }
 
+/// Reads only the files edited in place again; falls back to a full scan when one of them is new to the index.
+fn reindex_edited(paths: Vec<PathBuf>, cx: &mut App) {
+    let lib = lib(cx);
+    let Some(job) = lib.update(cx, |l, _| l.change_job(paths)) else {
+        cx.global_mut::<Store>().index_again = true;
+        return;
+    };
+    let task = cx.background_spawn(async move { job.run() });
+    cx.spawn(async move |cx| {
+        let found = task.await;
+        cx.update(|cx| {
+            let before = lib.read(cx).toast.as_ref().map(|t| t.id);
+            let full = lib.update(cx, |l, cx| {
+                let Some((count, entries)) = found else {
+                    l.index_abandoned();
+                    return true;
+                };
+                l.apply_changes(count, entries);
+                cx.notify();
+                false
+            });
+            time_toast(before, cx);
+            if std::mem::take(&mut cx.global_mut::<Store>().index_again) || full {
+                reindex(cx);
+            }
+        });
+    })
+    .detach();
+}
+
 /// Writes the notes still open in PDF views. When one cannot be written it stays open, the user is told, and the caller must not leave the folder or quit.
 pub fn notes_settled(cx: &mut App) -> bool {
     if super::pdf_view::flush_notes(cx) {
@@ -247,10 +281,12 @@ pub fn close_workspace(cx: &mut App) -> bool {
     true
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 struct Change {
     structural: bool,
     content: bool,
+    /// The files whose content changed.
+    edited: Vec<PathBuf>,
     config: bool,
     history: bool,
     /// Obsidian's own settings changed, which only the vault index reads.
@@ -279,8 +315,14 @@ fn classify(event: &notify::Event, roots: &[PathBuf]) -> Change {
             continue;
         }
         match event.kind {
-            EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_)) => c.structural = true,
-            EventKind::Modify(_) => c.content = true,
+            EventKind::Modify(notify::event::ModifyKind::Name(_)) | EventKind::Remove(_) if !p.is_file() => c.structural = true,
+            EventKind::Create(_) => c.structural = true,
+            EventKind::Modify(_) | EventKind::Remove(_) => {
+                c.content = true;
+                if !c.edited.contains(p) {
+                    c.edited.push(p.clone());
+                }
+            }
             _ => {}
         }
     }
@@ -320,6 +362,7 @@ fn watch(root: PathBuf, cx: &mut App) {
                 c.config |= more.config;
                 c.history |= more.history;
                 c.vault_settings |= more.vault_settings;
+                c.edited.extend(more.edited);
             }
             cx.update(|cx| changed(c, cx));
         }
@@ -351,6 +394,7 @@ fn changed(c: Change, cx: &mut App) {
         super::sync::refresh(cx);
     }
     if c.structural || c.config {
+        let c = c.clone();
         let task = cx.spawn(async move |cx| {
             cx.background_executor().timer(Duration::from_millis(300)).await;
             cx.update(|cx| {
@@ -374,14 +418,28 @@ fn changed(c: Change, cx: &mut App) {
         cx.global_mut::<Store>().pending_reload = Some(task);
     }
     if c.structural || c.content || c.vault_settings {
-        if cx.global::<Store>().pending_index.is_some() {
+        let store = cx.global_mut::<Store>();
+        store.index_full |= c.structural || c.vault_settings;
+        for p in c.edited {
+            if !store.edited.contains(&p) {
+                store.edited.push(p);
+            }
+        }
+        if store.pending_index.is_some() {
             return;
         }
         let task = cx.spawn(async move |cx| {
             cx.background_executor().timer(Duration::from_secs(2)).await;
             cx.update(|cx| {
-                cx.global_mut::<Store>().pending_index = None;
-                reindex(cx);
+                let store = cx.global_mut::<Store>();
+                store.pending_index = None;
+                let full = std::mem::take(&mut store.index_full);
+                let edited = std::mem::take(&mut store.edited);
+                if full || edited.is_empty() {
+                    reindex(cx);
+                } else {
+                    reindex_edited(edited, cx);
+                }
             });
         });
         cx.global_mut::<Store>().pending_index = Some(task);
@@ -572,5 +630,32 @@ pub fn edit_config(cx: &mut App, f: impl FnOnce(&mut crate::core::model::StudyCo
     });
     if changed {
         schedule_config_save(cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify;
+    use notify::event::{ModifyKind, RenameMode};
+    use notify::{Event, EventKind};
+
+    #[test]
+    fn a_save_that_replaces_the_note_is_an_edit_and_a_move_or_delete_is_structural() {
+        let dir = std::env::temp_dir().join(format!("schrumbi-classify-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let note = dir.join("n.md");
+        std::fs::write(&note, "x").unwrap();
+        let roots = vec![dir.clone()];
+        let saved = classify(&Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::To))).add_path(note.clone()), &roots);
+        assert!(!saved.structural && saved.content && saved.edited == vec![note.clone()]);
+        let replaced = classify(&Event::new(EventKind::Remove(notify::event::RemoveKind::Any)).add_path(note.clone()), &roots);
+        assert!(!replaced.structural && replaced.edited == vec![note.clone()]);
+        let deleted = classify(&Event::new(EventKind::Remove(notify::event::RemoveKind::Any)).add_path(dir.join("weg.md")), &roots);
+        assert!(deleted.structural);
+        let tmp = classify(&Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From))).add_path(dir.join(".n.md.tmp")), &roots);
+        assert!(!tmp.structural && !tmp.content);
+        let moved = classify(&Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::From))).add_path(dir.join("alt.md")), &roots);
+        assert!(moved.structural);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
