@@ -50,6 +50,8 @@ pub struct VaultIndex {
     pub resolver: Resolver,
     pub notes: HashMap<PathBuf, Arc<NoteFacts>>,
     pub files: Vec<PathBuf>,
+    /// Modification time in seconds of every file, from the scan.
+    pub file_times: HashMap<PathBuf, f64>,
     /// Every folder, also the empty ones; hidden and excluded folders stay out.
     pub folders: Vec<PathBuf>,
     pub backlinks: HashMap<PathBuf, Vec<Mention>>,
@@ -227,10 +229,12 @@ pub fn rebuild(root: &Path, exclude: &[String]) {
         })
         .collect();
     notes.extend(read);
+    let file_times: HashMap<PathBuf, f64> = stamped.iter().map(|(p, modified, _)| (p.clone(), *modified)).collect();
     let files: Vec<PathBuf> = stamped.into_iter().map(|(p, _, _)| p).collect();
     let folders = list_folders(&root, exclude);
     let mut index = assemble(root, files, notes);
     index.folders = folders;
+    index.file_times = file_times;
     *CACHE.lock().unwrap() = index.notes.clone();
     publish(index);
     if hidden().paths.values().any(|ended| ended.is_some_and(|e| e < scan)) {
@@ -269,7 +273,7 @@ fn assemble(root: PathBuf, files: Vec<PathBuf>, notes: HashMap<PathBuf, Arc<Note
     for list in tags.values_mut() {
         list.sort();
     }
-    VaultIndex { reach: Some(super::config::reach(&root, &super::config::known_vaults(), super::config::obsidian_installed())), bookmarks: super::config::bookmarks(&root), types: super::config::property_types(&root), config: VaultConfig::read(&root), root, resolver, notes, files, folders: Vec::new(), backlinks, missing, tags, generation: 0 }
+    VaultIndex { reach: Some(super::config::reach(&root, &super::config::known_vaults(), super::config::obsidian_installed())), bookmarks: super::config::bookmarks(&root), types: super::config::property_types(&root), config: VaultConfig::read(&root), root, resolver, notes, files, file_times: HashMap::new(), folders: Vec::new(), backlinks, missing, tags, generation: 0 }
 }
 
 impl VaultIndex {
@@ -414,7 +418,9 @@ fn moved_in(index: &VaultIndex, old: &Path, new: &Path, folder: bool) -> VaultIn
     let mut files = index.files.clone();
     let mut notes = index.notes.clone();
     let mut folders = index.folders.clone();
+    let mut file_times = index.file_times.clone();
     if folder {
+        file_times = file_times.into_iter().map(|(p, at)| (follow(&p).unwrap_or(p), at)).collect();
         files.iter_mut().for_each(|f| *f = follow(f).unwrap_or_else(|| f.clone()));
         folders.iter_mut().for_each(|f| *f = follow(f).unwrap_or_else(|| f.clone()));
         let below: Vec<PathBuf> = notes.keys().filter(|p| follow(p).is_some()).cloned().collect();
@@ -426,12 +432,16 @@ fn moved_in(index: &VaultIndex, old: &Path, new: &Path, folder: bool) -> VaultIn
     } else {
         files.retain(|f| f != old);
         files.push(new.to_path_buf());
+        if let Some(at) = file_times.remove(old) {
+            file_times.insert(new.to_path_buf(), at);
+        }
         if let Some(facts) = notes.remove(old) {
             notes.insert(new.to_path_buf(), facts);
         }
     }
     let mut next = assemble(index.root.clone(), files, notes);
     next.folders = folders;
+    next.file_times = file_times;
     next
 }
 

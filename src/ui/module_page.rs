@@ -477,6 +477,15 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
             super::ai::file_submenu(m, &menu, window, cx)
         })
     });
+    let other = super::today::recent_files_in(&folder, 6);
+    let other_rows = other.into_iter().enumerate().map(|(i, (path, at))| {
+        let (open, menu) = (path.clone(), path.clone());
+        inset_file_row(("module-file-row", i), &path, path.file_name().unwrap_or_default().to_string_lossy().to_string(), t).child(caption(super::notes_page::changed_ago(now - at), t).flex_none()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).context_menu(move |menu_box, window, cx| {
+            let m = file_menu(menu_box, menu.clone());
+            super::ai::file_submenu(m, &menu, window, cx)
+        })
+    });
+    let other_rows: Vec<_> = other_rows.collect();
     let new_id = m.id.clone();
     let module_folder = m.folder.clone();
     let all_files = more_link("to-files", tr("Alle Dateien"), t).tooltip(tip(tr("Im Dateibaum zeigen"))).on_click(move |_, _, cx| {
@@ -507,6 +516,7 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
         .gap(px(space::XL))
         .child(div().flex().flex_col().gap(px(space::S)).child(section(title, add)).child(list))
         .child(div().flex().flex_col().gap(px(space::S)).child(section(section_title(tr("Zuletzt geschrieben")), Some(all_files))).child(files))
+        .when(!other_rows.is_empty(), |d| d.child(div().flex().flex_col().gap(px(space::S)).child(section(section_title(tr("Dateien")), None)).child(inset_list(t).children(other_rows))))
 }
 
 fn empty_card(icon_name: &str, title: String, detail: String, actions: impl IntoElement, t: &Theme) -> AnyElement {

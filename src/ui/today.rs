@@ -67,6 +67,37 @@ pub(super) fn recent_notes_in(within: Option<&std::path::Path>, limit: usize) ->
     })
 }
 
+/// Files that are not notes, newest first, below `within`, from the scan's own dates; cached per vault generation and folder.
+pub(super) fn recent_files_in(within: &std::path::Path, limit: usize) -> Vec<(std::path::PathBuf, f64)> {
+    type Recent = std::collections::HashMap<(std::path::PathBuf, usize), Vec<(std::path::PathBuf, f64)>>;
+    thread_local! {
+        static CACHE: std::cell::RefCell<((u64, u64), std::path::PathBuf, Recent)> = std::cell::RefCell::new(Default::default());
+    }
+    let vault = crate::core::vault::index::current();
+    let hidden = crate::core::vault::index::hidden();
+    CACHE.with_borrow_mut(|(generation, root, recent)| {
+        if *generation != (vault.generation, hidden.generation) || *root != vault.root {
+            (*generation, *root) = ((vault.generation, hidden.generation), vault.root.clone());
+            recent.clear();
+        }
+        recent
+            .entry((within.to_path_buf(), limit))
+            .or_insert_with(|| {
+                let hidden = crate::core::vault::index::hidden();
+                let mut files: Vec<(std::path::PathBuf, f64)> = vault
+                    .files
+                    .iter()
+                    .filter(|p| p.starts_with(&within) && !crate::core::markdown::is_markdown(p) && !hidden.hides(p))
+                    .filter_map(|p| Some((p.clone(), *vault.file_times.get(p)?)))
+                    .collect();
+                files.sort_by(|a, b| b.1.total_cmp(&a.1));
+                files.truncate(limit);
+                files
+            })
+            .clone()
+    })
+}
+
 /// What was written last, one click away.
 fn recent_notes(t: &Theme) -> Option<Div> {
     let notes = recent_notes_in(None, 5);
