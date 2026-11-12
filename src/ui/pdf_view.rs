@@ -67,6 +67,26 @@ const DRAG_SCROLL: f32 = 16.;
 const KEPT_STATES: usize = 16;
 const ATLAS_SIDE: usize = 1024;
 
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
+enum BarLevel {
+    Full,
+    Menu,
+    ShortPage,
+    Overflow,
+    ToolsInOverflow,
+}
+
+fn fit_items(menu: PopupMenu, slides: bool, current: Fit, view: Entity<PdfView>) -> PopupMenu {
+    let entry = |label: String, fit: Fit, view: Entity<PdfView>| PopupMenuItem::new(label).checked(fit == current).on_click(move |_, _, cx| view.update(cx, |v, cx| v.set_fit(fit, None, cx)));
+    menu.item(entry(tr("Breite einpassen"), Fit::Width, view.clone()))
+        .item(entry(if slides { tr("Folie einpassen") } else { tr("Seite einpassen") }, Fit::Page, view.clone()))
+        .separator()
+        .item(entry("50 %".into(), Fit::Scale(0.5), view.clone()))
+        .item(entry("100 %".into(), Fit::Scale(1.), view.clone()))
+        .item(entry("150 %".into(), Fit::Scale(1.5), view.clone()))
+        .item(entry("200 %".into(), Fit::Scale(2.), view))
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Fit {
     Width,
@@ -156,7 +176,7 @@ fn edge_crossing(from: [f32; 2], to: [f32; 2], size: (f32, f32)) -> [f32; 2] {
 }
 
 fn bar_action(id: &'static str, icon_name: &'static str, help: String, tint: Hsla, t: &Theme) -> Stateful<Div> {
-    div().id(id).p(px(space::XXS)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().key_nav().soft(t.ink.opacity(tint::HOVER), radius::SMALL).tooltip(tip(help)).child(icon(icon_name, iconsize::S, tint))
+    div().id(id).size(px(control::S)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().key_nav().soft(t.ink.opacity(tint::HOVER), radius::SMALL).tooltip(tip(help)).child(icon(icon_name, iconsize::S, tint))
 }
 
 fn arrow_keys(first: bool, last: bool) -> impl Fn(&KeyDownEvent, &mut Window, &mut App) + 'static {
@@ -1915,8 +1935,9 @@ impl PdfView {
         let (y_min, y_max) = (-oy + space::XS, -oy + self.geo.view.1 - space::XS);
         let x = (left + r[0] * scale).min(right).max(if covered { beside_panel } else { x_min });
         let below = top + (r[1] + r[3]) * scale + space::XS;
-        let above = top + r[1] * scale - control::M - space::XS;
-        let y = if below + control::M <= y_max { below } else { above }.min(y_max - control::M).max(y_min);
+        let first = part.rects.first().copied().unwrap_or(r);
+        let above = top + first[1] * scale - control::M - space::XS;
+        let y = if above >= y_min { above } else { below }.min(y_max - control::M).max(y_min);
         let me = cx.entity();
         let current = editing.map(|h| h.color.clone());
         let editing_id = editing.map(|h| h.id);
@@ -2323,7 +2344,7 @@ impl PdfView {
         }));
         self._subs.push(cx.subscribe_in(&page, window, |this, s, e: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = e {
-                if let Ok(n) = s.read(cx).value().trim().parse::<usize>() {
+                if let Some(n) = s.read(cx).value().trim().parse::<usize>().ok().filter(|n| n.saturating_sub(1) != this.current_page()) {
                     let last = this.page_count().saturating_sub(1);
                     if let Some(here) = this.anchor_at(0., 0.) {
                         this.history.push(here);
@@ -2337,7 +2358,7 @@ impl PdfView {
         }));
         self._subs.push(cx.subscribe_in(&zoom, window, |this, s, e: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = e {
-                if let Ok(percent) = s.read(cx).value().trim().trim_end_matches('%').trim().parse::<f32>() {
+                if let Some(percent) = s.read(cx).value().trim().trim_end_matches('%').trim().parse::<f32>().ok().filter(|p| (p - (this.geo.scale * 100.).round()).abs() >= 0.5) {
                     this.set_fit(Fit::Scale((percent / 100.).clamp(MIN_SCALE, MAX_SCALE)), None, cx);
                 }
                 this.editing_zoom = false;
@@ -2361,9 +2382,9 @@ impl PdfView {
         };
         if let Some(input) = input {
             input.update(cx, |s, cx| {
-                s.set_value("", window, cx);
-                s.set_placeholder(value, window, cx);
+                s.set_value(value, window, cx);
                 s.focus(window, cx);
+                s.select_all(window, cx);
             });
         }
         cx.notify();
@@ -2679,20 +2700,33 @@ impl PdfView {
         let current = self.current_page() + 1;
         let (m1, m2, m3, m4, m5, m6, m7) = (me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me.clone(), me.clone());
         let page_label = if self.slides { trf("Folie %lld von %lld", &[&current, &count]) } else { trf("Seite %lld von %lld", &[&current, &count]) };
+        let short_label = format!("{current} / {count}");
         let text = |s: &str| super::bar_fit::text_width(s, font::CALLOUT, FontWeight::NORMAL, window);
         let back_w = if self.history.is_empty() { 0. } else { control::S };
-        let pager_w = text(&page_label) + 2. * space::S;
+        let (long_w, short_w) = (text(&page_label) + 2. * space::S, text(&short_label) + 2. * space::S);
         let fields = [control::S, (space::XXL + space::L).max(text(&self.zoom_label())), control::S, control::S];
+        let export_w = if matches!(self.source, pdf_worker::Source::Pdf(_)) { control::S } else { 0. };
         let spacers = 2. * space::S;
-        let needed = |navigator: f32, pager: f32| super::bar_fit::row(&[&[navigator, back_w, pager][..], &fields[..], &self.tool_widths()[..]].concat(), space::S) + spacers + 2. * space::S;
-        let compact = self.bar.bar().is_some_and(|w| w < needed(self.navigator_width(), pager_w));
+        let needed = |level: BarLevel| {
+            let navigator = if level >= BarLevel::Menu { control::S + space::S } else { self.navigator_width() };
+            let pager = if level >= BarLevel::ShortPage { short_w } else { long_w };
+            let zoom: &[f32] = if level >= BarLevel::Overflow { &[control::S] } else { &[&fields[..], &[export_w][..]].concat() };
+            let tools: &[f32] = if level >= BarLevel::ToolsInOverflow { &[] } else { &self.tool_widths()[..] };
+            super::bar_fit::row(&[&[navigator, back_w, pager][..], zoom, tools].concat(), space::S) + spacers + 2. * space::S
+        };
+        let level = self.bar.bar().map_or(BarLevel::Full, |w| [BarLevel::Full, BarLevel::Menu, BarLevel::ShortPage, BarLevel::Overflow, BarLevel::ToolsInOverflow].into_iter().find(|l| w >= needed(*l)).unwrap_or(BarLevel::ToolsInOverflow));
+        let compact = level >= BarLevel::Menu;
+        let page_label = if level >= BarLevel::ShortPage { short_label } else { page_label };
         let off = self.marks_off(cx);
+        let current_fit = self.fit;
         let pager: AnyElement = match (&self.page_input, self.editing_page) {
             (Some(input), true) => div().w(px(space::XXL * 2.)).child(Input::new(input).small()).into_any_element(),
             _ => div()
                 .id("pdf-page-label")
                 .px(px(space::S))
-                .py(px(space::XXS))
+                .h(px(control::S))
+                .flex()
+                .items_center()
                 .rounded(px(radius::INNER))
                 .cursor_pointer()
                 .key_nav()
@@ -2709,9 +2743,10 @@ impl PdfView {
             _ => div()
                 .id("pdf-zoom-label")
                 .min_w(px(space::XXL + space::L))
+                .h(px(control::S))
                 .flex()
+                .items_center()
                 .justify_center()
-                .py(px(space::XXS))
                 .rounded(px(radius::INNER))
                 .cursor_pointer()
                 .key_nav()
@@ -2742,16 +2777,46 @@ impl PdfView {
             .child(div().flex_1())
             .child(pager)
             .child(div().flex_1())
-            .child(self.tool_group(&me, off.clone(), t))
-            .child(tool_button("pdf-out", "zoom-out", tr("Verkleinern"), false, false, t).on_click(move |_, _, cx| m5.update(cx, |v, cx| v.zoom_by(0.8, None, cx))))
-            .child(zoom_field)
-            .child(tool_button("pdf-in", "zoom-in", tr("Vergrößern"), false, false, t).on_click(move |_, _, cx| m6.update(cx, |v, cx| v.zoom_by(1.25, None, cx))))
-            .child(Button::new("pdf-fit").ghost().small().icon(menu_icon("chevron-down")).tooltip(tr("Einpassen")).dropdown_menu(move |menu, _, _| {
-                let entry = |label: String, fit: Fit, view: Entity<PdfView>| PopupMenuItem::new(label).on_click(move |_, _, cx| view.update(cx, |v, cx| v.set_fit(fit, None, cx)));
-                let v = m7.clone();
-                menu.item(entry(tr("Breite einpassen"), Fit::Width, v.clone())).item(entry(if slides { tr("Folie einpassen") } else { tr("Seite einpassen") }, Fit::Page, v.clone())).separator().item(entry("50 %".into(), Fit::Scale(0.5), v.clone())).item(entry("100 %".into(), Fit::Scale(1.), v.clone())).item(entry("150 %".into(), Fit::Scale(1.5), v.clone())).item(entry("200 %".into(), Fit::Scale(2.), v))
-            }))
-            .children(self.export_button(&me, off, t))
+            .when(level < BarLevel::ToolsInOverflow, |d| d.child(self.tool_group(&me, off.clone(), t)))
+            .when(level < BarLevel::Overflow, |d| {
+                d.child(tool_button("pdf-out", "zoom-out", tr("Verkleinern"), false, false, t).on_click(move |_, _, cx| m5.update(cx, |v, cx| v.zoom_by(0.8, None, cx))))
+                    .child(zoom_field)
+                    .child(tool_button("pdf-in", "zoom-in", tr("Vergrößern"), false, false, t).on_click(move |_, _, cx| m6.update(cx, |v, cx| v.zoom_by(1.25, None, cx))))
+                    .child(Button::new("pdf-fit").ghost().small().icon(menu_icon("chevron-down")).tooltip(tr("Einpassen")).dropdown_menu(move |menu, _, _| {
+                        let v = m7.clone();
+                        fit_items(menu, slides, current_fit, v)
+                    }))
+                    .children(self.export_button(&me, off.clone(), t))
+            })
+            .when(level >= BarLevel::Overflow, |d| d.child(self.overflow_menu(&me, level, off)))
+    }
+
+    fn overflow_menu(&self, me: &Entity<PdfView>, level: BarLevel, off: Option<String>) -> impl IntoElement + use<> {
+        let (view, slides, fit, tool, label) = (me.clone(), self.slides, self.fit, self.tool, self.zoom_label());
+        let (exportable, none, off_why) = (matches!(self.source, pdf_worker::Source::Pdf(_)), self.marks.is_empty(), off);
+        Button::new("pdf-overflow").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |mut menu, _, _| {
+            if level >= BarLevel::ToolsInOverflow {
+                for (kind, action, name) in [(Tool::Pen, ShortcutAction::PenTool, tr("Stift")), (Tool::Eraser, ShortcutAction::EraserTool, tr("Radierer")), (Tool::Note, ShortcutAction::NoteTool, tr("Notiz setzen"))] {
+                    let v = view.clone();
+                    let blocked = off_why.is_some() && tool != kind;
+                    menu = menu.item(PopupMenuItem::new(format!("{name}{}", action.hint())).checked(tool == kind).disabled(blocked).on_click(move |_, window, cx| v.update(cx, |v, cx| v.press_tool(kind, window, cx))));
+                }
+                menu = menu.separator();
+            }
+            let (out, zoom_in) = (view.clone(), view.clone());
+            menu = menu
+                .item(PopupMenuItem::new(label.clone()).disabled(true))
+                .item(PopupMenuItem::new(tr("Verkleinern")).icon(menu_icon("zoom-out")).on_click(move |_, _, cx| out.update(cx, |v, cx| v.zoom_by(0.8, None, cx))))
+                .item(PopupMenuItem::new(tr("Vergrößern")).icon(menu_icon("zoom-in")).on_click(move |_, _, cx| zoom_in.update(cx, |v, cx| v.zoom_by(1.25, None, cx))))
+                .separator();
+            menu = fit_items(menu, slides, fit, view.clone());
+            if exportable {
+                let v = view.clone();
+                let help = if none { tr("Mit Markierungen exportieren (noch keine Markierungen)") } else { tr("Mit Markierungen exportieren") };
+                menu = menu.separator().item(PopupMenuItem::new(help).icon(menu_icon("download")).disabled(none || off_why.is_some()).on_click(move |_, _, cx| v.update(cx, |v, cx| v.export_marked(cx))));
+            }
+            menu
+        })
     }
 
     fn tool_widths(&self) -> Vec<f32> {
@@ -2879,7 +2944,7 @@ impl PdfView {
         let none = self.marks.is_empty();
         let view = me.clone();
         let help = match &off {
-            _ if none => tr("Noch keine Markierungen"),
+            _ if none => tr("Mit Markierungen exportieren (noch keine Markierungen)"),
             Some(why) => format!("{}: {why}", tr("Mit Markierungen exportieren")),
             None => format!("{}{}", tr("Mit Markierungen exportieren"), ShortcutAction::ExportMarkedPdf.hint()),
         };
@@ -2924,7 +2989,7 @@ impl PdfView {
                     .items_center()
                     .justify_center()
                     .w(px(control::S))
-                    .h(px(control::S - 2. * space::XXS))
+                    .h(px(control::S))
                     .rounded(px(radius::SMALL))
                     .cursor_pointer()
                     .key_nav()
@@ -3947,7 +4012,7 @@ impl PdfView {
         };
         bar.child(on(self.page_button("pdf-pages-left", "rotate-ccw", help(ShortcutAction::RotatePagesLeft, labels.left), t), |v, cx| v.rotate_pages(None, false, cx)))
             .child(on(self.page_button("pdf-pages-right", "rotate-cw", help(ShortcutAction::RotatePagesRight, labels.right), t), |v, cx| v.rotate_pages(None, true, cx)))
-            .child(on(self.page_button("pdf-pages-delete", "trash-2", help(ShortcutAction::DeletePages, labels.delete), t), |v, cx| v.delete_pages(None, cx)))
+            .child(on(self.page_button("pdf-pages-delete", "trash-2", help(ShortcutAction::DeletePages, labels.delete), t).ml(px(space::S)), |v, cx| v.delete_pages(None, cx)))
             .child(on(self.page_button("pdf-pages-insert", "file-plus", help(ShortcutAction::InsertPdf, tr("Seiten aus PDF einfügen …")), t), |v, cx| v.choose_pdf(None, cx)))
             .child(div().flex_1())
             .when(chosen > 1, |d| d.child(div().min_w_0().truncate().font_features(tabular()).text_size(px(font::CAPTION)).text_color(t.secondary).child(trf("%lld ausgewählt", &[&chosen]))))

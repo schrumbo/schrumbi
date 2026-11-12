@@ -24,6 +24,8 @@ pub const DEFAULT_ACCENT: &str = "#0EA5E9";
 pub struct Meta {
     pub left: String,
     pub right: String,
+    /// The document title in the file's properties.
+    pub title: String,
 }
 
 /// PDF settings from Settings → Notizen.
@@ -656,6 +658,10 @@ fn preamble(o: &Options, meta: Option<&Meta>) -> String {
     } else {
         "none"
     };
+    let title = match meta.map(|m| m.title.trim()).filter(|t| !t.is_empty()) {
+        Some(t) => str_arg(t),
+        None => "none".to_string(),
+    };
     let header = match meta.filter(|_| o.header) {
         Some(m) if !(m.left.is_empty() && m.right.is_empty()) => format!(
             "#block(width: 100%, below: 9mm, stroke: (bottom: 0.75pt + rule), inset: (bottom: 2.5mm), text(size: 8.5pt, fill: muted, tracking: 0.01em, grid(columns: (1fr, auto), column-gutter: 12pt, {}, {})))\n\n",
@@ -679,7 +685,7 @@ fn preamble(o: &Options, meta: Option<&Meta>) -> String {
   let probe = block(width: 100%, ..props, body)
   block(breakable: measure(width: size.width, probe).height > limit * texth, width: 100%, ..props, body)
 }}))
-#set document(title: none)
+#set document(title: {title})
 #set page(paper: "a4", margin: 56pt, footer: {footer}, footer-descent: 18pt)
 #set text(font: {SANS}, size: 10.5pt, fill: ink, lang: "{lang}", hyphenate: true)
 #set par(leading: 0.9em, spacing: 3mm)
@@ -1092,7 +1098,7 @@ mod tests {
 
     #[test]
     fn renders_every_block_type() {
-        let pdf = render(SAMPLE, Path::new("/"), Some(&Meta { left: "P1 · Projekt".into(), right: "Name · 30. Oktober 2026".into() }), &opts()).unwrap();
+        let pdf = render(SAMPLE, Path::new("/"), Some(&Meta { left: "P1 · Projekt".into(), right: "Name · 30. Oktober 2026".into(), title: String::new() }), &opts()).unwrap();
         assert!(pdf.starts_with(b"%PDF"));
     }
 

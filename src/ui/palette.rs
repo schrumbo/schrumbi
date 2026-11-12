@@ -248,7 +248,14 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&file, tr("Umbenennen…"), "pencil", keys(S::RenameNote), Run::Call(Rc::new(move |cx| app::rename_file(target.clone(), cx))));
     }
     if in_document && state::read(cx, |l| l.split_document.is_some()) {
+        add(&view, tr("Zur anderen Seite wechseln"), "repeat", None, Run::Call(Rc::new(|cx| act(cx, |l| {
+            l.beside_active = !l.beside_active;
+            if l.beside_active { l.focus_beside = true } else { l.focus_document = true }
+        }))));
         add(&view, tr("Geteilte Ansicht schließen"), "columns-2", None, Run::Call(Rc::new(|cx| act(cx, |l| l.set_split(None)))));
+    }
+    if let Some(doc) = focused.clone().filter(|d| state::read(cx, |l| l.split_document.is_none() && l.can_drop_document(d, crate::core::library::DocDrop::Beside, None))) {
+        add(&view, tr("Daneben öffnen"), "columns-2", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.drop_document(&doc, crate::core::library::DocDrop::Beside, None)))));
     }
     if state::read(cx, |l| l.can_undo()) {
         add(&edit, tr("Rückgängig"), "undo-2", Some(fixed_keys("Z")), Run::Action(Box::new(app::Undo)));
