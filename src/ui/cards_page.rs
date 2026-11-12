@@ -24,6 +24,9 @@ use crate::core::prefs;
 use crate::core::text::fold;
 use crate::core::vault::index;
 
+const STUDY_SCALE: f32 = 1.6;
+const STUDY_WIDTH: f32 = 400.;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Filter {
     All,
@@ -88,6 +91,8 @@ struct Session {
     shown: bool,
     /// What can be taken back, with the answer it counted as.
     answered: Vec<(cards::Answered, Option<usize>)>,
+    /// Answers taken back and not yet replaced by a new one.
+    undone: Vec<(String, Rating)>,
     ratings: [usize; 4],
     started: i64,
     left: Counts,
@@ -101,7 +106,7 @@ struct Session {
 
 impl Session {
     fn new(deck: String, cram: Option<Vec<Card>>) -> Self {
-        Self { deck, current: None, front: parsed(""), back: parsed(""), shown: false, answered: Vec::new(), ratings: [0; 4], started: cards::now(), left: Counts::default(), cram, crammed: Vec::new(), shown_at: std::time::Instant::now() }
+        Self { deck, current: None, front: parsed(""), back: parsed(""), shown: false, answered: Vec::new(), undone: Vec::new(), ratings: [0; 4], started: cards::now(), left: Counts::default(), cram, crammed: Vec::new(), shown_at: std::time::Instant::now() }
     }
 
     fn show(&mut self, card: Card, answered: bool) {
@@ -195,6 +200,22 @@ fn deck_rows(all: &[Card], open: &BTreeSet<String>, cx: &App) -> Vec<DeckRow> {
     let mut out = Vec::new();
     walk("", 0, &children, &totals, open, cx, &mut out);
     out
+}
+
+fn every_deck(all: &[Card]) -> BTreeSet<String> {
+    let mut open = BTreeSet::new();
+    for card in all {
+        let mut parent = String::new();
+        for part in card.note_rel.split('/') {
+            parent = if parent.is_empty() { part.to_string() } else { format!("{parent}/{part}") };
+            open.insert(parent.clone());
+        }
+    }
+    open
+}
+
+fn counts_text(counts: Counts) -> String {
+    [counts.new, counts.learning, counts.review].iter().filter(|n| **n > 0).map(ToString::to_string).collect::<Vec<_>>().join(" · ")
 }
 
 fn counts_pills(counts: Counts, t: &Theme) -> Div {
@@ -411,9 +432,13 @@ impl CardsPage {
     }
 
     fn rate(&mut self, rating: Rating, cx: &mut Context<Self>) {
+        self.answer(rating, false, cx);
+    }
+
+    fn answer(&mut self, rating: Rating, redoing: bool, cx: &mut Context<Self>) {
         let Some(s) = &mut self.session else { return };
         let Some(card) = s.current.clone().filter(|_| s.shown) else { return };
-        if s.shown_at.elapsed() < std::time::Duration::from_millis(120) {
+        if !redoing && s.shown_at.elapsed() < std::time::Duration::from_millis(120) {
             return;
         }
         if let Some(rest) = &mut s.cram {
@@ -425,6 +450,9 @@ impl CardsPage {
         } else {
             let done = cards::answer(&card, rating, cards::now());
             s.answered.push((done, Some(rating as usize - 1)));
+        }
+        if !redoing {
+            s.undone.clear();
         }
         s.ratings[rating as usize - 1] += 1;
         Self::advance(s, Some(card.id()));
@@ -455,19 +483,35 @@ impl CardsPage {
             return;
         }
         let Some((done, rating)) = s.answered.pop() else { return };
-        if let Some(rating) = rating {
-            s.ratings[rating] = s.ratings[rating].saturating_sub(1);
-        }
         let id = done.id.clone();
+        match rating {
+            Some(rating) => {
+                s.ratings[rating] = s.ratings[rating].saturating_sub(1);
+                s.undone.push((id.clone(), Rating::ALL[rating]));
+            }
+            None => s.undone.clear(),
+        }
         cards::undo(done);
         let card = cards::all_cards().iter().find(|c| c.id() == id).cloned();
-        if let Some(card) = card {
-            s.show(card, rating.is_some());
+        match card {
+            Some(card) => s.show(card, rating.is_some()),
+            None => s.undone.clear(),
         }
         s.left = cards::counts(&s.deck, cards::now());
         self.review_scroll.set_offset(point(px(0.), px(0.)));
         state::lib(cx).update(cx, |_, cx| cx.notify());
         cx.notify();
+    }
+
+    fn redo(&mut self, cx: &mut Context<Self>) {
+        let next = self.session.as_mut().and_then(|s| {
+            let ready = s.shown && s.current.as_ref().is_some_and(|c| s.undone.last().is_some_and(|(id, _)| *id == c.id()));
+            if ready { s.undone.pop().map(|(_, rating)| rating) } else { s.undone.clear(); None }
+        });
+        match next {
+            Some(rating) => self.answer(rating, true, cx),
+            None => act(cx, |l| l.notify(tr("Nichts zu wiederholen"), "info", None, None)),
+        }
     }
 
     fn set_aside(&mut self, suspend: bool, cx: &mut Context<Self>) {
@@ -477,6 +521,7 @@ impl CardsPage {
             return;
         }
         s.answered.push((cards::before_change(&card), None));
+        s.undone.clear();
         if suspend {
             cards::set_suspended(&card, true);
         } else {
@@ -1013,20 +1058,20 @@ impl CardsPage {
             .gap(px(space::XXS))
             .p(px(space::M))
             .rounded(px(radius::CARD))
-            .border_1()
-            .border_color(t.separator)
+            .bg(t.ink.opacity(0.04))
             .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).truncate().child(label))
             .child(div().text_size(px(font::TITLE)).font_weight(FontWeight::SEMIBOLD).font_features(tabular()).truncate().child(value))
             .children(detail.map(|d| div().text_size(px(font::CAPTION)).text_color(t.tertiary).truncate().child(d)))
     }
 
-    fn forecast(stats: &cards::Stats, t: &Theme) -> Div {
-        let most = stats.forecast.iter().copied().max().unwrap_or(0).max(1);
+    fn forecast(stats: &cards::Stats, backlog: usize, t: &Theme) -> Div {
+        let shown: Vec<usize> = stats.forecast.iter().enumerate().map(|(i, n)| if i == 0 { n.saturating_sub(backlog) } else { *n }).collect();
+        let most = shown.iter().copied().max().unwrap_or(0).max(1);
         let today = chrono::Local::now().date_naive();
-        let bars = stats.forecast.iter().enumerate().map(|(i, n)| {
+        let bars = shown.iter().enumerate().map(|(i, n)| {
             let share = *n as f32 / most as f32;
             let day = today + chrono::Days::new(i as u64);
-            let label = if i == 0 { tr("Heute") } else { day.format("%d.").to_string() };
+            let label = if i == 0 { tr("Heute") } else { crate::core::day::weekday_short(day).to_string() };
             div()
                 .id(("forecast", i))
                 .flex_1()
@@ -1262,7 +1307,7 @@ impl CardsPage {
             .into_any_element()
     }
 
-    fn overview(&mut self, now: i64, room: f32, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn overview(&mut self, now: i64, room: f32, switcher: bool, height: f32, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let room = room - if self.selected.is_some() || self.marked.len() > 1 { 320. } else { 0. };
         let deck = self.deck.clone();
         let counts = cards::counts(&deck, now);
@@ -1289,9 +1334,16 @@ impl CardsPage {
             l.semester_assignments().iter().filter(|a| a.module_id == module && a.kind == crate::core::model::Kind::Exam && a.due.timestamp() > now).map(|a| a.due.timestamp()).min()
         });
         let status = match exam {
-            Some(at) => format!("{status} · {}", trf("Prüfung in %@", &[&in_time(now, at)])),
+            Some(at) => {
+                let days = ((at - now) as f64 / 86_400.).ceil().max(1.) as usize;
+                let open = stats.new + stats.young;
+                let pace = if open > 0 { format!(" · {}", trf("%@ Karten noch offen, etwa %@ pro Tag", &[&open.to_string(), &open.div_ceil(days).to_string()])) } else { String::new() };
+                format!("{status} · {}{pace}", trf("Prüfung in %@", &[&in_time(now, at)]))
+            }
             None => status,
         };
+        let backlog = stats.forecast.first().copied().unwrap_or(0).saturating_sub(counts.learning + counts.review);
+        let status = if backlog > 0 { format!("{status} · {}", trf("%@ weitere folgen an den nächsten Tagen", &[&backlog.to_string()])) } else { status };
         let (start_deck, cram_deck) = (deck.clone(), deck.clone());
         let head = div()
             .flex_none()
@@ -1299,6 +1351,22 @@ impl CardsPage {
             .items_center()
             .gap(px(space::M))
             .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).truncate().child(title)).child(div().text_color(t.secondary).truncate().child(if stats.total == 0 { status } else { format!("{} · {status}", if stats.total == 1 { tr("1 Karte") } else { trf("%@ Karten", &[&stats.total.to_string()]) }) })))
+            .when(switcher, |d| {
+                let (me, all, current) = (cx.entity(), self.all.clone(), deck.clone());
+                d.child(Button::new("cards-deck").ghost().icon(menu_icon("layers")).label(tr("Stapel")).dropdown_caret(true).tooltip(tr("Stapel wählen")).dropdown_menu(move |menu, _, cx| {
+                    let (e, now) = (me.clone(), cards::now());
+                    let mut menu = menu.item(PopupMenuItem::new(format!("{}  {}", tr("Alle Karten"), counts_text(cards::counts("", now)))).checked(current.is_empty()).on_click({
+                        let e = e.clone();
+                        move |_, _, cx| e.update(cx, |p, cx| p.select_deck(String::new(), cx))
+                    }));
+                    for row in deck_rows(&all, &every_deck(&all), cx) {
+                        let (e, deck) = (e.clone(), row.deck.clone());
+                        let label = format!("{}{}  {}", "\u{2003}".repeat(row.depth), row.name, counts_text(cards::counts(&row.deck, now)));
+                        menu = menu.item(PopupMenuItem::new(label).checked(row.deck == current).on_click(move |_, _, cx| e.update(cx, |p, cx| p.select_deck(deck.clone(), cx))));
+                    }
+                    menu
+                }))
+            })
             .child(Button::new("cards-more").ghost().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu({
                 let me = cx.entity();
                 move |menu, _, _| {
@@ -1323,15 +1391,23 @@ impl CardsPage {
             .child(Button::new("cards-new").icon(menu_icon("plus")).label(tr("Neue Karte")).tooltip(tr("Neue Karte (N)")).on_click(cx.listener(|p, _, window, cx| p.compose(None, window, cx))))
             .child(Button::new("cards-learn").primary().min_w(px(control::COUNTED)).icon(menu_icon("graduation-cap")).label(if total > 0 { trf("Lernen (%@)", &[&total.to_string()]) } else { tr("Lernen") }).tooltip(tr("Lernen (Leertaste)")).disabled(total == 0).on_click(cx.listener(move |p, _, window, cx| p.start(start_deck.clone(), window, cx))));
         let retention = stats.true_retention.map_or_else(|| "–".to_string(), |r| format!("{:.0} %", r * 100.));
+        let streak = if stats.streak == 1 { tr("1 Tag") } else { trf("%@ Tage", &[&stats.streak.to_string()]) };
         let tiles = div()
             .flex_none()
             .flex()
             .gap(px(space::M))
             .child(Self::stat_tile(tr("Heute gelernt"), stats.reviewed_today.to_string(), None, t))
-            .child(Self::stat_tile(tr("Trefferquote"), retention, Some(tr("letzte 30 Tage")), t))
-            .child(Self::stat_tile(tr("Serie"), if stats.streak == 1 { tr("1 Tag") } else { trf("%@ Tage", &[&stats.streak.to_string()]) }, None, t))
-            .child(Self::stat_tile(tr("Gefestigt"), format!("{} / {}", stats.mature, stats.total), Some(tr("ab 3 Wochen")), t));
-        let forecast = Self::forecast(&stats, t);
+            .child(Self::stat_tile(tr("Trefferquote"), retention.clone(), Some(tr("letzte 30 Tage")), t))
+            .when(stats.streak >= 3, |d| d.child(Self::stat_tile(tr("Serie"), streak.clone(), None, t)))
+            .when(stats.mature > 0, |d| d.child(Self::stat_tile(tr("Gefestigt"), stats.mature.to_string(), Some(trf("von %@", &[&stats.total.to_string()])), t)));
+        let line = {
+            let mut parts = vec![format!("{} {}", tr("Heute gelernt"), stats.reviewed_today), format!("{} {retention}", tr("Trefferquote"))];
+            if stats.streak >= 3 {
+                parts.push(format!("{} {streak}", tr("Serie")));
+            }
+            caption(parts.join(" · "), t).truncate()
+        };
+        let forecast = Self::forecast(&stats, backlog, t);
         let rows = self.visible(now, cx);
         let me = cx.entity();
         let selected = self.selected.clone();
@@ -1364,7 +1440,7 @@ impl CardsPage {
             }))
         }));
         let narrow = room < 640.;
-        let browser = div().flex_1().min_h_0().flex().flex_col().child(div().flex_none().px(px(space::L)).py(px(space::S)).flex().flex_wrap().items_center().gap(px(space::S)).border_t_1().border_b_1().border_color(t.separator).child(div().w(px(if narrow { 150. } else { 220. })).child(Input::new(&self.query).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary)))).child(filters).child(div().flex_1()).child(Button::new("cards-order").ghost().small().when(narrow, |b| b.icon(menu_icon("arrow-up-down"))).when(!narrow, |b| b.label(order_label(current_order)).dropdown_caret(true)).tooltip(trf("Sortierung: %@", &[&order_label(current_order)])).dropdown_menu({
+        let browser = div().flex_1().min_h_0().flex().flex_col().child(div().flex_none().px(px(space::L)).py(px(space::S)).flex().flex_wrap().items_center().gap(px(space::S)).border_t_1().border_b_1().border_color(t.separator).child(div().w(px(if narrow { 170. } else { 220. })).child(Input::new(&self.query).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary)))).child(filters).child(div().flex_1()).child(Button::new("cards-order").ghost().small().when(narrow, |b| b.icon(menu_icon("arrow-up-down"))).when(!narrow, |b| b.label(order_label(current_order)).dropdown_caret(true)).tooltip(trf("Sortierung: %@", &[&order_label(current_order)])).dropdown_menu({
                     let me = cx.entity();
                     move |mut menu, _, _| {
                         for choice in [Order::Note, Order::Due, Order::Hardest] {
@@ -1376,17 +1452,18 @@ impl CardsPage {
                         }
                         menu
                     }
-                }))).child(div().flex_1().min_h_0().child(list));
+                }))).child(div().flex_1().min_h_0().w_full().max_w(px(960.)).child(list));
         let chosen = self.selected.as_ref().filter(|_| self.marked.len() <= 1).and_then(|id| self.all.iter().find(|c| c.id() == id)).cloned();
         let many = (self.marked.len() > 1).then(|| self.many_panel(t, cx));
-        let summary: Option<AnyElement> = if room >= 900. {
+        let tight = room < 700. || height < 640.;
+        let summary: Option<AnyElement> = if room >= 900. && height >= 640. {
             Some(div().flex().gap(px(space::XL)).child(div().flex_1().min_w_0().child(tiles)).child(div().w(px(340.)).flex_none().child(forecast)).into_any_element())
-        } else if room >= 560. {
+        } else if !tight {
             Some(tiles.into_any_element())
         } else {
-            None
+            Some(line.into_any_element())
         };
-        let main = div().flex_1().min_w_0().h_full().flex().flex_col().child(div().flex_none().p(px(space::XL)).pb(px(space::L)).flex().flex_col().gap(px(space::L)).child(head).children(summary)).child(browser);
+        let main = div().flex_1().min_w_0().h_full().flex().flex_col().child(div().flex_none().p(px(if tight { space::L } else { space::XL })).pb(px(space::L)).flex().flex_col().gap(px(space::L)).child(head).children(summary)).child(browser);
         div().size_full().flex().child(main).when_some(chosen, |d, card| d.child(self.detail_panel(&card, t, cx))).children(many).into_any_element()
     }
 
@@ -1443,12 +1520,12 @@ impl CardsPage {
         let phase = card.phase();
         let now = cards::now();
         let base = card.note.parent().map(Path::to_path_buf);
-        let front = super::theme::with_note_scale(1.3, || markdown_view::render(&s.front, base.as_deref(), None, t));
-        let back = s.shown.then(|| super::theme::with_note_scale(1.3, || markdown_view::render(&s.back, base.as_deref(), None, t)));
+        let front = super::theme::with_note_scale(STUDY_SCALE, || markdown_view::render(&s.front, base.as_deref(), None, t));
+        let back = s.shown.then(|| super::theme::with_note_scale(STUDY_SCALE, || markdown_view::render(&s.back, base.as_deref(), None, t)));
         let shown = s.shown;
         let can_undo = !s.answered.is_empty() || !s.crammed.is_empty();
         let cramming = s.cram.is_some();
-        let count_piece = |n: usize, color: Hsla, on: bool, label: String| div().px(px(space::S)).h(px(control::S)).flex().items_center().rounded(px(radius::INNER)).when(on, |d| d.bg(color.opacity(0.16))).text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).font_features(tabular()).text_color(color).child(format!("{n} {label}"));
+        let count_piece = |n: usize, color: Hsla, on: bool, label: String| div().px(px(space::S)).h(px(control::S)).flex().items_center().rounded(px(radius::INNER)).when(on, |d| d.bg(color.opacity(0.12))).text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).font_features(tabular()).text_color(if n == 0 { t.secondary } else { t.readable_on(color, t.content) }).child(format!("{n} {label}"));
         let (menu_card, menu_me) = (card.clone(), cx.entity());
         let bar = div()
             .flex_none()
@@ -1467,6 +1544,7 @@ impl CardsPage {
             })
             .child(div().flex_1())
             .child(Button::new("review-undo").ghost().small().icon(menu_icon("undo-2")).tooltip(tr("Letzte Antwort zurück (⌘Z)")).disabled(!can_undo).on_click(cx.listener(|p, _, _, cx| p.undo(cx))))
+            .child(Button::new("review-redo").ghost().small().icon(menu_icon("redo-2")).tooltip(tr("Antwort erneut geben (⌘⇧Z)")).disabled(s.undone.is_empty()).on_click(cx.listener(|p, _, _, cx| p.redo(cx))))
             .child(Button::new("review-edit").ghost().small().icon(menu_icon("pencil")).tooltip(tr("Karte bearbeiten (E)")).on_click({
                 let edit = card.clone();
                 cx.listener(move |p, _, window, cx| p.compose(Some(edit.clone()), window, cx))
@@ -1492,10 +1570,10 @@ impl CardsPage {
             .overflow_y_scroll()
             .track_scroll(&self.review_scroll)
             .child(
-                div().w_full().flex().flex_col().items_center().px(px(space::XL)).pt(px(space::XXL * 2.)).pb(px(space::XL)).child(
+                div().w_full().min_h(relative(1.)).flex().flex_col().items_center().justify_center().px(px(space::XL)).py(px(space::XL)).child(
                     div()
                         .w_full()
-                        .max_w(px(720. * super::theme::note_scale()))
+                        .max_w(px(640. * super::theme::note_scale()))
                         .flex()
                         .flex_col()
                         .gap(px(space::L))
@@ -1514,18 +1592,20 @@ impl CardsPage {
             div()
                 .flex_none()
                 .p(px(space::M))
+                .h(px(control::FOOTBAR + space::M * 2. + 1.))
                 .border_t_1()
                 .border_color(t.separator)
                 .flex()
+                .items_center()
                 .justify_center()
-                .gap(px(space::S))
-                .children(Rating::ALL.iter().enumerate().filter(|(_, r)| !cramming || matches!(r, Rating::Again | Rating::Good)).map(|(i, rating)| {
+                .child(div().w(px(STUDY_WIDTH)).max_w_full().flex().gap(px(space::XS)).children(Rating::ALL.iter().enumerate().filter(|(_, r)| !cramming || matches!(r, Rating::Again | Rating::Good)).map(|(i, rating)| {
                     let rating = *rating;
                     let color = colors[i];
                     let hover = color.opacity(0.16);
                     div()
                         .id(("rate", i))
-                        .w(px(if cramming { 200. } else { 132. }))
+                        .flex_1()
+                        .min_w_0()
                         .h(px(control::FOOTBAR))
                         .flex()
                         .flex_col()
@@ -1539,14 +1619,15 @@ impl CardsPage {
                         .cursor_pointer()
                         .key_nav()
                         .soft(hover, radius::CONTROL)
+                        .when(rating == Rating::Good, |d| d.tooltip(tip(tr("Gut (3 oder Leertaste)"))))
                         .when(!cramming, |d| d.child(div().text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child({ cards::wait_label(now, choices[i].due) })))
-                        .child(div().flex().items_start().gap(px(space::XS)).child(div().text_size(px(font::BODY)).line_height(px(line)).font_weight(FontWeight::SEMIBOLD).text_color(t.readable(color)).child(if cramming && rating == Rating::Good { tr("Gewusst") } else { rating_name(rating) })).child(div().relative().top(px(drop)).text_size(px(font::CAPTION2)).line_height(px(line)).text_color(t.tertiary).child(if rating == Rating::Good { format!("{} · {}", i + 1, tr("Leertaste")) } else { (i + 1).to_string() })))
+                        .child(div().flex().items_start().gap(px(space::XS)).child(div().text_size(px(font::BODY)).line_height(px(line)).font_weight(FontWeight::SEMIBOLD).text_color(t.readable(color)).child(if cramming && rating == Rating::Good { tr("Gewusst") } else { rating_name(rating) })).child(div().relative().top(px(drop)).text_size(px(font::CAPTION2)).line_height(px(line)).text_color(t.tertiary).child((i + 1).to_string())))
                         .on_click(cx.listener(move |p, e: &ClickEvent, _, cx| {
                             if e.click_count() <= 1 {
                                 p.rate(rating, cx);
                             }
                         }))
-                }))
+                })))
                 .into_any_element()
         } else {
             div()
@@ -1561,7 +1642,7 @@ impl CardsPage {
                 .child(
                     div()
                         .id("reveal")
-                        .w(px(320.))
+                        .w(px(STUDY_WIDTH))
                         .h(px(control::FOOTBAR))
                         .flex()
                         .items_center()
@@ -1716,7 +1797,7 @@ impl Render for CardsPage {
             self.empty_room(&t, cx)
         } else {
             let room = width - super::sidebar::RAIL - if width > 860. { 260. } else { 0. };
-            self.overview(now, room, &t, cx)
+            self.overview(now, room, width <= 860., f32::from(window.viewport_size().height), &t, cx)
         };
         let side = (!reviewing && !self.all.is_empty() && width > 860.).then(|| self.deck_column(now, &t, cx));
         let accent = t.accent;
@@ -1760,6 +1841,12 @@ impl Render for CardsPage {
                     if p.can_undo() {
                         p.undo(cx);
                     }
+                }
+            }))
+            .capture_action(cx.listener(|p, _: &super::app::Redo, _, cx| {
+                if p.session.is_some() {
+                    cx.stop_propagation();
+                    p.redo(cx);
                 }
             }))
             .capture_key_down(cx.listener(|p, e: &KeyDownEvent, window, cx| {
@@ -2047,7 +2134,7 @@ impl CardComposer {
     }
 
     /// Why the card cannot be saved yet, or what to know before saving it.
-    fn notice(&self, cx: &App) -> Option<String> {
+    fn notice(&self, window: &Window, cx: &App) -> Option<String> {
         if let Some(error) = &self.error {
             return Some(error.clone());
         }
@@ -2059,7 +2146,12 @@ impl CardComposer {
         if found.is_empty() {
             return Some(match self.kind {
                 ComposeKind::Cloze => tr("Markiere ein Wort und drück „Lücke“."),
-                _ if self.back.read(cx).value().trim().is_empty() => tr("Die Rückseite fehlt noch."),
+                _ if self.back.read(cx).value().trim().is_empty() => {
+                    if self.front.read(cx).focus_handle(cx).is_focused(window) || self.back.read(cx).focus_handle(cx).is_focused(window) {
+                        return None;
+                    }
+                    tr("Die Rückseite fehlt noch.")
+                }
                 _ => tr("Das ergibt keine Karte."),
             });
         }
@@ -2080,7 +2172,7 @@ impl Render for CardComposer {
             });
         }
         let kind = self.kind;
-        let kinds = [(ComposeKind::Basic, tr("Einfach"), "file-question"), (ComposeKind::Both, tr("Beide Richtungen"), "repeat-2"), (ComposeKind::Cloze, tr("Lückentext"), "scan")];
+        let kinds = [(ComposeKind::Basic, tr("Eine Richtung"), "file-question"), (ComposeKind::Both, tr("Beide Richtungen"), "repeat-2"), (ComposeKind::Cloze, tr("Lückentext"), "scan")];
         let switch = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS)).children(kinds.into_iter().map(|(k, label, name)| {
             let on = k == kind;
             div().id(SharedString::from(format!("kind-{name}"))).h(px(control::S)).px(px(space::S)).flex().items_center().gap(px(space::XS)).rounded(px(radius::SMALL)).when(!on, |d| d.soft(t.ink.opacity(0.06), radius::SMALL)).cursor_pointer().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.12))).child(icon(name, iconsize::S, if on { t.primary } else { t.secondary })).child(label).on_click(cx.listener(move |c, _, _, cx| {
@@ -2130,9 +2222,9 @@ impl Render for CardComposer {
             .child(div().flex().items_center().justify_between().child(field_label(if cloze { tr("Text mit Lücken") } else { tr("Vorderseite") })).child(Button::new("card-gap").ghost().small().icon(menu_icon("scan")).label(tr("Lücke")).tooltip(tr("Macht aus der Auswahl eine Lücke (⌘⇧C)")).on_click(cx.listener(|c, _, window, cx| c.make_gap(window, cx)))))
             .child(Textarea::new(&self.front))
             .when(!cloze, |d| d.child(field_label(tr("Rückseite"))).child(Textarea::new(&self.back)))
-            .child(match self.notice(cx) {
+            .child(match self.notice(window, cx) {
                 Some(text) => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange_text).child(icon("triangle-alert", iconsize::XS, t.orange_text)).child(div().flex_1().min_w_0().child(text)),
-                None => caption(tr("Markdown, Formeln mit $…$ und Bilder gehen überall."), &t),
+                None => caption(tr("Formatierung, Formeln mit $…$ und Bilder gehen überall."), &t),
             });
         let preview = div()
             .id("card-preview")
@@ -2201,7 +2293,7 @@ impl Render for CardComposer {
                     .child(div().flex_1())
                     .when(self.added > 0, |d| d.child(caption(if self.added == 1 { tr("1 Karte angelegt") } else { trf("%@ Karten angelegt", &[&self.added.to_string()]) }, &t)))
                     .child(Button::new("card-close").label(if self.added > 0 { tr("Fertig") } else { tr("Abbrechen") }).on_click(cx.listener(|c, _, _, cx| c.close(cx))))
-                    .child(caption(if self.kind == ComposeKind::Cloze { "⌘⇧C · ⌘↩".to_string() } else { "⇥ · ⌘↩".to_string() }, &t))
+                    .child(caption(if self.kind == ComposeKind::Cloze { tr("⌘⇧C · ⌘↩") } else { tr("Tab · ⌘↩") }, &t))
                     .child(Button::new("card-save").primary().label(if editing { tr("Sichern") } else { tr("Anlegen") }).disabled(!valid).on_click(cx.listener(|c, _, window, cx| c.save(window, cx)))),
             )
     }
@@ -2230,6 +2322,7 @@ pub struct CardImport {
     error: Option<String>,
     working: bool,
     keep_progress: bool,
+    pending: bool,
     folder: Entity<InputState>,
     _load: Option<Task<()>>,
     _enter: Subscription,
@@ -2260,14 +2353,20 @@ impl CardImport {
                     Ok(package) => s.package = Some(package),
                     Err(e) => s.error = Some(e.to_string()),
                 }
+                if std::mem::take(&mut s.pending) && s.package.is_some() {
+                    s.start(cx);
+                }
                 cx.notify();
             });
         });
-        Self { path, package: None, error: None, working: false, keep_progress: true, folder, _load: Some(load), _enter: enter }
+        Self { path, package: None, error: None, working: false, keep_progress: true, pending: false, folder, _load: Some(load), _enter: enter }
     }
 
     fn start(&mut self, cx: &mut Context<Self>) {
-        let Some(package) = self.package.take() else { return };
+        let Some(package) = self.package.take() else {
+            self.pending = self.error.is_none();
+            return;
+        };
         let root = index::current().root.clone();
         let name = self.folder.read(cx).value().trim().to_string();
         if root.as_os_str().is_empty() || name.split('/').any(|part| part == "..") {

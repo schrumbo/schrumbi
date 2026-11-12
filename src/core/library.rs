@@ -3025,6 +3025,10 @@ impl Library {
     /// Reports an import of flashcards; taking it back removes the new files and what was taken as known.
     pub fn cards_imported(&mut self, created: Vec<PathBuf>, added: usize, duplicates: usize, spread: Option<super::cards::Adopted>) {
         self.refresh();
+        if added == 0 && duplicates > 0 && created.is_empty() && spread.is_none() {
+            self.notify(tr("Alle Karten waren schon da, es wurde nichts importiert."), "layers", None, None);
+            return;
+        }
         let message = match (added, duplicates) {
             (1, 0) => tr("1 Karte importiert"),
             (n, 0) => trf("%@ Karten importiert", &[&n.to_string()]),
