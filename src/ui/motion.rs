@@ -76,6 +76,8 @@ pub trait Soft {
     fn soft_edge(self, color: Hsla, radius: f32, line: Hsla, width: f32) -> Self;
     /// The hover of a row in a list: rounded and `hover::INSET` away from the list's sides, like `row_fill`.
     fn soft_row(self, color: Hsla) -> Self;
+    /// A line of `width` at the right edge in `line` that fades in on hover and press of the whole element, for a divider with a wider hit area.
+    fn soft_strip(self, line: Hsla, width: f32) -> Self;
 }
 
 impl Soft for Stateful<Div> {
@@ -84,11 +86,15 @@ impl Soft for Stateful<Div> {
     }
 
     fn soft_edge(self, color: Hsla, radius: f32, line: Hsla, width: f32) -> Self {
-        layer(self, HoverLayer { color, radius, line, width, inset: 0. })
+        layer(self, HoverLayer { color, radius, line, width, inset: 0., right: false })
     }
 
     fn soft_row(self, color: Hsla) -> Self {
-        layer(self, HoverLayer { color, radius: radius::INNER, line: color, width: 0., inset: hover::INSET })
+        layer(self, HoverLayer { color, radius: radius::INNER, line: color, width: 0., inset: hover::INSET, right: false })
+    }
+
+    fn soft_strip(self, line: Hsla, width: f32) -> Self {
+        layer(self, HoverLayer { color: Hsla { a: 0., ..line }, radius: 0., line, width, inset: 0., right: true })
     }
 }
 
@@ -111,6 +117,7 @@ struct HoverLayer {
     line: Hsla,
     width: f32,
     inset: f32,
+    right: bool,
 }
 
 impl RenderOnce for HoverLayer {
@@ -129,7 +136,7 @@ impl RenderOnce for HoverLayer {
             .right(px(self.inset))
             .rounded(px(self.radius))
             .when(level > 0., |d| d.bg(Hsla { a: (self.color.a * level).min(1.), ..self.color }))
-            .when(level > 0. && self.width > 0., |d| d.child(div().absolute().top_0().bottom_0().left_0().w(px(self.width)).bg(Hsla { a: (self.line.a * level).min(1.), ..self.line })))
+            .when(level > 0. && self.width > 0., |d| d.child(div().absolute().top_0().bottom_0().when(self.right, Styled::right_0).when(!self.right, Styled::left_0).w(px(self.width)).bg(Hsla { a: (self.line.a * level).min(1.), ..self.line })))
             .on_hover(move |hovered, _, cx| on_hover.update(cx, |s, cx| {
                 s.0 = *hovered;
                 s.1 &= *hovered;

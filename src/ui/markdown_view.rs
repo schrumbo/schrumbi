@@ -1518,7 +1518,7 @@ fn linked_image(src: &str, alt: &str, target: Option<&str>, cx: &Ctx) -> AnyElem
     cx.order.set(order + 1);
     let action = link_action(target, cx.base);
     let sample = is_sample_base(cx.base);
-    div().id(("md-image-link", order)).relative().when(!sample, |d| d.cursor_pointer()).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| action(cx)).child(shown).when(!sample, |d| d.child(hover_ring(cx.t.accent, radius::CONTROL, tr("Öffnen")))).into_any_element()
+    div().id(("md-image-link", order)).relative().when(!sample, |d| d.cursor_pointer().key_nav()).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| action(cx)).child(shown).when(!sample, |d| d.child(hover_ring(cx.t.accent, radius::CONTROL, tr("Öffnen")))).into_any_element()
 }
 
 /// What a plain click on text in this block should do.

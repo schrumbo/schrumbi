@@ -12,7 +12,7 @@ use gpui_kit::*;
 use super::state::{self, act};
 use super::motion::{self, Soft};
 use super::theme::{Theme, calendar as cal, control, font, hover, radius, space, iconsize};
-use super::widgets::{KeyNav, file_target, icon, menu_icon, section_title, status_menu, status_toggle, tabular, Tip};
+use super::widgets::{KeyNav, file_target, icon, menu_icon, section_title, status_menu, status_toggle, tabular, ButtonTip, Tip};
 use crate::core::calendar::{self, CalendarView};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Library;
@@ -113,7 +113,7 @@ fn header(l: &Library, view: CalendarView, segment: f32, t: &Theme) -> Div {
                 .gap(px(space::XXS))
                 .child(Button::new("board-prev").ghost().small().icon(menu_icon("chevron-left")).tooltip(format!("{back} (←)")).on_click(|_, _, cx| act(cx, |l| l.turn_calendar(-1))))
                 .child(Button::new("board-next").ghost().small().icon(menu_icon("chevron-right")).tooltip(format!("{forward} (→)")).on_click(|_, _, cx| act(cx, |l| l.turn_calendar(1))))
-                .child(Button::new("board-today").small().label(tr("Heute")).when(at_today, |b| b.ghost()).tooltip(format!("{} (T)", tr("Zu heute springen"))).on_click(|_, _, cx| act(cx, Library::calendar_today))),
+                .child(Button::new("board-today").small().label(tr("Heute")).when(at_today, |b| b.ghost()).tip(format!("{} (T)", tr("Zu heute springen"))).on_click(|_, _, cx| act(cx, Library::calendar_today))),
         )
         .child(
             div()
@@ -292,7 +292,7 @@ fn empty_area(d: NaiveDate, height: f32, t: &Theme) -> Stateful<Div> {
         .cursor_pointer()
         .key_nav()
         .on_click(move |e, _, cx| {
-            if e.click_count() == 2 {
+            if e.click_count() == 2 || e.is_keyboard() {
                 act(cx, |l| l.show_week_of(d));
             }
         })

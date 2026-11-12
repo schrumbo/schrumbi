@@ -259,7 +259,7 @@ impl Render for UploadPanel {
             .text_size(px(font::BODY))
             .text_color(t.primary)
             .on_key_down(cx.listener(|p, e: &KeyDownEvent, window, cx| {
-                if e.keystroke.key == "enter" {
+                if e.keystroke.key == "enter" && p.focus.is_focused(window) {
                     p.mark_uploaded(window, cx);
                 } else if e.keystroke.key == "escape" {
                     window.remove_window();

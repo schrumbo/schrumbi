@@ -879,6 +879,13 @@ impl Library {
         list
     }
 
+    fn save_failed(&self, e: &dyn std::fmt::Display) -> String {
+        if self.root.as_ref().is_some_and(|r| !r.exists()) {
+            return tr("Der Studienordner fehlt. Wurde er verschoben oder gelöscht?");
+        }
+        trf("Speichern fehlgeschlagen: %@", &[e])
+    }
+
     fn write_highlights(&mut self) -> bool {
         if self.sync_gate {
             return true;
@@ -906,7 +913,7 @@ impl Library {
         }
         let written = failed.is_none();
         if let Some(e) = failed {
-            self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&e]));
+            self.last_error = Some(self.save_failed(&e));
         }
         written
     }
@@ -1026,7 +1033,7 @@ impl Library {
                 self.config = Some(c);
                 self.refresh();
             }
-            Err(e) => self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&e])),
+            Err(e) => self.last_error = Some(self.save_failed(&e)),
         }
     }
 
@@ -1080,7 +1087,7 @@ impl Library {
         }
         c.version = CURRENT_VERSION;
         if let Err(e) = workspace::save(&c, &path) {
-            self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&e]));
+            self.last_error = Some(self.save_failed(&e));
         }
     }
 
@@ -1094,7 +1101,7 @@ impl Library {
             return;
         }
         if let Err(e) = workspace::save(&self.state, &path) {
-            self.last_error = Some(trf("Speichern fehlgeschlagen: %@", &[&e]));
+            self.last_error = Some(self.save_failed(&e));
         }
     }
 
@@ -3426,7 +3433,7 @@ impl Library {
                 self.refresh();
                 changes.insert(0, Change::Move { from: target.clone(), to: file.to_path_buf() });
                 let message = match links {
-                    0 => trf("Umbenannt: %@", &[&name_of(&target)]),
+                    0 => trf("Umbenannt: %@", &[&if super::markdown::is_markdown(&target) { target.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default() } else { name_of(&target) }]),
                     1 => tr("Umbenannt, 1 Link angepasst"),
                     n => trf("Umbenannt, %@ Links angepasst", &[&n.to_string()]),
                 };

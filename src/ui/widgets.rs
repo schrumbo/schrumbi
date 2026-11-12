@@ -2,6 +2,7 @@ use std::f32::consts::TAU;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::component::Icon;
+use gpui_kit::component::button::Button;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -15,6 +16,7 @@ use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library};
 use crate::core::model::{Assignment, Kind, Status};
 use crate::core::naming::extension;
+use crate::core::shortcuts::ShortcutAction;
 
 /// Digits of equal width, for numbers that change or stand in columns.
 pub fn tabular() -> FontFeatures {
@@ -79,6 +81,21 @@ pub fn menu_icon(name: &str) -> Icon {
     Icon::empty().path(SharedString::from(format!("icons/{name}.svg")))
 }
 
+/// A menu entry with the active shortcut of `action` right-aligned in its own column; a plain entry when no shortcut is set.
+pub fn keyed_item(label: impl Into<SharedString>, action: Option<ShortcutAction>) -> PopupMenuItem {
+    keyed_text(label, action.and_then(|a| a.active_shortcut()).map(|s| s.display()))
+}
+
+/// Like `keyed_item` for keys that are written out, such as a fixed Delete key.
+pub fn keyed_text(label: impl Into<SharedString>, key: Option<String>) -> PopupMenuItem {
+    let label: SharedString = label.into();
+    let Some(key) = key.map(SharedString::from) else { return PopupMenuItem::new(label) };
+    PopupMenuItem::element(move |_, cx| {
+        let t = Theme::get(cx);
+        div().flex_1().flex().items_center().justify_between().gap(px(space::L)).child(label.clone()).child(div().flex_none().text_size(px(font::CALLOUT)).text_color(t.tertiary).font_features(tabular()).child(key.clone()))
+    })
+}
+
 /// Accent strength behind a selected list row, clearly apart from the grey hover.
 pub const SELECTED_ROW: f32 = 0.2;
 
@@ -101,6 +118,26 @@ impl Global for LastRightClick {}
 struct LastClick(std::time::Instant);
 
 impl Global for LastClick {}
+
+thread_local! {
+    static OPEN_MENUS: std::cell::RefCell<Vec<(EntityId, WeakEntity<PopupMenu>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Call from a menu builder: `tip` stays away until the menu is dismissed.
+pub fn menu_opened(window: &mut Window, cx: &mut Context<PopupMenu>) {
+    let menu = cx.entity();
+    let id = menu.entity_id();
+    OPEN_MENUS.with(|m| m.borrow_mut().push((id, menu.downgrade())));
+    window.subscribe(&menu, cx, move |_, _: &DismissEvent, _, _| OPEN_MENUS.with(|m| m.borrow_mut().retain(|(open, _)| *open != id))).detach();
+}
+
+fn menu_is_open() -> bool {
+    OPEN_MENUS.with(|m| {
+        let mut menus = m.borrow_mut();
+        menus.retain(|(_, weak)| weak.upgrade().is_some());
+        !menus.is_empty()
+    })
+}
 
 static TIPS_OPEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static TIP_CLOSED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
@@ -148,7 +185,7 @@ pub fn tooltip_delay() -> std::time::Duration {
 pub fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let text: SharedString = text.into();
     move |window, cx| {
-        if cx.try_global::<LastRightClick>().is_some_and(|c| c.0.elapsed() < TOOLTIP_PAUSE) || cx.try_global::<LastClick>().is_some_and(|c| c.0.elapsed() < TOOLTIP_AFTER_CLICK) {
+        if cx.try_global::<LastRightClick>().is_some_and(|c| c.0.elapsed() < TOOLTIP_PAUSE) || cx.try_global::<LastClick>().is_some_and(|c| c.0.elapsed() < TOOLTIP_AFTER_CLICK) || menu_is_open() {
             return cx.new(|_| NoTooltip).into();
         }
         let inner = gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(window, cx);
@@ -166,6 +203,17 @@ pub trait Tip: StatefulInteractiveElement + Sized {
 }
 
 impl<E: StatefulInteractiveElement> Tip for E {}
+
+/// `Tip` for kit buttons: the usual wait, none beside an open tooltip.
+pub trait ButtonTip {
+    fn tip(self, text: impl Into<SharedString>) -> Self;
+}
+
+impl ButtonTip for Button {
+    fn tip(self, text: impl Into<SharedString>) -> Self {
+        self.tooltip(text).tooltip_show_delay(tooltip_delay())
+    }
+}
 
 pub fn text(s: impl Into<SharedString>, size: f32, color: Hsla) -> Div {
     div().text_size(px(size)).text_color(color).child(s.into())

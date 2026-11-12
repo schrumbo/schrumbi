@@ -2151,7 +2151,7 @@ impl NoteView {
                 div()
                     .id(("live-grip", i))
                     .on_drag(DraggedLines { line, count, label }, |d, _, _, cx| cx.new(|_| d.clone()))
-                    .child(Button::new(("live-grip-menu", i)).ghost().small().icon(menu_icon("grip-vertical")).tooltip(tr("Ziehen zum Verschieben, Klick für das Menü")).dropdown_menu(move |m, _, _| block_menu(m, menu_me.clone(), line, count, is_table))),
+                    .child(Button::new(("live-grip-menu", i)).ghost().small().icon(menu_icon("grip-vertical")).tip(tr("Ziehen zum Verschieben, Klick für das Menü")).dropdown_menu(move |m, _, _| block_menu(m, menu_me.clone(), line, count, is_table))),
             )
     }
 
@@ -2805,7 +2805,7 @@ impl NoteView {
                 Button::new("note-toc").ghost().small().icon(menu_icon("list")).tooltip(tr("Noch keine Überschriften")).disabled(true).into_any_element()
             }
         });
-        let pdf_tip = tr("Als PDF neben der Notiz sichern (⇧⌘E)");
+        let pdf_tip = format!("{}{}", tr("Als PDF neben der Notiz sichern"), ShortcutAction::ExportPdf.hint());
         let shown_mode = mode_list.iter().find(|(m, ..)| *m == current_mode || (*m == edit_mode && current_mode == Mode::Source)).cloned();
         let mode_picker = picker.then(|| {
             let (list, e) = (mode_list.clone(), me.clone());
@@ -2843,15 +2843,15 @@ impl NoteView {
                 }
                 if pdf_out {
                     let e = e2.clone();
-                    menu = menu.item(PopupMenuItem::new(pdf_tip.clone()).icon(menu_icon("share")).disabled(exporting).on_click(move |_, window, cx| e.update(cx, |n, cx| n.export(window, cx))));
+                    menu = menu.item(keyed_item(tr("Als PDF neben der Notiz sichern"), Some(ShortcutAction::ExportPdf)).icon(menu_icon("share")).disabled(exporting).on_click(move |_, window, cx| e.update(cx, |n, cx| n.export(window, cx))));
                 }
                 if modes_out || toc_out || pdf_out {
                     menu = menu.separator();
                 }
                 let finder = find_me.clone();
-                menu = menu.item(PopupMenuItem::new(format!("{}{}", tr("In Notiz suchen"), ShortcutAction::FindInNote.hint())).icon(menu_icon("search")).on_click(move |_, window, cx| finder.update(cx, |n, cx| n.open_find(false, window, cx))));
+                menu = menu.item(keyed_item(tr("In Notiz suchen"), Some(ShortcutAction::FindInNote)).icon(menu_icon("search")).on_click(move |_, window, cx| finder.update(cx, |n, cx| n.open_find(false, window, cx))));
                 let replacer = find_me.clone();
-                menu = menu.item(PopupMenuItem::new(tr("In Notiz ersetzen")).icon(menu_icon("replace")).on_click(move |_, window, cx| replacer.update(cx, |n, cx| n.open_find(true, window, cx))));
+                menu = menu.item(keyed_text(tr("In Notiz ersetzen"), crate::core::prefs::Shortcut::fixed("In Notiz ersetzen").map(|s| s.display())).icon(menu_icon("replace")).on_click(move |_, window, cx| replacer.update(cx, |n, cx| n.open_find(true, window, cx))));
                 if embedded {
                     menu = menu.item(PopupMenuItem::new(tr("In eigenem Fenster öffnen")).icon(menu_icon("app-window")).on_click(move |_, _, cx| {
                         super::note_window::open_exclusive(&a, cx);
@@ -2865,7 +2865,7 @@ impl NoteView {
                 }
                 let source_view = source_me.clone();
                 let is_source = current_mode == Mode::Source;
-                menu = menu.when(live_editor, |menu| menu.item(PopupMenuItem::new(format!("{}{}", tr("Quelltext"), ShortcutAction::ToggleLive.hint())).icon(menu_icon("code")).checked(is_source).on_click(move |_, window, cx| source_view.update(cx, |n, cx| n.set_mode(if is_source { Mode::Live } else { Mode::Source }, window, cx)))));
+                menu = menu.when(live_editor, |menu| menu.item(keyed_item(tr("Quelltext"), Some(ShortcutAction::ToggleLive)).icon(menu_icon("code")).checked(is_source).on_click(move |_, window, cx| source_view.update(cx, |n, cx| n.set_mode(if is_source { Mode::Live } else { Mode::Source }, window, cx)))));
                 let full = prefs::get().reader_full_width;
                 menu = menu.item(PopupMenuItem::new(tr("Text in voller Breite")).checked(full).on_click(move |_, _, cx| set_reader_full_width(!full, cx)));
                 let g = d.clone();
@@ -2884,7 +2884,7 @@ impl NoteView {
                     });
                 }));
                 if embedded {
-                    menu = menu.separator().item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&d, cx)));
+                    menu = menu.separator().item(keyed_item(tr("Tab schließen"), Some(ShortcutAction::CloseTab)).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&d, cx)));
                 }
                 menu
             }))
@@ -4551,7 +4551,7 @@ fn tab_plan(current: &Path, fit: &BarFit, window: &Window, cx: &App) -> TabPlan 
     let roomy = fit.bar().is_none_or(|bar| bar >= tab::LIST_MIN_BAR);
     let overflowing = fit.strip().is_some_and(|strip| bar_fit::overflows(&natural, active, strip));
     let list_all = roomy && (docs.len() > 4 || overflowing);
-    TabPlan { docs, titles, dirty, natural, widths, active, show_files: prefs::get().notes_explorer_hidden, list_all }
+    TabPlan { docs, titles, dirty, natural, widths, active, show_files: !super::notes_page::explorer_wanted(f32::from(window.viewport_size().width)), list_all }
 }
 
 /// Which of the ever more compact action rows `steps` (their widths) fits next to the tabs or the title of
@@ -4616,7 +4616,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                     .tip(title.clone())
                     .context_menu(move |m, _, _| {
                         let shut = close.clone();
-                        m.item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).on_click(move |_, _, cx| close_tab(&shut, cx)))
+                        m.item(keyed_item(tr("Tab schließen"), Some(ShortcutAction::CloseTab)).on_click(move |_, _, cx| close_tab(&shut, cx)))
                             .separator()
                             .item(PopupMenuItem::new(tr("Geteilte Ansicht schließen")).icon(menu_icon("columns-2")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))))
                     })
@@ -4626,6 +4626,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
             .child(Button::new("split-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Geteilte Ansicht schließen")).on_click(|_, _, cx| act(cx, |l| l.set_split(None))));
     }
     let (beside, focused, can_beside) = state::read(cx, |l| (l.split_document.clone(), l.split_document.is_some() && !l.beside_active, l.can_drop_document(current, library::DocDrop::Beside, None)));
+    let has_split = beside.is_some();
     let TabPlan { docs, titles, dirty, natural, widths, active: shown_index, show_files, list_all, .. } = tab_plan(current, &fit, window, cx);
     let list_all = fit.decided().unwrap_or(list_all);
     let overflow = list_all.then(|| {
@@ -4745,9 +4746,10 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                 .context_menu(move |m, window, cx| {
                     let (a, b, c, d, beside, right, shown) = (menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone(), menu.clone());
                     let ai_path = menu.clone();
-                    let m = m.when(!active && !is_beside, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.set_split(Some(beside.clone()))))))
-                        .when(active && can_beside, |m| m.item(PopupMenuItem::new(tr("Daneben öffnen")).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.drop_document(&shown, library::DocDrop::Beside, None)))))
-                        .item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).on_click(move |_, _, cx| close_tab(&a, cx)))
+                    let m = m.when(!active && !is_beside, |m| m.item(keyed_item(tr("Daneben öffnen"), Some(ShortcutAction::OpenBeside)).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.set_split(Some(beside.clone()))))))
+                        .when(active && can_beside, |m| m.item(keyed_item(tr("Daneben öffnen"), Some(ShortcutAction::OpenBeside)).icon(menu_icon("columns-2")).on_click(move |_, _, cx| act(cx, |l| l.drop_document(&shown, library::DocDrop::Beside, None)))))
+                        .when(has_split, |m| m.item(keyed_item(tr("Zur anderen Seite wechseln"), Some(ShortcutAction::SwitchSide)).icon(menu_icon("repeat")).on_click(|_, window, cx| window.dispatch_action(Box::new(super::app::SwitchSide), cx))))
+                        .item(keyed_item(tr("Tab schließen"), Some(ShortcutAction::CloseTab)).on_click(move |_, _, cx| close_tab(&a, cx)))
                         .item(PopupMenuItem::new(tr("Andere Tabs schließen")).disabled(!others).on_click(move |_, _, cx| close_other_tabs(&b, cx)))
                         .item(PopupMenuItem::new(tr("Tabs rechts schließen")).disabled(!rightwards).on_click(move |_, _, cx| close_tabs_right(&right, cx)))
                         .item(PopupMenuItem::new(tr("Alle Tabs schließen")).on_click(|_, _, cx| close_all_tabs(cx)))
@@ -4854,7 +4856,7 @@ impl Render for FileViewer {
                 .item(PopupMenuItem::new(tr("Vorschau-Fenster (Leertaste)")).icon(menu_icon("eye")).on_click(move |_, _, cx| super::preview::show(&b, cx)))
                 .when_some(named, |m, item| m.item(item))
                 .separator()
-                .item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&c, cx)))
+                .item(keyed_item(tr("Tab schließen"), Some(ShortcutAction::CloseTab)).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&c, cx)))
         });
         let actions = div().flex().items_center().gap(px(space::XS)).children(table_toggle).child(more);
         let body: AnyElement = if !self.path.exists() {

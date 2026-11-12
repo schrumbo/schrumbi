@@ -822,6 +822,12 @@ impl Shortcut {
         parts
     }
 
+    /// The keys the app binds on its own for `label` on this system, e.g. "In Notiz ersetzen".
+    pub fn fixed(label: &str) -> Option<Shortcut> {
+        let mac = cfg!(target_os = "macos");
+        FIXED.iter().find(|f| f.label == label && f.platform.here(mac)).map(|f| Shortcut { key: f.key.into(), command: f.command, shift: f.shift, option: f.option, control: false })
+    }
+
     /// Display as the platform writes shortcuts: `⇧⌘E` on macOS, `Ctrl+Shift+E` elsewhere.
     pub fn display(&self) -> String {
         self.parts().join(if cfg!(target_os = "macos") { "" } else { "+" })

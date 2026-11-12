@@ -13,7 +13,7 @@ use super::drive::Mark;
 use super::history::VersionList;
 use super::motion::{Soft, chevron, reveal};
 use super::state::{self, act};
-use super::theme::{Theme, control, font, hover, iconsize, radius, space};
+use super::theme::{Theme, annot, control, font, hover, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::markdown;
@@ -67,7 +67,7 @@ impl DocSide {
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
             .key_nav()
-            .when(selected, |d| d.bg(t.ink.opacity(0.08)).soft(hover, radius::INNER))
+            .when(selected, |d| d.bg(t.ink.opacity(annot::ROW_ACTIVE)).soft(hover, radius::INNER))
             .when(!selected, |d| d.soft(hover, radius::INNER).text_color(t.secondary))
             .child(label)
             .on_click(cx.listener(move |s, _, _, cx| s.show(side, cx)))
@@ -467,7 +467,7 @@ impl PropertyEditor {
                     .px(px(space::S))
                     .py(px(space::XXS))
                     .rounded_full()
-                    .bg(t.ink.opacity(0.08))
+                    .bg(t.ink.opacity(annot::ROW_ACTIVE))
                     .text_size(px(font::CAPTION))
                     .cursor_pointer()
                     .key_nav()

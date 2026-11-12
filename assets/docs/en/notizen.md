@@ -22,6 +22,8 @@ If Obsidian is set to a fixed folder for new notes, it goes there. {key:escape} 
 - {key:renameNote} also renames the open note, as does a click on its title at the top.
 - A click opens the file in its own tab. If it is already open, its tab comes to the front.
 - Dragging a file onto a folder moves it.
+- Below 800 pixels of window width the file list folds away so the note has room. The button at the left of the bar brings it back until you quit the app.
+- If the study folder is missing when saving, the message says so: it was moved or deleted.
 - Right-click → {ui:Abgabe zuordnen} makes the file count for a submission. The pill at the top of the note shows what it belongs to.
 - {ui:In den Papierkorb} does not ask. {key:Undo} brings the file back.
 - Very large files then live only in the system trash and come back from there. If the drive has no trash, they stay where they are.
@@ -221,7 +223,7 @@ If another app changed the file, you see a notice. Nothing is lost until you cho
 - A tab only closes when you close it: ×, middle click or {key:closeTab}.
 - Every file gets its own tab. An open file is never opened twice: its tab comes to the front.
 - A link opens its target in a new tab; the note with the link stays open.
-- Right-click a tab: {ui:Andere Tabs schließen}, {ui:Tabs rechts schließen}, {ui:Alle Tabs schließen}.
+- Right-click a tab: {ui:Andere Tabs schließen}, {ui:Tabs rechts schließen}, {ui:Alle Tabs schließen}. The shortcut is shown at the right of each item.
 - Drag a tab to change the order. {key:reopenTab} brings a tab back to its old place.
 
 ### Side by side

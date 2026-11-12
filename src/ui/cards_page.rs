@@ -1453,7 +1453,7 @@ impl CardsPage {
         let current_order = self.order;
         let filters = div().flex().flex_wrap().gap(px(space::XXS)).children(Filter::ALL.iter().enumerate().filter(|(slot, f)| **f == Filter::All || **f == current_filter || amounts[*slot] > 0).map(|(slot, f)| {
             let (f, on) = (*f, *f == current_filter);
-            div().id(SharedString::from(format!("filter-{f:?}"))).px(px(space::S)).h(px(control::S)).flex().items_center().rounded(px(radius::INNER)).cursor_pointer().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.1))).when(!on, |d| d.text_color(t.secondary).soft(t.ink.opacity(hover::CONTROL), radius::INNER)).child(f.label()).when(f != Filter::All, |d| d.child(div().ml(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.tertiary).font_features(tabular()).child(amounts[slot].to_string()))).on_click(cx.listener(move |p, _, window, cx| {
+            div().id(SharedString::from(format!("filter-{f:?}"))).px(px(space::S)).h(px(control::S)).flex().items_center().rounded(px(radius::INNER)).cursor_pointer().key_nav().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.1))).when(!on, |d| d.text_color(t.secondary).soft(t.ink.opacity(hover::CONTROL), radius::INNER)).child(f.label()).when(f != Filter::All, |d| d.child(div().ml(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.tertiary).font_features(tabular()).child(amounts[slot].to_string()))).on_click(cx.listener(move |p, _, window, cx| {
                 p.filter = f;
                 p.clear_selection();
                 window.focus(&p.focus, cx);
@@ -2195,7 +2195,7 @@ impl Render for CardComposer {
         let kinds = [(ComposeKind::Basic, tr("Eine Richtung"), "file-question"), (ComposeKind::Both, tr("Beide Richtungen"), "repeat-2"), (ComposeKind::Cloze, tr("Lückentext"), "scan")];
         let switch = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS)).children(kinds.into_iter().map(|(k, label, name)| {
             let on = k == kind;
-            div().id(SharedString::from(format!("kind-{name}"))).h(px(control::S)).px(px(space::S)).flex().items_center().gap(px(space::XS)).rounded(px(radius::SMALL)).when(!on, |d| d.soft(t.ink.opacity(hover::CONTROL), radius::SMALL)).cursor_pointer().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.12))).child(icon(name, iconsize::S, if on { t.primary } else { t.secondary })).child(label).on_click(cx.listener(move |c, _, _, cx| {
+            div().id(SharedString::from(format!("kind-{name}"))).h(px(control::S)).px(px(space::S)).flex().items_center().gap(px(space::XS)).rounded(px(radius::SMALL)).when(!on, |d| d.soft(t.ink.opacity(hover::CONTROL), radius::SMALL)).cursor_pointer().key_nav().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.12))).child(icon(name, iconsize::S, if on { t.primary } else { t.secondary })).child(label).on_click(cx.listener(move |c, _, _, cx| {
                 c.kind = k;
                 c.refresh_preview(cx);
             }))

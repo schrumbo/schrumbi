@@ -212,7 +212,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                         .pb(px(STRIP_PAD))
                         .tip(help)
                         .when(s.lecture.is_some(), |d| {
-                            d.cursor_pointer().soft(t.ink.opacity(hover::CONTROL), radius::SMALL).on_click(move |_, window, cx| view.update(cx, |p, cx| {
+                            d.cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::SMALL).on_click(move |_, window, cx| view.update(cx, |p, cx| {
                                 p.grid.jump_to(monday, current, window);
                                 cx.notify();
                             }))

@@ -284,3 +284,15 @@ fn finishing_the_setup_list_travels_with_the_folder_and_leaves_old_files_as_they
     let read: super::model::StudyState = serde_json::from_str(&serde_json::to_string(&done).unwrap()).unwrap();
     assert!(read.setup_completed && !read.setup_dismissed);
 }
+
+#[test]
+fn saving_after_the_study_folder_disappeared_names_the_missing_folder() {
+    let root = folder("gone-while-open");
+    let mut lib = open(&root);
+    lib.config.get_or_insert_with(Default::default);
+    std::fs::remove_dir_all(&root).unwrap();
+    lib.write_config();
+    let say = crate::core::i18n::tr("Der Studienordner fehlt. Wurde er verschoben oder gelöscht?");
+    assert_eq!(lib.last_error.as_deref(), Some(say.as_str()));
+    assert!(!root.exists(), "no folder is created behind the user's back");
+}

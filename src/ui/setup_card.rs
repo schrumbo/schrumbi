@@ -159,7 +159,7 @@ impl Render for CalendarAsk {
                             }))
                             .child(Input::new(&field).small()),
                     )
-                    .child(Button::new("calendar-ask-fetch").primary().small().label(tr("Abrufen")).disabled(!ready).when(!ready, |b| b.tooltip(tr("Erst eine Adresse einfügen"))).on_click(cx.listener(|this, _, _, cx| this.fetch(cx)))),
+                    .child(Button::new("calendar-ask-fetch").primary().small().label(tr("Abrufen")).disabled(!ready).when(!ready, |b| b.tip(tr("Erst eine Adresse einfügen"))).on_click(cx.listener(|this, _, _, cx| this.fetch(cx)))),
             );
         let open = self.expanded;
         div()

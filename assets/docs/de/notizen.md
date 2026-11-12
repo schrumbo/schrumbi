@@ -22,6 +22,8 @@ Ist in Obsidian ein fester Ordner für neue Notizen eingestellt, landet sie dort
 - {key:renameNote} benennt auch die offene Notiz um, ebenso ein Klick auf ihren Titel oben.
 - Ein Klick öffnet die Datei in einem eigenen Tab. Ist sie schon offen, kommt ihr Tab nach vorn.
 - Datei auf einen Ordner ziehen verschiebt sie.
+- Unter 800 Pixel Fensterbreite klappt die Dateiliste zu, damit die Notiz Platz hat. Der Knopf links in der Leiste holt sie zurück, bis du die App schließt.
+- Fehlt der Studienordner beim Sichern, sagt die Meldung das: er wurde verschoben oder gelöscht.
 - Rechtsklick → {ui:Abgabe zuordnen} zählt die Datei für eine Abgabe. Die Pille oben in der Notiz zeigt, wozu sie gehört.
 - {ui:In den Papierkorb} fragt nicht nach. {key:Undo} holt die Datei zurück.
 - Sehr große Dateien liegen danach nur im Papierkorb des Systems und kommen von dort zurück. Hat das Laufwerk keinen Papierkorb, bleiben sie, wo sie sind.
@@ -221,7 +223,7 @@ Hat eine andere App die Datei geändert, siehst du einen Hinweis. Nichts geht ve
 - Ein Tab geht nur zu, wenn du ihn schließt: ×, Mittelklick oder {key:closeTab}.
 - Jede Datei bekommt ihren eigenen Tab. Eine offene Datei wird nie doppelt geöffnet: ihr Tab kommt nach vorn.
 - Ein Link öffnet sein Ziel in einem neuen Tab, die Notiz mit dem Link bleibt offen.
-- Rechtsklick auf einen Tab: {ui:Andere Tabs schließen}, {ui:Tabs rechts schließen}, {ui:Alle Tabs schließen}.
+- Rechtsklick auf einen Tab: {ui:Andere Tabs schließen}, {ui:Tabs rechts schließen}, {ui:Alle Tabs schließen}. Rechts im Menü steht jeweils das Kürzel.
 - Tab ziehen ändert die Reihenfolge. {key:reopenTab} bringt den Tab an seinen alten Platz zurück.
 
 ### Nebeneinander

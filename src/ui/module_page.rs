@@ -394,7 +394,7 @@ pub fn header(lib: &Library, m: &Module, width: f32, t: &Theme) -> Div {
         .child(Button::new("module-file").small().primary().icon(menu_icon("inbox")).when(!compact, |b| b.label(tr("Ablegen"))).tooltip(trf("Dateien in %@ ablegen (F)", &[&file_code])).on_click(move |_, _, cx| super::platform::pick_files_for_filing(next_entry.clone(), cx)))
         .child(Button::new("module-more").small().ghost().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, _, _| {
             let (reveal, edit_id) = (reveal.clone(), edit_id.clone());
-            menu.item(PopupMenuItem::new(format!("{}{}", tr("Neuer Eintrag…"), crate::core::shortcuts::ShortcutAction::NewEntry.hint())).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| {
+            menu.item(keyed_item(tr("Neuer Eintrag…"), Some(crate::core::shortcuts::ShortcutAction::NewEntry)).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| {
                 l.quick_add_kind = Some(Kind::Submission);
                 l.show_quick_add = true;
             })))
@@ -493,7 +493,7 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     let module_folder = m.folder.clone();
     let all_files = more_link("to-files", tr("Alle Dateien"), t).tip(tr("Im Dateibaum zeigen")).on_click(move |_, _, cx| {
         let folder = module_folder.clone();
-        crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
+        super::notes_page::set_hidden(false, cx);
         act(cx, |l| {
             l.reveal_folder = Some(folder);
             l.show_notes();

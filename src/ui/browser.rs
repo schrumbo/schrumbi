@@ -510,8 +510,11 @@ impl FileBrowser {
         div().w_full().px(px(space::L)).child(content).into_any_element()
     }
 
-    fn on_key(&mut self, e: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &e.keystroke;
+        if matches!(k.key.as_str(), "enter" | "space") && !self.focus.is_focused(window) {
+            return;
+        }
         let command = k.modifiers.platform || k.modifiers.control;
         if command && !k.modifiers.alt {
             match k.key.as_str() {
@@ -772,6 +775,7 @@ impl FileBrowser {
                             .rounded(px(radius::SMALL))
                             .soft(t.ink.opacity(hover::CONTROL), radius::SMALL)
                             .cursor_pointer()
+                            .key_nav()
                             .truncate()
                             .text_size(px(font::CAPTION))
                             .text_color(t.secondary)
@@ -802,6 +806,12 @@ impl FileBrowser {
             .context_menu(move |menu, window, cx| {
                 let p = menu_path.clone();
                 let (p1, p2, p3, p4) = (p.clone(), p.clone(), p.clone(), p.clone());
+                if !entity.read(cx).picked.contains(&p) && entity.read(cx).selected.as_ref() != Some(&p) {
+                    entity.update(cx, |b, cx| {
+                        b.pick_only(&p);
+                        cx.notify();
+                    });
+                }
                 let current = state::read(cx, current_week);
                 let group: Vec<PathBuf> = entity.read(cx).targets(current).into_iter().filter(|_| entity.read(cx).picked.contains(&p)).collect();
                 if group.len() > 1 {
@@ -845,7 +855,7 @@ impl FileBrowser {
                 let (rename, trash_path, e) = (p.clone(), p.clone(), entity.clone());
                 deadline_submenu(menu.separator(), &p, window, cx)
                     .separator()
-                    .item(PopupMenuItem::new(format!("{}{}", tr("Umbenennen…"), crate::core::shortcuts::ShortcutAction::RenameNote.hint())).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
+                    .item(keyed_item(tr("Umbenennen…"), Some(crate::core::shortcuts::ShortcutAction::RenameNote)).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
                     .when_some(super::convention_rename::menu_item_or_hint(&p, cx), |m, item| m.item(item))
                     .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| state::trash(vec![trash_path.clone()], cx)))
             })

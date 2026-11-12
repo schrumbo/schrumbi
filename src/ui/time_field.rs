@@ -10,7 +10,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::theme::{Theme, control, font, iconsize, radius, space};
-use super::widgets::{icon, menu_icon, Tip};
+use super::widgets::{icon, menu_icon, ButtonTip, Tip};
 use crate::core::clock;
 use crate::core::i18n::{tr, trf};
 
@@ -168,7 +168,7 @@ impl Render for TimeField {
         let presets = self.presets.clone();
         let current = self.value.clone();
         let none = presets.is_empty();
-        let chevron = Button::new("time-presets").ghost().xsmall().icon(menu_icon("chevron-down")).disabled(none).tooltip(if none { tr("Keine Schnellauswahl für diese Uhrzeit") } else { tr("Schnellauswahl") }).dropdown_menu(move |mut menu, _, _| {
+        let chevron = Button::new("time-presets").ghost().xsmall().icon(menu_icon("chevron-down")).disabled(none).tip(if none { tr("Keine Schnellauswahl für diese Uhrzeit") } else { tr("Schnellauswahl") }).dropdown_menu(move |mut menu, _, _| {
             for p in &presets {
                 let (me, v) = (me.clone(), p.time.clone());
                 menu = menu.item(PopupMenuItem::new(p.label.clone()).checked(p.time == current).on_click(move |_, window, cx| {

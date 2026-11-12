@@ -282,7 +282,7 @@ impl MainWindow {
                 .soft(over, radius::SMALL)
                 .tip(rel.clone())
                 .on_click(move |_, _, cx| {
-                    crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
+                    super::notes_page::set_hidden(false, cx);
                     act(cx, |l| l.reveal_folder = Some(rel.clone()));
                 })
                 .child(name.to_string())
@@ -296,7 +296,7 @@ impl MainWindow {
                     for (i, name) in hidden.iter().enumerate() {
                         let rel = all[..=i].join("/");
                         menu = menu.item(PopupMenuItem::new(crate::core::text::end_ellipsis(name, 40)).icon(menu_icon("folder")).on_click(move |_, _, cx| {
-                            crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
+                            super::notes_page::set_hidden(false, cx);
                             act(cx, |l| l.reveal_folder = Some(rel.clone()));
                         }));
                     }
@@ -374,14 +374,14 @@ impl MainWindow {
             .gap(px(space::S))
             .pl(px(toolbar_padding - space::M))
             .pr(px(space::M))
-            .child(Button::new("go-back").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-left")).disabled(!lib.can_go_back()).tooltip(format!("{}{}", tr("Zurück"), ShortcutAction::GoBack.hint())).on_click(|_, _, cx| act(cx, |l| l.go_back())))
-            .child(Button::new("go-forward").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-right")).disabled(!lib.can_go_forward()).tooltip(format!("{}{}", tr("Vorwärts"), ShortcutAction::GoForward.hint())).on_click(|_, _, cx| act(cx, |l| l.go_forward())))
+            .child(Button::new("go-back").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-left")).disabled(!lib.can_go_back()).tip(format!("{}{}", tr("Zurück"), ShortcutAction::GoBack.hint())).on_click(|_, _, cx| act(cx, |l| l.go_back())))
+            .child(Button::new("go-forward").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-right")).disabled(!lib.can_go_forward()).tip(format!("{}{}", tr("Vorwärts"), ShortcutAction::GoForward.hint())).on_click(|_, _, cx| act(cx, |l| l.go_forward())))
             
             .child(match lib.route() {
                 Route::Doc(shown) => Self::crumbs(lib, lib.focused_document().unwrap_or(shown), total - toolbar_padding - crumb::TOOLBAR_BUTTONS * control::M - search_width - crumb::TOOLBAR_GAPS * space::S - ai_room, window, t),
                 _ => div().flex_1().min_w(px(80.)).truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)),
             })
-            .child(super::coach::anchor(div().id("coach-new").rounded_full()).child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().icon(menu_icon("plus")).tooltip(format!("{}{}", tr("Neu"), ShortcutAction::NewEntry.hint())).dropdown_menu(move |menu, _, _| {
+            .child(super::coach::anchor(div().id("coach-new").rounded_full()).child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().icon(menu_icon("plus")).tip(format!("{}{}", tr("Neu"), ShortcutAction::NewEntry.hint())).dropdown_menu(move |menu, _, _| {
                 let m = module2.clone();
                 menu.item(PopupMenuItem::new(tr("Neuer Eintrag…")).icon(menu_icon("calendar-plus")).action(Box::new(super::app::NewEntry)).on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)))
                     .item(PopupMenuItem::new(tr("Neue Notiz, Datei oder Ordner…")).icon(menu_icon("file-plus")).action(Box::new(super::app::NewFile)).on_click(move |_, _, cx| {
@@ -398,7 +398,7 @@ impl MainWindow {
                     .when(offered && show, |b| b.bg(t.ink.opacity(0.14)))
                     .icon(menu_icon("panel-right"))
                     .disabled(!offered)
-                    .tooltip(if offered { format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()) } else { tr("Keine Details auf dieser Seite") })
+                    .tip(if offered { format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()) } else { tr("Keine Details auf dieser Seite") })
                     .on_click(|_, _, cx| super::ai::toggle_details(cx)),
             )
             .child(super::coach::anchor(div().id("coach-search")).w(px(search_width)).flex_none().key_context("SearchField").map(|d| if folded {
@@ -448,6 +448,7 @@ impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         super::perf::frame_start();
         super::widgets::note_drag(cx.has_active_drag());
+        theme::follow_undo(window, cx);
         if !std::mem::replace(&mut self.focused_once, true) && window.focused(cx).is_none() {
             window.focus(&self.focus, cx);
         }
@@ -723,7 +724,7 @@ impl Render for MainWindow {
                         let head = div().h(px(control::SUBBAR)).flex_none().flex().items_center().gap(px(space::XS)).pl(px(space::S)).pr(px(space::S)).border_b_1().border_color(t.separator)
                             .child(super::ai::panel_tabs(false, &t, cx))
                             .child(div().flex_1())
-                            .child(Button::new("details-close").ghost().size(px(control::S)).rounded(px(radius::INNER)).icon(menu_icon("x")).tooltip(format!("{}{}", tr("Details ausblenden"), ShortcutAction::ToggleInspector.hint())).on_click(|_, _, cx| super::ai::close_panel(cx)));
+                            .child(Button::new("details-close").ghost().size(px(control::S)).rounded(px(radius::INNER)).icon(menu_icon("x")).tip(format!("{}{}", tr("Details ausblenden"), ShortcutAction::ToggleInspector.hint())).on_click(|_, _, cx| super::ai::close_panel(cx)));
                         div().size_full().flex().flex_col().child(head).child(div().flex_1().min_h_0().child(self.inspector.clone())).into_any_element()
                     }
                     None => self.inspector.clone().into_any_element(),

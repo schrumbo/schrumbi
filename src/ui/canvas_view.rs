@@ -1287,7 +1287,7 @@ impl Render for CanvasView {
                         menu = menu.item(PopupMenuItem::new(tr(COLOR_NAMES[i])).checked(on).icon(menu_icon("circle-dot").text_color(shown)).on_click(move |_, _, cx| me.update(cx, |v, cx| v.set_color(Some(key.clone()), cx))));
                     }
                     let delete = me.clone();
-                    menu.separator().item(PopupMenuItem::new(format!("{} ({})", tr("Löschen"), if cfg!(target_os = "macos") { "⌫".to_string() } else { tr("Entf") })).icon(menu_icon("trash-2")).on_click(move |_, _, cx| delete.update(cx, |v, cx| v.delete_selection(cx))))
+                    menu.separator().item(keyed_text(tr("Löschen"), Some(if cfg!(target_os = "macos") { "⌫".to_string() } else { tr("Entf") })).icon(menu_icon("trash-2")).on_click(move |_, _, cx| delete.update(cx, |v, cx| v.delete_selection(cx))))
                 }
             });
         div().size_full().flex().flex_col().child(bar).child(surface).into_any_element()

@@ -48,7 +48,6 @@ const INK_SIMPLIFY: f32 = 0.25;
 const INK_HALO: f32 = 6.;
 const TOOL_GAP: f32 = space::XXS;
 const MARK_UNDERLINE: f32 = 2.;
-const LINK_HOVER: f32 = 0.12;
 const PREVIEW: u16 = 2;
 const MAX_SHARP_WIDTH: f32 = 4096.;
 const MAX_SHARP_HEIGHT: f32 = 8192.;
@@ -2588,7 +2587,7 @@ impl PdfView {
                 LinkTarget::Page(n) => page_word(self.slides, n + 1),
                 LinkTarget::Uri(url) => url.clone(),
             };
-            el = el.child(div().id(("pdf-link", page)).absolute().left(px(r.x * scale)).top(px(r.y * scale)).w(px(r.w * scale)).h(px(r.h * scale)).rounded(px(radius::SMALL)).bg(t.accent.opacity(LINK_HOVER)).tip(help));
+            el = el.child(div().id(("pdf-link", page)).absolute().left(px(r.x * scale)).top(px(r.y * scale)).w(px(r.w * scale)).h(px(r.h * scale)).rounded(px(radius::SMALL)).bg(t.accent.opacity(hover::RAISED)).tip(help));
         }
         let (yellow, orange) = (t.palette("yellow").opacity(annot::MATCH), t.orange.opacity(annot::MATCH_CURRENT));
         for m in self.page_marks.get(&page).into_iter().flatten().filter(|m| !shown.is_some_and(|c| c.baked_sigs.contains(&m.sig))) {
@@ -2823,7 +2822,7 @@ impl PdfView {
                 for (kind, action, name) in [(Tool::Pen, ShortcutAction::PenTool, tr("Stift")), (Tool::Eraser, ShortcutAction::EraserTool, tr("Radierer")), (Tool::Note, ShortcutAction::NoteTool, tr("Notiz setzen"))] {
                     let v = view.clone();
                     let blocked = off_why.is_some() && tool != kind;
-                    menu = menu.item(PopupMenuItem::new(format!("{name}{}", action.hint())).checked(tool == kind).disabled(blocked).on_click(move |_, window, cx| v.update(cx, |v, cx| v.press_tool(kind, window, cx))));
+                    menu = menu.item(keyed_item(name, Some(action)).checked(tool == kind).disabled(blocked).on_click(move |_, window, cx| v.update(cx, |v, cx| v.press_tool(kind, window, cx))));
                 }
                 menu = menu.separator();
             }

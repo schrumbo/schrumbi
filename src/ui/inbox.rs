@@ -87,6 +87,9 @@ impl InboxPage {
         if k.modifiers.platform || k.modifiers.control || k.modifiers.alt {
             return;
         }
+        if matches!(k.key.as_str(), "enter" | "space") && !self.focus.is_focused(window) {
+            return;
+        }
         match k.key.as_str() {
             "up" | "down" if !inbox.is_empty() => {
                 let current = inbox.iter().rposition(|p| self.selection.contains(p));
@@ -313,7 +316,7 @@ impl Render for InboxPage {
                         )
                         .on_click(move |ev: &ClickEvent, window, cx| {
                             e.update(cx, |this, cx| window.focus(&this.focus, cx));
-                            if ev.click_count() >= 2 {
+                            if ev.click_count() >= 2 || ev.is_keyboard() {
                                 super::preview::show(&path, cx);
                                 return;
                             }

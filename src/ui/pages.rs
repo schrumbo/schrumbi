@@ -404,7 +404,7 @@ impl Pages {
     /// Makes a note in the folder chosen in the explorer, like its own new-note button, when the explorer is shown and was used after the open note.
     /// False where there is nothing to ask: the caller then names the note in a sheet or beside the open note.
     pub fn new_note_in_explorer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(page) = self.notes_page.clone().filter(|_| Self::explorer_shown(self.width)) else { return false };
+        let Some(page) = self.notes_page.clone().filter(|_| Self::explorer_shown(self.width, window)) else { return false };
         let newer = match state::read(cx, |l| l.route().clone()) {
             Route::Notes => true,
             Route::Doc(_) => page.read(cx).has_focus(window, cx),
@@ -418,8 +418,8 @@ impl Pages {
     }
 
     /// The notes room: the workspace's files beside whatever note is shown.
-    fn explorer_shown(width: f32) -> bool {
-        !crate::core::prefs::get().notes_explorer_hidden && width >= super::theme::explorer::MIN + super::theme::explorer::NOTE_MIN
+    fn explorer_shown(width: f32, window: &Window) -> bool {
+        super::notes_page::explorer_wanted(f32::from(window.viewport_size().width)) && width >= super::theme::explorer::MIN + super::theme::explorer::NOTE_MIN
     }
 
     fn with_explorer(&mut self, body: AnyElement, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -428,7 +428,7 @@ impl Pages {
             return body;
         }
         let page = self.notes_page.get_or_insert_with(|| cx.new(|cx| super::notes_page::NotesPage::new(window, cx))).clone();
-        let shown = Self::explorer_shown(width);
+        let shown = Self::explorer_shown(width, window);
         let fading = self.shown_route.as_ref().is_none_or(|(_, at)| at.elapsed() <= super::motion::timed(super::motion::FAST, cx) + super::motion::FAST);
         page.update(cx, |p, _| p.fit(width));
         let mut slot = div().w(px(page.read(cx).outer_width())).h_full().flex_none();
@@ -673,7 +673,7 @@ impl Render for Pages {
         let view = cx.entity();
         let width = self.width;
         let route = lib.read(cx).route().clone();
-        if !Self::explorer_shown(width) && lib.read(cx).rename_request.is_some() {
+        if !Self::explorer_shown(width, window) && lib.read(cx).rename_request.is_some() {
             if let Some(path) = lib.update(cx, |l, _| l.rename_request.take()) {
                 window.defer(cx, move |window, cx| super::rename_sheet::open(path, window, cx));
             }

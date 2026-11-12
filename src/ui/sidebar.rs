@@ -9,7 +9,7 @@ use super::state::act;
 use super::drive::Mark;
 use super::motion::Soft;
 use super::theme::{Theme, font, hover, space, iconsize, radius, control};
-use super::widgets::{KeyNav, icon, Tip};
+use super::widgets::{KeyNav, icon, keyed_item, menu_opened, Tip};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library, Route};
 use crate::core::prefs::{self, Shortcut};
@@ -123,10 +123,7 @@ pub fn set_hidden(key: &str, hidden: bool, cx: &mut App) {
 
 /// The first three modules answer to their own shortcuts, in sidebar order.
 fn module_help(name: String, index: usize) -> String {
-    match ShortcutAction::for_module(index).and_then(|a| a.active_shortcut()) {
-        Some(s) => format!("{name} ({})", s.display()),
-        None => name,
-    }
+    format!("{name}{}", ShortcutAction::for_module(index).map_or_else(String::new, ShortcutAction::hint))
 }
 
 fn shortcut_label(key: &str) -> String {
@@ -214,10 +211,7 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
             continue;
         }
         let (hide_key, hide_label) = (e.key, e.label.clone());
-        let help = match e.shortcut.and_then(|a| a.active_shortcut()) {
-            Some(k) => format!("{} ({})", e.label, k.display()),
-            None => e.label.clone(),
-        };
+        let help = format!("{}{}", e.label, e.shortcut.map_or_else(String::new, ShortcutAction::hint));
         let route = e.route.clone();
         let is_inbox = e.route == Route::Inbox;
         let count = (e.badge > 0).then_some((e.badge, t.badge_fill(if e.urgent { t.gray } else { t.accent })));
@@ -227,7 +221,8 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
             continue;
         };
         let dir = lib.root.as_ref().zip(lib.config.as_ref()).map(|(r, c)| r.join(&c.inbox)).filter(|_| is_inbox);
-        top = top.child(row.context_menu(move |mut menu, _, _| {
+        top = top.child(row.context_menu(move |mut menu, window, cx| {
+            menu_opened(window, cx);
             if let Some(dir) = dir.clone() {
                 menu = menu.item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::open_folder(&dir))).separator();
             }
@@ -282,7 +277,8 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
                     act(cx, |l| l.request_filing(vec![path], l.next_in_module(&inside)));
                 })
                 .on_click(move |_, _, cx| navigate(route.clone(), cx))
-                .context_menu(move |mut menu, _, _| {
+                .context_menu(move |mut menu, window, cx| {
+                    menu_opened(window, cx);
                     for (title, url) in &links {
                         let url = url.clone();
                         menu = menu.item(PopupMenuItem::new(trf("%@ öffnen", &[title])).on_click(move |_, _, _| {
@@ -301,6 +297,7 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
     let recents = prefs::get().recent_workspaces;
     let current = lib.root.clone();
     let name = lib.config.as_ref().map(|c| c.name.clone()).filter(|n| !n.is_empty());
+    let current_name = name.clone();
     let workspace_help = name.as_ref().map_or_else(|| tr("Arbeitsordner"), |n| format!("{}: {n}", tr("Arbeitsordner")));
     let workspace = name.unwrap_or_else(|| tr("Arbeitsordner"));
     let semesters = lib.config.as_ref().map(|c| c.semesters.clone()).unwrap_or_default();
@@ -319,7 +316,8 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
         })
         .when_some(sync_row(t, cx), |d, row| d.child(row))
         .when(semesters.len() > 1, |d| {
-            d.child(tab("tab-semester-row".into(), false, true, icon("calendar-range", iconsize::L, fg).into_any_element(), semester.clone(), None, format!("{}: {semester}", tr("Semester")), t).child(div().absolute().inset_0().child(menu_overlay("tab-semester").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+            d.child(tab("tab-semester-row".into(), false, true, icon("calendar-range", iconsize::L, fg).into_any_element(), semester.clone(), None, format!("{}: {semester}", tr("Semester")), t).child(div().absolute().inset_0().child(menu_overlay("tab-semester").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, window, cx| {
+                menu_opened(window, cx);
                 for s in &semesters {
                     let id = s.id.clone();
                     menu = menu.item(PopupMenuItem::new(s.name.clone()).checked(selected_id.as_deref() == Some(s.id.as_str())).on_click(move |_, _, cx| {
@@ -332,12 +330,13 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
                 menu
             }))))
         })
-        .child(tab("tab-workspace-row".into(), false, true, icon("folder-open", iconsize::L, fg).into_any_element(), workspace, None, workspace_help, t).child(div().absolute().inset_0().child(menu_overlay("tab-workspace").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+        .child(tab("tab-workspace-row".into(), false, true, icon("folder-open", iconsize::L, fg).into_any_element(), workspace, None, workspace_help, t).child(div().absolute().inset_0().child(menu_overlay("tab-workspace").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, window, cx| {
+            menu_opened(window, cx);
             for (i, p) in recents.iter().enumerate() {
-                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let name = current_name.clone().filter(|_| current.as_ref() == Some(p)).unwrap_or_else(|| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
                 menu = menu.item(PopupMenuItem::new(name).checked(current.as_ref() == Some(p)).on_click(move |_, window, cx| window.dispatch_action(Box::new(super::app::OpenRecent(i)), cx)));
             }
-            menu.separator().item(PopupMenuItem::new(format!("{}{}", tr("Anderen Ordner öffnen…"), ShortcutAction::OpenOtherWorkspace.hint())).on_click(|_, window, cx| window.dispatch_action(Box::new(super::app::OpenOtherWorkspace), cx)))
+            menu.separator().item(keyed_item(tr("Anderen Ordner öffnen…"), Some(ShortcutAction::OpenOtherWorkspace)).on_click(|_, window, cx| window.dispatch_action(Box::new(super::app::OpenOtherWorkspace), cx)))
         }))))
         .child(tab("tab-settings".into(), false, true, icon("settings", iconsize::L, fg).into_any_element(), tr("Einstellungen"), None, format!("{} ({})", tr("Einstellungen"), shortcut_label(",")), t).on_click(|_, _, cx| super::settings::open(cx)))
         .when(can_toggle, |d| d.child(tab("tab-sidebar-toggle".into(), false, true, icon(if wide { "panel-left-close" } else { "panel-left-open" }, iconsize::L, fg).into_any_element(), toggle_label.clone(), None, toggle_label, t).on_click(|_, _, cx| toggle_compact(cx))));
