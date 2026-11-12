@@ -89,6 +89,10 @@ pub struct CanvasView {
     save_task: Option<Task<()>>,
     /// The open text field has already taken its undo step; further typing joins it.
     typed: bool,
+    /// The last save failed, so the file on disk is older than the canvas shown.
+    unsaved: bool,
+    /// Held while the file is written, so a save on close never overlaps one still running.
+    writing: std::sync::Arc<std::sync::Mutex<()>>,
     seen_generation: u64,
     /// Texts of note cards, read again when the vault changed.
     card_texts: std::cell::RefCell<std::collections::HashMap<PathBuf, (u64, String)>>,
@@ -101,12 +105,13 @@ impl CanvasView {
         let source = std::fs::read_to_string(&path).unwrap_or_default();
         let doc = Canvas::parse(&source);
         cx.on_release(|v: &mut Self, _| {
-            if v.save_task.take().is_some() {
+            if v.save_task.take().is_some() || v.unsaved {
+                let _held = v.writing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let _ = write_atomic(&v.path, v.source.as_bytes());
             }
         })
         .detach();
-        Self { path, doc, source, pan: (0., 0.), zoom: 1., fitted: false, selection: BTreeSet::new(), selected_edge: None, gesture: None, guides: Vec::new(), edge_mode: false, space_down: false, editing: None, menu_at: None, bounds: Default::default(), undo: Vec::new(), redo: Vec::new(), last_edit: None, save_task: None, typed: false, seen_generation: index::current().generation, card_texts: Default::default(), focus: cx.focus_handle(), _subs: Vec::new() }
+        Self { path, doc, source, pan: (0., 0.), zoom: 1., fitted: false, selection: BTreeSet::new(), selected_edge: None, gesture: None, guides: Vec::new(), edge_mode: false, space_down: false, editing: None, menu_at: None, bounds: Default::default(), undo: Vec::new(), redo: Vec::new(), last_edit: None, save_task: None, typed: false, unsaved: false, writing: Default::default(), seen_generation: index::current().generation, card_texts: Default::default(), focus: cx.focus_handle(), _subs: Vec::new() }
     }
 
     /// Gives the keyboard to the canvas.
@@ -116,7 +121,7 @@ impl CanvasView {
 
     fn reload_if_changed(&mut self) {
         let generation = index::current().generation;
-        if self.save_task.is_some() || self.gesture.is_some() || std::mem::replace(&mut self.seen_generation, generation) == generation {
+        if self.save_task.is_some() || self.unsaved || self.gesture.is_some() || std::mem::replace(&mut self.seen_generation, generation) == generation {
             return;
         }
         let Ok(text) = std::fs::read_to_string(&self.path) else { return };
@@ -147,13 +152,20 @@ impl CanvasView {
         if self.save_task.is_none() {
             self.save_task = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(SAVE_DELAY).await;
-                let Ok((path, text)) = this.update(cx, |v, _| (v.path.clone(), v.source.clone())) else { return };
+                let Ok((path, text, writing)) = this.update(cx, |v, _| (v.path.clone(), v.source.clone(), v.writing.clone())) else { return };
                 let bytes = text.clone().into_bytes();
-                let result = cx.background_spawn(async move { write_atomic(&path, &bytes) }).await;
+                let result = cx
+                    .background_spawn(async move {
+                        let _held = writing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        write_atomic(&path, &bytes)
+                    })
+                    .await;
                 let _ = this.update(cx, |v, cx| {
                     v.save_task = None;
+                    v.unsaved = result.is_err();
                     match result {
-                        Ok(()) => super::state::reindex(cx),
+                        Ok(()) if v.editing.is_none() => super::state::reindex(cx),
+                        Ok(()) => {}
                         Err(e) => act(cx, |l| l.last_error = Some(e.to_string())),
                     }
                     if v.source != text {
@@ -384,6 +396,9 @@ impl CanvasView {
     fn finish_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.keep_edit(cx);
         if self.editing.take().is_some() {
+            if self.typed && self.save_task.is_none() {
+                super::state::reindex(cx);
+            }
             window.focus(&self.focus, cx);
             cx.notify();
         }
