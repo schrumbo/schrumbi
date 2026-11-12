@@ -153,6 +153,8 @@ Links in {ui:Seiten}, der Seitenliste. {key:pageList} blendet sie ein und aus. E
 
 Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} oder {ui:Quelltext: Text mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} im Menü {ui:Darstellung} oder die {key:CommandPalette} wechselt sofort.
 
+Beim Wechsel bleibt die Stelle im Text, und {key:Undo} nimmt auch Änderungen vor dem Wechsel zurück. Die Knöpfe bleiben an ihrem Platz; die {ui:Geteilte Ansicht} ist im Live-Editor ausgegraut.
+
 ## In der Notiz suchen
 
 | Kürzel | Wirkung |

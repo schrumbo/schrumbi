@@ -21,12 +21,35 @@ fn line_start(s: &str, at: usize) -> usize {
 }
 
 fn line_end(s: &str, at: usize) -> usize {
-    s[at..].find('\n').map_or(s.len(), |i| at + i)
+    let end = s[at..].find('\n').map_or(s.len(), |i| at + i);
+    if end > line_start(s, at) && s.as_bytes()[end - 1] == b'\r' { end - 1 } else { end }
 }
 
-/// Full lines touched by the selection, without the final newline.
+/// The caret moved in front of the `\r` it sits behind when that ends the line: the editor puts the caret there after End or a click past the end.
+pub fn before_cr(s: &str, at: usize) -> usize {
+    if at > 0 && s.as_bytes()[at - 1] == b'\r' && (at == s.len() || s.as_bytes()[at] == b'\n') { at - 1 } else { at }
+}
+
+/// The line break the text uses: `\r\n` as soon as it contains one.
+pub fn eol(s: &str) -> &'static str {
+    if s.contains("\r\n") { "\r\n" } else { "\n" }
+}
+
+fn break_at(s: &str, at: usize) -> usize {
+    if s[at..].starts_with("\r\n") { 2 } else { usize::from(s[at..].starts_with('\n')) }
+}
+
+fn break_before(s: &str, at: usize) -> usize {
+    if s[..at].ends_with("\r\n") { 2 } else { usize::from(s[..at].ends_with('\n')) }
+}
+
+fn rows(block: &str) -> impl Iterator<Item = &str> {
+    block.split('\n').map(|row| row.strip_suffix('\r').unwrap_or(row))
+}
+
+/// Full lines touched by the selection, without the final line break.
 pub fn selected_lines(s: &str, sel: &Range<usize>) -> Range<usize> {
-    let end = if sel.end > sel.start && s[..sel.end].ends_with('\n') { sel.end - 1 } else { sel.end };
+    let end = if sel.end > sel.start { sel.end - break_before(s, sel.end) } else { sel.end };
     line_start(s, sel.start)..line_end(s, end.max(sel.start))
 }
 
@@ -403,9 +426,10 @@ pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
             let mut at = sel.start;
             let lines: Vec<(usize, bool)> = inner
                 .split('\n')
-                .map(|line| {
+                .map(|raw| {
+                    let line = raw.strip_suffix('\r').unwrap_or(raw);
                     let range = at..at + line.len();
-                    at = range.end + 1;
+                    at += raw.len() + 1;
                     let display = line.trim() == "$$" || math.iter().any(|r| r.start <= range.start && range.end <= r.end && s[r.clone()].starts_with("$$"));
                     let marks = super::live_text::prefix_len(line);
                     let skip = display || line[marks..].trim().is_empty();
@@ -421,10 +445,9 @@ pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
                     _ => body.len() >= token.len() * 2 && body.starts_with(token) && body.ends_with(token) && !body[token.len()..body.len() - token.len()].contains(token),
                 }
             };
-            let content: Vec<bool> = inner.split('\n').zip(&lines).filter(|(_, (_, skip))| !skip).map(|(line, (marks, _))| closed(&line[*marks..])).collect();
+            let content: Vec<bool> = rows(inner).zip(&lines).filter(|(_, (_, skip))| !skip).map(|(line, (marks, _))| closed(&line[*marks..])).collect();
             let unwrap_all = !content.is_empty() && content.iter().all(|c| *c);
-            let text = inner
-                .split('\n')
+            let text = rows(inner)
                 .zip(&lines)
                 .map(|(line, (marks, skip))| {
                     let body = &line[*marks..];
@@ -441,7 +464,7 @@ pub fn wrap(s: &str, sel: Range<usize>, token: &str) -> Edit {
                     }
                 })
                 .collect::<Vec<_>>()
-                .join("\n");
+                .join(eol(s));
             let select = sel.start..sel.start + text.len();
             return Edit { range: sel, text, select };
         }
@@ -488,7 +511,7 @@ pub fn toggled_task(line: &str) -> String {
 /// Applies `transform` to every selected line; a caret stays at the same distance from the line end.
 pub fn edit_lines(s: &str, sel: Range<usize>, transform: impl Fn(&str) -> String) -> Edit {
     let r = selected_lines(s, &sel);
-    let text = s[r.clone()].split('\n').map(transform).collect::<Vec<_>>().join("\n");
+    let text = rows(&s[r.clone()]).map(transform).collect::<Vec<_>>().join(eol(s));
     let select = if sel.is_empty() {
         let caret = (sel.start as isize + text.len() as isize - r.len() as isize).clamp(r.start as isize, (r.start + text.len()) as isize) as usize;
         caret..caret
@@ -527,18 +550,20 @@ pub fn move_lines(s: &str, sel: Range<usize>, up: bool) -> Option<Edit> {
         if r.start == 0 {
             return None;
         }
-        let prev = line_start(s, r.start - 1);
-        let prev_text = &s[prev..r.start - 1];
+        let gap = break_before(s, r.start);
+        let prev = line_start(s, r.start - gap);
+        let prev_text = &s[prev..r.start - gap];
         let shift = r.start - prev;
-        Some(Edit { range: prev..r.end, text: format!("{cur}\n{prev_text}"), select: sel.start - shift..sel.end - shift })
+        Some(Edit { range: prev..r.end, text: format!("{cur}{}{prev_text}", &s[r.start - gap..r.start]), select: sel.start - shift..sel.end - shift })
     } else {
         if r.end >= s.len() {
             return None;
         }
-        let next_end = line_end(s, r.end + 1);
-        let next_text = &s[r.end + 1..next_end];
-        let shift = next_text.len() + 1;
-        Some(Edit { range: r.start..next_end, text: format!("{next_text}\n{cur}"), select: sel.start + shift..sel.end + shift })
+        let gap = break_at(s, r.end);
+        let next_end = line_end(s, r.end + gap);
+        let next_text = &s[r.end + gap..next_end];
+        let shift = next_text.len() + gap;
+        Some(Edit { range: r.start..next_end, text: format!("{next_text}{}{cur}", &s[r.end..r.end + gap]), select: sel.start + shift..sel.end + shift })
     }
 }
 
@@ -546,17 +571,18 @@ pub fn move_lines(s: &str, sel: Range<usize>, up: bool) -> Option<Edit> {
 pub fn copy_lines(s: &str, sel: Range<usize>, up: bool) -> Edit {
     let r = selected_lines(s, &sel);
     let cur = &s[r.clone()];
-    let shift = if up { 0 } else { cur.len() + 1 };
-    Edit { range: r.clone(), text: format!("{cur}\n{cur}"), select: sel.start + shift..sel.end + shift }
+    let nl = eol(s);
+    let shift = if up { 0 } else { cur.len() + nl.len() };
+    Edit { range: r.clone(), text: format!("{cur}{nl}{cur}"), select: sel.start + shift..sel.end + shift }
 }
 
-/// Removes the selected lines including their newline.
+/// Removes the selected lines including their line break.
 pub fn delete_lines(s: &str, sel: Range<usize>) -> Edit {
     let r = selected_lines(s, &sel);
     let range = if r.end < s.len() {
-        r.start..r.end + 1
+        r.start..r.end + break_at(s, r.end)
     } else if r.start > 0 {
-        r.start - 1..r.end
+        r.start - break_before(s, r.start)..r.end
     } else {
         r.clone()
     };
@@ -566,7 +592,7 @@ pub fn delete_lines(s: &str, sel: Range<usize>) -> Edit {
 
 /// Selects the current line including its newline; repeated, extends by the next line.
 pub fn select_lines(s: &str, sel: Range<usize>) -> Range<usize> {
-    let full = |r: Range<usize>| r.start..(r.end + 1).min(s.len());
+    let full = |r: Range<usize>| r.start..(r.end + break_at(s, r.end)).min(s.len());
     let r = full(selected_lines(s, &sel));
     if !sel.is_empty() && sel == r && r.end < s.len() {
         return r.start..full(line_start(s, r.end)..line_end(s, r.end)).end;
@@ -577,8 +603,7 @@ pub fn select_lines(s: &str, sel: Range<usize>) -> Range<usize> {
 /// Indents (`+1`) or outdents (`-1`) the selected lines by two spaces.
 pub fn shift_lines(s: &str, sel: Range<usize>, direction: i32) -> Edit {
     let r = selected_lines(s, &sel);
-    let text = s[r.clone()]
-        .split('\n')
+    let text = rows(&s[r.clone()])
         .map(|row| {
             if direction > 0 {
                 format!("  {row}")
@@ -587,10 +612,10 @@ pub fn shift_lines(s: &str, sel: Range<usize>, direction: i32) -> Edit {
             }
         })
         .collect::<Vec<_>>()
-        .join("\n");
+        .join(eol(s));
     let end = r.start + text.len();
     if sel.is_empty() {
-        let first = s[r.clone()].split('\n').next().unwrap_or_default();
+        let first = rows(&s[r.clone()]).next().unwrap_or_default();
         let moved = if direction > 0 { 2 } else { first.len().saturating_sub(first.strip_prefix("  ").or_else(|| first.strip_prefix(' ')).unwrap_or(first).len()) };
         let caret = if direction > 0 { sel.start + moved } else { sel.start.saturating_sub(moved).max(r.start) };
         return Edit { range: r.clone(), text, select: caret..caret };
@@ -634,7 +659,7 @@ pub fn table_cell(s: &str, caret: usize, back: bool) -> Option<Range<usize>> {
     let mut cells: Vec<Range<usize>> = Vec::new();
     let mut at = 0;
     for line in s.split_inclusive('\n') {
-        let bare = line.trim_end_matches('\n');
+        let bare = line.trim_end_matches(['\r', '\n']);
         let rule = bare.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '));
         if bare.trim_start().starts_with('|') && !rule {
             let bars: Vec<usize> = bare.char_indices().filter(|(i, c)| *c == '|' && (*i == 0 || bare.as_bytes()[i - 1] != b'\\')).map(|(i, _)| i).collect();
@@ -660,8 +685,9 @@ pub fn new_table_row(s: &str, caret: usize) -> Option<Edit> {
         return None;
     }
     let cells = line.trim().matches('|').count().saturating_sub(1).max(1);
-    let row = format!("\n|{}", "  |".repeat(cells));
-    let at = end + 3;
+    let nl = eol(s);
+    let row = format!("{nl}|{}", "  |".repeat(cells));
+    let at = end + nl.len() + 2;
     Some(Edit { range: end..end, text: row, select: at..at })
 }
 
@@ -682,7 +708,7 @@ fn quote_prefix(line: &str) -> Option<&str> {
 /// Puts a mark in front of each line, or takes it away if all have it.
 pub fn toggle_line_mark(s: &str, sel: Range<usize>, mark: &str) -> Edit {
     let r = selected_lines(s, &sel);
-    let all = s[r.clone()].split('\n').all(|l| l.trim_start().starts_with(mark));
+    let all = rows(&s[r.clone()]).all(|l| l.trim_start().starts_with(mark));
     edit_lines(s, sel, |line| {
         let bare = line.trim_start();
         let indent = &line[..line.len() - bare.len()];
@@ -718,13 +744,19 @@ pub fn pasted_link(s: &str, sel: Range<usize>, pasted: &str) -> Option<Edit> {
 }
 
 pub fn newline(s: &str, caret: usize) -> Option<Edit> {
+    newline_in(s, caret, eol(s))
+}
+
+/// `newline` with the line break of the whole note, for a block that holds only part of it.
+pub fn newline_in(s: &str, caret: usize, nl: &str) -> Option<Edit> {
+    let caret = before_cr(s, caret);
     let start = line_start(s, caret);
     let current = &s[start..caret];
     if let Some(quote) = quote_prefix(current) {
         if quote.len() == current.len() {
             return Some(Edit { range: start..caret, text: String::new(), select: start..start });
         }
-        let text = format!("\n{quote}");
+        let text = format!("{nl}{quote}");
         let end = caret + text.len();
         return Some(Edit { range: caret..caret, text, select: end..end });
     }
@@ -733,7 +765,7 @@ pub fn newline(s: &str, caret: usize) -> Option<Edit> {
         if indent.is_empty() {
             return None;
         }
-        let text = format!("\n{indent}");
+        let text = format!("{nl}{indent}");
         let end = caret + text.len();
         return Some(Edit { range: caret..caret, text, select: end..end });
     };
@@ -746,7 +778,7 @@ pub fn newline(s: &str, caret: usize) -> Option<Edit> {
         _ => c[2].to_string(),
     };
     let task = if c.get(6).is_some() { "[ ] " } else { "" };
-    let text = format!("\n{indent}{marker} {task}");
+    let text = format!("{nl}{indent}{marker} {task}");
     let end = caret + text.len();
     Some(Edit { range: caret..caret, text, select: end..end })
 }
@@ -1445,5 +1477,103 @@ world");
         assert_eq!(after("eins\r\nzwei", 6), format!("eins\r\n\r\n{block}\r\n\r\nzwei"));
         let two = insert_paragraph("a\r\n", 3, "x\n\ny");
         assert_eq!(apply("a\r\n", &two), "a\r\n\r\nx\r\n\r\ny");
+    }
+
+    fn bare_lf(s: &str) -> bool {
+        !s.replace("\r\n", "").contains(['\n', '\r'])
+    }
+
+    #[test]
+    fn crlf_notes_stay_crlf_when_enter_continues_a_list() {
+        let s = "- a\r\n- zwei\r\nende";
+        let e = newline(s, 11).unwrap();
+        let out = apply(s, &e);
+        assert_eq!(out, "- a\r\n- zwei\r\n- \r\nende");
+        assert_eq!(e.select, 15..15);
+        assert_eq!(apply("- a\r\n- b", &newline("- a\r\n- b", 3).unwrap()), "- a\r\n- \r\n- b");
+        assert_eq!(apply("1. a\r\nx", &newline("1. a\r\nx", 4).unwrap()), "1. a\r\n2. \r\nx");
+        assert_eq!(apply("> q\r\nx", &newline("> q\r\nx", 3).unwrap()), "> q\r\n> \r\nx");
+        assert_eq!(apply("  code\r\nx", &newline("  code\r\nx", 6).unwrap()), "  code\r\n  \r\nx");
+        assert_eq!(apply("- a\n- b", &newline("- a\n- b", 3).unwrap()), "- a\n- \n- b");
+        assert_eq!(newline_in("- a", 3, "\r\n").unwrap().text, "\r\n- ");
+        assert_eq!(apply("- a\r\n- \r\nx", &newline("- a\r\n- \r\nx", 7).unwrap()), "- a\r\n\r\nx");
+    }
+
+    #[test]
+    fn a_caret_behind_the_cr_at_the_line_end_keeps_pure_crlf() {
+        let sel = |s: &str, at: usize| selected_lines(s, &(at..at));
+        assert_eq!(sel("- a\r\n- b", 4), 0..3);
+        assert_eq!(sel("A\r\nB\r", 5), 3..4);
+        assert_eq!(apply("- a\r\n- b", &shift_lines("- a\r\n- b", 4..4, 1)), "  - a\r\n- b");
+        assert_eq!(apply("a\r\nb\r\nc", &move_lines("a\r\nb\r\nc", 5..5, true).unwrap()), "b\r\na\r\nc");
+        assert_eq!(apply("- a\r\nx", &newline("- a\r\nx", 4).unwrap()), "- a\r\n- \r\nx");
+        assert_eq!(apply("- \r\nx", &newline("- \r\nx", 3).unwrap()), "\r\nx");
+        assert_eq!(before_cr("a\r\nb", 2), 1);
+        assert_eq!(before_cr("a\r\nb", 3), 3);
+        assert_eq!(before_cr("a\r", 2), 1);
+        assert_eq!(before_cr("a\rb", 2), 2);
+        assert_eq!(apply("A\r\nB\r", &toggle_line_mark("A\r\nB\r", 3..5, "- ")), "A\r\n- B\r");
+    }
+
+    #[test]
+    fn crlf_line_commands_keep_every_line_break() {
+        let up = |s: &str, at: usize| apply(s, &move_lines(s, at..at, true).unwrap());
+        let down = |s: &str, at: usize| apply(s, &move_lines(s, at..at, false).unwrap());
+        assert_eq!(up("A\r\nB", 3), "B\r\nA");
+        assert_eq!(down("A\r\nB\r\nC", 3), "A\r\nC\r\nB");
+        assert_eq!(down("A\r\nB\r\n", 0), "B\r\nA\r\n");
+        assert_eq!(up("A\r\nB\r\nC", 6), "A\r\nC\r\nB");
+        let e = move_lines("A\r\nB\r\nC", 3..3, false).unwrap();
+        assert_eq!(e.select, 6..6);
+        let e = move_lines("A\r\nB", 3..3, true).unwrap();
+        assert_eq!(e.select, 0..0);
+
+        let copy = |s: &str, at: usize, up: bool| apply(s, &copy_lines(s, at..at, up));
+        assert_eq!(copy("A\r\nB\r\nC", 6, false), "A\r\nB\r\nC\r\nC");
+        assert_eq!(copy("A\r\nB\r\nC", 3, true), "A\r\nB\r\nB\r\nC");
+        assert_eq!(copy_lines("A\r\nB", 3..3, false).select, 6..6);
+
+        let del = |s: &str, at: usize| apply(s, &delete_lines(s, at..at));
+        assert_eq!(del("A\r\nB", 3), "A");
+        assert_eq!(del("A\r\nB\r\nC", 3), "A\r\nC");
+        assert_eq!(del("A\r\nB\r\nC", 0), "B\r\nC");
+        assert_eq!(del("A", 0), "");
+
+        assert_eq!(selected_lines("A\r\nB\r\nC", &(0..3)), 0..1);
+        assert_eq!(selected_lines("A\r\nB\r\nC", &(0..6)), 0..4);
+        assert_eq!(select_lines("A\r\nB\r\nC", 0..0), 0..3);
+        assert_eq!(select_lines("A\r\nB\r\nC", 0..3), 0..6);
+    }
+
+    #[test]
+    fn crlf_line_edits_keep_pure_crlf() {
+        let s = "A\r\nB\r\nC";
+        let e = toggle_comment(s, 0..0).unwrap();
+        assert_eq!(apply(s, &e), "<!-- A -->\r\nB\r\nC");
+        let on = toggle_comment(s, 0..4).unwrap();
+        assert_eq!(apply(s, &on), "<!-- A\r\nB -->\r\nC");
+        let off = apply(s, &on);
+        assert_eq!(apply(&off, &toggle_comment(&off, 0..9).unwrap()), s);
+        assert!(bare_lf(&apply(s, &toggle_line_mark(s, 0..s.len(), "- "))));
+        assert_eq!(apply(s, &toggle_line_mark(s, 0..s.len(), "- ")), "- A\r\n- B\r\n- C");
+        assert_eq!(apply(s, &set_heading(s, 0..s.len(), 2)), "## A\r\n## B\r\n## C");
+        assert_eq!(apply(s, &shift_lines(s, 0..s.len(), 1)), "  A\r\n  B\r\n  C");
+        let indented = "  A\r\n  B\r\nC";
+        assert_eq!(apply(indented, &shift_lines(indented, 0..indented.len(), -1)), "A\r\nB\r\nC");
+        assert_eq!(apply(s, &edit_lines(s, 0..s.len(), |l| l.to_lowercase())), "a\r\nb\r\nc");
+        let wrapped = wrap(s, 0..s.len(), "**");
+        assert_eq!(apply(s, &wrapped), "**A**\r\n**B**\r\n**C**");
+    }
+
+    #[test]
+    fn crlf_tables_keep_their_rows_and_rules() {
+        let s = "| a | b |\r\n|---|---|\r\n| 1 | 2 |";
+        let e = new_table_row(s, s.len()).unwrap();
+        assert_eq!(apply(s, &e), format!("{s}\r\n|  |  |"));
+        assert_eq!(e.select.start, s.len() + 4);
+        let next = table_cell(s, 2, false).unwrap();
+        assert_eq!(&s[next], "b");
+        let below = table_cell(s, 8, false).unwrap();
+        assert_eq!(&s[below], "1");
     }
 }

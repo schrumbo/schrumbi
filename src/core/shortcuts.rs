@@ -396,6 +396,13 @@ impl ShortcutAction {
                 _ => {}
             }
         }
+        if os == Os::Windows {
+            match self {
+                Self::Indent => return Some(s("right", true, false, true, false)),
+                Self::Outdent => return Some(s("left", true, false, true, false)),
+                _ => {}
+            }
+        }
         Some(match self {
             Self::GoToday => s("1", true, false, false, false),
             Self::GoGrid => s("2", true, false, false, false),
@@ -996,6 +1003,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn indent_keys_on_windows_need_no_bracket_and_are_unique() {
+        let indent = ShortcutAction::Indent.default_on(Os::Windows).unwrap();
+        let outdent = ShortcutAction::Outdent.default_on(Os::Windows).unwrap();
+        assert_eq!((indent.key.as_str(), outdent.key.as_str()), ("right", "left"));
+        assert!(indent.command && indent.option && !indent.shift && outdent.command && outdent.option && !outdent.shift);
+        for action in ShortcutAction::ALL {
+            if !matches!(action, ShortcutAction::Indent | ShortcutAction::Outdent) {
+                let other = action.default_on(Os::Windows);
+                assert!(other.as_ref() != Some(&indent) && other.as_ref() != Some(&outdent), "{}", action.label());
+            }
+        }
+        assert!(ShortcutAction::Indent.reserved_on(&indent, Os::Windows).is_none());
     }
 
     #[test]

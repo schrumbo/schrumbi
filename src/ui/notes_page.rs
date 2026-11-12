@@ -814,9 +814,11 @@ impl NotesPage {
             Row::File { path, .. } => {
                 self.target_folder = None;
                 let p = path.clone();
+                let empty = std::fs::metadata(&p).is_ok_and(|m| m.len() == 0);
                 act(cx, |l| {
                     l.quiet_open = true;
                     l.open_file(&p);
+                    l.focus_document |= empty;
                 });
             }
             Row::Tag { tag, .. } => {

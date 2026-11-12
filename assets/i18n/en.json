@@ -2154,5 +2154,7 @@
   "Alle Karten waren schon da, es wurde nichts importiert.": "All cards were already there, nothing was imported.",
   "Zur anderen Seite wechseln": "Switch to the other side",
   "Antwort erneut geben (⌘⇧Z)": "Give answer again (⌘⇧Z)",
-  "Gut (3 oder Leertaste)": "Good (3 or Space)"
+  "Gut (3 oder Leertaste)": "Good (3 or Space)",
+  "Geteilte Ansicht gibt es nur im Quelltext": "Split view is only available in the source editor",
+  "Noch keine Überschriften": "No headings yet"
 }
