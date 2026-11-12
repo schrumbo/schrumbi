@@ -4,7 +4,7 @@ Was jetzt dran ist, auf einen Blick. {key:goToday} öffnet sie.
 
 ## Jetzt dran
 
-Die große Karte oben zeigt das Dringendste, in dieser Reihenfolge:
+Die große Karte oben ({ui:Jetzt}) zeigt das Dringendste, in dieser Reihenfolge:
 
 1. Überfälliges
 2. Fertig, aber Upload nicht bestätigt
@@ -18,7 +18,7 @@ Die große Karte oben zeigt das Dringendste, in dieser Reihenfolge:
 | Upload nicht bestätigt | {ui:Als hochgeladen markieren} |
 | Dateien in der Inbox | {ui:Jetzt ablegen} |
 
-Ist nichts offen, steht dort {ui:Nichts offen}. Daneben zeigt {ui:Diese Woche}, wie viel von dieser Woche erledigt ist, und {ui:Pünktlich in Folge} deine Serie pünktlicher Abgaben.
+Ist nichts offen, steht dort {ui:Nichts offen}. Daneben zeigt {ui:Diese Woche}, wie viel von dieser Woche erledigt ist. {ui:Pünktlich in Folge} erscheint, sobald du eine Serie pünktlicher Abgaben hast.
 
 ## Status setzen
 
@@ -69,7 +69,7 @@ Eine Datei zählt für eine Abgabe, wenn sie dazugehört. Datum und Ordner allei
 
 ## Weiter unten
 
-- Gesammelt: {ui:Überfällig} und {ui:Fertig, aber Upload nicht bestätigt}, mit {ui:Alle als hochgeladen markieren}.
+- Eine Zeile {ui:Offen}: alles Weitere, das noch offen ist. Ein Klick klappt die Einträge auf, {ui:Alle erledigt} setzt alle auf einmal.
 - Der Kalender, {ui:Prüfungen} und {ui:Zuletzt geschrieben}.
 - Warten Karten, erscheint ein Hinweis mit {ui:Lernen}.
 

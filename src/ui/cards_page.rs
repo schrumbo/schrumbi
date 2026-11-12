@@ -1715,7 +1715,7 @@ impl Render for CardsPage {
         } else if self.all.is_empty() {
             self.empty_room(&t, cx)
         } else {
-            let room = width - super::sidebar::RAIL - if width > 860. { 260. } else { 0. };
+            let room = width - super::sidebar::rail_for(width) - if width > 860. { 260. } else { 0. };
             self.overview(now, room, &t, cx)
         };
         let side = (!reviewing && !self.all.is_empty() && width > 860.).then(|| self.deck_column(now, &t, cx));

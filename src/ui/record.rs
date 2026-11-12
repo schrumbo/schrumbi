@@ -11,7 +11,7 @@ use super::fields::{Fields, format_grade, format_number, parse_number};
 use super::pages::Pages;
 use super::state::edit_config;
 use super::motion::{self, Soft};
-use super::theme::{Theme, font, space, radius};
+use super::theme::{Theme, control, font, space, radius};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::model::{GradeComponent, GradingSystem, StudyConfig};
@@ -59,7 +59,7 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
                 .child(caption(tr("bestanden"), t)),
         );
 
-    let mut col = div().w_full().max_w(px(980.)).px(px(space::XXL)).py(px(space::XL)).flex().flex_col().gap(px(space::XL)).child(tiles);
+    let mut col = div().w_full().max_w(px(control::CONTENT_MAX)).mx_auto().p(px(space::XL)).flex().flex_col().gap(px(space::XL)).child(tiles);
 
     for s in &semesters {
         let ms: Vec<_> = c.modules.iter().filter(|m| m.semester == s.id).collect();
@@ -70,6 +70,7 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
             div()
                 .flex()
                 .items_center()
+                .gap(px(space::S))
                 .px(px(space::L))
                 .py(px(space::S))
                 .text_size(px(font::CAPTION))
@@ -144,13 +145,13 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
                 .flex()
                 .items_center()
                 .gap(px(space::S))
-                .py(px(space::XS))
+                .min_h(px(control::S))
                 .px(px(space::S))
                 .ml(px(-space::S))
                 .rounded(px(radius::INNER))
                 .cursor_pointer().key_nav()
                 .soft(t.ink.opacity(0.06), radius::INNER)
-                .tooltip(tip(tr("Teilleistungen anzeigen")))
+                .tooltip(tip(if expanded { tr("Teilleistungen ausblenden") } else { tr("Teilleistungen anzeigen") }))
                 .on_click({
                     let id = id.clone();
                     move |_, _, cx| view.update(cx, |p, cx| {
@@ -169,7 +170,7 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
         .child(div().w(px(80.)).child(Input::new(&ects).small().text_right()))
         .when(system.uses_grades(), |d| {
             d.child(match grade {
-                Some(g) => div().w(px(90.)).child(Input::new(&g).small().text_right()).when(failing, |d| d.text_color(t.red)).into_any_element(),
+                Some(g) => div().w(px(90.)).child(Input::new(&g).small().text_right()).when(failing, |d| d.text_color(t.secondary)).into_any_element(),
                 None => div().id(SharedString::from(format!("computed-{id}"))).w(px(90.)).text_right().child(m.effective_grade().map_or("–".into(), |g| format_grade(g, system))).tooltip(tip(tr("Aus Teilleistungen berechnet"))).into_any_element(),
             })
         })
@@ -198,6 +199,21 @@ fn edit_components(id: &str, cx: &mut App, f: impl FnOnce(&mut Vec<GradeComponen
 
 fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fields: &mut Fields, window: &mut Window, cx: &mut Context<Pages>, t: &Theme) -> Div {
     let mut col = div().flex().flex_col().gap(px(space::S));
+    if !m.components.is_empty() {
+        col = col.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::S))
+                .text_size(px(font::CAPTION))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(t.secondary)
+                .child(div().flex_1().child(tr("Teilleistung")))
+                .child(div().w(px(70.)).text_right().child(tr("Gewicht")))
+                .when(system.uses_grades(), |r| r.child(div().w(px(80.)).text_right().child(tr("Note"))))
+                .child(div().w(px(control::S)).flex_none()),
+        );
+    }
     for (j, comp) in m.components.iter().enumerate() {
         let id = m.id.clone();
         let (a, b, cc, d) = (id.clone(), id.clone(), id.clone(), id.clone());
@@ -254,7 +270,7 @@ fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fiel
             let (lo, hi) = system.range();
             let (too_good, too_easy) = if system.higher_is_better() { (need > hi, need < lo) } else { (need < lo, need > hi) };
             let (text, color) = if too_good {
-                (tr("Ziel nicht mehr erreichbar"), t.red)
+                (tr("Ziel nicht mehr erreichbar"), t.secondary)
             } else if too_easy {
                 (tr("Ziel schon sicher"), t.secondary)
             } else {

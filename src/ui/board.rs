@@ -637,7 +637,7 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
     let border = if selected {
         Some(t.accent)
     } else if attention {
-        Some(if e.status == Status::Ready { t.blue.opacity(0.7) } else { t.red.opacity(0.7) })
+        Some(if e.status == Status::Ready { t.blue.opacity(0.7) } else { t.secondary.opacity(0.6) })
     } else if a.optional && !closed {
         Some(t.secondary.opacity(0.5))
     } else {
@@ -684,7 +684,7 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
             if e.status == Status::Skipped { title.line_through() } else { title }
         })
         .when(attention, |c| {
-            let (label, color) = if e.status == Status::Ready { (tr("Upload bestätigen"), t.blue) } else { (tr("Überfällig"), t.red) };
+            let (label, color) = if e.status == Status::Ready { (tr("Upload bestätigen"), t.blue) } else { (tr("Noch offen"), t.secondary) };
             c.child(div().text_size(px(font::CAPTION2)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(label))
         });
     if let Some(color) = border {

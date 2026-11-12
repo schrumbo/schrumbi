@@ -42,6 +42,8 @@ pub mod control {
     pub const TRAFFIC_INSET: f32 = 14.;
     pub const S: f32 = 24.;
     pub const M: f32 = 28.;
+    /// The widest a page's content grows before it is centred.
+    pub const CONTENT_MAX: f32 = 1120.;
     /// The toolbar band.
     pub const BAR: f32 = 52.;
     /// The band under the toolbar. Every pane uses it, so the lines below them meet.
@@ -311,6 +313,14 @@ pub mod ring {
     pub fn fill() -> Hsla {
         of(*ACCENT.read().unwrap_or_else(|e| e.into_inner()))
     }
+
+    /// The solid line drawn around a keyboard-focused element.
+    pub fn line() -> Hsla {
+        *ACCENT.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Width of the line around a keyboard-focused element.
+    pub const WIDTH: f32 = 2.;
 }
 
 /// macOS text styles in points.

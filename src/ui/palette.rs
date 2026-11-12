@@ -151,6 +151,7 @@ fn commands(cx: &App) -> Vec<Command> {
     if state::read(cx, |l| l.inspector_kind().is_some()) {
         add(&view, S::ToggleInspector.label(), "panel-right", keys(S::ToggleInspector), Run::Action(Box::new(app::ToggleInspector)));
     }
+    add(&view, if super::sidebar::compact() { tr("Seitenleiste ausklappen") } else { tr("Seitenleiste einklappen") }, if super::sidebar::compact() { "panel-left-open" } else { "panel-left-close" }, None, Run::Call(Rc::new(super::sidebar::toggle_compact)));
     add(&view, S::Refresh.label(), "refresh-cw", keys(S::Refresh), Run::Action(Box::new(app::Refresh)));
     add(&view, S::ToggleFullscreen.label(), "maximize", keys(S::ToggleFullscreen), Run::Action(Box::new(app::ToggleFullscreen)));
     if active.is_some() {
