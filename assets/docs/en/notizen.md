@@ -36,6 +36,7 @@ Word, Excel and PowerPoint open in Schrumbi, read-only.
 | `.docx` | Pages like a PDF, portrait and landscape per section: zoom, search, copy text |
 | `.pptx` | One slide below the other, with slide numbers, zoom and search |
 | `.xlsx` `.xlsm` `.xls` `.ods` | Spreadsheet with sheets at the bottom |
+| `.csv` `.tsv` | One spreadsheet; {ui:Als Text zeigen} in the file menu shows the text, the file stays unchanged |
 
 In a spreadsheet:
 
@@ -48,6 +49,8 @@ In a spreadsheet:
 | {key:cmd-f} | Search this sheet, {key:return} for the next match |
 | {key:cmd-pageup} {key:cmd-pagedown} | Previous and next sheet |
 | {key:escape} | Cancel a drag and keep the old selection |
+
+Audio (`.mp3` `.m4a` `.wav` `.aiff`) opens with a play button and the length.
 
 Edit in the default app: ⋯ → {ui:Mit Standard-App öffnen}. When it saves, Schrumbi shows the new version. Password-protected files open only in the default app. When one sheet can't be read, the other sheets stay open.
 

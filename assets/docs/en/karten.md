@@ -44,6 +44,7 @@ Without typing: select text and {ui:Karte aus Auswahl…}, or {ui:Neue Karte} wi
 | {key:e} | Edit card |
 | {key:o} | Show in the note |
 | {key:cmd-z} | Undo last answer |
+| {key:Redo} | Give an undone answer again |
 | {key:escape} | Quit |
 
 Scheduling uses FSRS-6, like Anki. A new day starts at 4 am.

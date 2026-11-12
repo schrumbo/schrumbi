@@ -18,9 +18,9 @@ fn meta(path: &Path, cx: &App) -> Meta {
     let date = path.file_name().and_then(|n| day::date_in_name(&n.to_string_lossy())).unwrap_or_else(|| chrono::Local::now().date_naive());
     state::read(cx, |l| {
         let module = l.module_containing(path).map(|m| if m.name == m.code { m.code.clone() } else { format!("{} · {}", m.code, m.name) });
-        let week = l.lecture_week_containing(date).map(|w| format!("W{:02}", w.index));
+        let week = module.as_ref().and_then(|_| l.lecture_week_containing(date)).map(|w| format!("W{:02}", w.index));
         let author = l.config.as_ref().map(|c| c.author.clone()).unwrap_or_default();
-        Meta { left: [module, week].into_iter().flatten().collect::<Vec<_>>().join(" · "), right: [author, day::long(date)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ") }
+        Meta { left: [module, week].into_iter().flatten().collect::<Vec<_>>().join(" · "), right: [author, day::long(date)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "), title: path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default() }
     })
 }
 
@@ -170,7 +170,7 @@ fn run(path: &Path, text: String, target: PathBuf, cx: &mut App) {
 pub fn sample(cx: &mut App) {
     let target: PathBuf = std::env::temp_dir().join(format!("{}.pdf", tr("Beispiel-Notiz")));
     let text = sample_text();
-    let meta = Meta { left: "P1 · Projekt".into(), right: day::long(chrono::Local::now().date_naive()) };
+    let meta = Meta { left: "P1 · Projekt".into(), right: day::long(chrono::Local::now().date_naive()), title: tr("Beispiel-Notiz") };
     let options = Options::current();
     let out = target.clone();
     let task = cx.background_spawn(async move { pdf_export::export(&text, &std::env::temp_dir(), &out, Some(&meta), &options) });

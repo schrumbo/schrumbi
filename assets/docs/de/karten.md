@@ -44,6 +44,7 @@ Ohne Tippen: Text markieren und {ui:Karte aus Auswahl…}, oder {ui:Neue Karte} 
 | {key:e} | Karte bearbeiten |
 | {key:o} | In der Notiz zeigen |
 | {key:cmd-z} | Letzte Antwort zurück |
+| {key:Redo} | Zurückgenommene Antwort erneut geben |
 | {key:escape} | Beenden |
 
 Geplant wird mit FSRS-6, wie in Anki. Ein neuer Tag beginnt um 4 Uhr.

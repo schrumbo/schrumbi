@@ -911,6 +911,7 @@ impl Book {
     pub fn open_with(bytes: Vec<u8>, ext: &str, locale: Locale) -> Result<Self, OpenError> {
         match ext {
             "xlsx" | "xlsm" | "xltx" | "xltm" => Self::xlsx(bytes, locale),
+            "csv" | "tsv" => Ok(Self::delimited(&bytes, ext == "tsv", locale)),
             _ => {
                 if bytes.starts_with(&CFB_MAGIC) {
                     let book = legacy_in_child(bytes)?;
@@ -928,6 +929,12 @@ impl Book {
                 Ok(Self { names, active: 0, source: BookSource::Other { sheets: Box::new(sheets), locale } })
             }
         }
+    }
+
+    /// Reads delimited text as one sheet; every value stays the text it is in the file.
+    fn delimited(bytes: &[u8], tabs: bool, locale: Locale) -> Self {
+        let cells = delimited_cells(&decode_text(bytes), tabs.then_some('\t'));
+        Self { names: vec![crate::core::i18n::tr("Tabelle")], active: 0, source: BookSource::Legacy { sheets: vec![cells], locale } }
     }
 
     fn xlsx(bytes: Vec<u8>, locale: Locale) -> Result<Self, OpenError> {
@@ -1036,6 +1043,76 @@ fn from_cells<'a>(cells: impl Iterator<Item = (u32, u32, &'a Value)>, locale: Lo
     b.rows = rows.into_iter().map(|(index, cells)| Row { index, cells }).collect();
     b.widths = widths.into_iter().map(|n| if n == 0 { f32::NAN } else { (n as f32 * 7. + 12.).clamp(64., 320.) }).collect();
     b.finish(vec![Style::default()])
+}
+
+const CSV_ROWS: u32 = 200_000;
+const CSV_COLS: u32 = 1_000;
+const WINDOWS_1252: [char; 32] = ['€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž', '\u{8f}', '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}', 'ž', 'Ÿ'];
+
+pub(crate) fn decode_text(bytes: &[u8]) -> String {
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]).or_else(|| bytes.strip_prefix(&[0xFE, 0xFF])) {
+        let big = bytes.starts_with(&[0xFE, 0xFF]);
+        let units: Vec<u16> = rest.chunks_exact(2).map(|p| if big { u16::from_be_bytes([p[0], p[1]]) } else { u16::from_le_bytes([p[0], p[1]]) }).collect();
+        return String::from_utf16_lossy(&units);
+    }
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => bytes.iter().map(|b| if (0x80..0xA0).contains(b) { WINDOWS_1252[usize::from(b - 0x80)] } else { char::from(*b) }).collect(),
+    }
+}
+
+fn delimiter_of(text: &str) -> char {
+    let first = text.lines().next().unwrap_or("");
+    let (mut quoted, mut counts) = (false, [0usize; 3]);
+    for c in first.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            ';' if !quoted => counts[0] += 1,
+            '\t' if !quoted => counts[1] += 1,
+            ',' if !quoted => counts[2] += 1,
+            _ => {}
+        }
+    }
+    let best = (0..3).max_by_key(|i| (counts[*i], std::cmp::Reverse(*i))).unwrap_or(0);
+    if counts[best] == 0 { ',' } else { [';', '\t', ','][best] }
+}
+
+fn delimited_cells(text: &str, fixed: Option<char>) -> Vec<(u32, u32, Value)> {
+    let delimiter = fixed.unwrap_or_else(|| delimiter_of(text));
+    let (mut cells, mut field, mut quoted, mut row, mut col) = (Vec::new(), String::new(), false, 0u32, 0u32);
+    let mut chars = text.chars().peekable();
+    let push = |cells: &mut Vec<(u32, u32, Value)>, field: &mut String, row: u32, col: u32| {
+        if !field.is_empty() && col < CSV_COLS {
+            cells.push((row, col, Value::Text(std::mem::take(field))));
+        }
+        field.clear();
+    };
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                field.push('"');
+                chars.next();
+            }
+            '"' if field.is_empty() || quoted => quoted = !quoted,
+            c if c == delimiter && !quoted => {
+                push(&mut cells, &mut field, row, col);
+                col += 1;
+            }
+            '\r' if !quoted && chars.peek() == Some(&'\n') => {}
+            '\r' | '\n' if !quoted => {
+                push(&mut cells, &mut field, row, col);
+                row += 1;
+                col = 0;
+                if row >= CSV_ROWS {
+                    return cells;
+                }
+            }
+            c => field.push(c),
+        }
+    }
+    push(&mut cells, &mut field, row, col);
+    cells
 }
 
 #[cfg(test)]
@@ -1158,6 +1235,33 @@ mod tests {
         assert_eq!(s.cols.at(s.cols.start(29) + 500.), 28);
         let s = only_sheet(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="1000000"><c r="C1000000"><v>2</v></c></row></sheetData>"#);
         assert_eq!(s.tsv(0, 0, 999_999, 2).len(), 2 + 999_998 * 2 + 4);
+    }
+
+    #[test]
+    fn delimited_text_becomes_one_sheet_of_text() {
+        let mut book = Book::open_with("Name;Note\r\n\"Meier; Anna\";\"sagt \"\"hi\"\"\"\n007;1,5\n".as_bytes().to_vec(), "csv", DE).unwrap();
+        let s = book.sheet(0);
+        let text = |r, c| s.cell(r, c).map(|c| c.text.as_str());
+        assert_eq!((text(0, 0), text(0, 1)), (Some("Name"), Some("Note")));
+        assert_eq!((text(1, 0), text(1, 1)), (Some("Meier; Anna"), Some("sagt \"hi\"")));
+        assert_eq!((text(2, 0), text(2, 1)), (Some("007"), Some("1,5")));
+        let mut tabs = Book::open_with(b"a\tb\n1\t2".to_vec(), "tsv", DE).unwrap();
+        assert_eq!(tabs.sheet(0).cell(1, 1).map(|c| c.text.as_str()), Some("2"));
+        let mut old = Book::open_with(vec![b'M', 0xE4, b'r', b'z', b';', 0x80], "csv", DE).unwrap();
+        assert_eq!(old.sheet(0).cell(0, 0).map(|c| c.text.as_str()), Some("März"));
+        assert_eq!(old.sheet(0).cell(0, 1).map(|c| c.text.as_str()), Some("€"));
+    }
+
+    #[test]
+    fn delimited_text_survives_old_line_endings_and_utf16() {
+        let mut mac = Book::open_with(b"a;b\rc;d\r".to_vec(), "csv", DE).unwrap();
+        assert_eq!(mac.sheet(0).cell(1, 1).map(|c| c.text.as_str()), Some("d"));
+        let mut wide: Vec<u8> = vec![0xFF, 0xFE];
+        wide.extend("Name;Zahl\n".encode_utf16().flat_map(u16::to_le_bytes));
+        let mut utf16 = Book::open_with(wide, "csv", DE).unwrap();
+        assert_eq!(utf16.sheet(0).cell(0, 1).map(|c| c.text.as_str()), Some("Zahl"));
+        let mut tabs = Book::open_with(b"Begriff\tErkl (kurz, knapp, klar)".to_vec(), "tsv", DE).unwrap();
+        assert_eq!(tabs.sheet(0).cell(0, 1).map(|c| c.text.as_str()), Some("Erkl (kurz, knapp, klar)"));
     }
 
     #[test]

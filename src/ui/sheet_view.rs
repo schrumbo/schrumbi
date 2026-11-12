@@ -826,6 +826,7 @@ impl SheetView {
             .border_color(t.separator)
             .child(address)
             .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().text_size(px(font::CALLOUT)).text_color(if content.starts_with('=') { t.secondary } else { t.primary }).child(content))
+            .child(div().flex_none().text_size(px(font::CAPTION)).text_color(t.secondary).child(tr("Nur Lesen")))
             .child(search)
             .child(Button::new("sheet-out").ghost().small().icon(menu_icon("zoom-out")).tooltip(tr("Verkleinern")).disabled(self.zoom <= MIN_ZOOM).on_click(move |_, _, cx| m4.update(cx, |v, cx| v.zoom_by(0.8, None, cx))))
             .child(Button::new("sheet-zoom").ghost().small().label(zoom).tooltip(tr("Zoom")).dropdown_menu(move |mut menu, _, _| {
@@ -895,6 +896,10 @@ impl SheetView {
             hits: self.hits.clone(),
             current_hit: self.current_hit.and_then(|i| self.hits.get(i).copied()),
             base: window.text_style().font(),
+            paper: if t.dark { t.content } else { hex(PAPER) },
+            grid: if t.dark { t.ink.opacity(0.12) } else { hex(GRID) },
+            frozen: if t.dark { t.ink.opacity(0.3) } else { hex(FROZEN_LINE) },
+            ink: if t.dark { t.primary } else { hex(INK) },
             header_bg: if t.dark { t.content } else { t.secondary_bg },
             header_line: t.separator,
             header_text: t.secondary,
@@ -908,7 +913,7 @@ impl SheetView {
             .min_h_0()
             .relative()
             .overflow_hidden()
-            .bg(hex(PAPER))
+            .bg(if t.dark { t.content } else { hex(PAPER) })
             .child(
                 canvas(
                     move |bounds, _, cx| {
@@ -941,7 +946,7 @@ impl SheetView {
                     .child(div().w(px(content_w)).h(px(content_h))),
             )
             .child(canvas(|_, _, _| {}, move |bounds, _, window, cx| window.with_content_mask(Some(ContentMask { bounds }), |window| paint.paint(bounds, window, cx))).absolute().top_0().left_0().size_full())
-            .when(empty, |d| d.child(div().absolute().top_0().left_0().size_full().flex().items_center().justify_center().text_size(px(font::BODY)).text_color(hex(MUTED)).child(tr("Dieses Blatt ist leer"))))
+            .when(empty, |d| d.child(div().absolute().top_0().left_0().size_full().flex().items_center().justify_center().text_size(px(font::BODY)).text_color(if t.dark { t.secondary } else { hex(MUTED) }).child(tr("Dieses Blatt ist leer"))))
             .scrollbar(&self.scroll, gpui_kit::component::scroll::ScrollbarAxis::Both)
             .child(super::image_view::wheel_zoom(move |factor, at, _, cx| {
                 me.update(cx, |v, cx| {
@@ -987,6 +992,10 @@ struct Paint {
     hits: Arc<Vec<(u32, u32)>>,
     current_hit: Option<(u32, u32)>,
     base: Font,
+    paper: Hsla,
+    grid: Hsla,
+    frozen: Hsla,
+    ink: Hsla,
     header_bg: Hsla,
     header_line: Hsla,
     header_text: Hsla,
@@ -1032,10 +1041,10 @@ impl Paint {
             window.with_content_mask(Some(ContentMask { bounds: clip }), |window| self.paint_area(&g, o, rows, cols, clip, window, cx));
         }
         if fc > 0 {
-            quad(window, o, g.header_w + g.frozen_w - 1., g.header_h, 1., g.h - g.header_h, hex(FROZEN_LINE));
+            quad(window, o, g.header_w + g.frozen_w - 1., g.header_h, 1., g.h - g.header_h, self.frozen);
         }
         if fr > 0 {
-            quad(window, o, g.header_w, g.header_h + g.frozen_h - 1., g.w - g.header_w, 1., hex(FROZEN_LINE));
+            quad(window, o, g.header_w, g.header_h + g.frozen_h - 1., g.w - g.header_w, 1., self.frozen);
         }
         self.paint_headers(&g, o, rows, cols, window, cx);
     }
@@ -1051,14 +1060,14 @@ impl Paint {
         if s.grid_lines {
             for c in cols.start..cols.end {
                 if c == cols.start || s.cols.size(c - 1) > 0. {
-                    quad(window, o, x_of(c), top, 1., bottom - top, hex(GRID));
+                    quad(window, o, x_of(c), top, 1., bottom - top, self.grid);
                 }
             }
-            quad(window, o, right, top, 1., bottom - top, hex(GRID));
+            quad(window, o, right, top, 1., bottom - top, self.grid);
             for r in rows.start..rows.end {
-                quad(window, o, left, y_of(r), right - left + 1., 1., hex(GRID));
+                quad(window, o, left, y_of(r), right - left + 1., 1., self.grid);
             }
-            quad(window, o, left, bottom, right - left + 1., 1., hex(GRID));
+            quad(window, o, left, bottom, right - left + 1., 1., self.grid);
         }
         let merges: Vec<Merge> = s.merges.iter().copied().filter(|m| m.r1 >= rows.start && m.r0 < rows.end && m.c1 >= cols.start && m.c0 < cols.end).collect();
         let in_merge = |r: u32, c: u32| merges.iter().any(|m| (m.r0..=m.r1).contains(&r) && (m.c0..=m.c1).contains(&c));
@@ -1070,7 +1079,7 @@ impl Paint {
             let fill = s.cell(m.r0, m.c0).and_then(|c| s.style(c).fill);
             match fill {
                 Some(f) => quad(window, o, x, y, w + 1., h + 1., hex(f)),
-                None => quad(window, o, x + 1., y + 1., w - 1., h - 1., hex(PAPER)),
+                None => quad(window, o, x + 1., y + 1., w - 1., h - 1., self.paper),
             }
         }
         let cells_of = |row: &'_ crate::core::office::sheet::Row| -> Range<usize> {
@@ -1163,7 +1172,7 @@ impl Paint {
             return;
         }
         let line_h = (size * 1.25).round().max(1.);
-        let color = hex(cell.color.or(st.color).unwrap_or(INK));
+        let color = cell.color.or(st.color).map_or(if st.fill.is_some() { hex(INK) } else { self.ink }, hex);
         let align = match st.h {
             HAlign::General => match cell.kind {
                 CellKind::Number => HAlign::Right,
@@ -1268,7 +1277,7 @@ impl Paint {
                 cl = g.col_x(s, c) + 1.;
             }
             if cr - cl > w {
-                quad(window, o, cl, ty.max(y + 1.), cr - cl - 1., line_h.min(h - 1.), hex(PAPER));
+                quad(window, o, cl, ty.max(y + 1.), cr - cl - 1., line_h.min(h - 1.), self.paper);
                 let fill = st.fill;
                 if let Some(f) = fill {
                     quad(window, o, x, y, w + 1., h + 1., hex(f));

@@ -4562,6 +4562,7 @@ pub struct FileViewer {
     sheet: Option<Entity<super::sheet_view::SheetView>>,
     preview: Entity<FilePreview>,
     app: Option<String>,
+    as_text: bool,
 }
 
 impl FileViewer {
@@ -4582,7 +4583,7 @@ impl FileViewer {
             p
         });
         let app = super::platform::default_app_name(&path);
-        Self { path, pdf, sheet, preview, app }
+        Self { path, pdf, sheet, preview, app, as_text: false }
     }
 }
 
@@ -4613,7 +4614,16 @@ impl Render for FileViewer {
         }
         let (p1, p2, p3, p4) = (self.path.clone(), self.path.clone(), self.path.clone(), self.path.clone());
         let open_label = self.app.as_ref().map_or_else(|| tr("Mit Standard-App öffnen"), |a| trf("In %@ öffnen", &[a]));
-        let actions = Button::new("viewer-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |m, _, cx| {
+        let table_toggle = crate::core::office::is_delimited(&self.path).then(|| {
+            let as_text = self.as_text;
+            Button::new("viewer-text").ghost().small().icon(menu_icon(if as_text { "table" } else { "file-text" })).tooltip(if as_text { tr("Als Tabelle zeigen") } else { tr("Als Text zeigen") }).on_click(cx.listener(move |v, _, _, cx| {
+                v.as_text = !v.as_text;
+                let raw = v.as_text;
+                v.preview.update(cx, |p, cx| p.show_raw(raw, cx));
+                cx.notify();
+            }))
+        });
+        let more = Button::new("viewer-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |m, _, cx| {
             let (a, b, c, o, n) = (p1.clone(), p2.clone(), p3.clone(), p4.clone(), p4.clone());
             let named = super::convention_rename::menu_item(&n, cx);
             m.item(PopupMenuItem::new(open_label.clone()).icon(menu_icon("square-arrow-out-up-right")).on_click(move |_, _, _| library::open_path(&o)))
@@ -4623,6 +4633,7 @@ impl Render for FileViewer {
                 .separator()
                 .item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).icon(menu_icon("x")).on_click(move |_, _, cx| close_tab(&c, cx)))
         });
+        let actions = div().flex().items_center().gap(px(space::XS)).children(table_toggle).child(more);
         let body: AnyElement = if !self.path.exists() {
             unavailable("file-question", tr("Datei nicht gefunden"), self.path.file_name().unwrap_or_default().to_string_lossy().to_string(), &t).into_any_element()
         } else if let Some(pdf) = &self.pdf {

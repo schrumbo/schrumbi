@@ -89,7 +89,7 @@ fn keep_visible_when_inactive(window: &Window) {
 #[cfg(not(any(target_os = "macos", windows)))]
 fn keep_visible_when_inactive(_: &Window) {}
 
-fn size_label(path: &Path) -> String {
+pub(super) fn size_label(path: &Path) -> String {
     let bytes = std::fs::metadata(path).map_or(0, |m| m.len()) as f64;
     let label = match bytes {
         b if b < 1e3 => format!("{b} B"),

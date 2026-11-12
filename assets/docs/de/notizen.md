@@ -36,6 +36,7 @@ Word, Excel und PowerPoint öffnen in Schrumbi, nur zum Lesen.
 | `.docx` | Seiten wie im PDF, Hoch- und Querformat je Abschnitt: Zoom, Suche, Text kopieren |
 | `.pptx` | Eine Folie unter der anderen, mit Foliennummer, Zoom und Suche |
 | `.xlsx` `.xlsm` `.xls` `.ods` | Tabelle mit Blättern unten |
+| `.csv` `.tsv` | Eine Tabelle; {ui:Als Text zeigen} im Menü der Datei zeigt den Text, die Datei bleibt unverändert |
 
 In einer Tabelle:
 
@@ -48,6 +49,8 @@ In einer Tabelle:
 | {key:cmd-f} | In diesem Blatt suchen, {key:return} zum nächsten Treffer |
 | {key:cmd-pageup} {key:cmd-pagedown} | Voriges und nächstes Blatt |
 | {key:escape} | Ziehen abbrechen, die alte Auswahl bleibt |
+
+Audio (`.mp3` `.m4a` `.wav` `.aiff`) öffnet mit Abspielknopf und Dauer.
 
 Bearbeiten geht in der Standard-App: ⋯ → {ui:Mit Standard-App öffnen}. Sichert sie, zeigt Schrumbi die neue Version. Mit Passwort geschützte Dateien öffnet nur die Standard-App. Lässt sich ein Blatt nicht lesen, bleiben die anderen Blätter offen.
 

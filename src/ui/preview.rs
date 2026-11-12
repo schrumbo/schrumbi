@@ -17,13 +17,15 @@ use crate::core::office;
 use crate::core::naming::extension;
 
 const IMAGES: [&str; 9] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "svg", "heic"];
-const TEXTS: [&str; 14] = ["txt", "csv", "json", "xml", "yml", "yaml", "css", "js", "ts", "swift", "java", "py", "c", "html"];
+const AUDIO: [&str; 4] = ["mp3", "m4a", "wav", "aiff"];
+const TEXTS: [&str; 15] = ["txt", "csv", "tsv", "json", "xml", "yml", "yaml", "css", "js", "ts", "swift", "java", "py", "c", "html"];
 
 enum Content {
     Loading,
     Markdown(Arc<super::markdown_view::ParsedNote>),
     Text(String),
     Image(Entity<super::image_view::ImageView>),
+    Audio,
     Other,
 }
 
@@ -34,6 +36,7 @@ pub struct FilePreview {
     load: Option<Task<()>>,
     pdf: Option<Entity<super::pdf_view::PdfView>>,
     sheet: Option<Entity<super::sheet_view::SheetView>>,
+    raw: bool,
     /// Shows the header with title, path and actions.
     pub header: bool,
 }
@@ -44,14 +47,23 @@ fn ext(path: &Path) -> String {
 
 impl FilePreview {
     pub fn new(header: bool) -> Self {
-        Self { path: None, content: Content::Other, load: None, pdf: None, sheet: None, header }
+        Self { path: None, content: Content::Other, load: None, pdf: None, sheet: None, raw: false, header }
     }
 
     /// Gives the keyboard to an image, so its zoom keys work.
     pub fn take_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Content::Image(view) = &self.content {
             view.update(cx, |v, cx| v.take_focus(window, cx));
+        } else if let Some(sheet) = self.sheet.clone() {
+            sheet.update(cx, |v, cx| v.take_focus(window, cx));
         }
+    }
+
+    /// Shows delimited text as plain text instead of a table.
+    pub fn show_raw(&mut self, raw: bool, cx: &mut Context<Self>) {
+        self.raw = raw;
+        let path = self.path.take();
+        self.set_path(path, cx);
     }
 
     pub fn path(&self) -> Option<&PathBuf> {
@@ -64,6 +76,7 @@ impl FilePreview {
             return;
         }
         self.path = path.clone();
+        self.load = None;
         self.pdf = None;
         self.sheet = None;
         let Some(path) = path else {
@@ -88,8 +101,19 @@ impl FilePreview {
             cx.notify();
             return;
         }
+        if office::is_delimited(&path) && !self.raw {
+            self.sheet = Some(cx.new(|cx| super::sheet_view::SheetView::new(&path, cx)));
+            self.content = Content::Other;
+            cx.notify();
+            return;
+        }
         if IMAGES.contains(&e.as_str()) {
             self.content = Content::Image(cx.new(|cx| super::image_view::ImageView::new(path, cx)));
+            cx.notify();
+            return;
+        }
+        if AUDIO.contains(&e.as_str()) {
+            self.content = Content::Audio;
             cx.notify();
             return;
         }
@@ -99,7 +123,7 @@ impl FilePreview {
             if markdown::is_markdown(&path) {
                 Content::Markdown(Arc::new(super::markdown_view::parse(&std::fs::read_to_string(&path).unwrap_or_default())))
             } else if TEXTS.contains(&e.as_str()) {
-                Content::Text(std::fs::read_to_string(&path).map(|s| s.chars().take(200_000).collect()).unwrap_or_default())
+                Content::Text(std::fs::read(&path).map(|b| office::decode_text(&b).chars().take(200_000).collect()).unwrap_or_default())
             } else {
                 Content::Other
             }
@@ -143,6 +167,10 @@ impl Render for FilePreview {
                 .child(super::image_view::wheel_zoom(|factor, _, _, cx| super::documents::scale_font(factor, cx)))
                 .into_any_element(),
             Content::Image(view) => view.clone().into_any_element(),
+            Content::Audio => {
+                let id = path.to_string_lossy().bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(u64::from(b)));
+                div().size_full().flex().items_center().justify_center().p(px(space::XL)).child(div().w_full().max_w(px(480.)).child(super::embeds::audio(path.clone(), id, &t))).into_any_element()
+            }
             Content::Other => div()
                 .size_full()
                 .flex()

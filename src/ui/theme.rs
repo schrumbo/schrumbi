@@ -473,9 +473,14 @@ impl Theme {
 
     /// A color moved towards the text color until it reads as text on this theme's backgrounds.
     pub fn readable(&self, color: Hsla) -> Hsla {
+        self.readable_on(color, self.column)
+    }
+
+    /// `color` deepened until it reads at 4.5:1 on `background` tinted with itself.
+    pub fn readable_on(&self, color: Hsla, background: Hsla) -> Hsla {
         let mut text = color;
         for step in 1..=10 {
-            if contrast(text, self.column.blend(color.opacity(0.12))) >= 4.5 {
+            if contrast(text, background.blend(color.opacity(0.12))) >= 4.5 {
                 break;
             }
             text = color.blend(self.ink.opacity(step as f32 * 0.1));
@@ -917,6 +922,18 @@ mod tests {
                 assert!(contrast(row, background) >= 1.1, "fill on the panel, {kind:?}: {}", contrast(row, background));
                 assert!(contrast(row.blend(t.accent.opacity(tint::SELECTED_HOVER)), row) >= 1.1, "hover on a selected row, {kind:?}");
             }
+        }
+    }
+
+    #[test]
+    fn study_counts_read_on_the_study_header() {
+        for (kind, t) in all() {
+            for color in [t.blue, t.orange, t.green] {
+                let chip = t.content.blend(color.opacity(0.12));
+                assert!(contrast(t.readable_on(color, t.content), chip) >= 4.5, "count on its chip, {kind:?}: {}", contrast(t.readable_on(color, t.content), chip));
+                assert!(contrast(t.readable_on(color, t.content), t.content) >= 4.5, "count on the header, {kind:?}: {}", contrast(t.readable_on(color, t.content), t.content));
+            }
+            assert!(contrast(t.secondary, t.content) >= 4.5, "zero count, {kind:?}");
         }
     }
 
