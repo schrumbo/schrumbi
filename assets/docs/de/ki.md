@@ -71,7 +71,7 @@ Die Abläufe der Spalte gibt es dort als Befehle:
 
 ## Änderungen
 
-Vor jeder Änderung fragt Schrumbi in der Spalte, bei geschlossener Spalte unten rechts im Fenster. Mit {key:tab} wechselst du zwischen den Knöpfen, {key:return} drückt den gewählten, {key:escape} lehnt ab.
+Vor jeder Änderung fragt Schrumbi in der Spalte, bei geschlossener Spalte unten rechts im Fenster. {key:escape} lehnt ab. Unten rechts wechselst du mit {key:tab} zwischen den Knöpfen, {key:return} drückt den gewählten.
 
 | Knopf | Was passiert |
 |---|---|

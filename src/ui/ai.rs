@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -11,6 +12,7 @@ use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use gpui_kit::base::FocusTrapElement;
 use serde_json::{Value, json};
 
 use super::motion::Soft;
@@ -1064,23 +1066,86 @@ fn today_label(w: &Waiting) -> Option<String> {
     w.today.map(|folder| if folder { tr("In diesem Ordner heute erlauben") } else if w.tool == "write_file" { tr("In dieser Datei heute erlauben") } else { tr("In dieser Notiz heute erlauben") })
 }
 
-/// The inside of a permission card: one request with its change, or several of the same kind, answered together or one by one.
-pub fn ask_body(group: &[Waiting], cx: &App, t: &Theme) -> Option<Div> {
+const ASK_ENTER_GRACE: Duration = Duration::from_millis(600);
+
+/// The focus of the floating permission card: the card itself, its three buttons and what had the focus before it appeared.
+pub struct AskFocus {
+    card: FocusHandle,
+    buttons: [FocusHandle; 3],
+    shown: u64,
+    since: std::time::Instant,
+    before: Option<WeakFocusHandle>,
+}
+
+impl AskFocus {
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self { card: cx.focus_handle(), buttons: std::array::from_fn(|_| cx.focus_handle()), shown: 0, since: std::time::Instant::now(), before: None }
+    }
+}
+
+type AskAction = Rc<dyn Fn(&mut Window, &mut App)>;
+
+type AskStops = Option<(Entity<AskFocus>, FocusHandle, [FocusHandle; 3])>;
+
+fn ask_stop(stops: &AskStops, at: usize) -> Option<FocusHandle> {
+    stops.as_ref().map(|(_, _, handles)| handles[at].clone())
+}
+
+fn ask_track(button: Button, handle: Option<FocusHandle>) -> Button {
+    match handle {
+        Some(h) => button.track_focus(&h),
+        None => button,
+    }
+}
+
+fn ask_keys(order: Vec<(FocusHandle, AskAction)>, focus: Entity<AskFocus>) -> impl Fn(&KeyDownEvent, &mut Window, &mut App) + 'static {
+    move |e, window, cx| {
+        let k = &e.keystroke;
+        if k.key != "enter" || k.modifiers.shift || k.modifiers.platform || k.modifiers.control || k.modifiers.alt || order.is_empty() {
+            return;
+        }
+        cx.stop_propagation();
+        if focus.read(cx).since.elapsed() < ASK_ENTER_GRACE {
+            return;
+        }
+        if let Some((_, act)) = order.iter().find(|(h, _)| h.is_focused(window)) {
+            act(window, cx);
+        }
+    }
+}
+
+/// The inside of a permission card: one request with its change, or several of the same kind, answered together or one by one. With `focus` the card takes keys: Tab walks the buttons, Enter does the focused one, Esc declines.
+pub fn ask_body(group: &[Waiting], focus: Option<&Entity<AskFocus>>, cx: &App, t: &Theme) -> Option<Div> {
     let first = group.first()?;
+    let stops = focus.map(|f| (f.clone(), f.read(cx).card.clone(), f.read(cx).buttons.clone()));
     let header = if first.terminal { tr("Ein KI-Programm im Terminal möchte etwas ändern") } else { tr("Die KI möchte etwas ändern") };
     let body = div().flex().flex_col().gap(px(space::S)).child(div().flex().items_center().gap(px(space::S)).child(icon("bot", iconsize::S, t.secondary)).child(div().flex_1().text_size(px(font::CAPTION)).text_color(t.secondary).child(header)));
     let buttons = div().flex().flex_wrap().justify_end().gap(px(space::S));
     if let [w] = group {
         let id = w.id;
-        let today = today_label(w).map(|label| Button::new(("ai-today", id)).small().label(label).tooltip(tr("Gleiche Änderungen an derselben Stelle bis Mitternacht ohne Nachfrage")).on_click(move |_, _, cx| answer_ask(id, Answer::Today, cx)));
+        let today_text = today_label(w);
+        let has_today = today_text.is_some();
+        let today = today_text.map(|label| Button::new(("ai-today", id)).small().label(label).tooltip(tr("Gleiche Änderungen an derselben Stelle bis Mitternacht ohne Nachfrage")).on_click(move |_, _, cx| answer_ask(id, Answer::Today, cx)));
+        let (decline, today_stop, allow) = (ask_stop(&stops, 0), ask_stop(&stops, 1), ask_stop(&stops, 2));
+        let body = match &stops {
+            Some((focus, card, handles)) => {
+                let mut order: Vec<(FocusHandle, AskAction)> = vec![(handles[0].clone(), Rc::new(move |_, cx| answer_ask(id, Answer::Decline, cx)))];
+                if has_today {
+                    order.push((handles[1].clone(), Rc::new(move |_, cx| answer_ask(id, Answer::Today, cx))));
+                }
+                order.push((handles[2].clone(), Rc::new(move |_, cx| answer_ask(id, Answer::Allow, cx))));
+                body.track_focus(card).capture_key_down(ask_keys(order, focus.clone()))
+            }
+            None => body,
+        };
         return Some(
             body.child(div().font_weight(FontWeight::SEMIBOLD).child(w.preview.title.clone()))
                 .children(change_box(id, &w.preview, t))
                 .child(
                     buttons
-                        .child(Button::new(("ai-decline", id)).ghost().small().label(tr("Ablehnen")).on_click(move |_, _, cx| answer_ask(id, Answer::Decline, cx)))
-                        .children(today)
-                        .child(Button::new(("ai-allow", id)).primary().small().label(tr("Erlauben")).on_click(move |_, _, cx| answer_ask(id, Answer::Allow, cx))),
+                        .child(ask_track(Button::new(("ai-decline", id)).ghost().small().label(tr("Ablehnen")).on_click(move |_, _, cx| answer_ask(id, Answer::Decline, cx)), decline))
+                        .children(today.map(|b| ask_track(b, today_stop)))
+                        .child(ask_track(Button::new(("ai-allow", id)).primary().small().label(tr("Erlauben")).on_click(move |_, _, cx| answer_ask(id, Answer::Allow, cx)), allow)),
                 ),
         );
     }
@@ -1097,30 +1162,76 @@ pub fn ask_body(group: &[Waiting], cx: &App, t: &Theme) -> Option<Div> {
             row
         });
     }
-    let (decline, allow) = (ids.clone(), ids);
     let first_id = first.id;
+    let (toggle_key, decline, allow) = (key.clone(), ids.clone(), ids.clone());
+    let body = match &stops {
+        Some((focus, card, handles)) => {
+            let (key, decline, allow) = (key.clone(), decline.clone(), allow.clone());
+            let order: Vec<(FocusHandle, AskAction)> = vec![
+                (handles[0].clone(), Rc::new(move |_, cx| toggle_group(key.clone(), cx))),
+                (handles[1].clone(), Rc::new(move |_, cx| answer_all(&decline, Answer::Decline, cx))),
+                (handles[2].clone(), Rc::new(move |_, cx| answer_all(&allow, Answer::Allow, cx))),
+            ];
+            body.track_focus(card).capture_key_down(ask_keys(order, focus.clone()))
+        }
+        None => body,
+    };
+    let (open_stop, decline_stop, allow_stop) = (ask_stop(&stops, 0), ask_stop(&stops, 1), ask_stop(&stops, 2));
     Some(
         body.child(div().font_weight(FontWeight::SEMIBOLD).child(trf("%lld Änderungen auf einmal", &[&group.len()])))
             .child(rows)
             .child(
                 buttons
-                    .child(Button::new(("ai-group-open", first_id)).ghost().small().label(if open { tr("Einklappen") } else { tr("Einzeln ansehen") }).on_click(move |_, _, cx| toggle_group(key.clone(), cx)))
-                    .child(Button::new(("ai-group-decline", first_id)).ghost().small().label(tr("Alle ablehnen")).on_click(move |_, _, cx| answer_all(&decline, Answer::Decline, cx)))
-                    .child(Button::new(("ai-group-allow", first_id)).primary().small().label(tr("Alle erlauben")).on_click(move |_, _, cx| answer_all(&allow, Answer::Allow, cx))),
+                    .child(ask_track(Button::new(("ai-group-open", first_id)).ghost().small().label(if open { tr("Einklappen") } else { tr("Einzeln ansehen") }).on_click(move |_, _, cx| toggle_group(toggle_key.clone(), cx)), open_stop))
+                    .child(ask_track(Button::new(("ai-group-decline", first_id)).ghost().small().label(tr("Alle ablehnen")).on_click(move |_, _, cx| answer_all(&decline, Answer::Decline, cx)), decline_stop))
+                    .child(ask_track(Button::new(("ai-group-allow", first_id)).primary().small().label(tr("Alle erlauben")).on_click(move |_, _, cx| answer_all(&allow, Answer::Allow, cx)), allow_stop)),
             ),
     )
 }
 
-/// The card that asks before the agent changes something; it never takes the focus.
-pub fn ask_card(cx: &App, t: &Theme) -> Option<Stateful<Div>> {
-    if column_open() {
-        return None;
+fn arrive_ask_focus(focus: &Entity<AskFocus>, id: u64, window: &mut Window, cx: &mut App) {
+    if focus.read(cx).shown == id {
+        return;
     }
-    let groups = waiting_groups(cx);
-    let group = groups.first()?;
+    let card = focus.read(cx).card.clone();
+    let own = focus.read(cx).buttons.iter().any(|b| b.contains_focused(window, cx)) || card.contains_focused(window, cx);
+    let before = if own { None } else { window.focused(cx).map(|h| h.downgrade()) };
+    focus.update(cx, |f, _| {
+        if f.shown == 0 {
+            f.before = before;
+        }
+        f.shown = id;
+        f.since = std::time::Instant::now();
+    });
+    window.defer(cx, move |window, cx| window.focus(&card, cx));
+}
+
+fn release_ask_focus(focus: &Entity<AskFocus>, window: &mut Window, cx: &mut App) {
+    if focus.read(cx).shown == 0 {
+        return;
+    }
+    let before = focus.update(cx, |f, _| {
+        f.shown = 0;
+        f.before.take()
+    });
+    if let Some(handle) = before.and_then(|h| h.upgrade()) {
+        window.defer(cx, move |window, cx| window.focus(&handle, cx));
+    }
+}
+
+/// The card that asks before the agent changes something. It takes the focus when it appears and gives it back when the last request is answered.
+pub fn ask_card(window: &mut Window, cx: &mut App, t: &Theme) -> Option<Stateful<Div>> {
+    let focus = window.use_keyed_state("ai-ask-focus", cx, |_, cx| AskFocus::new(cx));
+    let groups = if column_open() { Vec::new() } else { waiting_groups(cx) };
+    let Some(group) = groups.first() else {
+        release_ask_focus(&focus, window, cx);
+        return None;
+    };
     let more: usize = groups.iter().skip(1).map(Vec::len).sum();
-    let body = ask_body(group, cx, t)?;
+    arrive_ask_focus(&focus, group.first().map_or(0, |w| w.id), window, cx);
+    let body = ask_body(group, Some(&focus), cx, t)?;
     let ids: Vec<u64> = group.iter().map(|w| w.id).collect();
+    let card = focus.read(cx).card.clone();
     Some(
         div()
             .id("ai-ask-slot")
@@ -1147,14 +1258,10 @@ pub fn ask_card(cx: &App, t: &Theme) -> Option<Stateful<Div>> {
                     .flex()
                     .flex_col()
                     .gap(px(space::S))
-                    .on_key_down(move |e: &KeyDownEvent, _, cx| {
-                        if e.keystroke.key == "escape" {
-                            answer_all(&ids, Answer::Decline, cx);
-                            cx.stop_propagation();
-                        }
-                    })
+                    .on_action(move |_: &super::main_window::Dismiss, _, cx| answer_all(&ids, Answer::Decline, cx))
                     .child(body)
-                    .when(more > 0, |d| d.child(caption(if more == 1 { tr("Danach wartet noch 1 Anfrage") } else { trf("Danach warten noch %lld Anfragen", &[&more]) }, t))),
+                    .when(more > 0, |d| d.child(caption(if more == 1 { tr("Danach wartet noch 1 Anfrage") } else { trf("Danach warten noch %lld Anfragen", &[&more]) }, t)))
+                    .focus_trap("ai-ask-trap", &card),
             ),
     )
 }

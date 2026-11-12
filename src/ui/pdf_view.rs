@@ -4031,7 +4031,7 @@ impl PdfView {
         let chosen = self.selected.len();
         let clear = {
             let view = me.clone();
-            self.page_button("pdf-pages-clear", "x", tr("Auswahl aufheben (Esc)"), t).on_click(move |_, _, cx| view.update(cx, |v, cx| v.clear_page_selection(cx)))
+            self.page_button("pdf-pages-clear", "x", format!("{}{}", tr("Auswahl aufheben"), key_hint("escape")), t).on_click(move |_, _, cx| view.update(cx, |v, cx| v.clear_page_selection(cx)))
         };
         bar.child(on(self.page_button("pdf-pages-left", "rotate-ccw", help(ShortcutAction::RotatePagesLeft, labels.left), t), |v, cx| v.rotate_pages(None, false, cx)))
             .child(on(self.page_button("pdf-pages-right", "rotate-cw", help(ShortcutAction::RotatePagesRight, labels.right), t), |v, cx| v.rotate_pages(None, true, cx)))

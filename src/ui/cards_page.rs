@@ -1045,7 +1045,7 @@ impl CardsPage {
         })
         .track_scroll(&self.deck_scroll)
         .size_full();
-        div().w(px(260.)).flex_none().h_full().flex().flex_col().bg(t.column).border_r_1().border_color(t.separator).child(div().flex_none().h(px(control::SUBBAR)).px(px(space::M)).flex().items_center().border_b_1().border_color(t.separator).font_weight(FontWeight::SEMIBOLD).child(div().flex_1().child(tr("Stapel"))).child(Button::new("cards-new-side").ghost().small().icon(menu_icon("plus")).tooltip(tr("Neue Karte (N)")).on_click(cx.listener(|p, _, window, cx| p.compose(None, window, cx))))).child(head).child(div().flex_1().min_h_0().child(tree))
+        div().w(px(260.)).flex_none().h_full().flex().flex_col().bg(t.column).border_r_1().border_color(t.separator).child(div().flex_none().h(px(control::SUBBAR)).px(px(space::M)).flex().items_center().border_b_1().border_color(t.separator).font_weight(FontWeight::SEMIBOLD).child(div().flex_1().child(tr("Stapel"))).child(Button::new("cards-new-side").ghost().small().icon(menu_icon("plus")).tooltip(format!("{}{}", tr("Neue Karte"), key_hint("n"))).on_click(cx.listener(|p, _, window, cx| p.compose(None, window, cx))))).child(head).child(div().flex_1().min_h_0().child(tree))
     }
 
     fn stat_tile(label: String, value: String, detail: Option<String>, t: &Theme) -> Div {
@@ -1271,7 +1271,7 @@ impl CardsPage {
             .child(Button::new("many-pause").icon(menu_icon("pause")).label(tr("Pausieren oder fortsetzen")).tooltip(tr("S")).on_click(cx.listener(|p, _, _, cx| p.toggle_pause(cx))))
             .child(Button::new("many-reset").icon(menu_icon("rotate-ccw")).label(tr("Fortschritt zurücksetzen")).on_click(cx.listener(|p, _, _, cx| p.reset_chosen(cx))))
             .child(Button::new("many-delete").icon(menu_icon("trash-2")).label(tr("Löschen")).tooltip(tr("⌫")).on_click(cx.listener(|p, _, window, cx| p.delete_chosen(window, cx))))
-            .child(caption(tr("⌘-Klick nimmt einzelne Karten dazu, ⇧-Klick einen Bereich, ⌘A alle in der Liste."), t))
+            .child(caption(tr("Mit ⌘ angeklickt kommen einzelne Karten dazu, mit ⇧ ein Bereich, ⌘A wählt alle in der Liste."), t))
             .into_any_element()
     }
 
@@ -1409,7 +1409,7 @@ impl CardsPage {
                     p.start(deck.clone(), window, cx);
                 })))
             })
-            .child(Button::new("cards-new").icon(menu_icon("plus")).label(tr("Neue Karte")).tooltip(tr("Neue Karte (N)")).on_click(cx.listener(|p, _, window, cx| p.compose(None, window, cx))))
+            .child(Button::new("cards-new").icon(menu_icon("plus")).label(tr("Neue Karte")).tooltip(format!("{}{}", tr("Neue Karte"), key_hint("n"))).on_click(cx.listener(|p, _, window, cx| p.compose(None, window, cx))))
             .child(Button::new("cards-learn").primary().min_w(px(control::COUNTED)).icon(menu_icon("graduation-cap")).label(if total > 0 { trf("Lernen (%@)", &[&total.to_string()]) } else { tr("Lernen") }).tooltip(tr("Lernen (Leertaste)")).disabled(total == 0).on_click(cx.listener(move |p, _, window, cx| p.start(start_deck.clone(), window, cx))));
         let retention = stats.true_retention.map_or_else(|| "–".to_string(), |r| format!("{:.0} %", r * 100.));
         let streak = if stats.streak == 1 { tr("1 Tag") } else { trf("%@ Tage", &[&stats.streak.to_string()]) };
@@ -1461,7 +1461,7 @@ impl CardsPage {
             }))
         }));
         let narrow = room < 640.;
-        let browser = div().flex_1().min_h_0().flex().flex_col().child(div().flex_none().px(px(space::L)).py(px(space::S)).flex().flex_wrap().items_center().gap(px(space::S)).border_t_1().border_b_1().border_color(t.separator).child(div().w(px(if narrow { 170. } else { 220. })).child(Input::new(&self.query).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary)))).child(filters).child(div().flex_1()).child(Button::new("cards-order").ghost().small().when(narrow, |b| b.icon(menu_icon("arrow-up-down"))).when(!narrow, |b| b.label(order_label(current_order)).dropdown_caret(true)).tooltip(trf("Sortierung: %@", &[&order_label(current_order)])).dropdown_menu({
+        let browser = div().flex_1().min_h_0().flex().flex_col().child(div().flex_none().px(px(space::L)).py(px(space::S)).flex().flex_wrap().items_center().gap(px(space::S)).border_t_1().border_b_1().border_color(t.separator).child(div().w(px(if narrow { 170. } else { 220. })).capture_action(clear_on_escape(&self.query)).child(Input::new(&self.query).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary)))).child(filters).child(div().flex_1()).child(Button::new("cards-order").ghost().small().when(narrow, |b| b.icon(menu_icon("arrow-up-down"))).when(!narrow, |b| b.label(order_label(current_order)).dropdown_caret(true)).tooltip(trf("Sortierung: %@", &[&order_label(current_order)])).dropdown_menu({
                     let me = cx.entity();
                     move |mut menu, _, _| {
                         for choice in [Order::Note, Order::Due, Order::Hardest] {
@@ -1555,7 +1555,7 @@ impl CardsPage {
             .flex()
             .items_center()
             .gap(px(space::S))
-            .child(Button::new("review-end").ghost().small().icon(menu_icon("x")).tooltip(tr("Beenden (Esc)")).on_click(cx.listener(|p, _, _, cx| p.end_session(cx))))
+            .child(Button::new("review-end").ghost().small().icon(menu_icon("x")).tooltip(format!("{}{}", tr("Beenden"), key_hint("escape"))).on_click(cx.listener(|p, _, _, cx| p.end_session(cx))))
             .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(if s.cram.is_some() { format!("{} · {}", deck_title(&s.deck, cx), tr("Prüfungsmodus")) } else { deck_title(&s.deck, cx) }))
             .when(cramming, |d| d.child(count_piece(s.left.review + 1, t.accent_text, true, tr("übrig"))))
             .when(!cramming, |d| {
@@ -1566,16 +1566,16 @@ impl CardsPage {
             .child(div().flex_1())
             .child(Button::new("review-undo").ghost().small().icon(menu_icon("undo-2")).tooltip(tr("Letzte Antwort zurück (⌘Z)")).disabled(!can_undo).on_click(cx.listener(|p, _, _, cx| p.undo(cx))))
             .child(Button::new("review-redo").ghost().small().icon(menu_icon("redo-2")).tooltip(tr("Antwort erneut geben (⌘⇧Z)")).disabled(s.undone.is_empty()).on_click(cx.listener(|p, _, _, cx| p.redo(cx))))
-            .child(Button::new("review-edit").ghost().small().icon(menu_icon("pencil")).tooltip(tr("Karte bearbeiten (E)")).on_click({
+            .child(Button::new("review-edit").ghost().small().icon(menu_icon("pencil")).tooltip(format!("{}{}", tr("Karte bearbeiten"), key_hint("e"))).on_click({
                 let edit = card.clone();
                 cx.listener(move |p, _, window, cx| p.compose(Some(edit.clone()), window, cx))
             }))
             .child(Button::new("review-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, _, _| {
                 let (a, b, c) = (menu_me.clone(), menu_me.clone(), menu_card.clone());
-                menu.item(PopupMenuItem::new(tr("In der Notiz zeigen (O)")).icon(menu_icon("file-text")).on_click(move |_, _, cx| Self::open_source(&c, cx)))
+                menu.item(keyed_text(tr("In der Notiz zeigen"), Some(key_label("o"))).icon(menu_icon("file-text")).on_click(move |_, _, cx| Self::open_source(&c, cx)))
                     .when(!cramming, |menu| {
-                        menu.item(PopupMenuItem::new(tr("Für heute zurückstellen (B)")).icon(menu_icon("eye-off")).on_click(move |_, _, cx| a.update(cx, |p, cx| p.set_aside(false, cx))))
-                            .item(PopupMenuItem::new(tr("Pausieren (S)")).icon(menu_icon("pause")).on_click(move |_, _, cx| b.update(cx, |p, cx| p.set_aside(true, cx))))
+                        menu.item(keyed_text(tr("Für heute zurückstellen"), Some(key_label("b"))).icon(menu_icon("eye-off")).on_click(move |_, _, cx| a.update(cx, |p, cx| p.set_aside(false, cx))))
+                            .item(keyed_text(tr("Pausieren"), Some(key_label("s"))).icon(menu_icon("pause")).on_click(move |_, _, cx| b.update(cx, |p, cx| p.set_aside(true, cx))))
                     })
             }));
         let track = div().flex_none().h(px(space::XXS)).w_full().bg(t.separator).child(div().h_full().w(relative(progress)).bg(t.accent));

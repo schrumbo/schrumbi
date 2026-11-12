@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use chrono::{Days, Local};
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -302,6 +303,7 @@ pub struct Settings {
     recording: Option<ShortcutAction>,
     rejected: Option<Rejected>,
     key_buttons: HashMap<&'static str, FocusHandle>,
+    shortcut_scroll: UniformListScrollHandle,
     last_changed: Option<ShortcutAction>,
     notice: Option<Notice>,
     notices: u64,
@@ -363,6 +365,170 @@ fn show(module: Option<String>, cx: &mut App) {
 fn is_inner_folder(folder: &str) -> bool {
     let path = std::path::Path::new(folder.trim());
     !folder.trim().is_empty() && path.is_relative() && !path.components().any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
+const SHORTCUT_ROW: f32 = control::M + space::S * 2.;
+
+struct ShortcutRows {
+    me: Entity<Settings>,
+    modules: Vec<String>,
+    clashes: HashMap<ShortcutAction, Vec<ShortcutAction>>,
+    handles: HashMap<&'static str, FocusHandle>,
+    recording: Option<ShortcutAction>,
+    rejected: Option<Rejected>,
+    reserved: bool,
+    any_custom: bool,
+    escape: String,
+    delete: String,
+}
+
+enum ShortcutLine {
+    Head(Group),
+    Row(ShortcutAction, bool, bool),
+}
+
+fn shortcut_line(line: &ShortcutLine, c: &ShortcutRows, t: &Theme, cx: &mut App) -> AnyElement {
+    let (a, first, last) = match line {
+        ShortcutLine::Head(g) => {
+            let key = g.label();
+            return div().w_full().h(px(SHORTCUT_ROW)).flex().items_end().pb(px(space::S)).px(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(jump_target(&key, div().child(key.clone()), t)).into_any_element();
+        }
+        ShortcutLine::Row(a, first, last) => (*a, *first, *last),
+    };
+        let mut clashes: Vec<String> = c.clashes.get(&a).map(|others| others.iter().map(|o| o.named(&c.modules)).collect()).unwrap_or_default();
+        clashes.extend(a.fixed_conflicts());
+        let recording = c.recording == Some(a);
+        let customized = a.is_customized();
+        let rejected = c.rejected.clone().filter(|_| recording);
+        let handle = c.handles.get(a.id()).cloned().unwrap_or_else(|| cx.focus_handle().tab_stop(true));
+        let blocked_why = a.blocked();
+        let blocked = blocked_why.as_ref().map(|why| trf("%@ – inaktiv", &[why]));
+        let reason_chip: Option<String> = rejected.map(|why| match why {
+            Rejected::NeedsModifier if cfg!(target_os = "macos") => tr("Dazu ⌘, ⌥ oder ⌃ halten"),
+            Rejected::NeedsModifier => trf("Dazu %@ oder Alt halten", &[&ctrl_name()]),
+            Rejected::Reserved(why) => why,
+        });
+        let reason: Option<String> = reason_chip.as_ref().map(|chip| if c.reserved { trf("%@ – andere Tasten drücken", &[chip]) } else { chip.clone() });
+        let note = |text: String| div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.orange_text).child(text).into_any_element();
+        let quiet = |text: String| {
+            div().min_w_0().flex().px(px(space::XS)).rounded(px(radius::SMALL)).bg(t.ink.opacity(0.04)).border_1().border_color(t.ink.opacity(0.08)).text_size(px(font::CAPTION)).text_color(t.secondary).child(div().min_w_0().truncate().child(text)).child(div().flex_none().whitespace_nowrap().ml(px(space::XS)).child(tr("– inaktiv"))).into_any_element()
+        };
+        let dimmed = blocked.is_some() && reason.is_none() && !recording;
+        let name = a.named(&c.modules);
+        let state = if let Some(text) = reason.clone().or(blocked.clone()) {
+            text
+        } else if recording {
+            tr("Tasten drücken…")
+        } else {
+            a.shortcut().map_or_else(|| tr("Kein Kürzel"), |s| s.display())
+        };
+        let caps: AnyElement = if let Some(text) = reason_chip.clone() {
+            note(text)
+        } else if recording {
+            div().text_size(px(font::CALLOUT)).text_color(t.accent_text).child(tr("Tasten drücken…")).into_any_element()
+        } else if let Some(text) = blocked_why.clone() {
+            quiet(text)
+        } else if let Some(s) = a.shortcut() {
+            div().flex().flex_none().gap(px(space::XS)).children(Shortcut::parts(&s).into_iter().map(|c| div().min_w(px(iconsize::M)).h(px(iconsize::M)).px(px(space::XS)).flex().items_center().justify_center().rounded(px(radius::SMALL)).bg(t.ink.opacity(0.07)).border_1().border_color(t.ink.opacity(0.12)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).child(c))).into_any_element()
+        } else {
+            div().text_size(px(font::CALLOUT)).text_color(t.tertiary).child(tr("Kein Kürzel")).into_any_element()
+        };
+        let hover = t.ink.opacity(hover::ROW);
+        let help = reason.or(blocked).unwrap_or_else(|| if recording { trf("%@ bricht ab, %@ entfernt das Kürzel", &[&c.escape, &c.delete]) } else { tr("Klicken zum Ändern") });
+        let help = if clashes.is_empty() { help } else { format!("{help}\n{}", trf("Auch belegt: %@", &[&clashes.join(", ")])) };
+        let recorder = div()
+            .id(SharedString::from(format!("rec-{}", a.id())))
+            .track_focus(&handle)
+            .w(px(control::KEYS))
+            .h(px(control::M))
+            .px(px(space::S))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_end()
+            .rounded(px(radius::CONTROL))
+            .border(px(theme::ring::BORDER))
+            .border_color(if recording { t.accent } else { gpui::transparent_black() })
+            .when(recording, |d| d.bg(t.accent.opacity(theme::ring::ARMED)))
+            .cursor_pointer()
+            .key_nav()
+            .soft(hover, radius::CONTROL)
+            .aria_label(trf("%@: %@", &[&name, &state]))
+            .when(!clashes.is_empty(), |d| d.aria_description(format!("{} · {}", tr("Doppelt"), trf("Auch belegt: %@", &[&clashes.join(", ")]))))
+            .child(caps)
+            .tip(help)
+            .on_click({ let me = c.me.clone(); move |_, window, cx| me.update(cx, |s, cx| s.start_recording(a, true, window, cx)) });
+        let default = a.default_shortcut().map_or_else(|| tr("Kein Kürzel"), |d| d.display());
+        let clash = (!clashes.is_empty()).then(|| {
+            let full = trf("Auch belegt: %@", &[&clashes.join(", ")]);
+            div()
+                .id(SharedString::from(format!("dup-{}", a.id())))
+                .flex()
+                .min_w_0()
+                .max_w(px(control::CLASH))
+                .items_center()
+                .gap(px(space::XS))
+                .rounded(px(radius::SMALL))
+                .text_size(px(font::CAPTION))
+                .text_color(t.orange_text)
+                .aria_label(format!("{} · {}", tr("Doppelt"), full))
+                .child(icon("triangle-alert", iconsize::XS, t.orange_text))
+                .child(div().flex_none().child(tr("Doppelt")))
+                .child(div().min_w_0().truncate().child(format!("· {}", clashes.join(", "))))
+                .tip(full)
+        });
+    let row = div()
+                .flex()
+                .items_center()
+                .min_h(px(control::M + space::S * 2.))
+                .child(
+                    div()
+                        .id(SharedString::from(format!("lbl-{}", a.id())))
+                        .flex_1()
+                        .min_w_0()
+                        .self_stretch()
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S))
+                        .pl(px(space::L))
+                        .pr(px(space::S))
+                        .cursor_pointer()
+                        .soft(hover, radius::SMALL)
+                        .on_click({ let me = c.me.clone(); move |_, window, cx| me.update(cx, |s, cx| s.start_recording(a, false, window, cx)) })
+                        .child(div().min_w_0().truncate().when(dimmed, |d| d.text_color(t.secondary)).child(a.named(&c.modules)))
+                        .children(clash),
+                )
+                .child(recorder)
+                .child(div().flex_none().w(px(if c.any_custom { control::S + space::S + space::L } else { space::L })).pl(px(if c.any_custom { space::S } else { 0. })).pr(px(space::L)).when(customized, |d| {
+                    d.child(icon_button(SharedString::from(format!("rst-{}", a.id())), "rotate-ccw", trf("Zurücksetzen auf %@", &[&default]), false, t, {
+                        let this = c.me.clone();
+                        move |_, cx| {
+                            this.update(cx, |s, cx| {
+                                let before = ShortcutAction::snapshot();
+                                s.last_changed = Some(a);
+                                a.reset();
+                                super::app::bind_keys(cx);
+                                let text = changed(a, cx);
+                                s.offer_undo(before, text, cx);
+                                cx.notify();
+                            });
+                        }
+                    }))
+                }))
+                .into_any_element();
+    div()
+        .w_full()
+        .h(px(SHORTCUT_ROW))
+        .flex()
+        .flex_col()
+        .bg(t.secondary_bg)
+        .border_x_1()
+        .border_color(t.separator.opacity(0.6))
+        .when(first, |d| d.border_t_1().rounded_tl(px(radius::CARD)).rounded_tr(px(radius::CARD)))
+        .when(last, |d| d.border_b_1().rounded_bl(px(radius::CARD)).rounded_br(px(radius::CARD)))
+        .when(!first, |d| d.child(divider(t)))
+        .child(div().flex_1().min_h_0().flex().flex_col().justify_center().child(row))
+        .into_any_element()
 }
 
 fn module_names(cx: &App) -> Vec<String> {
@@ -756,6 +922,7 @@ impl Settings {
             recording: None,
             rejected: None,
             key_buttons: HashMap::new(),
+            shortcut_scroll: UniformListScrollHandle::new(),
             last_changed: None,
             notice: None,
             notices: 0,
@@ -898,6 +1065,7 @@ impl Settings {
     fn tab_bar(&self, window: &Window, t: &Theme, cx: &mut Context<Self>) -> Div {
         let searching = self.search.read(cx).focus_handle(cx).is_focused(window) || !self.search.read(cx).value().is_empty();
         let folded = f32::from(window.viewport_size().width) < TABS_WITH_SEARCH && !searching;
+        let showing_results = self.tab != Tab::Shortcuts && !self.search.read(cx).value().trim().is_empty();
         let mut bar = div().flex_1().min_w_0().flex().justify_start().gap(px(space::XXS));
         for (tab, label, icon_name) in [
             (Tab::General, tr("Allgemein"), "settings"),
@@ -909,7 +1077,7 @@ impl Settings {
             (Tab::Ai, tr("KI"), "bot"),
             (Tab::Shortcuts, tr("Tastenkürzel"), "command"),
         ] {
-            let active = tab == self.tab;
+            let active = tab == self.tab && !showing_results;
             bar = bar.child(
                 div()
                     .id(SharedString::from(format!("tab-{label}")))
@@ -2795,154 +2963,81 @@ impl Settings {
             .border_b_1()
             .border_color(t.separator)
             .child(div().h(px(control::S)).w_full().min_w_0().flex().items_center().gap(px(space::S)).child(div().flex_1().min_w_0().child(line)).child(reset_all));
-        let mut col = div().flex().flex_col().gap(px(space::XL));
         let modules = module_names(cx);
-        let all_clashes = ShortcutAction::all_conflicts();
-        let mut shown = false;
+        let mut lines: Vec<ShortcutLine> = Vec::new();
         for g in Group::ALL {
             let actions: Vec<ShortcutAction> = ShortcutAction::ALL.into_iter().filter(|a| a.group() == g && (*a != ShortcutAction::ToggleAi || super::ai::active()) && (filter.is_empty() || shortcut_fits(*a, &modules, &filter))).collect();
             if actions.is_empty() {
                 continue;
             }
-            shown = true;
-            let mut rows: Vec<AnyElement> = Vec::new();
-            for a in actions {
-                let mut clashes: Vec<String> = all_clashes.get(&a).map(|c| c.iter().map(|o| o.named(&modules)).collect()).unwrap_or_default();
-                clashes.extend(a.fixed_conflicts());
-                let recording = self.recording == Some(a);
-                let customized = a.is_customized();
-                let rejected = self.rejected.clone().filter(|_| recording);
-                let handle = self.key_button(a, cx);
-                let blocked_why = a.blocked();
-                let blocked = blocked_why.as_ref().map(|why| trf("%@ – inaktiv", &[why]));
-                let reason_chip: Option<String> = rejected.map(|why| match why {
-                    Rejected::NeedsModifier if cfg!(target_os = "macos") => tr("Dazu ⌘, ⌥ oder ⌃ halten"),
-                    Rejected::NeedsModifier => trf("Dazu %@ oder Alt halten", &[&ctrl_name()]),
-                    Rejected::Reserved(why) => why,
-                });
-                let reason: Option<String> = reason_chip.as_ref().map(|chip| if self.rejected_is_reserved() { trf("%@ – andere Tasten drücken", &[chip]) } else { chip.clone() });
-                let note = |text: String| div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.orange_text).child(text).into_any_element();
-                let quiet = |text: String| {
-                    div().min_w_0().flex().px(px(space::XS)).rounded(px(radius::SMALL)).bg(t.ink.opacity(0.04)).border_1().border_color(t.ink.opacity(0.08)).text_size(px(font::CAPTION)).text_color(t.secondary).child(div().min_w_0().truncate().child(text)).child(div().flex_none().whitespace_nowrap().ml(px(space::XS)).child(tr("– inaktiv"))).into_any_element()
-                };
-                let dimmed = blocked.is_some() && reason.is_none() && !recording;
-                let name = a.named(&modules);
-                let state = if let Some(text) = reason.clone().or(blocked.clone()) {
-                    text
-                } else if recording {
-                    tr("Tasten drücken…")
-                } else {
-                    a.shortcut().map_or_else(|| tr("Kein Kürzel"), |s| s.display())
-                };
-                let caps: AnyElement = if let Some(text) = reason_chip.clone() {
-                    note(text)
-                } else if recording {
-                    div().text_size(px(font::CALLOUT)).text_color(t.accent_text).child(tr("Tasten drücken…")).into_any_element()
-                } else if let Some(text) = blocked_why.clone() {
-                    quiet(text)
-                } else if let Some(s) = a.shortcut() {
-                    div().flex().flex_none().gap(px(space::XS)).children(Shortcut::parts(&s).into_iter().map(|c| div().min_w(px(iconsize::M)).h(px(iconsize::M)).px(px(space::XS)).flex().items_center().justify_center().rounded(px(radius::SMALL)).bg(t.ink.opacity(0.07)).border_1().border_color(t.ink.opacity(0.12)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).child(c))).into_any_element()
-                } else {
-                    div().text_size(px(font::CALLOUT)).text_color(t.tertiary).child(tr("Kein Kürzel")).into_any_element()
-                };
-                let hover = t.ink.opacity(hover::ROW);
-                let help = reason.or(blocked).unwrap_or_else(|| if recording { trf("%@ bricht ab, %@ entfernt das Kürzel", &[&escape, &delete]) } else { tr("Klicken zum Ändern") });
-                let help = if clashes.is_empty() { help } else { format!("{help}\n{}", trf("Auch belegt: %@", &[&clashes.join(", ")])) };
-                let recorder = div()
-                    .id(SharedString::from(format!("rec-{}", a.id())))
-                    .track_focus(&handle)
-                    .w(px(control::KEYS))
-                    .h(px(control::M))
-                    .px(px(space::S))
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_end()
-                    .rounded(px(radius::CONTROL))
-                    .border(px(theme::ring::BORDER))
-                    .border_color(if recording { t.accent } else { gpui::transparent_black() })
-                    .when(recording, |d| d.bg(t.accent.opacity(theme::ring::ARMED)))
-                    .cursor_pointer()
-                    .key_nav()
-                    .soft(hover, radius::CONTROL)
-                    .aria_label(trf("%@: %@", &[&name, &state]))
-                    .when(!clashes.is_empty(), |d| d.aria_description(format!("{} · {}", tr("Doppelt"), trf("Auch belegt: %@", &[&clashes.join(", ")]))))
-                    .child(caps)
-                    .tip(help)
-                    .on_click(cx.listener(move |s, _, window, cx| s.start_recording(a, true, window, cx)));
-                let default = a.default_shortcut().map_or_else(|| tr("Kein Kürzel"), |d| d.display());
-                let clash = (!clashes.is_empty()).then(|| {
-                    let full = trf("Auch belegt: %@", &[&clashes.join(", ")]);
-                    div()
-                        .id(SharedString::from(format!("dup-{}", a.id())))
-                        .flex()
-                        .min_w_0()
-                        .max_w(px(control::CLASH))
-                        .items_center()
-                        .gap(px(space::XS))
-                        .rounded(px(radius::SMALL))
-                        .text_size(px(font::CAPTION))
-                        .text_color(t.orange_text)
-                        .aria_label(format!("{} · {}", tr("Doppelt"), full))
-                        .child(icon("triangle-alert", iconsize::XS, t.orange_text))
-                        .child(div().flex_none().child(tr("Doppelt")))
-                        .child(div().min_w_0().truncate().child(format!("· {}", clashes.join(", "))))
-                        .tip(full)
-                });
-                rows.push(
-                    div()
-                        .flex()
-                        .items_center()
-                        .min_h(px(control::M + space::S * 2.))
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("lbl-{}", a.id())))
-                                .flex_1()
-                                .min_w_0()
-                                .self_stretch()
-                                .flex()
-                                .items_center()
-                                .gap(px(space::S))
-                                .pl(px(space::L))
-                                .pr(px(space::S))
-                                .cursor_pointer()
-                                .soft(hover, radius::SMALL)
-                                .on_click(cx.listener(move |s, _, window, cx| s.start_recording(a, false, window, cx)))
-                                .child(div().min_w_0().truncate().when(dimmed, |d| d.text_color(t.secondary)).child(a.named(&modules)))
-                                .children(clash),
-                        )
-                        .child(recorder)
-                        .child(div().flex_none().w(px(if any_custom { control::S + space::S + space::L } else { space::L })).pl(px(if any_custom { space::S } else { 0. })).pr(px(space::L)).when(customized, |d| {
-                            d.child(icon_button(SharedString::from(format!("rst-{}", a.id())), "rotate-ccw", trf("Zurücksetzen auf %@", &[&default]), false, t, {
-                                let this = cx.entity();
-                                move |_, cx| {
-                                    this.update(cx, |s, cx| {
-                                        let before = ShortcutAction::snapshot();
-                                        s.last_changed = Some(a);
-                                        a.reset();
-                                        super::app::bind_keys(cx);
-                                        let text = changed(a, cx);
-                                        s.offer_undo(before, text, cx);
-                                        cx.notify();
-                                    });
-                                }
-                            }))
-                        }))
-                        .into_any_element(),
-                );
+            lines.push(ShortcutLine::Head(g));
+            let count = actions.len();
+            for (i, a) in actions.into_iter().enumerate() {
+                lines.push(ShortcutLine::Row(a, i == 0, i + 1 == count));
             }
-            col = col.child(section(Some(g.label()), None, rows, t));
         }
-        let scroller = div().id("sc-scroll").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.page()).p(px(space::XL));
-        if !shown {
+        if lines.is_empty() {
             let search = self.search.clone();
-            col = col.child(
-                unavailable("search", trf("Keine Treffer für „%@“", &[&query]), "", t)
-                    .h(px(240.))
-                    .child(Button::new("sc-clear-filter").label(tr("Suche zurücksetzen")).on_click(cx.listener(move |_, _, window, cx| search.update(cx, |f, cx| f.set_value("", window, cx))))),
-            );
+            let empty = unavailable("search", trf("Keine Treffer für „%@“", &[&query]), "", t)
+                .h(px(240.))
+                .child(Button::new("sc-clear-filter").label(tr("Suche zurücksetzen")).on_click(cx.listener(move |_, _, window, cx| search.update(cx, |f, cx| f.set_value("", window, cx)))));
+            let scroller = div().id("sc-scroll").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.page()).p(px(space::XL));
+            return div().size_full().flex().flex_col().child(header).child(scroller.child(empty));
         }
-        div().size_full().flex().flex_col().child(header).child(scroller.child(col))
+        let handles: HashMap<&'static str, FocusHandle> = lines.iter().filter_map(|l| if let ShortcutLine::Row(a, ..) = l { Some((a.id(), self.key_button(*a, cx))) } else { None }).collect();
+        let ctx = Rc::new(ShortcutRows {
+            me: cx.entity(),
+            modules,
+            clashes: ShortcutAction::all_conflicts(),
+            handles,
+            recording: self.recording,
+            rejected: self.rejected.clone(),
+            reserved: self.rejected_is_reserved(),
+            any_custom,
+            escape,
+            delete,
+        });
+        let stops: Vec<(usize, FocusHandle)> = lines.iter().enumerate().filter_map(|(at, l)| if let ShortcutLine::Row(a, ..) = l { ctx.handles.get(a.id()).map(|h| (at, h.clone())) } else { None }).collect();
+        let lines = Rc::new(lines);
+        let count = lines.len();
+        let list = uniform_list("sc-list", count, move |range, _, cx| {
+            let t = Theme::get(cx);
+            range.map(|i| shortcut_line(&lines[i], &ctx, &t, cx)).collect::<Vec<_>>()
+        })
+        .track_scroll(&self.shortcut_scroll)
+        .size_full();
+        let scroll = self.shortcut_scroll.clone();
+        let walk = move |s: &mut Self, back: bool, window: &mut Window, cx: &mut Context<Self>| {
+            let here = stops.iter().position(|(_, h)| h.is_focused(window));
+            let next = here.filter(|_| s.recording.is_none()).and_then(|here| if back { here.checked_sub(1) } else { Some(here + 1).filter(|n| *n < stops.len()) });
+            let Some(next) = next else {
+                cx.propagate();
+                return;
+            };
+            let (at, handle) = &stops[next];
+            scroll.scroll_to_item(if back { at.saturating_sub(1) } else { *at }, ScrollStrategy::Nearest);
+            window.focus(handle, cx);
+            cx.notify();
+        };
+        let walk = Rc::new(walk);
+        let back = walk.clone();
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .px(px(space::XL))
+                    .pt(px(space::M))
+                    .pb(px(space::XL))
+                    .key_context("WalkItems")
+                    .on_action(cx.listener(move |s, _: &super::canvas_view::NextItem, window, cx| walk(s, false, window, cx)))
+                    .on_action(cx.listener(move |s, _: &super::canvas_view::PreviousItem, window, cx| back(s, true, window, cx)))
+                    .child(list),
+            )
     }
 
     fn record_key(&mut self, k: &Keystroke, cx: &mut Context<Self>) {

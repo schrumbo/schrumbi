@@ -387,11 +387,11 @@ pub fn header(lib: &Library, m: &Module, width: f32, t: &Theme) -> Div {
         .flex()
         .items_center()
         .gap(px(space::S))
-        .child(Button::new("module-new").small().icon(menu_icon("file-plus")).when(!compact, |b| b.label(tr("Neue Notiz"))).tooltip(trf("Notiz, Textdatei oder Ordner in %@ anlegen (N)", &[&m.code])).on_click(move |_, _, cx| {
+        .child(Button::new("module-new").small().icon(menu_icon("file-plus")).when(!compact, |b| b.label(tr("Neue Notiz"))).tooltip(format!("{}{}", trf("Notiz, Textdatei oder Ordner in %@ anlegen", &[&m.code]), key_hint("n"))).on_click(move |_, _, cx| {
             let id = note_id.clone();
             act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: Some(id), folder: None }))
         }))
-        .child(Button::new("module-file").small().primary().icon(menu_icon("inbox")).when(!compact, |b| b.label(tr("Ablegen"))).tooltip(trf("Dateien in %@ ablegen (F)", &[&file_code])).on_click(move |_, _, cx| super::platform::pick_files_for_filing(next_entry.clone(), cx)))
+        .child(Button::new("module-file").small().primary().icon(menu_icon("inbox")).when(!compact, |b| b.label(tr("Ablegen"))).tooltip(format!("{}{}", trf("Dateien in %@ ablegen", &[&file_code]), key_hint("f"))).on_click(move |_, _, cx| super::platform::pick_files_for_filing(next_entry.clone(), cx)))
         .child(Button::new("module-more").small().ghost().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, _, _| {
             let (reveal, edit_id) = (reveal.clone(), edit_id.clone());
             menu.item(keyed_item(tr("Neuer Eintrag…"), Some(crate::core::shortcuts::ShortcutAction::NewEntry)).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| {

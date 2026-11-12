@@ -402,7 +402,7 @@ impl MainWindow {
                     .on_click(|_, _, cx| super::ai::toggle_details(cx)),
             )
             .child(super::coach::anchor(div().id("coach-search")).w(px(search_width)).flex_none().key_context("SearchField").map(|d| if folded {
-                d.child(Button::new("search-fold").ghost().size(px(control::M)).rounded_full().icon(menu_icon("search")).tooltip(format!("{} (/)", self.search_placeholder)).on_click(|_, window, cx| window.dispatch_action(Box::new(FocusSearch), cx)))
+                d.child(Button::new("search-fold").ghost().size(px(control::M)).rounded_full().icon(menu_icon("search")).tooltip(format!("{}{}", self.search_placeholder, key_hint("/"))).on_click(|_, window, cx| window.dispatch_action(Box::new(FocusSearch), cx)))
             } else {
                 d.child(Input::new(&self.search).h(px(control::M)).prefix(icon("search", iconsize::M, t.secondary)).suffix(kbd("/", t)).cleanable(true))
             }))
@@ -628,10 +628,12 @@ impl Render for MainWindow {
         let floating = panel_open && panel_floats(width);
         let reserved = if floating { 0. } else { inspector_target };
         let slot_w = motion::follow("right-panel-width", inspector_target, if self.resizing.is_some() { std::time::Duration::ZERO } else { motion::MEDIUM }, window, cx);
+        super::bar_fit::set_cover(if floating { slot_w } else { 0. });
         let page_width = width - left - reserved;
         self.pages.update(cx, |p, _| p.width = page_width);
         let dialog_open = window.has_active_dialog(cx);
         self.today.update(cx, |v, _| v.width = page_width);
+        let ask = super::ai::ask_card(window, cx, &t);
         let l = lib.read(cx);
         let page = match l.route() {
             Route::Today => {
@@ -784,7 +786,7 @@ impl Render for MainWindow {
                 }))
             })
             .children(super::link_card::overlay(cx))
-            .children(super::ai::ask_card(cx, &t))
+            .children(ask)
             .children(slides)
             .children(toast.or(working).map(|v| {
                 let toast_motion = motion::timed(motion::SLOW, cx);
@@ -802,7 +804,8 @@ impl Render for MainWindow {
         }
         root = root.children(super::coach::overlay(window, cx, &t));
         if let Some(message) = error {
-            root = root.child(error_alert(message, broken, config_path, &t));
+            let missing = l.root.clone().filter(|r| !r.exists());
+            root = root.child(error_alert(message, broken, config_path, missing, &t));
         }
         root = super::perf::frame_end(root);
         if super::chrome::CUSTOM {
@@ -836,8 +839,29 @@ fn toast_view(message: String, icon_name: &'static str, action: Option<String>, 
         })
 }
 
-fn error_alert(message: String, broken: bool, config: Option<PathBuf>, t: &Theme) -> Stateful<Div> {
-    let mut buttons = div().flex().justify_end().gap(px(space::S));
+fn error_alert(message: String, broken: bool, config: Option<PathBuf>, missing: Option<PathBuf>, t: &Theme) -> Stateful<Div> {
+    let mut buttons = div().flex().flex_wrap().justify_end().gap(px(space::S));
+    if let Some(root) = missing {
+        buttons = buttons
+            .child(Button::new("recreate-root").label(tr("Ordner neu anlegen")).on_click(move |_, _, cx| {
+                let made = std::fs::create_dir_all(&root);
+                act(cx, |l| match made {
+                    Ok(()) => {
+                        l.last_error = None;
+                        l.save_again();
+                    }
+                    Err(e) => l.last_error = Some(trf("Ordner konnte nicht angelegt werden: %@", &[&e])),
+                })
+            }))
+            .child(Button::new("choose-other-root").label(tr("Anderen Ordner wählen")).on_click(|_, _, cx| {
+                super::platform::choose_folder(cx, |path, cx| {
+                    if super::state::close_workspace(cx) {
+                        super::state::open_workspace(&path, cx);
+                        act(cx, |l| l.last_error = None);
+                    }
+                })
+            }));
+    }
     if broken {
         buttons = buttons.child(Button::new("restore").label(tr("Letzte Sicherung wiederherstellen")).on_click(|_, _, cx| act(cx, |l| l.restore_config_backup())));
         if let Some(p) = config {

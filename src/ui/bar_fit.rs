@@ -19,6 +19,7 @@ pub const ICON_BUTTON: f32 = control::S;
 #[derive(Clone, Default)]
 pub struct BarFit {
     bar: Rc<Cell<f32>>,
+    covered: Rc<Cell<f32>>,
     strip: Rc<Cell<f32>>,
     revealed: Rc<RefCell<(Option<PathBuf>, f32)>>,
     decided: Rc<Cell<Option<bool>>>,
@@ -26,7 +27,13 @@ pub struct BarFit {
 
 thread_local! {
     static SLOTS: [BarFit; 2] = Default::default();
+    static COVER: Cell<f32> = const { Cell::new(0.) };
     static TAB_TEXT: RefCell<std::collections::HashMap<String, f32>> = RefCell::default();
+}
+
+/// Tells the rows how much of the window's right edge a floating panel covers, so what they keep at their right end stays visible.
+pub fn set_cover(width: f32) {
+    COVER.with(|c| c.set(width.max(0.)));
 }
 
 /// The widths of the main document pane's row, or of the split pane's, shared by whatever document is shown there.
@@ -38,6 +45,11 @@ impl BarFit {
     /// The row's width, once it was drawn.
     pub fn bar(&self) -> Option<f32> {
         Some(self.bar.get()).filter(|w| *w > 0.)
+    }
+
+    /// How far a floating panel reaches into the row from its right end, as of the last frame.
+    pub fn covered(&self) -> f32 {
+        self.covered.get()
     }
 
     /// The tab strip's width, once it was drawn.
@@ -68,7 +80,24 @@ impl BarFit {
 
     /// Fills its parent and records the row's width.
     pub fn measure_bar(&self) -> impl IntoElement + use<> {
-        measurer(self.bar.clone())
+        let (bar, covered) = (self.bar.clone(), self.covered.clone());
+        canvas(
+            move |bounds, window, _| {
+                let cover = COVER.with(Cell::get);
+                let reach = if cover > 0. { (f32::from(bounds.right()) - (f32::from(window.viewport_size().width) - cover)).clamp(0., f32::from(bounds.size.width)) } else { 0. };
+                let width = (f32::from(bounds.size.width) - reach).floor();
+                if bar.get() != width || covered.get() != reach {
+                    bar.set(width);
+                    covered.set(reach);
+                    window.on_next_frame(|window, _| window.refresh());
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
 
     /// Fills its parent and records the strip's width.

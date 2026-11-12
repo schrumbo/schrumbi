@@ -276,7 +276,7 @@ impl Render for QuickAdd {
                         .cursor_pointer()
                         .key_nav()
                         .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
-                        .tip(format!("{} (Esc)", tr("Schließen")))
+                        .tip(format!("{}{}", tr("Schließen"), key_hint("escape")))
                         .on_click(move |_, _, cx| close.update(cx, |_, cx| cx.emit(Dismissed)))
                         .child(icon("x", iconsize::S, t.secondary)),
                 ),
@@ -302,6 +302,7 @@ pub struct QuickOpen {
     focused: bool,
     link_to: Option<String>,
     cache: Option<(String, u64, usize, u64, Rc<Vec<(CatalogFile, bool)>>, Rc<Vec<VaultHit>>)>,
+    pool: Option<(String, u64, u64, usize, Rc<Vec<usize>>)>,
     _subs: Vec<Subscription>,
 }
 
@@ -379,24 +380,30 @@ pub fn list_room(window_height: f32, chrome: f32, want: f32) -> f32 {
 const QUICK_CHROME: f32 = 100.;
 const QUICK_LIST: f32 = 360.;
 
-/// How a name fits the whole query: 2 for the exact name without extension, 1 for a name starting with it, else 0; with the name's length for ties.
-fn name_rank(name: &str, terms: &[String]) -> (u8, usize) {
-    fit(&fold(crate::core::naming::stem(name)), &terms.join(" "))
-}
-
+/// How a folded name fits the whole query: 2 for the exact name, 1 for a name starting with it, else 0; with the name's length for ties.
 fn fit(folded: &str, needle: &str) -> (u8, usize) {
     let tier = if needle.is_empty() { 0 } else if folded == needle { 2 } else if folded.starts_with(needle) { 1 } else { 0 };
     (tier, folded.chars().count())
 }
 
-fn order(scored: &mut [(&CatalogFile, f64)], terms: &[String]) {
-    scored.sort_by(|a, b| {
-        let (x, y) = (name_rank(a.0.name(), terms), name_rank(b.0.name(), terms));
-        y.0.cmp(&x.0)
-            .then_with(|| if x.0 > 0 { x.1.cmp(&y.1) } else { std::cmp::Ordering::Equal })
-            .then_with(|| b.1.total_cmp(&a.1))
-            .then_with(|| b.0.date.cmp(&a.0.date))
-    });
+type Ranked<'a> = (u8, usize, f64, NaiveDate, usize, (&'a CatalogFile, f64));
+
+fn order<'a>(scored: Vec<(&'a CatalogFile, f64)>, terms: &[String], keep: usize) -> Vec<(&'a CatalogFile, f64)> {
+    let needle = terms.join(" ");
+    let mut ranked: Vec<Ranked> = scored
+        .into_iter()
+        .map(|s| {
+            let (tier, len) = fit(&s.0.folded_stem, &needle);
+            (tier, if tier > 0 { len } else { 0 }, s.1, s.0.date, s.0 as *const CatalogFile as usize, s)
+        })
+        .collect();
+    let before = |a: &Ranked, b: &Ranked| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then_with(|| b.2.total_cmp(&a.2)).then(b.3.cmp(&a.3)).then(a.4.cmp(&b.4));
+    if ranked.len() > keep && keep > 0 {
+        ranked.select_nth_unstable_by(keep - 1, before);
+        ranked.truncate(keep);
+    }
+    ranked.sort_by(before);
+    ranked.into_iter().map(|r| r.5).collect()
 }
 
 actions!(schrumbi_quick, [QuickUp, QuickDown]);
@@ -423,7 +430,7 @@ impl QuickOpen {
             InputEvent::PressEnter { .. } => this.open(cx),
             _ => {}
         })];
-        Self { query, index: 0, focused: false, link_to, cache: None, _subs: subs }
+        Self { query, index: 0, focused: false, link_to, cache: None, pool: None, _subs: subs }
     }
 
     fn results(&mut self, cx: &App) -> (Rc<Vec<(CatalogFile, bool)>>, Rc<Vec<VaultHit>>) {
@@ -437,7 +444,7 @@ impl QuickOpen {
         }
         let files = Rc::new(match &self.link_to {
             Some(id) => self.link_results(id, cx),
-            None => self.file_results(&q, cx),
+            None => self.file_results(&q, revision, generation, cx),
         });
         let mut hits = if self.link_to.is_some() { Vec::new() } else { vault_hits(&q) };
         let typed = q.trim();
@@ -449,9 +456,11 @@ impl QuickOpen {
         (files, hits)
     }
 
-    fn file_results(&self, q: &str, cx: &App) -> Vec<(CatalogFile, bool)> {
-        state::read(cx, |l| {
-            let terms: Vec<String> = fold(q).split(' ').filter(|t| !t.is_empty()).map(String::from).collect();
+    fn file_results(&mut self, q: &str, revision: u64, generation: u64, cx: &App) -> Vec<(CatalogFile, bool)> {
+        let folded = fold(q);
+        let narrow = self.pool.take().filter(|(pq, pr, pg, ..)| *pr == revision && *pg == generation && !pq.trim().is_empty() && folded.starts_with(pq.as_str())).map(|(.., n, p)| (n, p));
+        let (files, pool) = state::read(cx, |l| {
+            let terms: Vec<String> = folded.split(' ').filter(|t| !t.is_empty()).map(String::from).collect();
             let current = l.current_week().map(|w| w.index);
             let open: HashSet<&FilePath> = l.open_documents.iter().map(|p| p.as_path()).collect();
             let files: Vec<&CatalogFile> = l.catalog.iter().filter(|f| !f.in_project || !terms.is_empty()).collect();
@@ -460,12 +469,25 @@ impl QuickOpen {
                 let tabs = l.open_documents.iter().filter_map(|p| by_path.get(p.as_path()).map(|f| ((*f).clone(), true)));
                 let mut recent: Vec<&CatalogFile> = files.iter().filter(|f| !open.contains(f.file.path.as_path()) && FileKind::Documents.matches(f.name())).copied().collect();
                 recent.sort_by(|a, b| b.date.cmp(&a.date));
-                return tabs.chain(recent.into_iter().map(|f| (f.clone(), false))).take(12).collect();
+                return (tabs.chain(recent.into_iter().map(|f| (f.clone(), false))).take(12).collect(), None);
             }
-            let mut scored: Vec<(&CatalogFile, f64)> = files.iter().filter_map(|f| catalog::score(f, &terms, current).map(|s| (*f, s + if open.contains(f.file.path.as_path()) { 3. } else { 0. }))).collect();
-            order(&mut scored, &terms);
-            scored.into_iter().take(40).map(|(f, _)| (f.clone(), open.contains(f.file.path.as_path()))).collect()
-        })
+            let candidates: Vec<usize> = match narrow.as_ref().filter(|(n, _)| *n == l.catalog.len()) {
+                Some((_, p)) => p.to_vec(),
+                None => (0..l.catalog.len()).collect(),
+            };
+            let mut kept = Vec::new();
+            let mut scored: Vec<(&CatalogFile, f64)> = Vec::new();
+            for i in candidates {
+                let f = &l.catalog[i];
+                if let Some(s) = catalog::score(f, &terms, current) {
+                    kept.push(i);
+                    scored.push((f, s + if open.contains(f.file.path.as_path()) { 3. } else { 0. }));
+                }
+            }
+            (order(scored, &terms, 40).into_iter().map(|(f, _)| (f.clone(), open.contains(f.file.path.as_path()))).collect(), Some((l.catalog.len(), Rc::new(kept))))
+        });
+        self.pool = pool.map(|(n, p)| (folded, revision, generation, n, p));
+        files
     }
 
     /// Files for a deadline; the flag says the file already belongs to it.
@@ -479,7 +501,7 @@ impl QuickOpen {
             let mine = |f: &CatalogFile| f.module_id.as_deref() == Some(a.module_id.as_str());
             let linked = |f: &CatalogFile| e.files.contains(&f.file.path) || e.briefs.contains(&f.file.path);
             let files: Vec<&CatalogFile> = l.catalog.iter().filter(|f| !f.in_project || !terms.is_empty()).collect();
-            let mut scored: Vec<(&CatalogFile, f64)> = if terms.is_empty() {
+            let scored: Vec<(&CatalogFile, f64)> = if terms.is_empty() {
                 files
                     .iter()
                     .filter(|f| mine(f))
@@ -491,8 +513,7 @@ impl QuickOpen {
             } else {
                 files.iter().filter_map(|f| catalog::score(f, &terms, current).map(|s| (*f, s + if mine(f) { 2. } else { 0. }))).collect()
             };
-            order(&mut scored, &terms);
-            scored.into_iter().take(40).map(|(f, _)| (f.clone(), linked(f))).collect()
+            order(scored, &terms, 40).into_iter().map(|(f, _)| (f.clone(), linked(f))).collect()
         })
     }
 
@@ -909,6 +930,7 @@ mod tests {
             in_project: false,
             haystack: fold(name),
             folded_name: fold(name),
+            folded_stem: fold(crate::core::naming::stem(name)),
             title: None,
         }
     }
@@ -916,15 +938,25 @@ mod tests {
     fn ranked(names: &[&str], query: &str) -> Vec<String> {
         let files: Vec<CatalogFile> = names.iter().map(|n| file(n)).collect();
         let terms: Vec<String> = fold(query).split(' ').filter(|t| !t.is_empty()).map(String::from).collect();
-        let mut scored: Vec<(&CatalogFile, f64)> = files.iter().filter_map(|f| catalog::score(f, &terms, None).map(|s| (f, s))).collect();
-        order(&mut scored, &terms);
-        scored.into_iter().map(|(f, _)| f.name().to_string()).collect()
+        let scored: Vec<(&CatalogFile, f64)> = files.iter().filter_map(|f| catalog::score(f, &terms, None).map(|s| (f, s))).collect();
+        order(scored, &terms, usize::MAX).into_iter().map(|(f, _)| f.name().to_string()).collect()
     }
 
     #[test]
     fn exact_name_ranks_first() {
         let found = ranked(&["Messung 17348.md", "Messung 73480.md", "Messung 7348.md"], "Messung 7348");
         assert_eq!(found, ["Messung 7348.md", "Messung 73480.md", "Messung 17348.md"]);
+    }
+
+    #[test]
+    fn keeping_the_top_few_matches_the_full_order() {
+        let names: Vec<String> = (0..200).map(|i| format!("Messung {}.md", (i * 7919) % 1000)).collect();
+        let files: Vec<CatalogFile> = names.iter().map(|n| file(n)).collect();
+        let terms = vec![fold("messung 7")];
+        let scored = || files.iter().filter_map(|f| catalog::score(f, &terms, None).map(|s| (f, s))).collect::<Vec<_>>();
+        let all: Vec<&str> = order(scored(), &terms, usize::MAX).into_iter().map(|(f, _)| f.name()).collect();
+        let top: Vec<&str> = order(scored(), &terms, 5).into_iter().map(|(f, _)| f.name()).collect();
+        assert_eq!(top, all[..5]);
     }
 
     #[test]

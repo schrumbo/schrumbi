@@ -352,7 +352,7 @@ impl Render for GraphView {
             .gap(px(space::M))
             .border_b_1()
             .border_color(t.separator)
-            .child(div().w(px(220.)).child(Input::new(&self.filter).small()))
+            .child(div().w(px(220.)).capture_action(clear_on_escape(&self.filter)).child(Input::new(&self.filter).small()))
             .child(Button::new("graph-filters").ghost().small().icon(menu_icon("sliders-horizontal")).label(tr("Anzeigen")).dropdown_menu({
                 let (me, options) = (cx.entity(), self.options.clone());
                 move |menu, _, _| {

@@ -1280,7 +1280,7 @@ impl Render for NotesPage {
                         }))
                 }
             }));
-        let filter = div().flex_none().p(px(space::S)).child(Input::new(&self.query).small());
+        let filter = div().flex_none().p(px(space::S)).capture_action(clear_on_escape(&self.query)).child(Input::new(&self.query).small());
         let filtered = !self.query.read(cx).value().is_empty() && view != View::Search;
         let loading = self.cache.as_ref().is_some_and(|c| c.loading);
         let body: AnyElement = if rows.is_empty() && loading {

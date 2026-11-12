@@ -648,6 +648,7 @@ impl Render for Setup {
                 let adder = me.clone();
                 let can_add = !self.new_module.trim().is_empty();
                 let creates = self.draft.create_folders;
+                let narrow = f32::from(window.viewport_size().width) < 760.;
                 div()
                     .h_full()
                     .flex()
@@ -661,10 +662,10 @@ impl Render for Setup {
                             .min_h_0()
                             .flex()
                             .gap(px(space::M))
-                            .child(div().flex_1().min_w_0().h_full().flex().flex_col().gap(px(space::S)).child(div().flex_1().min_h_0().rounded(px(radius::CARD)).border_1().border_color(t.separator).overflow_hidden().child(self.folders.clone())).when(creates, |d| d.child(div().flex_none().flex().gap(px(space::S)).child(div().flex_1().min_w_0().child(Input::new(&add_field).small())).child(Button::new("setup-add").small().icon(menu_icon("plus")).label(tr("Anlegen")).disabled(!can_add).on_click(move |_, window, cx| adder.update(cx, |s, cx| s.add_module(window, cx)))))))
+                            .child(div().flex_1().min_w_0().h_full().flex().flex_col().gap(px(space::S)).child(div().flex_1().min_h_0().rounded(px(radius::CARD)).border_1().border_color(t.separator).overflow_hidden().child(self.folders.clone())).when(creates, |d| d.child(div().flex_none().flex().gap(px(space::S)).child(div().flex_1().min_w_0().child(Input::new(&add_field).small())).child(Button::new("setup-add").small().icon(menu_icon("plus")).when(!narrow, |b| b.label(tr("Anlegen"))).tooltip(tr("Anlegen")).disabled(!can_add).on_click(move |_, window, cx| adder.update(cx, |s, cx| s.add_module(window, cx)))))))
                             .child(
                                 div()
-                                    .w(px(320.))
+                                    .w(px(if narrow { 240. } else { 320. }))
                                     .flex_none()
                                     .h_full()
                                     .flex()

@@ -175,6 +175,27 @@ pub fn clicked(cx: &mut App) {
     cx.set_global(LastClick(std::time::Instant::now()));
 }
 
+/// Esc in a filter field empties it first; with nothing in it the key goes on to close or leave.
+pub fn clear_on_escape(input: &Entity<gpui_kit::component::input::InputState>) -> impl Fn(&gpui_kit::component::input::Escape, &mut Window, &mut App) + 'static {
+    let input = input.clone();
+    move |_, window, cx| {
+        if !input.read(cx).value().is_empty() {
+            input.update(cx, |s, cx| s.set_value("", window, cx));
+            cx.stop_propagation();
+        }
+    }
+}
+
+/// A key of a page as the shortcuts are written: `Enter`, `Esc`, `N`.
+pub fn key_label(key: &str) -> String {
+    crate::core::prefs::Shortcut { key: key.into(), command: false, shift: false, option: false, control: false }.display()
+}
+
+/// The suffix of a tooltip for a key of a page: ` (Enter)`.
+pub fn key_hint(key: &str) -> String {
+    format!(" ({})", key_label(key))
+}
+
 /// The wait before a tooltip: none while another one is open or just closed, so moving along a row of controls reads their names at once.
 pub fn tooltip_delay() -> std::time::Duration {
     let warm = TIPS_OPEN.load(std::sync::atomic::Ordering::Relaxed) > 0 || TIP_CLOSED.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed() < TOOLTIP_WARM);

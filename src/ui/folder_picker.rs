@@ -232,7 +232,7 @@ impl Render for FolderPicker {
                     cx.notify();
                 }
             }))
-            .child(div().flex_none().p(px(space::S)).child(Input::new(&self.filter).small().prefix(icon("search", iconsize::XS, t.secondary))))
+            .child(div().flex_none().p(px(space::S)).capture_action(clear_on_escape(&self.filter)).child(Input::new(&self.filter).small().prefix(icon("search", iconsize::XS, t.secondary))))
             .child(div().flex_1().min_h_0().child(body))
     }
 }

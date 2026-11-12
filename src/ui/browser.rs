@@ -1291,6 +1291,7 @@ mod tests {
             in_project: false,
             haystack: String::new(),
             folded_name: String::new(),
+            folded_stem: String::new(),
             title: None,
         }
     }
