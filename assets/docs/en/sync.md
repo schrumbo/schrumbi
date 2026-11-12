@@ -26,6 +26,8 @@ The line at the bottom of the sidebar shows the state, a click opens details.
 
 Offline, it backs up locally and uploads later. You do not need to do anything.
 
+If many files are gone at once, saving pauses, also when started by hand. If that was on purpose, {ui:Trotzdem sichern}.
+
 ## Conflicts
 
 If the same file was changed on two devices, the sync line in the sidebar shows the conflicts, and automatic sync waits. A click on it or {ui:Konflikte lösen…} in {key:CommandPalette} opens the choice. Nothing is lost.

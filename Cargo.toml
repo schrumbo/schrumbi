@@ -18,6 +18,7 @@ calamine = "0.38"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10.4"
 dirs = "6"
+encoding_rs = "0.8"
 glob = "0.3"
 gpui-kit = { version = "0.8.1", features = ["tree-sitter", "tree-sitter-markdown", "tree-sitter-markdown-inline"] }
 hayro = "0.8.0"
@@ -113,4 +114,4 @@ objc2-user-notifications = "0.3"
 objc2-event-kit = { version = "0.3", default-features = false, features = ["std", "block2", "bitflags", "EKAlarm", "EKCalendar", "EKCalendarItem", "EKError", "EKEvent", "EKEventStore", "EKObject", "EKSource", "EKTypes"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }

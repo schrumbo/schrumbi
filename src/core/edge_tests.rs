@@ -1160,17 +1160,29 @@ fn taking_back_a_cards_import_removes_its_notes_and_what_was_taken_as_known() {
     lib.apply_index(count, catalog);
     let note = root.join("Anki/Deck.md");
     std::fs::create_dir_all(note.parent().unwrap()).unwrap();
-    std::fs::write(&note, "F1 :: B1\n").unwrap();
-    let fresh = vec![("n1".to_string(), "Anki/Deck.md".to_string(), "F1".to_string())];
-    let spread = super::cards::adopt_import(Vec::new(), Vec::new(), fresh, super::cards::now());
+    std::fs::write(&note, "F1 :: B1
+").unwrap();
+    let old = root.join("Anki/Alt.md");
+    std::fs::write(&old, "Meins
+
+F2 :: B2
+
+").unwrap();
+    let learned = super::cards::CardState { phase: super::cards::Phase::Review, stability: 9., reps: 3, due: 5, last_review: Some(1), ..Default::default() };
+    let back = super::cards::adopt_import(vec![("n1".to_string(), learned)], Vec::new());
     assert!(super::cards::snapshot(&["n1".to_string()])[0].1.is_some());
-    lib.cards_imported(vec![note.clone()], 1, 0, spread);
-    assert!(lib.toast.as_ref().unwrap().message.starts_with("1 Karte importiert · "));
+    let done = super::cards::anki::ImportResult { added: 2, created: vec![note.clone()], appended: vec![(old.clone(), b"Meins
+".to_vec())], ..Default::default() };
+    lib.cards_imported(done, back);
+    assert_eq!(lib.toast.as_ref().unwrap().message, "2 Karten importiert · 1 mit Lernstand, 1 neu");
     lib.undo();
     assert!(!note.exists());
+    assert_eq!(std::fs::read_to_string(&old).unwrap(), "Meins
+");
     assert_eq!(super::cards::snapshot(&["n1".to_string()])[0].1, None);
     lib.redo();
     assert!(note.exists());
+    assert!(std::fs::read_to_string(&old).unwrap().contains("F2 :: B2"));
     assert!(super::cards::snapshot(&["n1".to_string()])[0].1.is_some());
     super::cards::close();
     let _ = std::fs::remove_dir_all(root);

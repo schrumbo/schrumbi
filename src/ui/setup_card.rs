@@ -32,6 +32,8 @@ pub struct SetupCard {
     calendar: Entity<CalendarAsk>,
     /// The form just unfolded; its first field takes the keyboard on the next frame.
     focus_field: bool,
+    /// The steps after the first one are unfolded.
+    more: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -161,6 +163,34 @@ fn marks(cx: &App) -> SetupPrefs {
     prefs::setup_of(&root(cx))
 }
 
+/// Finished and closed as the workspace remembers them for every device.
+fn shared(cx: &App) -> (bool, bool) {
+    state::read(cx, |l| (l.state.setup_completed, l.state.setup_dismissed))
+}
+
+/// Records the list as finished or closed, or brings it back, on this device and in the workspace.
+fn settle(cx: &mut App, completed: bool, dismissed: bool) {
+    prefs::update_setup(&root(cx), |s| {
+        s.completed = completed;
+        s.dismissed = dismissed;
+    });
+    act(cx, |l| l.mark_setup(completed, dismissed));
+    cx.refresh_windows();
+}
+
+/// The item of this device still open after the list was finished on another device; offered one at a time.
+fn device_offer(facts: &Facts, marks: &SetupPrefs) -> Option<Item> {
+    [Item::Calendar, Item::Editor, Item::Sync].into_iter().find(|i| !setup::settled(*i, facts, &marks.skipped, &marks.confirmed))
+}
+
+/// Ticks what the guided setup just settled: the semester dates were shown and the naming was decided there.
+pub fn wizard_done(cx: &mut App) {
+    remember(cx, |s| {
+        s.confirmed.insert(Item::Semester.key().to_string());
+        s.confirmed.insert(Item::Naming.key().to_string());
+    });
+}
+
 fn remember(cx: &mut App, f: impl FnOnce(&mut SetupPrefs)) {
     let root = root(cx);
     prefs::update_setup(&root, f);
@@ -186,18 +216,17 @@ fn unskip(item: Item, cx: &mut App) {
     });
 }
 
-/// Brings a dismissed or finished list back; from the settings.
+/// Brings a dismissed or finished list back, with the steps that were skipped; from the settings.
 pub fn restore(cx: &mut App) {
-    remember(cx, |s| {
-        s.dismissed = false;
-        s.completed = false;
-    });
+    remember(cx, |s| s.skipped.clear());
+    settle(cx, false, false);
 }
 
-/// Whether the list is dismissed or finished for this workspace.
+/// Whether the list is dismissed or finished for this workspace, here or on another device.
 pub fn hidden(cx: &App) -> bool {
     let m = marks(cx);
-    m.dismissed || m.completed
+    let (completed, dismissed) = shared(cx);
+    m.dismissed || m.completed || completed || dismissed
 }
 
 fn title(item: Item) -> String {
@@ -301,13 +330,20 @@ impl SetupCard {
                 cx.notify();
             }),
         ];
-        Self { fields: Fields::default(), open: None, had_open: false, celebrating: None, calendar, focus_field: false, _subs: subs }
+        Self { fields: Fields::default(), open: None, had_open: false, celebrating: None, calendar, focus_field: false, more: false, _subs: subs }
     }
 
     /// Whether the overview should show the list at all right now.
     pub fn wanted(&self, cx: &App) -> bool {
         let marks = marks(cx);
         let facts = state::read(cx, |l| facts(l, cx));
+        if marks.dismissed || marks.completed {
+            return false;
+        }
+        let (completed, dismissed) = shared(cx);
+        if completed || dismissed {
+            return device_offer(&facts, &marks).is_some();
+        }
         setup::wanted(&facts, &marks.skipped, &marks.confirmed, marks.dismissed, marks.completed) && (self.had_open || !setup::open_items(&facts, &marks.skipped, &marks.confirmed).is_empty())
     }
 
@@ -315,7 +351,7 @@ impl SetupCard {
     pub fn offers_calendar(&self, cx: &App) -> bool {
         let marks = marks(cx);
         let facts = state::read(cx, |l| facts(l, cx));
-        self.wanted(cx) && !marks.collapsed && !setup::settled(Item::Calendar, &facts, &marks.skipped, &marks.confirmed)
+        self.wanted(cx) && !marks.collapsed && !setup::settled(Item::Calendar, &facts, &marks.skipped, &marks.confirmed) && (!hidden(cx) || device_offer(&facts, &marks) == Some(Item::Calendar))
     }
 
     fn primary(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
@@ -466,10 +502,11 @@ impl SetupCard {
             let root = root(cx);
             self.celebrating = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(hints::DONE_FOR).await;
-                prefs::update_setup(&root, |s| s.completed = true);
                 let _ = this.update(cx, |s, cx| {
                     s.celebrating = None;
-                    cx.refresh_windows();
+                    if self::root(cx) == root {
+                        settle(cx, true, false);
+                    }
                 });
             }));
         }
@@ -490,7 +527,8 @@ impl Render for SetupCard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = Theme::get(cx);
         let root_now = root(cx);
-        if !prefs::with(|p| p.setup.contains_key(root_now.to_string_lossy().as_ref())) {
+        let key = prefs::workspace_key(&root_now);
+        if !prefs::with(|p| p.setup.contains_key(&key)) {
             let busy = state::read(cx, |l| !l.semester_assignments().is_empty());
             prefs::update_setup(&root_now, |s| s.collapsed = busy);
         }
@@ -499,11 +537,17 @@ impl Render for SetupCard {
             return div();
         }
         let (facts, snap) = state::read(cx, |l| (facts(l, cx), Snap { config: l.config.clone(), semester: l.semester().cloned(), modules: l.semester_modules().into_iter().cloned().collect() }));
+        let (done_elsewhere, closed_elsewhere) = shared(cx);
+        if done_elsewhere || closed_elsewhere {
+            let Some(item) = device_offer(&facts, &marks) else { return div() };
+            let row = self.row(item, true, &facts, &snap, &marks, window, cx, &t);
+            self.fields.prune();
+            return grouped(&t).child(div().px(px(space::L)).pt(px(space::M)).child(caption(tr("Auf diesem Gerät noch offen"), &t))).child(row);
+        }
         let open_items = setup::open_items(&facts, &marks.skipped, &marks.confirmed);
         if open_items.is_empty() {
             if !self.had_open {
-                let root = root(cx);
-                prefs::update_setup(&root, |s| s.completed = true);
+                cx.defer(|cx| settle(cx, true, false));
                 return div();
             }
             return self.celebration(cx, &t);
@@ -559,21 +603,100 @@ impl Render for SetupCard {
                     .soft(t.ink.opacity(0.1), radius::FULL)
                     .tooltip(tip(tr("Ausblenden; die Einstellungen zeigen die Liste wieder")))
                     .on_click(move |_, _, cx| {
-                        prefs::update_setup(&close_root, |s| s.dismissed = true);
+                        settle(cx, false, true);
                         let undo_root = close_root.clone();
-                        act(cx, |l| l.notify(tr("Einrichten ausgeblendet"), "eye-off", Some(tr("Einblenden")), Some(Box::new(move |_: &mut Library| prefs::update_setup(&undo_root, |s| s.dismissed = false)))));
+                        act(cx, |l| {
+                            l.notify(
+                                tr("Einrichten ausgeblendet"),
+                                "eye-off",
+                                Some(tr("Einblenden")),
+                                Some(Box::new(move |l: &mut Library| {
+                                    prefs::update_setup(&undo_root, |s| s.dismissed = false);
+                                    l.mark_setup(false, false);
+                                })),
+                            )
+                        });
                     })
                     .child(icon("x", iconsize::S, t.secondary)),
             );
-        let first_open = open_items.first().copied();
-        let mut body = div().flex().flex_col();
-        for (i, item) in Item::ALL.into_iter().enumerate() {
-            if i > 0 {
-                body = body.child(divider(&t));
+        let first = open_items[0];
+        let waiting = open_items.len() - 1;
+        let mut body = div().flex().flex_col().child(self.row(first, true, &facts, &snap, &marks, window, cx, &t));
+        let more = self.more;
+        let me = cx.entity();
+        let all = open_items.clone();
+        body = body.child(divider(&t)).child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(space::M))
+                .px(px(space::L))
+                .py(px(space::S))
+                .child(
+                    div()
+                        .id("setup-more")
+                        .flex()
+                        .items_center()
+                        .gap(px(space::S))
+                        .mx(px(-space::S))
+                        .px(px(space::S))
+                        .py(px(space::XS))
+                        .rounded(px(radius::CONTROL))
+                        .cursor_pointer()
+                        .key_nav()
+                        .soft(t.ink.opacity(0.05), radius::CONTROL)
+                        .on_click(move |_, _, cx| {
+                            me.update(cx, |s, cx| {
+                                s.more = !s.more;
+                                cx.notify();
+                            })
+                        })
+                        .child(motion::chevron("setup-more-chevron", more, t.secondary))
+                        .child(caption(
+                            match waiting {
+                                0 => tr("Erledigte Schritte"),
+                                1 => tr("Noch 1 Schritt"),
+                                n => trf("Noch %@ Schritte", &[&n.to_string()]),
+                            },
+                            &t,
+                        )),
+                )
+                .child(div().flex_1())
+                .child(link_button("setup-skip-all", tr("Alle überspringen"), &t).text_size(px(font::CAPTION)).text_color(t.secondary).tooltip(tip(tr("Geht jederzeit später, auch aus den Einstellungen"))).on_click({
+                    let me = cx.entity();
+                    move |_, _, cx| {
+                        let keys: Vec<String> = all.iter().map(|i| i.key().to_string()).collect();
+                        me.update(cx, |s, _| s.had_open = false);
+                        remember(cx, |s| s.skipped.extend(keys.iter().cloned()));
+                        let undo_root = root(cx);
+                        act(cx, |l| {
+                            l.notify(
+                                tr("Einrichten übersprungen"),
+                                "eye-off",
+                                Some(tr("Rückgängig")),
+                                Some(Box::new(move |l: &mut Library| {
+                                    prefs::update_setup(&undo_root, |s| {
+                                        for key in &keys {
+                                            s.skipped.remove(key);
+                                        }
+                                        s.completed = false;
+                                    });
+                                    l.mark_setup(false, false);
+                                })),
+                            )
+                        });
+                    }
+                })),
+        );
+        let mut rest = div().w_full().flex().flex_col();
+        if more {
+            let (open, done): (Vec<Item>, Vec<Item>) = Item::ALL.into_iter().filter(|i| *i != first).partition(|i| open_items.contains(i));
+            for item in open.into_iter().chain(done) {
+                let row = self.row(item, false, &facts, &snap, &marks, window, cx, &t);
+                rest = rest.child(divider(&t)).child(row);
             }
-            let row = self.row(item, first_open == Some(item), &facts, &snap, &marks, window, cx, &t);
-            body = body.child(row);
         }
+        body = body.child(div().w_full().child(motion::reveal("setup-more-body", more, rest)));
         self.fields.prune();
         let footer = div()
             .flex()

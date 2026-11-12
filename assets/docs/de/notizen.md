@@ -24,6 +24,10 @@ Notizen sind Markdown-Dateien in deinem Ordner. Obsidian liest sie genauso.
 - Datei auf einen Ordner ziehen verschiebt sie.
 - Rechtsklick → {ui:Abgabe zuordnen} zählt die Datei für eine Abgabe. Die Pille oben in der Notiz zeigt, wozu sie gehört.
 - {ui:In den Papierkorb} fragt nicht nach. {key:Undo} holt die Datei zurück.
+- Sehr große Dateien liegen danach nur im Papierkorb des Systems und kommen von dort zurück. Hat das Laufwerk keinen Papierkorb, bleiben sie, wo sie sind.
+- Eine Notiz, deren letzte Änderungen nicht gesichert werden konnten, bleibt liegen.
+- Umbenennen und Verschieben passt Links in anderen Notizen an, auch in einen umbenannten Ordner hinein.
+- Eine Notiz, die nicht in UTF-8 gespeichert ist, bleibt unverändert. {ui:UTF-8-Kopie öffnen} legt eine bearbeitbare Kopie daneben.
 
 Oben wechselst du zwischen {ui:Dateien}, {ui:Suche}, {ui:Tags} und {ui:Aufgaben}.
 

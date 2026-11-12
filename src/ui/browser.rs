@@ -402,7 +402,7 @@ impl FileBrowser {
         let sub = cx.subscribe_in(&field, window, move |this, s, e: &InputEvent, window, cx| match e {
             InputEvent::PressEnter { .. } => {
                 let stem = s.read(cx).value().trim().to_string();
-                if !stem.is_empty() && !stem.contains(['/', '\\']) {
+                if !stem.is_empty() {
                     let name = if ext.is_empty() { stem } else { format!("{stem}.{ext}") };
                     let file = target.clone();
                     act(cx, |l| l.rename(&file, &name));

@@ -59,7 +59,10 @@ In the deck menu, {ui:Alles wiederholen}: every unpaused card once, in random or
 2. Choose `.apkg`, `.colpkg`, `.txt`, `.tsv` or `.csv`.
 3. {ui:Lernfortschritt übernehmen} keeps due dates and stability.
 
-Each deck becomes a note in the {ui:Zielordner}. Duplicate cards are skipped.
+Each deck becomes a note in the {ui:Zielordner}. Cards that are already there are skipped. If two cards have the same question, both arrive, the second with a number.
+
+- Cards never learned stay new.
+- {key:Undo} takes back the whole import, including cards added to an existing note.
 
 ## Where Things Are
 

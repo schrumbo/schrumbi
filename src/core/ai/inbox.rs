@@ -135,7 +135,7 @@ fn row_of(lib: &Library, v: &Value) -> Result<Row, String> {
     };
     row.name = match text(v, "name") {
         Some(n) if tools::plain_name(n).is_err() => return Err(format!("{rel}: `name` is a plain file name: no path, no leading dot.")),
-        Some(n) => n.to_string(),
+        Some(n) => tools::file_name(n.to_string()).map_err(|e| format!("{rel}: {e}"))?,
         None => name_for(lib, &row, module.as_deref(), assignment.as_ref().and_then(|a| a.week), assignment.as_ref().and_then(|a| a.iso_week)),
     };
     Ok(row)

@@ -112,9 +112,15 @@ pub fn export_archive(cx: &mut App) {
                 act(cx, |l| {
                     l.is_exporting = false;
                     match result {
-                        Ok(()) => {
+                        Ok(skipped) => {
                             let d = dest.clone();
-                            l.notify(crate::core::i18n::trf("ZIP gespeichert: %@", &[&dest.file_name().unwrap_or_default().to_string_lossy()]), "archive", Some(tr("Zeigen")), Some(Box::new(move |_| crate::core::library::reveal(&d))));
+                            let name = dest.file_name().unwrap_or_default().to_string_lossy().to_string();
+                            let message = match skipped.len() {
+                                0 => crate::core::i18n::trf("ZIP gespeichert: %@", &[&name]),
+                                1 => crate::core::i18n::trf("ZIP gespeichert: %@, ohne „%@“, das gerade nicht lesbar war", &[&name, &skipped[0].file_name().unwrap_or_default().to_string_lossy()]),
+                                n => crate::core::i18n::trf("ZIP gespeichert: %@, ohne %@ Dateien, die gerade nicht lesbar waren", &[&name, &n.to_string()]),
+                            };
+                            l.notify(message, "archive", Some(tr("Zeigen")), Some(Box::new(move |_| crate::core::library::reveal(&d))));
                         }
                         Err(e) => l.last_error = Some(crate::core::i18n::trf("Export fehlgeschlagen: %@", &[&e])),
                     }

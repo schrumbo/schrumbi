@@ -100,6 +100,8 @@ pub enum Change {
     Trash(PathBuf),
     /// Brings a trashed file back from the copy kept for this purpose; macOS does not let apps read the trash.
     Restore { path: PathBuf, backup: PathBuf },
+    /// A file in the system trash without a copy kept here, being too large; only the trash brings it back.
+    InTrash(PathBuf),
     /// Puts back the version of a file from before it was replaced.
     Replaced { path: PathBuf, backup: PathBuf },
     Highlights { key: String, list: Vec<Highlight>, orphans: BTreeMap<String, highlights::Attached> },
@@ -107,6 +109,8 @@ pub enum Change {
     Note { path: PathBuf, text: String },
     /// Takes a note back to a decision still open: `theirs` on disk, `mine` kept in the note.
     Conflict { path: PathBuf, mine: String, theirs: String },
+    /// Settles that decision again for `mine`, while the other app's version still is `theirs`.
+    Decided { path: PathBuf, mine: String, theirs: String },
     /// Puts a file's bytes back, for restoring an earlier version.
     Bytes { path: PathBuf, bytes: Vec<u8> },
     /// Puts cards' progress back, in the vault whose cards they are.
@@ -1439,7 +1443,7 @@ impl Library {
             self.last_error = Some(explain(&e.into()));
             return;
         }
-        let (mut changes, _) = self.relink(source, target);
+        let (mut changes, _, _) = self.relink(source, target);
         changes.push(Change::Note { path: target.to_path_buf(), text: before });
         match trash_with_copy(source) {
             Ok(change) => changes.push(change),
@@ -1513,46 +1517,65 @@ impl Library {
         }
     }
 
-    /// Points every link at a file's new place. The returned changes take that back, and how many links moved.
-    pub fn relink(&mut self, old: &Path, new: &Path) -> (Vec<Change>, usize) {
+    /// Points every link at a file's new place. The returned changes take that back, how many links moved,
+    /// and how many notes kept their links because another app's version of them waits for a decision.
+    pub fn relink(&mut self, old: &Path, new: &Path) -> (Vec<Change>, usize, usize) {
         use super::vault::{canvas, index};
         let settled = |p: &Path| p.parent().and_then(|d| dunce::canonicalize(d).ok()).zip(p.file_name()).map_or_else(|| p.to_path_buf(), |(d, n)| d.join(n));
         let (old, new) = (settled(old), settled(new));
         let before = index::current();
         if before.root.as_os_str().is_empty() || !old.starts_with(&before.root) || !new.starts_with(&before.root) {
-            return (Vec::new(), 0);
+            return (Vec::new(), 0, 0);
         }
         let after = index::moved(&old, &new);
         if !after.config.always_update_links {
-            return (Vec::new(), 0);
+            return (Vec::new(), 0, 0);
         }
-        let mut sources: Vec<PathBuf> = before.backlinks.get(&old).map(|l| l.iter().map(|m| m.source.clone()).collect()).unwrap_or_default();
+        let follow = |p: &Path| p.strip_prefix(&old).ok().map(|rest| if rest.as_os_str().is_empty() { new.clone() } else { new.join(rest) });
+        let targets: Vec<(&PathBuf, PathBuf)> = before.backlinks.keys().filter_map(|k| follow(k).map(|n| (k, n))).collect();
+        let linking = |target: &PathBuf, source: &Path| before.backlinks.get(target).is_some_and(|l| l.iter().any(|m| m.source == source));
+        let mut sources: Vec<PathBuf> = targets.iter().flat_map(|(k, _)| before.backlinks[*k].iter().map(|m| m.source.clone())).collect();
+        sources.extend(before.notes.keys().filter(|p| follow(p).is_some() && super::markdown::is_markdown(p)).cloned());
         sources.sort();
         sources.dedup();
-        let (mut changes, mut count) = (Vec::new(), 0);
+        let (mut changes, mut count, mut waiting) = (Vec::new(), 0, 0);
         let relative = |p: &Path| p.strip_prefix(&before.root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
-        for source in sources {
-            if let Some(buffer) = self.buffers.get_mut(&source) {
+        for was in sources {
+            let here = follow(&was).unwrap_or_else(|| was.clone());
+            if let Some(buffer) = self.buffers.get_mut(&here) {
                 buffer.reload_if_changed();
+                if buffer.conflict.is_some() {
+                    waiting += 1;
+                    continue;
+                }
             }
-            let open = self.buffers.get(&source).map(|b| b.text.clone());
-            let Some(text) = open.clone().or_else(|| std::fs::read_to_string(&source).ok()) else { continue };
-            let rewritten = if source.extension().is_some_and(|e| e.eq_ignore_ascii_case("canvas")) {
-                canvas::rewrite_file(&text, &relative(&old), &relative(&new)).map(|t| (t, 1))
+            let open = self.buffers.get(&here).map(|b| b.text.clone());
+            let Some(text) = open.clone().or_else(|| std::fs::read_to_string(&here).ok()) else { continue };
+            let rewritten = if here.extension().is_some_and(|e| e.eq_ignore_ascii_case("canvas")) {
+                let (mut current, mut links) = (None::<String>, 0);
+                for (target, moved) in targets.iter().filter(|(t, _)| linking(t, &was)) {
+                    if let Some(t) = canvas::rewrite_file(current.as_deref().unwrap_or(&text), &relative(target), &relative(moved)) {
+                        current = Some(t);
+                        links += 1;
+                    }
+                }
+                current.map(|t| (t, links))
+            } else if was == here && !new.is_dir() {
+                index::rewrite_links(&text, &was, &old, &new, &before.resolver, &after)
             } else {
-                index::rewrite_links(&text, &source, &old, &new, &before.resolver, &after)
+                index::rewrite_moved(&text, &was, &here, follow, &before.resolver, &after)
             };
             let Some((updated, links)) = rewritten else { continue };
-            let written = match self.buffers.get_mut(&source) {
+            let written = match self.buffers.get_mut(&here) {
                 Some(buffer) => buffer.restore(updated).is_ok(),
-                None => super::note_buffer::write_atomic(&source, updated.as_bytes()).is_ok(),
+                None => super::note_buffer::write_atomic(&here, updated.as_bytes()).is_ok(),
             };
             if written {
                 count += links;
-                changes.push(if open.is_some() { Change::Note { path: source, text } } else { Change::Bytes { path: source, bytes: text.into_bytes() } });
+                changes.push(if open.is_some() { Change::Note { path: here, text } } else { Change::Bytes { path: here, bytes: text.into_bytes() } });
             }
         }
-        (changes, count)
+        (changes, count, waiting)
     }
 
     // MARK: Notes changed by other apps
@@ -1681,6 +1704,12 @@ impl Library {
     pub fn tick(&mut self) -> bool {
         let (before, evaluations, actions) = (self.now, self.evaluations.clone(), self.action_items.clone());
         self.now = Local::now();
+        if let Some(reason) = super::cards::take_save_failure() {
+            self.last_error = Some(trf("Der Lernfortschritt konnte gerade nicht gesichert werden: %@ Schrumbi versucht es weiter.", &[&reason]));
+        }
+        for buffer in self.buffers.values_mut().filter(|b| b.unreadable) {
+            buffer.reload_if_changed();
+        }
         self.reevaluate();
         self.evaluations != evaluations || self.action_items != actions || before.timestamp() / 60 != self.now.timestamp() / 60
     }
@@ -2385,7 +2414,8 @@ impl Library {
     }
 
     fn typed_name(title: &str) -> String {
-        title.trim().chars().filter(|c| !"*?\"<>|".contains(*c)).map(|c| if "\\/:".contains(c) { '-' } else { c }).collect::<String>().trim_end_matches(['.', ' ']).to_string()
+        let typed: String = title.trim().chars().filter(|c| !"*?\"<>|".contains(*c)).map(|c| if "\\/:".contains(c) { '-' } else { c }).collect();
+        super::text::safe_file_name(&typed, &tr("Neue Notiz"))
     }
 
     /// The file name of something new: what you call it. A convention is applied only when asked for, see `convention_plan`.
@@ -2481,6 +2511,10 @@ impl Library {
 
     /// Creates a subfolder; returns its path.
     pub fn create_folder(&mut self, name: &str, folder: &Path) -> Option<PathBuf> {
+        if let Some(problem) = super::text::file_name_problem(name) {
+            self.last_error = Some(trf("Ordner konnte nicht angelegt werden: %@", &[&problem]));
+            return None;
+        }
         let path = unique_path(&folder.join(name));
         match std::fs::create_dir_all(&path) {
             Ok(()) => {
@@ -2741,7 +2775,8 @@ impl Library {
             }
         }
         inverse.retain(|c| !matches!(c, Change::Cards { swaps, .. } if swaps.is_empty()));
-        inverse.reverse();
+        inverse.sort_by_key(|c| matches!(c, Change::Replaced { .. }));
+        failed.retain(|c| !matches!(c, Change::InTrash(_)));
         failed.reverse();
         self.refresh();
         (Step { label: step.label, changes: inverse, series: false }, failed)
@@ -2771,12 +2806,13 @@ impl Library {
                     if let Some(parent) = to.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
-                    let target = unique_path(&to);
+                    let target = if same_file(&from, &to) { to.clone() } else { unique_path(&to) };
                     move_path(&from, &target)?;
                     self.path_moved(&from, &target);
                     Change::Move { from: target, to: from }
                 }
                 Change::Trash(path) => trash_with_copy(&path)?,
+                Change::InTrash(path) => anyhow::bail!(trf("„%@“ liegt im Papierkorb. Hole es dort zurück.", &[&name_of(&path)])),
                 Change::Restore { path, backup } => {
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)?;
@@ -2816,8 +2852,17 @@ impl Library {
                 Change::Conflict { path, mine, theirs } => {
                     let buffer = self.buffer(&path);
                     let before = buffer.text.clone();
-                    buffer.put_conflict(mine, theirs)?;
-                    Change::Note { path, text: before }
+                    buffer.put_conflict(mine, theirs.clone())?;
+                    Change::Decided { path, mine: before, theirs }
+                }
+                Change::Decided { path, mine, theirs } => {
+                    let buffer = self.buffer(&path);
+                    if buffer.conflict.as_deref().is_some_and(|c| c != theirs) {
+                        anyhow::bail!(trf("„%@“ wurde auch in einer anderen App geändert. Entscheide zuerst, welche Version bleibt.", &[&name_of(&path)]));
+                    }
+                    buffer.keep_mine();
+                    buffer.restore(mine.clone())?;
+                    Change::Conflict { path, mine, theirs }
                 }
                 Change::Cards { root, swaps } => {
                     let back =super::cards::swap(root.as_deref(), swaps).unwrap_or_else(|| {
@@ -2911,6 +2956,9 @@ impl Library {
         let inside = self.inside(path);
         let link_to = assignment.and_then(|id| self.assignment(id)).filter(|a| a.tracks_files()).map(|a| a.id.clone());
         let result: Result<PathBuf> = (|| {
+            if let Some(problem) = super::text::file_name_problem(name) {
+                anyhow::bail!(problem);
+            }
             std::fs::create_dir_all(folder)?;
             let wanted = folder.join(name);
             if wanted == path || settled_path(&wanted) == settled_path(path) {
@@ -3021,6 +3069,47 @@ impl Library {
         self.rename_file(file, name);
     }
 
+    /// Remembers in the workspace whether the setup list was finished or closed, so every device that shares the folder knows.
+    pub fn mark_setup(&mut self, completed: bool, dismissed: bool) {
+        if (self.state.setup_completed, self.state.setup_dismissed) == (completed, dismissed) {
+            return;
+        }
+        self.state.setup_completed = completed;
+        self.state.setup_dismissed = dismissed;
+        self.save_state();
+    }
+
+    /// Writes a UTF-8 copy of a note saved in another encoding beside it, as „Name (UTF-8).md“, and opens it.
+    /// The original stays byte for byte as it is.
+    pub fn utf8_copy(&mut self, path: &Path) -> Option<PathBuf> {
+        let made = std::fs::read(path).and_then(|bytes| {
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+            let extension = path.extension().map_or_else(|| "md".to_string(), |e| e.to_string_lossy().into_owned());
+            let text = super::note_buffer::decode_legacy(&bytes);
+            let wanted = path.with_file_name(format!("{stem} (UTF-8).{extension}"));
+            if std::fs::read_to_string(&wanted).is_ok_and(|there| there == text) {
+                return Ok((wanted, false));
+            }
+            let target = unique_path(&wanted);
+            super::note_buffer::write_atomic(&target, text.as_bytes()).map(|()| (target, true))
+        });
+        let target = match made {
+            Ok((target, false)) => {
+                self.open_document(&target);
+                return Some(target);
+            }
+            Ok((target, true)) => target,
+            Err(e) => {
+                self.last_error = Some(trf("Die UTF-8-Kopie konnte nicht angelegt werden: %@", &[&explain(&e.into())]));
+                return None;
+            }
+        };
+        self.refresh();
+        self.commit(trf("Angelegt: %@", &[&name_of(&target)]), "square-pen", vec![Change::Trash(target.clone())]);
+        self.open_document(&target);
+        Some(target)
+    }
+
     /// Records cards taken as known and offers to take that back.
     pub fn cards_known(&mut self, adopted: super::cards::Adopted) {
         let message = adopted.message();
@@ -3038,25 +3127,33 @@ impl Library {
         self.commit(message, icon, vec![Change::Cards { root: super::cards::store_root(), swaps: back }]);
     }
 
-    /// Reports an import of flashcards; taking it back removes the new files and what was taken as known.
-    pub fn cards_imported(&mut self, created: Vec<PathBuf>, added: usize, duplicates: usize, spread: Option<super::cards::Adopted>) {
+    /// Reports an import of flashcards; taking it back removes the new files, the cards added to notes that were there,
+    /// and the progress that came along.
+    pub fn cards_imported(&mut self, done: super::cards::anki::ImportResult, progress: Vec<super::cards::Swap>) {
         self.refresh();
-        if added == 0 && duplicates > 0 && created.is_empty() && spread.is_none() {
+        let (added, duplicates) = (done.added, done.duplicates);
+        if added == 0 && duplicates > 0 && done.created.is_empty() && done.appended.is_empty() && progress.is_empty() {
             self.notify(tr("Alle Karten waren schon da, es wurde nichts importiert."), "layers", None, None);
             return;
         }
         let message = match (added, duplicates) {
             (1, 0) => tr("1 Karte importiert"),
             (n, 0) => trf("%@ Karten importiert", &[&n.to_string()]),
+            (n, 1) => trf("%@ Karten importiert, 1 war schon da", &[&n.to_string()]),
             (n, d) => trf("%@ Karten importiert, %@ waren schon da", &[&n.to_string(), &d.to_string()]),
         };
-        let message = match &spread {
-            Some(adopted) => format!("{message} · {}", adopted.spread_words()),
-            None => message,
+        let message = match progress.len() {
+            0 => message,
+            p => format!("{message} · {}", trf("%@ mit Lernstand, %@ neu", &[&p.to_string(), &added.saturating_sub(p).to_string()])),
         };
-        let mut changes: Vec<Change> = created.into_iter().map(Change::Trash).collect();
-        if let Some(adopted) = spread {
-            changes.push(Change::Cards { root: adopted.root, swaps: adopted.changes });
+        let message = match done.skipped_media {
+            0 => message,
+            n => format!("{message} · {}", trf("%@ Bilder oder Töne ausgelassen", &[&n.to_string()])),
+        };
+        let mut changes: Vec<Change> = done.created.into_iter().map(Change::Trash).collect();
+        changes.extend(done.appended.into_iter().map(|(path, bytes)| Change::Bytes { path, bytes }));
+        if !progress.is_empty() {
+            changes.push(Change::Cards { root: super::cards::store_root(), swaps: progress });
         }
         self.commit(message, "layers", changes);
     }
@@ -3258,18 +3355,26 @@ impl Library {
         if name == name_of(file) {
             return Ok(());
         }
+        if let Some(problem) = super::text::file_name_problem(name) {
+            return Err(problem);
+        }
         let target = rename_target(file, name);
         match move_path(file, &target) {
             Ok(()) => {
                 self.folder_moved(file, &target);
                 self.path_moved(file, &target);
-                let (mut changes, links) = self.relink(file, &target);
+                let (mut changes, links, waiting) = self.relink(file, &target);
                 self.refresh();
                 changes.insert(0, Change::Move { from: target.clone(), to: file.to_path_buf() });
                 let message = match links {
                     0 => trf("Umbenannt: %@", &[&name_of(&target)]),
                     1 => tr("Umbenannt, 1 Link angepasst"),
                     n => trf("Umbenannt, %@ Links angepasst", &[&n.to_string()]),
+                };
+                let message = match waiting {
+                    0 => message,
+                    1 => format!("{message} · {}", tr("1 Notiz nicht angepasst, weil dort eine Entscheidung offen ist")),
+                    n => format!("{message} · {}", trf("%@ Notizen nicht angepasst, weil dort eine Entscheidung offen ist", &[&n.to_string()])),
                 };
                 if announce {
                     self.commit(message, "pencil", changes);
@@ -3495,10 +3600,23 @@ impl Library {
                 self.last_error = Some(trf("„%@“ wurde auch in einer anderen App geändert. Entscheide zuerst, welche Version bleibt.", &[&name_of(stuck)]));
                 continue;
             }
+            let mut unsaved = None;
             for (p, buffer) in self.buffers.iter_mut() {
                 if buffer.dirty && within(p) {
-                    let _ = buffer.save();
+                    let saved = buffer.save();
+                    if saved.is_err() || buffer.dirty {
+                        unsaved = Some((p.clone(), buffer.conflict.is_some(), saved.err()));
+                        break;
+                    }
                 }
+            }
+            if let Some((stuck, conflict, error)) = unsaved {
+                self.last_error = Some(match (conflict, error) {
+                    (true, _) => trf("„%@“ wurde auch in einer anderen App geändert. Entscheide zuerst, welche Version bleibt.", &[&name_of(&stuck)]),
+                    (false, Some(e)) => trf("„%@“ bleibt, weil die letzten Änderungen nicht gesichert werden konnten: %@", &[&name_of(&stuck), &explain(&e.into())]),
+                    (false, None) => trf("„%@“ bleibt, weil die letzten Änderungen gerade nicht gesichert werden können. Versuche es gleich noch einmal.", &[&name_of(&stuck)]),
+                });
+                continue;
             }
             super::vault::index::hide(&[path.clone(), settled.clone()]);
             self.leaving.insert(path.clone());
@@ -3554,9 +3672,13 @@ impl Library {
                     gone.extend(both);
                     done.push((path, change));
                 }
-                Err(_) => {
+                Err(e) => {
                     kept.extend(both);
-                    self.last_error = Some(tr("Konnte nicht in den Papierkorb gelegt werden. Prüfe, ob die Datei noch existiert und nicht gerade in einer anderen App offen ist."));
+                    let known = e.downcast_ref::<std::io::Error>().and_then(super::errors::explain_io).or_else(|| e.downcast_ref::<std::io::Error>().is_none().then(|| e.to_string()));
+                    self.last_error = Some(match known {
+                        Some(reason) => trf("„%@“ konnte nicht in den Papierkorb gelegt werden: %@", &[&name_of(&path), &reason]),
+                        None => tr("Konnte nicht in den Papierkorb gelegt werden. Prüfe, ob die Datei noch existiert und nicht gerade in einer anderen App offen ist."),
+                    });
                 }
             }
         }
@@ -3570,7 +3692,13 @@ impl Library {
             [(path, _)] => trf("In den Papierkorb: %@", &[&name_of(path)]),
             _ => trf("%lld Dateien in den Papierkorb", &[&done.len()]),
         };
-        self.commit(message, "trash-2", done.into_iter().map(|(_, c)| c).chain(unlinked).collect());
+        let (only_trash, undoable): (Vec<_>, Vec<_>) = done.into_iter().map(|(_, c)| c).partition(|c| matches!(c, Change::InTrash(_)));
+        let message = if only_trash.is_empty() { message } else { format!("{message} · {}", tr("Zurückholen über den Papierkorb")) };
+        if undoable.is_empty() && unlinked.is_none() {
+            self.notify(message, "trash-2", None, None);
+            return;
+        }
+        self.commit(message, "trash-2", undoable.into_iter().chain(unlinked).collect());
     }
 
     pub fn note(&self, id: &str) -> String {
@@ -3936,6 +4064,9 @@ impl Library {
     /// Opens a file as a tab in the main window.
     pub fn open_document(&mut self, path: &Path) {
         let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if let Some(buffer) = self.buffers.get_mut(&path).filter(|b| b.unavailable()) {
+            buffer.reload_if_changed();
+        }
         if self.raise_if_windowed(&path) {
             return;
         }
@@ -4404,7 +4535,10 @@ fn stash(path: &Path) -> Result<PathBuf> {
     let dir = undo_folder().ok_or_else(|| anyhow::anyhow!("no data folder"))?.join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir_all(&dir)?;
     let copy = dir.join(name_of(path));
-    copy_path(path, &copy)?;
+    if let Err(e) = copy_path(path, &copy) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(e.into());
+    }
     Ok(copy)
 }
 
@@ -4432,8 +4566,24 @@ pub fn trash_files(paths: &[PathBuf]) -> Vec<(PathBuf, Result<Change>)> {
     paths.iter().map(|p| (p.clone(), trash_with_copy(p))).collect()
 }
 
+const STASH_LIMIT: u64 = if cfg!(test) { 1 << 20 } else { 256 << 20 };
+
+/// Trashes with a copy kept for undo. What is too large to copy, or does not fit on the disk any more, goes to the
+/// system trash alone, and only where there is one: it is never deleted for good.
 fn trash_with_copy(path: &Path) -> Result<Change> {
-    let backup = stash(path)?;
+    let no_trash = || anyhow::anyhow!(trf("„%@“ ist zu groß für eine Sicherungskopie, und dieses Laufwerk hat keinen Papierkorb. Es bleibt, wo es ist.", &[&name_of(path)]));
+    let backup = if size_beyond(path, STASH_LIMIT) {
+        if !has_system_trash(path) {
+            return Err(no_trash());
+        }
+        None
+    } else {
+        match stash(path) {
+            Ok(backup) => Some(backup),
+            Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::StorageFull) && has_system_trash(path) => None,
+            Err(e) => return Err(e),
+        }
+    };
     #[cfg(not(test))]
     let moved = match super::drive::trash_slot(path) {
         Some(slot) => slot.and_then(|slot| move_path(path, &slot)).map_err(anyhow::Error::from),
@@ -4442,10 +4592,15 @@ fn trash_with_copy(path: &Path) -> Result<Change> {
     #[cfg(test)]
     let moved = if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) }.map_err(anyhow::Error::from);
     if let Err(e) = moved {
-        let _ = backup.parent().map(std::fs::remove_dir_all);
+        if let Some(backup) = &backup {
+            let _ = backup.parent().map(std::fs::remove_dir_all);
+        }
         return Err(e);
     }
-    Ok(Change::Restore { path: path.to_path_buf(), backup })
+    Ok(match backup {
+        Some(backup) => Change::Restore { path: path.to_path_buf(), backup },
+        None => Change::InTrash(path.to_path_buf()),
+    })
 }
 
 /// The path with its folder resolved, so it compares with open documents; works after the file itself is gone.
@@ -4549,29 +4704,92 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
     a != b && dunce::canonicalize(a).ok().zip(dunce::canonicalize(b).ok()).is_some_and(|(x, y)| x == y)
 }
 
-fn move_path(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::rename(from, to).or_else(|_| {
-        copy_path(from, to)?;
-        let was_dir = from.is_dir();
-        let removed = if was_dir { std::fs::remove_dir_all(from) } else { std::fs::remove_file(from) };
-        if removed.is_err() && !was_dir && from.is_file() && !same_file(from, to) {
-            let _ = std::fs::remove_file(to);
-        }
-        removed
-    })
+fn crosses_devices(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::CrossesDevices || e.raw_os_error() == Some(if cfg!(windows) { 17 } else { 18 })
 }
 
+/// Moves without ever replacing what is at `to`; copies only between disks, where a rename cannot work.
+/// A failed move leaves the original in place and no copy behind, unless the original lost files on the way.
+fn move_path(from: &Path, to: &Path) -> std::io::Result<()> {
+    if std::fs::symlink_metadata(to).is_ok() && !same_file(from, to) {
+        return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
+    }
+    match std::fs::rename(from, to) {
+        Err(e) if crosses_devices(&e) => {}
+        other => return other,
+    }
+    if let Err(e) = copy_path(from, to) {
+        let _ = if to.is_dir() { std::fs::remove_dir_all(to) } else { std::fs::remove_file(to) };
+        return Err(e);
+    }
+    let was_dir = std::fs::symlink_metadata(from).is_ok_and(|m| m.is_dir());
+    let entries = if was_dir { entry_count(from) } else { 0 };
+    let removed = if was_dir { std::fs::remove_dir_all(from) } else { std::fs::remove_file(from) };
+    if removed.is_err() {
+        let whole = if was_dir { entry_count(from) == entries } else { from.is_file() };
+        if whole {
+            let _ = if was_dir { std::fs::remove_dir_all(to) } else { std::fs::remove_file(to) };
+        }
+    }
+    removed
+}
+
+fn entry_count(dir: &Path) -> usize {
+    walkdir::WalkDir::new(dir).into_iter().filter_map(Result::ok).count()
+}
+
+/// Copies a file or folder. Links inside a folder are never followed, so a link to a large or enclosing folder
+/// copies no data: on Unix the link itself is copied, on Windows it is left out.
 fn copy_path(from: &Path, to: &Path) -> std::io::Result<()> {
-    if from.is_dir() {
+    copy_tree(from, to, true)
+}
+
+fn copy_tree(from: &Path, to: &Path, top: bool) -> std::io::Result<()> {
+    let meta = if top { std::fs::metadata(from)? } else { std::fs::symlink_metadata(from)? };
+    if meta.file_type().is_symlink() {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(std::fs::read_link(from)?, to)?;
+        return Ok(());
+    }
+    if meta.is_dir() {
         std::fs::create_dir_all(to)?;
         for e in std::fs::read_dir(from)? {
             let e = e?;
-            copy_path(&e.path(), &to.join(e.file_name()))?;
+            copy_tree(&e.path(), &to.join(e.file_name()), false)?;
         }
         Ok(())
     } else {
         std::fs::copy(from, to).map(|_| ())
     }
+}
+
+/// The bytes a file or folder takes, links not followed; stops counting once past `limit`.
+fn size_beyond(path: &Path, limit: u64) -> bool {
+    let mut total = 0u64;
+    for entry in walkdir::WalkDir::new(path).into_iter().filter_map(Result::ok) {
+        if entry.file_type().is_file() {
+            total += entry.metadata().map_or(0, |m| m.len());
+            if total > limit {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether the system trash can take files from this disk, instead of deleting them for good.
+#[cfg(windows)]
+fn has_system_trash(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    let full = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let Some(root) = full.ancestors().last() else { return false };
+    let wide: Vec<u16> = root.as_os_str().encode_wide().chain([0]).collect();
+    unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(wide.as_ptr()) == 3 }
+}
+
+#[cfg(not(windows))]
+fn has_system_trash(_path: &Path) -> bool {
+    true
 }
 
 /// Opens a file, folder or web address in its default app.
@@ -4657,22 +4875,50 @@ fn filing_change(original: &Path, target: &Path, moved: bool) -> Change {
     if moved { Change::Move { from: target.to_path_buf(), to: original.to_path_buf() } } else { Change::Trash(target.to_path_buf()) }
 }
 
-/// Zips the whole workspace into `destination`; run off the main thread.
-pub fn export_archive(root: &Path, destination: &Path) -> Result<()> {
-    use std::io::Write;
-    let file = std::fs::File::create(destination)?;
-    let mut zip = zip::ZipWriter::new(file);
-    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    let base = root.parent().unwrap_or(root);
-    for e in walkdir::WalkDir::new(root).into_iter().filter_map(Result::ok) {
-        let rel = e.path().strip_prefix(base)?.to_string_lossy().replace('\\', "/");
-        if e.file_type().is_dir() {
-            zip.add_directory(format!("{rel}/"), opts)?;
-        } else if e.file_type().is_file() {
-            zip.start_file(rel, opts)?;
-            zip.write_all(&std::fs::read(e.path())?)?;
-        }
+/// Zips the whole workspace into `destination`; run off the main thread. An earlier archive there is replaced
+/// only by a complete one. Files that cannot be read, and links, are left out and returned.
+pub fn export_archive(root: &Path, destination: &Path) -> Result<Vec<PathBuf>> {
+    let settled_root = dunce::canonicalize(root)?;
+    let folder = destination.parent().and_then(|d| dunce::canonicalize(d).ok()).unwrap_or_else(|| destination.to_path_buf());
+    if folder.starts_with(&settled_root) {
+        anyhow::bail!(tr("Bitte einen Ort außerhalb des Studienordners wählen, sonst landet die ZIP in der nächsten Sicherung."));
     }
-    zip.finish()?;
-    Ok(())
+    let tmp = destination.with_file_name(format!(".{}.tmp", destination.file_name().unwrap_or_default().to_string_lossy()));
+    let mut skipped = Vec::new();
+    let written: Result<()> = (|| {
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&tmp)?);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).large_file(true);
+        let base = root.parent().unwrap_or(root);
+        for entry in walkdir::WalkDir::new(root) {
+            let e = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    skipped.extend(e.path().map(Path::to_path_buf));
+                    continue;
+                }
+            };
+            let rel = e.path().strip_prefix(base)?.to_string_lossy().replace('\\', "/");
+            if e.file_type().is_dir() {
+                zip.add_directory(format!("{rel}/"), opts)?;
+            } else if e.file_type().is_file() {
+                match std::fs::File::open(e.path()) {
+                    Ok(mut file) => {
+                        zip.start_file(rel, opts)?;
+                        std::io::copy(&mut file, &mut zip)?;
+                    }
+                    Err(_) => skipped.push(e.path().to_path_buf()),
+                }
+            } else {
+                skipped.push(e.path().to_path_buf());
+            }
+        }
+        zip.finish()?.sync_all()?;
+        std::fs::rename(&tmp, destination)?;
+        Ok(())
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(skipped)
 }

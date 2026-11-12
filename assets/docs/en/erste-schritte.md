@@ -24,9 +24,11 @@ At the top of the {ui:Übersicht} sits a list that ticks itself off.
 | {ui:Karten} | the first card exists |
 | {ui:Sichern & Abgleichen} | syncing is set up |
 
-- {ui:Überspringen} counts as done. {ui:Doch einrichten} brings the item back.
+- Only the next step is shown large, the others wait folded below it.
+- {ui:Überspringen} counts as done. {ui:Doch einrichten} brings the item back. {ui:Alle überspringen} settles the rest at once.
 - The {ui:Einrichten} row collapses the list, the X hides it.
-- {key:OpenSettings} → {ui:Allgemein} → {ui:Einrichten in der Übersicht} shows it again.
+- Finished or hidden counts for every device with this folder. What only concerns one device, like the calendar, comes up there one at a time, once.
+- {key:OpenSettings} → {ui:Allgemein} → {ui:Einrichten in der Übersicht} shows it again, skipped items too.
 - Once every item is done, the list says {ui:Alles eingerichtet} and goes away.
 
 > [!tip] All at once

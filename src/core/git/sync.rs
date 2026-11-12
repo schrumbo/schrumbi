@@ -7,6 +7,8 @@ use super::status::{ChangeKind, ChangedFile, RepoStatus};
 
 /// GitHub refuses files of 100 MB; these stay local and are reported.
 pub const MAX_FILE: u64 = 95 * 1024 * 1024;
+/// More deletions than this, and at least 30 % of the tracked files, pause automatic saving.
+const MANY_DELETED: usize = 20;
 /// How often a push is retried after someone else pushed first.
 const PUSH_ATTEMPTS: usize = 3;
 
@@ -51,8 +53,18 @@ impl Git {
     }
 
     /// Stages everything except nested repositories and oversized files, then makes one new state.
-    fn commit_all(&self, status: &RepoStatus, message: &dyn Fn(&[ChangedFile]) -> String, report: &mut Report) -> Result<(), GitError> {
+    /// Unless `deletions_allowed`, a state that deletes many tracked files at once is not made.
+    fn commit_all(&self, status: &RepoStatus, message: &dyn Fn(&[ChangedFile]) -> String, deletions_allowed: bool, report: &mut Report) -> Result<(), GitError> {
         report.nested = status.nested.clone();
+        let name = |path: &str| path.rsplit('/').next().unwrap_or(path).to_string();
+        let arrived: std::collections::HashSet<String> = status.changed.iter().filter(|f| f.kind == ChangeKind::New).map(|f| name(&f.path)).collect();
+        let deleted = status.changed.iter().filter(|f| f.kind == ChangeKind::Deleted && !arrived.contains(&name(&f.path))).count();
+        if !deletions_allowed && deleted > MANY_DELETED {
+            let tracked = self.run_bulk(&["ls-files", "-z"], None)?.split('\0').filter(|p| !p.is_empty()).count();
+            if deleted * 10 > tracked * 3 {
+                return Err(GitError::ManyDeleted(deleted));
+            }
+        }
         let mut files = Vec::new();
         for f in &status.changed {
             let big = f.kind != ChangeKind::Deleted && std::fs::metadata(self.root.join(&f.path)).is_ok_and(|m| m.len() > MAX_FILE);
@@ -149,11 +161,12 @@ impl Git {
     }
 
     /// One full sync: save, fetch, take in, upload. A missing connection is not a failure, the state stays local.
-    pub fn sync(&self, message: &dyn Fn(&[ChangedFile]) -> String, progress: &dyn Fn(Step)) -> Result<Report, GitError> {
+    /// Many files gone at once are only recorded when `deletions_allowed`, which the user confirmed.
+    pub fn sync(&self, message: &dyn Fn(&[ChangedFile]) -> String, progress: &dyn Fn(Step), deletions_allowed: bool) -> Result<Report, GitError> {
         let mut report = Report::default();
         progress(Step::Saving);
         let status = self.preflight()?;
-        self.commit_all(&status, message, &mut report)?;
+        self.commit_all(&status, message, deletions_allowed, &mut report)?;
         let Some(remote) = self.remote() else { return Err(GitError::NoRemote) };
         for attempt in 0..PUSH_ATTEMPTS {
             progress(Step::Fetching);

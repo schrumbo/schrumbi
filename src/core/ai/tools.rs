@@ -364,6 +364,9 @@ fn is_text(path: &Path) -> bool {
 /// The text as the user sees it: the open buffer when there is one, else the file.
 fn current_text(lib: &Library, path: &Path) -> Result<String, String> {
     if let Some(b) = lib.buffers.get(&lib.buffer_key(path)) {
+        if b.unreadable {
+            return Err("The file cannot be read right now; another app may hold it.".into());
+        }
         if b.undecodable {
             return Err("The file is not UTF-8 text.".into());
         }
@@ -667,10 +670,20 @@ pub(crate) fn plain_name(name: &str) -> Result<(), String> {
 
 fn note_file_name(name: &str) -> Result<String, String> {
     let name = name.trim();
-    if name.contains(['/', '\\']) || name.starts_with('.') {
-        return Err("`name` is a file name, not a path.".into());
+    if name.starts_with('.') {
+        return Err(BAD_NAME.into());
     }
-    Ok(if name.to_lowercase().ends_with(".md") { name.to_string() } else { format!("{name}.md") })
+    file_name(if name.to_lowercase().ends_with(".md") { name.to_string() } else { format!("{name}.md") })
+}
+
+pub(crate) const BAD_NAME: &str = "`name` is not a file name that works on every system: no folder, none of / \\ : * ? \" < > |, no control characters, no trailing dot or space, no Windows device name such as CON or NUL.";
+
+/// `name` when it works as a file name on every system, else the error the agent gets back.
+pub(crate) fn file_name(name: String) -> Result<String, String> {
+    match crate::core::text::file_name_problem(&name) {
+        Some(_) => Err(BAD_NAME.into()),
+        None => Ok(name),
+    }
 }
 
 /// The file a write tool changes, before it runs.
@@ -825,7 +838,7 @@ pub fn preview(lib: &Library, name: &str, args: &Value) -> Result<Preview, Strin
         "file_document" => {
             let path = resolve_write(lib, need_str(args, "path")?)?;
             let folder = resolve(lib, need_str(args, "folder")?)?;
-            let name = arg_str(args, "name").map_or_else(|| name_of(&path), String::from);
+            let name = file_name(arg_str(args, "name").map_or_else(|| name_of(&path), String::from))?;
             Ok(Preview { title: trf("%@ nach %@ ablegen", &[&rel(lib, &path), &folder_label(lib, &folder)]), lines: if name == name_of(&path) { Vec::new() } else { vec![trf("Neuer Name: %@", &[&name])] }, ..Preview::default() })
         }
         other => Err(format!("`{other}` is not a write tool")),
@@ -986,7 +999,7 @@ pub fn call(lib: &mut Library, name: &str, args: &Value) -> Result<Outcome, Stri
                 return Err(format!("No such file: {}", rel(lib, &path)));
             }
             let folder = resolve(lib, need_str(args, "folder")?)?;
-            let name = arg_str(args, "name").map_or_else(|| name_of(&path), String::from);
+            let name = file_name(arg_str(args, "name").map_or_else(|| name_of(&path), String::from))?;
             plain_name(&name)?;
             let deadline = arg_str(args, "deadline");
             if let Some(id) = deadline

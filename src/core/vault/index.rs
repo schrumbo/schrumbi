@@ -401,6 +401,27 @@ pub fn rewrite_links(text: &str, source: &Path, old: &Path, new: &Path, before: 
     (count > 0).then(|| (links::apply_replacements(text, changes), count))
 }
 
+/// New text of the note that was at `was` and is at `now`, once every file `follow` names moved there;
+/// only links that would no longer reach their file change. `None` when none does.
+pub fn rewrite_moved(text: &str, was: &Path, now: &Path, follow: impl Fn(&Path) -> Option<PathBuf>, before: &Resolver, after: &VaultIndex) -> Option<(String, usize)> {
+    let mut changes = Vec::new();
+    for link in links::find_links(text) {
+        if link.target.path.is_empty() {
+            continue;
+        }
+        let Some(target) = before.resolve(&link.target, Some(was)) else { continue };
+        let target = follow(&target).unwrap_or(target);
+        if after.resolver.resolve(&link.target, Some(now)).as_deref() == Some(target.as_path()) {
+            continue;
+        }
+        let path = after.link_path(Some(now), &target);
+        let path = if link.markdown && markdown::is_markdown(&target) && !path.ends_with(".md") { format!("{path}.md") } else { path };
+        changes.push((link.range.clone(), links::render_link(&link, &path)));
+    }
+    let count = changes.len();
+    (count > 0).then(|| (links::apply_replacements(text, changes), count))
+}
+
 /// The index as it is after a file moved, so several moves in a row see each other.
 pub fn moved(old: &Path, new: &Path) -> Arc<VaultIndex> {
     let next = moved_in(&current(), old, new, new.is_dir());

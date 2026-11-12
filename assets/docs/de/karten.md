@@ -59,7 +59,10 @@ Im Stapelmenü {ui:Alles wiederholen}: jede nicht pausierte Karte einmal, in zuf
 2. `.apkg`, `.colpkg`, `.txt`, `.tsv` oder `.csv` wählen.
 3. {ui:Lernfortschritt übernehmen} behält Termine und Stabilität.
 
-Je Stapel entsteht eine Notiz im {ui:Zielordner}. Doppelte Karten werden übersprungen.
+Je Stapel entsteht eine Notiz im {ui:Zielordner}. Karten, die schon da sind, werden übersprungen. Haben zwei Karten dieselbe Frage, kommen beide, die zweite mit einer Nummer.
+
+- Nie gelernte Karten bleiben neu.
+- {key:Undo} nimmt den ganzen Import zurück, auch Karten, die an eine vorhandene Notiz angehängt wurden.
 
 ## Wo was liegt
 

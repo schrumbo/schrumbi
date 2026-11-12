@@ -44,6 +44,8 @@ pub struct Package {
     pub reviews: Vec<(i64, i64, u8, u8, f64)>,
     pub cards: usize,
     pub with_progress: usize,
+    /// Media files left out because they were too large.
+    pub skipped_media: usize,
 }
 
 /// What an import did.
@@ -55,8 +57,10 @@ pub struct ImportResult {
     pub media: usize,
     pub states: Vec<(String, CardState)>,
     pub log: Vec<ReviewLog>,
-    /// Cards never reviewed in Anki, to take as known: id, note and question.
-    pub fresh: Vec<(String, String, String)>,
+    /// Notes that were there before and got cards added at the end, with their bytes before.
+    pub appended: Vec<(PathBuf, Vec<u8>)>,
+    /// Media files left out because their name cannot be a file name.
+    pub skipped_media: usize,
 }
 
 /// Reads a package or a text export, whichever the file is.
@@ -69,10 +73,23 @@ pub fn read(path: &Path) -> Result<Package> {
     }
 }
 
-fn zstd(bytes: &[u8]) -> Result<Vec<u8>> {
+const COLLECTION_LIMIT: u64 = 512 << 20;
+const MEDIA_LIMIT: u64 = 64 << 20;
+const TOTAL_LIMIT: u64 = 2 << 30;
+
+fn too_large() -> anyhow::Error {
+    anyhow!(crate::core::i18n::tr("Dieses Anki-Paket ist zu groß zum Importieren. Exportiere die Stapel in Anki einzeln."))
+}
+
+/// Everything `from` holds, unless that is more than `limit` bytes.
+fn read_capped(from: impl Read, limit: u64) -> Result<Option<Vec<u8>>> {
     let mut out = Vec::new();
-    ruzstd::decoding::StreamingDecoder::new(bytes).map_err(|e| anyhow!("{e}"))?.read_to_end(&mut out)?;
-    Ok(out)
+    from.take(limit + 1).read_to_end(&mut out)?;
+    Ok((out.len() as u64 <= limit).then_some(out))
+}
+
+fn zstd(bytes: &[u8], limit: u64) -> Result<Option<Vec<u8>>> {
+    read_capped(ruzstd::decoding::StreamingDecoder::new(bytes).map_err(|e| anyhow!("{e}"))?, limit)
 }
 
 /// The next value of a protobuf message: field number, and its bytes when length-delimited.
@@ -133,32 +150,41 @@ fn read_package(path: &Path) -> Result<Package> {
     let file = std::fs::File::open(path).with_context(|| path.display().to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|_| anyhow!("Die Datei ist kein gültiges Anki-Paket."))?;
     let names: Vec<String> = zip.file_names().flatten().map(|n| n.to_string()).collect();
-    let read_entry = |zip: &mut zip::ZipArchive<std::fs::File>, name: &str| -> Result<Vec<u8>> {
-        let mut bytes = Vec::new();
-        zip.by_name(name)?.read_to_end(&mut bytes)?;
-        Ok(bytes)
-    };
+    let read_entry = |zip: &mut zip::ZipArchive<std::fs::File>, name: &str, limit: u64| -> Result<Option<Vec<u8>>> { read_capped(zip.by_name(name)?, limit) };
+    let collection = |zip: &mut zip::ZipArchive<std::fs::File>, name: &str| read_entry(zip, name, COLLECTION_LIMIT)?.ok_or_else(too_large);
     let (database, modern) = if names.iter().any(|n| n == "collection.anki21b") {
-        (zstd(&read_entry(&mut zip, "collection.anki21b")?)?, true)
+        (zstd(&collection(&mut zip, "collection.anki21b")?, COLLECTION_LIMIT)?.ok_or_else(too_large)?, true)
     } else if names.iter().any(|n| n == "collection.anki21") {
-        (read_entry(&mut zip, "collection.anki21")?, false)
+        (collection(&mut zip, "collection.anki21")?, false)
     } else if names.iter().any(|n| n == "collection.anki2") {
-        (read_entry(&mut zip, "collection.anki2")?, false)
+        (collection(&mut zip, "collection.anki2")?, false)
     } else {
         return Err(anyhow!("In diesem Paket steht keine Sammlung."));
     };
     let mut media = Vec::new();
-    if let Ok(map) = read_entry(&mut zip, "media") {
+    let (mut total, mut skipped) = (database.len() as u64, 0);
+    if let Ok(Some(map)) = read_entry(&mut zip, "media", COLLECTION_LIMIT) {
         let named: Vec<(String, String)> = match serde_json::from_slice::<HashMap<String, String>>(&map) {
             Ok(old) => old.into_iter().collect(),
             Err(_) => {
-                let plain = zstd(&map).unwrap_or(map);
+                let plain = zstd(&map, COLLECTION_LIMIT).ok().flatten().unwrap_or(map);
                 proto_fields(&plain).into_iter().filter(|(f, ..)| *f == 1).enumerate().map(|(i, (_, entry, _))| (i.to_string(), proto_text(&entry, 1))).collect()
             }
         };
         for (index, name) in named {
-            let Ok(bytes) = read_entry(&mut zip, &index) else { continue };
-            let bytes = if modern { zstd(&bytes).unwrap_or(bytes) } else { bytes };
+            let Ok(read) = read_entry(&mut zip, &index, MEDIA_LIMIT) else { continue };
+            let read = match (read, modern) {
+                (Some(bytes), true) => zstd(&bytes, MEDIA_LIMIT).unwrap_or(Some(bytes)),
+                (read, _) => read,
+            };
+            let Some(bytes) = read else {
+                skipped += 1;
+                continue;
+            };
+            total += bytes.len() as u64;
+            if total > TOTAL_LIMIT {
+                return Err(too_large());
+            }
             if !name.contains(['/', '\\']) && !name.starts_with('.') {
                 media.push((name, bytes));
             }
@@ -168,7 +194,7 @@ fn read_package(path: &Path) -> Result<Package> {
     std::fs::write(&tmp, database)?;
     let read = read_database(&tmp, media);
     let _ = std::fs::remove_file(&tmp);
-    read
+    read.map(|package| Package { skipped_media: skipped, ..package })
 }
 
 fn read_database(file: &Path, media: Vec<(String, Vec<u8>)>) -> Result<Package> {
@@ -269,9 +295,13 @@ fn progress_of(kind: i64, queue: i64, due: i64, ivl: i64, factor: i64, reps: i64
         3 => Phase::Relearning,
         _ => Phase::New,
     };
-    let due_at = if phase == Phase::Review || due < 1_000_000_000 { crt + due.max(0) * 86_400 } else { due };
-    let last_review = (phase != Phase::New).then_some(due_at - ivl.max(0) * 86_400);
-    Progress { phase, stability, difficulty, due: due_at, last_review, reps: reps.max(0) as u32, lapses: lapses.max(0) as u32, suspended: queue == -1, anki_id: id }
+    const CENTURY: i64 = 36_500 * 86_400;
+    let due_at = if phase == Phase::Review || due < 1_000_000_000 { crt.saturating_add(due.clamp(0, 365_000).saturating_mul(86_400)) } else { due };
+    if phase != Phase::New && (due_at > crt.max(0).saturating_add(2 * CENTURY) || reps <= 0) {
+        return Progress { suspended: queue == -1, anki_id: id, ..Default::default() };
+    }
+    let last_review = (phase != Phase::New).then_some(due_at.saturating_sub(ivl.clamp(0, 365_000) * 86_400));
+    Progress { phase, stability, difficulty, due: due_at, last_review, reps: reps.clamp(0, u32::MAX as i64) as u32, lapses: lapses.clamp(0, u32::MAX as i64) as u32, suspended: queue == -1, anki_id: id }
 }
 
 fn render_note(kind: &NoteType, fields: &HashMap<&str, &str>, ords: &[usize], progress: &[Progress], tags: &[String]) -> Vec<ImportNote> {
@@ -362,7 +392,8 @@ pub fn to_markdown(html: &str) -> String {
     static INLINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)\[\$\](.*?)\[/\$\]|\\\((.*?)\\\)").unwrap());
     static HEADING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<h([1-6])[^>]*>(.*?)</h[1-6]>").unwrap());
     static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)</?[a-zA-Z][^>]*>").unwrap());
-    let simple: [(&str, &str); 14] = [
+    static SIMPLE: LazyLock<Vec<(Regex, &str)>> = LazyLock::new(|| {
+        [
         (r"(?i)<br\s*/?>", "\n"),
         (r"(?i)</(div|p|li|tr|ul|ol|h[1-6]|blockquote|pre)>", "\n"),
         (r"(?i)<li[^>]*>", "- "),
@@ -377,7 +408,11 @@ pub fn to_markdown(html: &str) -> String {
         (r"(?i)</sup>", "\u{e004}"),
         (r"(?i)<sub(\s[^>]*)?>", "\u{e005}"),
         (r"(?i)</sub>", "\u{e006}"),
-    ];
+        ]
+        .into_iter()
+        .map(|(pattern, to)| (Regex::new(pattern).unwrap(), to))
+        .collect()
+    });
     let text = DROP.replace_all(html, "");
     let text = SOUND.replace_all(&text, "![[$1]]");
     let text = MATHJAX.replace_all(&text, |c: &regex::Captures| if c.get(1).is_some() { format!("$${}$$", &c[2]) } else { format!("${}$", &c[2]) });
@@ -390,8 +425,10 @@ pub fn to_markdown(html: &str) -> String {
     let text = LINK.replace_all(&text, "[$2]($1)");
     let text = HEADING.replace_all(&text, |c: &regex::Captures| format!("{} {}\n", "#".repeat(c[1].parse().unwrap_or(1)), &c[2]));
     let mut text = text.into_owned();
-    for (pattern, to) in simple {
-        text = Regex::new(pattern).map_or(text.clone(), |r| r.replace_all(&text, to).into_owned());
+    for (pattern, to) in SIMPLE.iter() {
+        if let std::borrow::Cow::Owned(replaced) = pattern.replace_all(&text, *to) {
+            text = replaced;
+        }
     }
     let text = TAG.replace_all(&text, "");
     let text = entities(&text);
@@ -461,14 +498,20 @@ fn split_row(row: &str, separator: char) -> Vec<String> {
 
 fn safe_name(name: &str) -> String {
     let cleaned: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '#' | '^' | '[' | ']') { '-' } else { c }).collect();
-    let cleaned = cleaned.trim().trim_matches('.').to_string();
-    if cleaned.is_empty() { "Anki".to_string() } else { cleaned }
+    crate::core::text::safe_file_name(&cleaned, "Anki")
+}
+
+/// The note text with ` (n)` behind its question, so a card with the same question as another one gets an id of its own.
+fn distinguished(text: &str, front: &str, n: usize) -> String {
+    let at = text.find(front).filter(|_| !front.is_empty()).map_or_else(|| text.find('\n').unwrap_or(text.len()), |at| at + front.len());
+    format!("{} ({n}){}", &text[..at], &text[at..])
 }
 
 /// Writes a package into notes under `folder`, media beside them. What is already there is not written twice.
 pub fn write(package: Package, folder: &Path, keep_progress: bool, known: &HashSet<String>, rel_of: impl Fn(&Path) -> String) -> Result<ImportResult> {
-    let mut result = ImportResult::default();
-    let mut known = known.clone();
+    let mut result = ImportResult { skipped_media: package.skipped_media, ..Default::default() };
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut texts: HashSet<String> = HashSet::new();
     let mut by_anki: HashMap<i64, String> = HashMap::new();
     std::fs::create_dir_all(folder)?;
     for (deck, notes) in package.decks {
@@ -477,22 +520,48 @@ pub fn write(package: Package, folder: &Path, keep_progress: bool, known: &HashS
             path.push(safe_name(part));
         }
         path.push(format!("{}.md", safe_name(deck.last().map_or("Anki", String::as_str))));
+        let before = match std::fs::read(&path) {
+            Ok(bytes) if String::from_utf8(bytes.clone()).is_ok() => Some(bytes),
+            Ok(_) => {
+                path = crate::core::library::unique_path(&path);
+                None
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(anyhow!(crate::core::i18n::trf("„%@“ ist gerade nicht lesbar, deshalb wurde nichts importiert: %@", &[&path.file_name().unwrap_or_default().to_string_lossy(), &e]))),
+        };
         let mut text = String::new();
         let mut tags: Vec<String> = Vec::new();
         for note in notes {
-            let cards = parse::cards_in(&note.text);
+            let mut body = note.text;
+            let mut cards = parse::cards_in(&body);
             if cards.is_empty() {
                 continue;
             }
-            if cards.iter().all(|c| known.contains(&c.id)) {
+            if cards.iter().all(|c| known.contains(&c.id)) || !texts.insert(body.clone()) {
                 result.duplicates += cards.len();
                 continue;
             }
+            let front = cards[0].front.clone();
+            let original = body.clone();
+            let probe = parse::cards_in(&distinguished(&original, &front, 2));
+            let movable: Vec<bool> = cards.iter().enumerate().map(|(i, c)| probe.get(i).is_none_or(|p| p.id != c.id)).collect();
+            let clashes = |cards: &[parse::RawCard], seen: &HashSet<String>| cards.iter().zip(&movable).any(|(c, m)| *m && (seen.contains(&c.id) || known.contains(&c.id)));
+            let mut n = 2;
+            while clashes(&cards, &seen) && n < 1000 {
+                let next = distinguished(&original, &front, n);
+                let tried = parse::cards_in(&next);
+                if tried.len() != cards.len() {
+                    break;
+                }
+                cards = tried;
+                body = next;
+                n += 1;
+            }
             for (card, progress) in cards.iter().zip(&note.progress) {
-                known.insert(card.id.clone());
+                seen.insert(card.id.clone());
                 by_anki.insert(progress.anki_id, card.id.clone());
                 result.added += 1;
-                if keep_progress && (progress.phase != Phase::New || progress.suspended) {
+                if keep_progress && (progress.phase != Phase::New || progress.suspended) && !known.contains(&card.id) {
                     result.states.push((card.id.clone(), CardState {
                         phase: progress.phase,
                         stability: progress.stability,
@@ -507,8 +576,6 @@ pub fn write(package: Package, folder: &Path, keep_progress: bool, known: &HashS
                         note: rel_of(&path),
                         question: card.front.clone(),
                     }));
-                } else if keep_progress {
-                    result.fresh.push((card.id.clone(), rel_of(&path), card.front.clone()));
                 }
             }
             for tag in note.tags {
@@ -516,7 +583,7 @@ pub fn write(package: Package, folder: &Path, keep_progress: bool, known: &HashS
                     tags.push(tag);
                 }
             }
-            text.push_str(&note.text);
+            text.push_str(&body);
             text.push_str("\n\n");
         }
         if text.is_empty() {
@@ -525,19 +592,27 @@ pub fn write(package: Package, folder: &Path, keep_progress: bool, known: &HashS
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let existed = path.exists();
-        let before = std::fs::read_to_string(&path).unwrap_or_default();
-        let before = if !existed && !tags.is_empty() { format!("---\ntags: [{}]\n---\n\n", tags.join(", ")) } else { before };
-        let joined = if before.is_empty() || before.ends_with("\n\n") { before } else if before.ends_with('\n') { before + "\n" } else { before + "\n\n" };
-        std::fs::write(&path, joined + &text)?;
-        if !existed {
-            result.created.push(path);
+        let existing = before.as_ref().map(|b| String::from_utf8_lossy(b).into_owned());
+        let start = match &existing {
+            Some(old) => old.clone(),
+            None if !tags.is_empty() => format!("---\ntags: [{}]\n---\n\n", tags.join(", ")),
+            None => String::new(),
+        };
+        let joined = if start.is_empty() || start.ends_with("\n\n") { start } else if start.ends_with('\n') { start + "\n" } else { start + "\n\n" };
+        crate::core::note_buffer::write_atomic(&path, (joined + &text).as_bytes())?;
+        match before {
+            Some(bytes) => result.appended.push((path, bytes)),
+            None => result.created.push(path),
         }
     }
     if !package.media.is_empty() {
         let media = folder.join("Medien");
         std::fs::create_dir_all(&media)?;
         for (name, bytes) in package.media {
+            if crate::core::text::file_name_problem(&name).is_some() || name.starts_with('.') {
+                result.skipped_media += 1;
+                continue;
+            }
             let target = media.join(&name);
             if !target.exists() {
                 std::fs::write(&target, bytes)?;
@@ -673,17 +748,105 @@ mod tests {
         assert_eq!(known.1.due, 1700000000 + 100 * 86_400);
         assert!(result.states.iter().any(|(_, s)| s.suspended));
         assert_eq!(result.log.len(), 1);
-        assert_eq!(result.fresh.len(), 2, "the two cloze cards were never reviewed");
-        assert!(result.fresh.iter().all(|(id, ..)| !result.states.iter().any(|(s, _)| s == id)));
-        assert!(result.fresh.iter().all(|(_, note, question)| note.ends_with("Analysis.md") && !question.is_empty()));
-        let fresh_ids: Vec<&String> = result.fresh.iter().map(|(id, ..)| id).collect();
-        assert!(cards.iter().filter(|c| c.kind == parse::CardKind::Cloze).all(|c| fresh_ids.contains(&&c.id)));
+        assert_eq!(result.states.len(), 2, "only the learned and the suspended card bring a state");
+        assert!(result.states.iter().all(|(_, s)| s.phase == Phase::New || s.reps > 0), "a card never learned is never scheduled as learned");
+        assert!(cards.iter().filter(|c| c.kind == parse::CardKind::Cloze).all(|c| !result.states.iter().any(|(id, _)| *id == c.id)), "the never reviewed cloze cards stay new");
         let dropped = write(read(&dir.join(if modern { "m.apkg" } else { "o.apkg" })).unwrap(), &dir.join("Neu"), false, &HashSet::new(), |p| p.to_string_lossy().to_string()).unwrap();
-        assert!(dropped.fresh.is_empty() && dropped.states.is_empty(), "starting over keeps everything new");
+        assert!(dropped.states.is_empty(), "starting over keeps everything new");
         let again: HashSet<String> = cards.iter().map(|c| c.id.clone()).collect();
         let second = write(read(&dir.join(if modern { "m.apkg" } else { "o.apkg" })).unwrap(), &target, true, &again, |p| p.to_string_lossy().to_string()).unwrap();
         assert_eq!((second.added, second.duplicates), (0, 4));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn deck(name: &str, notes: &[&str]) -> Package {
+        let notes = notes.iter().enumerate().map(|(i, text)| ImportNote { text: text.to_string(), progress: vec![Progress { anki_id: i as i64, ..Default::default() }], tags: Vec::new() }).collect();
+        Package { decks: BTreeMap::from([(vec![name.to_string()], notes)]), ..Default::default() }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("schrumbi-anki-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn cards_with_the_same_question_all_arrive() {
+        let dir = scratch("same-front");
+        let result = write(deck("Vokabeln", &["Haus :: house", "Haus :: home", "Baum :: tree", "Baum :: tree"]), &dir, true, &HashSet::new(), |p| p.to_string_lossy().to_string()).unwrap();
+        let note = std::fs::read_to_string(dir.join("Vokabeln.md")).unwrap();
+        let cards = parse::cards_in(&note);
+        assert_eq!(cards.len(), 3, "{note}");
+        assert!(cards.iter().any(|c| c.back == "house") && cards.iter().any(|c| c.back == "home"), "{note}");
+        assert!(cards.iter().any(|c| c.front == "Haus") && cards.iter().any(|c| c.front == "Haus (2)"), "only the second one gets a suffix: {note}");
+        assert_eq!((result.added, result.duplicates), (3, 1));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reversed_cards_with_the_same_answer_keep_their_questions_as_they_are() {
+        let dir = scratch("same-back");
+        let result = write(deck("Vokabeln", &["anfangen ::: to begin", "beginnen ::: to begin", "Haus ::: house", "Haus ::: home"]), &dir, true, &HashSet::new(), |p| p.to_string_lossy().to_string()).unwrap();
+        let note = std::fs::read_to_string(dir.join("Vokabeln.md")).unwrap();
+        assert!(note.contains("beginnen ::: to begin") && !note.contains("beginnen ("), "{note}");
+        assert!(note.contains("Haus (2) ::: home"), "{note}");
+        assert!(note.len() < 200, "{note}");
+        assert_eq!((result.added, result.duplicates), (4, 0));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn imported_progress_never_replaces_the_progress_of_a_card_already_there() {
+        let dir = scratch("known-back");
+        let existing = parse::cards_in("anfangen ::: to begin");
+        let known: HashSet<String> = existing.iter().map(|c| c.id.clone()).collect();
+        let learned = |anki_id| Progress { anki_id, phase: Phase::Review, ..Default::default() };
+        let notes = vec![ImportNote { text: "beginnen ::: to begin".to_string(), progress: vec![learned(1), learned(2)], tags: Vec::new() }];
+        let package = Package { decks: BTreeMap::from([(vec!["Vokabeln".to_string()], notes)]), ..Default::default() };
+        let result = write(package, &dir, true, &known, |p| p.to_string_lossy().to_string()).unwrap();
+        assert_eq!(result.states.len(), 1, "{:?}", result.states.iter().map(|s| &s.0).collect::<Vec<_>>());
+        assert!(result.states.iter().all(|s| !known.contains(&s.0)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_note_that_is_not_utf8_is_never_replaced_by_imported_cards() {
+        let dir = scratch("latin1");
+        let latin = b"Meine Notiz \xe4\xf6\xfc\n".to_vec();
+        std::fs::write(dir.join("Bio.md"), &latin).unwrap();
+        let result = write(deck("Bio", &["Was ist ATP? :: Energie"]), &dir, true, &HashSet::new(), |p| p.to_string_lossy().to_string()).unwrap();
+        assert_eq!(std::fs::read(dir.join("Bio.md")).unwrap(), latin);
+        assert_eq!(result.created.len(), 1);
+        assert!(std::fs::read_to_string(&result.created[0]).unwrap().contains("Was ist ATP?"));
+        std::fs::write(dir.join("Chemie.md"), "Eigenes\n").unwrap();
+        let result = write(deck("Chemie", &["Was ist H2O? :: Wasser"]), &dir, true, &HashSet::new(), |p| p.to_string_lossy().to_string()).unwrap();
+        assert_eq!(result.appended, vec![(dir.join("Chemie.md"), b"Eigenes\n".to_vec())], "cards added to a note are known, so undo can take them back");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn names_from_a_package_never_leave_the_import_folder() {
+        let dir = scratch("names");
+        let target = dir.join("Anki");
+        let mut package = deck("..", &["F :: B"]);
+        package.decks.insert(vec!["C:".to_string(), "..".to_string(), "CON".to_string()], vec![ImportNote { text: "G :: H".to_string(), progress: vec![Progress::default()], tags: Vec::new() }]);
+        package.media = vec![("CON".to_string(), b"x".to_vec()), ("ok.png".to_string(), b"y".to_vec()), ("a?.png".to_string(), b"z".to_vec())];
+        let result = write(package, &target, true, &HashSet::new(), |p| p.to_string_lossy().to_string()).unwrap();
+        assert!(result.created.iter().all(|p| p.starts_with(&target)), "{:?}", result.created);
+        assert_eq!((result.media, result.skipped_media), (1, 2));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn far_future_or_unreviewed_progress_is_taken_as_new() {
+        let far = progress_of(2, 2, i64::MAX / 2, i64::MAX, 2500, 5, 0, "", 1_700_000_000, 1);
+        assert_eq!(far.phase, Phase::New);
+        let never = progress_of(2, 2, 100, 0, 2500, 0, 0, "", 1_700_000_000, 2);
+        assert_eq!(never.phase, Phase::New);
+        let real = progress_of(2, 2, 100, 30, 2500, 4, 0, "", 1_700_000_000, 3);
+        assert_eq!((real.phase, real.due), (Phase::Review, 1_700_000_000 + 100 * 86_400));
     }
 
     #[test]

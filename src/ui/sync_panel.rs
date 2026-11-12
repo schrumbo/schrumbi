@@ -253,6 +253,7 @@ impl Render for SyncPanel {
             let mut buttons = div().flex().gap(px(space::S));
             match action {
                 Some("retry") => buttons = buttons.child(Button::new("sync-retry").small().label(tr("Erneut versuchen")).on_click(|_, _, cx| sync::run(None, true, cx))),
+                Some("anyway") => buttons = buttons.child(Button::new("sync-anyway").small().label(tr("Trotzdem sichern")).on_click(|_, _, cx| sync::run_anyway(cx))),
                 Some("setup") => buttons = buttons.child(Button::new("sync-setup").small().label(tr("Einrichten…")).on_click(|_, _, cx| act(cx, |l| l.show_sync_setup = true))),
                 Some("reveal") => buttons = buttons.child(Button::new("sync-reveal").small().label(tr("Ordner öffnen")).on_click(|_, _, cx| {
                     if let Some(r) = state::read(cx, |l| l.root.clone()) {

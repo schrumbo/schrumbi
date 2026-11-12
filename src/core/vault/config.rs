@@ -218,7 +218,11 @@ pub fn is_bookmarked(root: &Path, rel: &str) -> bool {
 /// Adds or removes a file's bookmark in the file Obsidian uses; other bookmarks and groups stay as they are.
 pub fn toggle_bookmark(root: &Path, rel: &str) -> std::io::Result<()> {
     let path = root.join(".obsidian/bookmarks.json");
-    let mut value: serde_json::Value = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_else(|| serde_json::json!({ "items": [] }));
+    let mut value: serde_json::Value = match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, crate::core::i18n::tr("Die Lesezeichen von Obsidian sind gerade nicht lesbar und bleiben, wie sie sind. Versuche es gleich noch einmal.")))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({ "items": [] }),
+        Err(e) => return Err(e),
+    };
     if !value.get("items").is_some_and(serde_json::Value::is_array) {
         value["items"] = serde_json::json!([]);
     }
@@ -238,7 +242,7 @@ pub fn toggle_bookmark(root: &Path, rel: &str) -> std::io::Result<()> {
         items.push(serde_json::json!({ "type": "file", "ctime": chrono::Utc::now().timestamp_millis(), "path": rel }));
     }
     std::fs::create_dir_all(root.join(".obsidian"))?;
-    std::fs::write(path, serde_json::to_vec_pretty(&value).unwrap_or_default())
+    crate::core::note_buffer::write_atomic(&path, &serde_json::to_vec_pretty(&value).unwrap_or_default())
 }
 
 /// A vault Obsidian knows on this device.

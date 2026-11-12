@@ -48,6 +48,8 @@ pub enum GitError {
     Detached,
     ExternalMerge,
     Conflicts(Vec<String>),
+    /// An automatic save would record this many files as deleted at once; it waits for the user.
+    ManyDeleted(usize),
     Timeout,
     Other(String),
 }
