@@ -32,6 +32,10 @@ pub struct Sync {
     pub step: Option<Step>,
     pub error: Option<GitError>,
     pub offline: bool,
+    /// The workspace has no remote, which is how it was set up: states are only saved here.
+    pub local_only: bool,
+    /// When the newest state was made, as a Unix time.
+    pub last_commit: Option<i64>,
     pub conflicts: Vec<ConflictFile>,
     pub automatic: Vec<(String, String)>,
     pub too_large: Vec<String>,
@@ -208,7 +212,7 @@ pub fn hide_offer(cx: &mut App) {
 pub fn refresh(cx: &mut App) {
     let Some(git) = get(cx).git.clone() else { return };
     let generation = get(cx).generation;
-    let task = cx.background_spawn(async move { git.status() });
+    let task = cx.background_spawn(async move { git.status().map(|status| (status, git.last_commit_time(), git.has_remote())) });
     let job = cx.spawn(async move |cx| {
         let result = task.await;
         cx.update(|cx| {
@@ -217,7 +221,11 @@ pub fn refresh(cx: &mut App) {
                 return;
             }
             match result {
-                Ok(status) => s.status = Some(status),
+                Ok((status, last_commit, remote)) => {
+                    s.status = Some(status);
+                    s.last_commit = last_commit;
+                    s.local_only = !remote;
+                }
                 Err(e) => s.error = Some(e),
             }
             cx.refresh_windows();
@@ -352,6 +360,7 @@ fn finished(result: Result<Report, GitError>, conflicts: Option<(Vec<ConflictFil
             s.too_large = report.too_large.clone();
             s.nested = report.nested.clone();
             s.offline = report.offline;
+            s.local_only = report.local_only;
             s.last_fetch = Some(Instant::now());
             if report.committed > 0 {
                 s.message.clear();
@@ -406,8 +415,11 @@ fn report_to_user(result: &Result<Report, GitError>, pulled: &[PathBuf], manual:
     } else if manual && !pulled.is_empty() {
         let text = if pulled.len() == 1 { tr("1 Datei übernommen") } else { trf("%@ Dateien übernommen", &[&pulled.len().to_string()]) };
         act(cx, |l| l.notify(text, "arrow-down", None, None));
-    } else if manual && report.committed == 0 && !report.pushed && !report.offline {
-        act(cx, |l| l.notify(tr("Alles aktuell"), "check", None, None));
+    } else if manual && report.committed > 0 {
+        let text = if report.committed == 1 { tr("Gesichert · 1 Datei") } else { trf("Gesichert · %@ Dateien", &[&report.committed.to_string()]) };
+        act(cx, |l| l.notify(text, "check", None, None));
+    } else if manual && !report.pushed && !report.offline {
+        act(cx, |l| l.notify(tr("Nichts Neues"), "check", None, None));
     }
 }
 

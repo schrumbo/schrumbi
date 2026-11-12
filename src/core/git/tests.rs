@@ -198,8 +198,13 @@ fn no_remote_saves_and_says_so() {
     configure(&dir);
     std::fs::write(dir.join("x.md"), "x").unwrap();
     let git = Git::new(exe(), &dir);
-    assert_eq!(sync(&git), Err(GitError::NoRemote));
+    let report = sync(&git).unwrap();
+    assert!(report.local_only && !report.pushed && !report.offline);
+    assert_eq!(report.committed, 1);
     assert_eq!(log_count(&git), 1);
+    assert!(!git.has_remote());
+    assert!(git.last_commit_time().is_some());
+    assert_eq!(sync(&git).unwrap().committed, 0);
 }
 
 #[test]
@@ -514,6 +519,79 @@ fn the_apps_own_files_merge_without_asking() {
     assert!(merged.contains("e1") && merged.contains("e2"), "{merged}");
     sync(&a).unwrap();
     assert!(read(&a, ".schrumbi-state.json").contains("e2"));
+}
+
+#[test]
+fn two_devices_reviewing_different_cards_lose_neither() {
+    let (a, b) = devices("cards");
+    let name = ".schrumbi-cards.json";
+    let store = |x: &str, y: &str| format!("{{\"version\":0,\"cards\":{{\"x\":{x},\"y\":{y}}}}}");
+    let fresh_card = "{\"reps\":0}";
+    let reviewed = |at: i64| format!("{{\"reps\":1,\"lastReview\":{at},\"stability\":2.0}}");
+    std::fs::write(a.root.join(name), store(fresh_card, fresh_card)).unwrap();
+    sync(&a).unwrap();
+    sync(&b).unwrap();
+    std::fs::write(a.root.join(name), store(&reviewed(5), fresh_card)).unwrap();
+    sync(&a).unwrap();
+    std::fs::write(b.root.join(name), store(fresh_card, &reviewed(7))).unwrap();
+    let report = sync(&b).unwrap();
+    assert!(report.pushed);
+    let merged: serde_json::Value = serde_json::from_str(&read(&b, name)).unwrap();
+    assert_eq!(merged["cards"]["x"]["lastReview"], 5);
+    assert_eq!(merged["cards"]["y"]["lastReview"], 7);
+    sync(&a).unwrap();
+    assert_eq!(read(&a, name), read(&b, name));
+}
+
+#[test]
+fn leaving_the_app_files_out_untracks_them_and_deletes_nothing_anywhere() {
+    let (a, b) = devices("appdata");
+    for name in setup::APP_DATA {
+        std::fs::write(a.root.join(name), "{}").unwrap();
+    }
+    sync(&a).unwrap();
+    sync(&b).unwrap();
+    assert!(a.app_data_synced());
+    for name in setup::APP_DATA {
+        assert!(a.run(&["ls-files"]).unwrap().contains(name));
+        assert!(b.root.join(name).exists());
+    }
+    assert!(a.set_app_data_synced(false, "App-Daten bleiben hier").unwrap().is_some());
+    assert!(!a.app_data_synced());
+    assert_eq!(a.set_app_data_synced(false, "nochmal").unwrap(), None);
+    for name in setup::APP_DATA {
+        assert!(a.root.join(name).exists());
+        assert!(!a.run(&["ls-files"]).unwrap().contains(name));
+        assert_eq!(read(&a, ".gitignore").lines().filter(|l| *l == name).count(), 1);
+    }
+    std::fs::write(a.root.join(".schrumbi-state.json"), "{\"nur\":\"hier\"}").unwrap();
+    assert!(a.status().unwrap().changed.is_empty());
+    sync(&a).unwrap();
+    std::fs::write(b.root.join(".schrumbi-state.json"), "{\"nur\":\"dort\"}").unwrap();
+    sync(&b).unwrap();
+    for name in setup::APP_DATA {
+        assert!(b.root.join(name).exists(), "{name} must survive the pull");
+    }
+    assert_eq!(read(&b, ".schrumbi-state.json"), "{\"nur\":\"dort\"}");
+    assert_eq!(read(&a, ".schrumbi-state.json"), "{\"nur\":\"hier\"}");
+    assert!(!b.run(&["ls-files"]).unwrap().contains("schrumbi-state"));
+    assert!(a.set_app_data_synced(true, "App-Daten wieder dabei").unwrap().is_some());
+    assert!(a.app_data_synced());
+    assert!(!read(&a, ".gitignore").contains("schrumbi"));
+    sync(&a).unwrap();
+    for name in setup::APP_DATA {
+        assert!(a.run(&["ls-files"]).unwrap().contains(name));
+    }
+}
+
+#[test]
+fn an_unreadable_gitignore_is_never_rewritten() {
+    let (a, _) = devices("badignore");
+    let bytes = [0xffu8, 0xfe, b'\n', b'x', b'\n'];
+    std::fs::write(a.root.join(".gitignore"), bytes).unwrap();
+    assert!(a.set_app_data_synced(false, "x").is_err());
+    assert!(a.clean_up(&["a".to_string()], &[], false, "x").is_err());
+    assert_eq!(std::fs::read(a.root.join(".gitignore")).unwrap(), bytes);
 }
 
 #[test]

@@ -44,11 +44,11 @@ From the second start on, a tip shows once a day at the bottom right, only about
 
 ## Guided Setup
 
-Four short steps, {key:return} moves on.
+A few short steps, {key:return} moves on. {key:escape} or the X at the top right closes like {ui:Später einrichten}.
 
 | Step | You set |
 |---|---|
-| {ui:Willkommen} | Degree program, naming pattern and whether Schrumbi creates submission folders |
+| {ui:Willkommen} | Whether Schrumbi creates submission folders |
 | {ui:Semester} | Name, lecture start, lecture end |
 | {ui:Module} | Which folders are modules, with code and name |
 | {ui:Abgaben} | Moodle calendar and a weekly submission, both optional |

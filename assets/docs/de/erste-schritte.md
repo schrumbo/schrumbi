@@ -44,11 +44,11 @@ Ab dem zweiten Start erscheint einmal am Tag unten rechts ein Tipp, nur zu Dinge
 
 ## Geführt einrichten
 
-Vier kurze Schritte, {key:return} geht weiter.
+Ein paar kurze Schritte, {key:return} geht weiter. {key:escape} oder das X oben rechts schließt wie {ui:Später einrichten}.
 
 | Schritt | Du legst fest |
 |---|---|
-| {ui:Willkommen} | Studiengang, Namensmuster und ob Schrumbi Abgabeordner anlegt |
+| {ui:Willkommen} | Ob Schrumbi Abgabeordner anlegt |
 | {ui:Semester} | Name, Vorlesungsbeginn, Vorlesungsende |
 | {ui:Module} | Welche Ordner Module sind, mit Kürzel und Name |
 | {ui:Abgaben} | Moodle-Kalender und eine Abgabe jede Woche, beides freiwillig |

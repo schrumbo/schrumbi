@@ -31,6 +31,8 @@ pub struct Report {
     pub pushed: bool,
     /// The remote could not be reached; everything is saved locally.
     pub offline: bool,
+    /// There is no remote; states are only saved here.
+    pub local_only: bool,
     pub too_large: Vec<String>,
     pub nested: Vec<String>,
 }
@@ -118,6 +120,7 @@ impl Git {
         }
         if let Some(before) = before {
             report.pulled.extend(self.settle_times(&before)?);
+            self.keep_app_data(&before);
         }
         Ok(())
     }
@@ -167,7 +170,10 @@ impl Git {
         progress(Step::Saving);
         let status = self.preflight()?;
         self.commit_all(&status, message, deletions_allowed, &mut report)?;
-        let Some(remote) = self.remote() else { return Err(GitError::NoRemote) };
+        let Some(remote) = self.remote() else {
+            report.local_only = true;
+            return Ok(report);
+        };
         for attempt in 0..PUSH_ATTEMPTS {
             progress(Step::Fetching);
             match self.fetch() {

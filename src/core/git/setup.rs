@@ -6,6 +6,9 @@ use super::cmd::{Git, GitError, LOCAL, NETWORK, spawn};
 /// Lines every synced workspace should ignore: backups, temporary files, and what apps regenerate.
 pub const IGNORE_LINES: [&str; 8] = [".schrumbi-backup/", ".*.tmp", "*.defekt", "Schrumbi-Kalender.ics", ".DS_Store", ".obsidian/workspace*.json", ".obsidian/cache", ".trash/"];
 
+/// The app's own files at the top of the study folder; they sync unless the user leaves them out.
+pub const APP_DATA: [&str; 3] = [crate::core::workspace::CONFIG_NAME, crate::core::workspace::STATE_NAME, crate::core::cards::STORE_NAME];
+
 /// What setting up sync would find and do. Reading it runs Git only after the user asked for setup.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Inspection {
@@ -40,6 +43,19 @@ pub fn obsidian_git_enabled(root: &Path) -> bool {
 fn missing_ignores(root: &Path) -> Vec<String> {
     let current = std::fs::read_to_string(root.join(".gitignore")).unwrap_or_default();
     IGNORE_LINES.iter().filter(|l| !current.lines().any(|c| c.trim() == **l)).map(|l| l.to_string()).collect()
+}
+
+/// The `.gitignore` text; a missing file is empty, one that is not text is an error so it is never overwritten.
+fn read_ignore(path: &Path) -> Result<String, GitError> {
+    match std::fs::read(path) {
+        Ok(bytes) => String::from_utf8(bytes).map_err(|_| GitError::Other(".gitignore".into())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(GitError::Other(e.to_string())),
+    }
+}
+
+fn lists(ignore: &str, name: &str) -> bool {
+    ignore.lines().any(|l| l.trim() == name)
 }
 
 fn gh(args: &[&str], dir: &Path) -> Option<String> {
@@ -123,7 +139,7 @@ impl Git {
     pub fn clean_up(&self, ignore_lines: &[String], nested: &[String], untrack_backups: bool, message: &str) -> Result<Option<String>, GitError> {
         let mut add: Vec<String> = ignore_lines.to_vec();
         let path = self.root.join(".gitignore");
-        let current = std::fs::read_to_string(&path).unwrap_or_default();
+        let current = read_ignore(&path)?;
         for folder in nested {
             let line = format!("{folder}/");
             if !current.lines().any(|l| l.trim() == line) {
@@ -150,5 +166,73 @@ impl Git {
     /// Takes the cleanup back as a new state; files on disk were never touched by it.
     pub fn undo_clean_up(&self, state: &str) -> Result<(), GitError> {
         self.run(&["revert", "--no-edit", state]).map(|_| ())
+    }
+
+    /// Whether the app's own files travel with the folder: none of them is in `.gitignore`.
+    pub fn app_data_synced(&self) -> bool {
+        let current = read_ignore(&self.root.join(".gitignore")).unwrap_or_default();
+        !APP_DATA.iter().any(|name| lists(&current, name))
+    }
+
+    /// Takes the app's own files in or out of sync. Out: they go into `.gitignore` and leave the history, the files stay on disk.
+    /// In: those lines go again and the next sync takes the files back. Returns the id of the state it made, if any.
+    pub fn set_app_data_synced(&self, on: bool, message: &str) -> Result<Option<String>, GitError> {
+        let path = self.root.join(".gitignore");
+        let current = read_ignore(&path)?;
+        let text = if on {
+            current.split_inclusive('\n').filter(|l| !APP_DATA.contains(&l.trim())).collect::<String>()
+        } else {
+            let add: Vec<&str> = APP_DATA.iter().copied().filter(|name| !lists(&current, name)).collect();
+            let separator = if add.is_empty() || current.is_empty() || current.ends_with('\n') { "" } else { "\n" };
+            if add.is_empty() { current.clone() } else { format!("{current}{separator}{}\n", add.join("\n")) }
+        };
+        if text != current {
+            std::fs::write(&path, text).map_err(|e| GitError::Other(e.to_string()))?;
+            self.run(&["add", "--", ".gitignore"])?;
+        }
+        if !on {
+            let mut args = vec!["rm", "-q", "--cached", "--ignore-unmatch", "--"];
+            args.extend(APP_DATA);
+            self.run(&args)?;
+        }
+        let staged = self.output(&["diff", "--cached", "--quiet"], None, LOCAL)?;
+        if staged.code == 0 {
+            return Ok(None);
+        }
+        self.checked(&["commit", "-q", "--cleanup=whitespace", "-F", "-"], Some(message.as_bytes().to_vec()), LOCAL)?;
+        Ok(Some(self.run(&["rev-parse", "HEAD"])?.trim().to_string()))
+    }
+
+    /// Whether the other device took this app file out of sync: it is gone from the upstream and listed in its `.gitignore`.
+    pub(super) fn left_out_upstream(&self, name: &str) -> bool {
+        APP_DATA.contains(&name)
+            && self.run(&["cat-file", "-e", &format!("@{{u}}:{name}")]).is_err()
+            && self.run(&["show", "@{u}:.gitignore"]).is_ok_and(|ignore| lists(&ignore, name))
+    }
+
+    /// After taking in the other device's states: an app file it left out of sync stays here as it was, for it is still in use.
+    pub(super) fn keep_app_data(&self, before: &str) {
+        let ignore = read_ignore(&self.root.join(".gitignore")).unwrap_or_default();
+        for name in APP_DATA {
+            let path = self.root.join(name);
+            if path.exists() || !lists(&ignore, name) {
+                continue;
+            }
+            if let Ok(blob) = self.output(&["cat-file", "blob", &format!("{before}:{name}")], None, LOCAL)
+                && blob.code == 0
+            {
+                let _ = std::fs::write(&path, blob.raw);
+            }
+        }
+    }
+
+    /// When the newest state was made, as a Unix time; `None` before the first.
+    pub fn last_commit_time(&self) -> Option<i64> {
+        self.run(&["--no-optional-locks", "log", "-1", "--format=%ct"]).ok()?.trim().parse().ok()
+    }
+
+    /// Whether any remote is set, which sync needs for uploading.
+    pub fn has_remote(&self) -> bool {
+        self.run(&["remote"]).is_ok_and(|r| r.lines().any(|l| !l.trim().is_empty()))
     }
 }
