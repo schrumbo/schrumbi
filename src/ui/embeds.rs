@@ -544,7 +544,7 @@ impl RenderOnce for AudioLine {
         let t = Theme::get(cx);
         let playing = super::audio::is_playing(&self.path);
         let (position, total) = super::audio::progress(&self.path);
-        let total = total.or_else(|| super::audio::length(&self.path));
+        let total = total.or_else(|| super::audio::length(&self.path, cx));
         if playing {
             keep_ticking(cx);
         }

@@ -54,6 +54,7 @@ pub mod module_page;
 pub mod filing_form;
 pub mod cards_page;
 pub mod folder_picker;
+pub mod image_cache;
 pub mod image_view;
 pub mod inbox;
 pub mod quick;

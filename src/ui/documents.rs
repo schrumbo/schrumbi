@@ -1015,6 +1015,7 @@ impl NoteView {
         self.parse_job = None;
         self.parse_slow = false;
         self.parse_hold = false;
+        self.first_parse = true;
         self.item_hashes.clear();
         self.reader_list.reset(0);
         self.keep_line = Some(keep_line);

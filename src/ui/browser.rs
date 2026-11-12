@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Days, NaiveDate};
@@ -132,6 +133,8 @@ pub struct FileBrowser {
     results: Results,
     key: String,
     load: Option<Task<()>>,
+    /// The name matches a background task is still finding, to find them at once when Enter comes first.
+    pending: Option<(Pending, bool)>,
     /// Picks the best hit automatically, as the search page's preview needs.
     pub auto_select: bool,
     focus: FocusHandle,
@@ -165,6 +168,7 @@ impl FileBrowser {
             results: Results::default(),
             key: String::new(),
             load: None,
+            pending: None,
             auto_select,
             focus: cx.focus_handle(),
             list_focused: false,
@@ -216,6 +220,8 @@ impl FileBrowser {
         }
         let was_searching = self.results.searching;
         self.key = key;
+        self.load = None;
+        self.pending = None;
         let Some(config) = l.config.clone() else { return };
         let weeks = l.weeks();
         let current = current_week(l);
@@ -224,21 +230,18 @@ impl FileBrowser {
         let week = q.week.or(self.week_filter);
         let picked_week = q.week.is_none() && week.is_some();
         let searching = !q.terms.is_empty();
-        let scoped: Vec<CatalogFile> = l.catalog.iter().filter(|f| module.as_ref().is_none_or(|m| f.module_id.as_ref() == Some(m)) && week.is_none_or(|w| f.week == Some(w) && (!picked_week || starts.in_shown(f)))).cloned().collect();
         self.week_starts = starts.clone();
-        let mut items: Vec<Item> = if searching {
-            scoped.iter().filter_map(|f| catalog::score(f, &q.terms, current).map(|s| Item { file: f.clone(), spots: Vec::new(), score: s })).collect()
-        } else {
-            scoped.iter().filter(|f| !f.in_project).map(|f| Item { file: f.clone(), spots: Vec::new(), score: 0. }).collect()
-        };
+        let scope = Scope { module: module.clone(), week, picked_week, starts: starts.clone() };
+        let catalog = l.catalog.clone();
         let kind = self.kind;
         let grouping = prefs::get().file_grouping;
         let today = l.today();
         let module_order: HashMap<String, usize> = config.modules.iter().enumerate().map(|(i, m)| (m.id.clone(), i)).collect();
-        let finish = move |items: Vec<Item>, scoped: &[CatalogFile]| -> Results {
+        let terms = q.terms.clone();
+        let finish = move |items: Vec<Item>, catalog: &[CatalogFile], scope: &Scope| -> Results {
             let mut items = items;
             if searching && items.is_empty() {
-                items = scoped.iter().filter_map(|f| catalog::fuzzy_score(f, &q.terms, current).map(|s| Item { file: f.clone(), spots: Vec::new(), score: s })).collect();
+                items = catalog.iter().filter(|f| scope.holds(f)).filter_map(|f| catalog::fuzzy_score(f, &q.terms, current).map(|s| Item { file: f.clone(), spots: Vec::new(), score: s })).collect();
             }
             let total_all = items.len();
             let mut matching: Vec<Item> = items.into_iter().filter(|i| kind.matches(i.file.name())).collect();
@@ -259,11 +262,16 @@ impl FileBrowser {
                     let (vault, sort) = (crate::core::vault::index::current(), self.vault_sort);
                     self.load = Some(cx.spawn(async move |this, cx| {
                         cx.background_executor().timer(Duration::from_millis(120)).await;
-                        let paths = cx.background_spawn(async move { vault_query::search(&parsed, &vault, sort) }).await;
-                        let by_path: HashMap<PathBuf, &CatalogFile> = scoped.iter().map(|f| (f.file.path.clone(), f)).collect();
-                        let count = paths.len() as f64;
-                        let items: Vec<Item> = paths.iter().enumerate().filter_map(|(i, p)| by_path.get(p).map(|f| Item { file: (*f).clone(), spots: Vec::new(), score: count - i as f64 })).collect();
-                        let results = finish(items, &scoped);
+                        let results = cx
+                            .background_executor()
+                            .spawn(async move {
+                                let paths = vault_query::search(&parsed, &vault, sort);
+                                let by_path: HashMap<&Path, &CatalogFile> = catalog.iter().filter(|f| scope.holds(f)).map(|f| (f.file.path.as_path(), f)).collect();
+                                let count = paths.len() as f64;
+                                let items: Vec<Item> = paths.iter().enumerate().filter_map(|(i, p)| by_path.get(p.as_path()).map(|f| Item { file: (*f).clone(), spots: Vec::new(), score: count - i as f64 })).collect();
+                                finish(items, &catalog, &scope)
+                            })
+                            .await;
                         let _ = this.update(cx, |b, cx| {
                             b.results = results;
                             b.after_load(true);
@@ -275,32 +283,51 @@ impl FileBrowser {
             return;
         }
         if !searching {
-            self.results = finish(items, &scoped);
+            let items = named(&catalog, &scope, &terms, current, false);
+            self.results = finish(items, &catalog, &scope);
             self.after_load(was_searching);
             cx.notify();
             return;
         }
         let index = l.search_index.clone();
         let prefix = module.as_ref().and_then(|m| config.module(m)).zip(l.root.clone()).map(|(m, r)| r.join(&m.folder));
-        self.results = finish(items.clone(), &scoped);
-        self.after_load(was_searching);
-        cx.notify();
-        let terms = self.results.query.terms.clone();
-        let finish = std::sync::Arc::new(finish);
+        let finish = Arc::new(finish);
+        let names: Pending = {
+            let (finish, catalog, scope, terms) = (finish.clone(), catalog.clone(), scope.clone(), terms.clone());
+            Arc::new(move || {
+                let items = named(&catalog, &scope, &terms, current, true);
+                let results = finish(items.clone(), &catalog, &scope);
+                (items, results)
+            })
+        };
+        self.pending = Some((names.clone(), was_searching));
         self.load = Some(cx.spawn(async move |this, cx| {
+            let (named_items, results) = cx.background_executor().spawn(async move { names() }).await;
+            let _ = this.update(cx, |b, cx| {
+                b.pending = None;
+                b.results = results;
+                b.after_load(was_searching);
+                cx.notify();
+            });
             cx.background_executor().timer(Duration::from_millis(120)).await;
-            let hits = cx.background_spawn(async move { index.content_search(&terms, prefix.as_deref(), 150) }).await;
-            let mut by_name: HashMap<PathBuf, usize> = items.iter().enumerate().map(|(i, item)| (item.file.file.path.clone(), i)).collect();
-            let by_path: HashMap<PathBuf, &CatalogFile> = scoped.iter().map(|f| (f.file.path.clone(), f)).collect();
-            for h in hits {
-                if let Some(i) = by_name.get(&h.file.path) {
-                    items[*i].spots = h.spots;
-                } else if let Some(f) = by_path.get(&h.file.path) {
-                    by_name.insert(h.file.path.clone(), items.len());
-                    items.push(Item { file: (*f).clone(), spots: h.spots, score: 0.5 + catalog::recency(f.week, current) });
-                }
-            }
-            let results = finish(items, &scoped);
+            let results = cx
+                .background_executor()
+                .spawn(async move {
+                    let hits = index.content_search(&terms, prefix.as_deref(), 150);
+                    let mut items = named_items;
+                    let mut by_name: HashMap<PathBuf, usize> = items.iter().enumerate().map(|(i, item)| (item.file.file.path.clone(), i)).collect();
+                    let by_path: HashMap<&Path, &CatalogFile> = catalog.iter().filter(|f| scope.holds(f)).map(|f| (f.file.path.as_path(), f)).collect();
+                    for h in hits {
+                        if let Some(i) = by_name.get(&h.file.path) {
+                            items[*i].spots = h.spots;
+                        } else if let Some(f) = by_path.get(h.file.path.as_path()) {
+                            by_name.insert(h.file.path.clone(), items.len());
+                            items.push(Item { file: (*f).clone(), spots: h.spots, score: 0.5 + catalog::recency(f.week, current) });
+                        }
+                    }
+                    finish(items, &catalog, &scope)
+                })
+                .await;
             let _ = this.update(cx, |b, cx| {
                 b.results = results;
                 b.after_load(true);
@@ -439,7 +466,11 @@ impl FileBrowser {
     }
 
     /// Opens the selected file; a content match opens at its first occurrence.
-    pub fn open_selected(&self, cx: &mut App) {
+    pub fn open_selected(&mut self, cx: &mut App) {
+        if let Some((names, was_searching)) = self.pending.take() {
+            self.results = names().1;
+            self.after_load(was_searching);
+        }
         let Some(path) = self.selected.clone() else { return };
         let r = &self.results;
         let spot = r.best.iter().chain(r.groups.iter().flat_map(|g| g.items.iter())).find(|i| i.file.file.path == path).and_then(|i| i.spots.first().cloned());
@@ -558,6 +589,33 @@ impl FileBrowser {
 
 pub fn current_week(l: &Library) -> Option<u32> {
     l.current_week().map(|w| w.index).or_else(|| l.weeks().iter().rev().find(|w| w.monday <= l.today()).map(|w| w.index))
+}
+
+/// Finds the name matches of a query and the list made of them.
+type Pending = Arc<dyn Fn() -> (Vec<Item>, Results) + Send + Sync>;
+
+/// Which files a list may show: the module and week picked.
+#[derive(Clone)]
+struct Scope {
+    module: Option<String>,
+    week: Option<u32>,
+    picked_week: bool,
+    starts: WeekStarts,
+}
+
+impl Scope {
+    fn holds(&self, f: &CatalogFile) -> bool {
+        self.module.as_ref().is_none_or(|m| f.module_id.as_ref() == Some(m)) && self.week.is_none_or(|w| f.week == Some(w) && (!self.picked_week || self.starts.in_shown(f)))
+    }
+}
+
+/// Files whose name matches the terms, scored; without terms every file outside projects.
+fn named(catalog: &[CatalogFile], scope: &Scope, terms: &[String], current: Option<u32>, searching: bool) -> Vec<Item> {
+    if searching {
+        catalog.iter().filter(|f| scope.holds(f)).filter_map(|f| catalog::score(f, terms, current).map(|s| Item { file: f.clone(), spots: Vec::new(), score: s })).collect()
+    } else {
+        catalog.iter().filter(|f| scope.holds(f) && !f.in_project).map(|f| Item { file: f.clone(), spots: Vec::new(), score: 0. }).collect()
+    }
 }
 
 /// Newer files first; equally old ones by name, so equal results keep their order.

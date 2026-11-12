@@ -57,6 +57,8 @@ pub struct GraphView {
     filter: Entity<InputState>,
     focus: FocusHandle,
     running: Option<Task<()>>,
+    building: Option<Task<()>>,
+    missing: (u64, Arc<Vec<(String, usize)>>),
     _subs: Vec<Subscription>,
 }
 
@@ -96,6 +98,8 @@ impl GraphView {
             filter,
             focus: cx.focus_handle(),
             running: None,
+            building: None,
+            missing: (u64::MAX, Arc::default()),
             _subs: subs,
         }
     }
@@ -108,25 +112,42 @@ impl GraphView {
         }
         self.generation = vault.generation;
         self.built_for = Some((self.options.clone(), wanted.clone()));
-        self.focus_note = wanted.clone();
         let wanted_options = if wanted.is_some() { Options { orphans: true, ..self.options.clone() } } else { self.options.clone() };
-        let full = Graph::build(&vault, &wanted_options);
-        let graph = Arc::new(match &wanted {
-            Some((path, depth)) => full.local(path, *depth),
-            None => full,
+        let known = cx.try_global::<KnownPositions>().map(|k| k.0.clone()).unwrap_or_default();
+        let focus = wanted.clone();
+        let task = cx.background_spawn(async move {
+            let full = Graph::build(&vault, &wanted_options);
+            let graph = Arc::new(match &focus {
+                Some((path, depth)) => full.local(path, *depth),
+                None => full,
+            });
+            let order = Arc::new(graph.by_importance());
+            let nodes = &graph.nodes;
+            let mut layout = Layout::for_graph(&graph, |i| known.get(&nodes[i].name).copied());
+            if nodes.iter().all(|n| known.contains_key(&n.name)) && !nodes.is_empty() {
+                layout.heat = 0.2;
+            }
+            (graph, order, layout)
         });
+        self.building = Some(cx.spawn(async move |this, cx| {
+            let (graph, order, layout) = task.await;
+            let _ = this.update(cx, |v, cx| {
+                v.building = None;
+                v.adopt(graph, order, layout, wanted, cx);
+                cx.notify();
+            });
+        }));
+    }
+
+    fn adopt(&mut self, graph: Arc<Graph>, order: Arc<Vec<u32>>, layout: Layout, wanted: Option<(PathBuf, usize)>, cx: &mut Context<Self>) {
+        let vault = index::current();
+        self.focus_note = wanted;
         let t = Theme::get(cx);
         let modules: Vec<(String, Hsla)> = state::read(cx, |l| l.config.as_ref().map_or(Vec::new(), |c| c.modules.iter().map(|m| (m.folder.rsplit('/').next().unwrap_or(&m.folder).to_string(), t.palette(&m.color))).collect()));
         const TURNS: [&str; 8] = ["blue", "teal", "orange", "pink", "purple", "green", "brown", "indigo"];
         self.cluster_tints = graph.clusters.iter().enumerate().map(|(i, name)| modules.iter().find(|(f, _)| f == name).map_or_else(|| t.palette(TURNS[i % TURNS.len()]), |(_, c)| *c)).collect();
         self.tints = graph.nodes.iter().map(|n| n.cluster.and_then(|c| self.cluster_tints.get(c as usize).copied())).collect();
-        self.order = Arc::new(graph.by_importance());
-        let known = cx.try_global::<KnownPositions>().map(|k| k.0.clone()).unwrap_or_default();
-        let nodes = graph.nodes.clone();
-        let mut layout = Layout::for_graph(&graph, |i| known.get(&nodes[i].name).copied());
-        if nodes.iter().all(|n| known.contains_key(&n.name)) && !nodes.is_empty() {
-            layout.heat = 0.2;
-        }
+        self.order = order;
         self.positions = layout.positions.clone();
         self.graph = graph.clone();
         self.layout = Arc::new(Mutex::new(layout));
@@ -138,6 +159,7 @@ impl GraphView {
         self.hover = None;
         self.fitted = false;
         self.hand_moved = false;
+        self.fit();
         let shared = self.layout.clone();
         let reduce = cx.reduce_motion();
         self.running = Some(cx.spawn(async move |this, cx| {
@@ -312,9 +334,13 @@ impl Render for GraphView {
         let local = self.focus_note.clone();
         let vault = index::current();
         let missing_total = vault.missing.len();
-        let mut missing_names: Vec<(String, usize)> = vault.missing.iter().map(|(name, from)| (name.clone(), from.len())).collect();
-        missing_names.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        missing_names.truncate(30);
+        if self.missing.0 != vault.generation {
+            let mut names: Vec<(String, usize)> = vault.missing.iter().map(|(name, from)| (name.clone(), from.len())).collect();
+            names.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            names.truncate(30);
+            self.missing = (vault.generation, Arc::new(names));
+        }
+        let missing_names = self.missing.1.clone();
         let bar = div()
             .flex_none()
             .px(px(space::M))
@@ -341,7 +367,7 @@ impl Render for GraphView {
                 let (me, shown) = (cx.entity(), self.options.missing);
                 Button::new("graph-missing-list").ghost().small().label(trf("Nicht aufgelöst: %@", &[&missing_total.to_string()])).tooltip(tr("Links auf Notizen, die es nicht gibt")).dropdown_menu(move |menu, _, _| {
                     let mut menu = Self::filter_item(menu, &me, tr("Im Graph zeigen"), shown, |o, v| o.missing = v).separator();
-                    for (name, count) in &names {
+                    for (name, count) in names.iter() {
                         let target = name.clone();
                         menu = menu.item(PopupMenuItem::new(format!("{name} · {count}")).on_click(move |_, _, cx| act(cx, |l| l.create_link_target(&target, None))));
                     }
@@ -517,8 +543,9 @@ impl Render for GraphView {
             },
         )
         .size_full();
-        let empty = count == 0;
-        let unlinked_hidden = !self.options.orphans && self.focus_note.is_none() && count < 3 && vault.notes.keys().filter(|p| crate::core::markdown::is_markdown(p)).nth(count).is_some();
+        let building = self.building.is_some() && count == 0;
+        let empty = count == 0 && !building;
+        let unlinked_hidden = !building && !self.options.orphans && self.focus_note.is_none() && count < 3 && vault.notes.keys().filter(|p| crate::core::markdown::is_markdown(p)).nth(count).is_some();
         let surface = div()
             .id("graph-surface")
             .track_focus(&self.focus)
@@ -528,6 +555,7 @@ impl Render for GraphView {
             .overflow_hidden()
             .cursor(if self.hover.is_some() { CursorStyle::PointingHand } else { CursorStyle::Arrow })
             .child(view)
+            .when(building, |d| d.child(div().absolute().inset_0().flex().items_center().justify_center().child(super::motion::loading(super::theme::iconsize::L, t.secondary))))
             .when(empty, |d| d.child(div().absolute().inset_0().flex().items_center().justify_center().child(unavailable("waypoints", tr("Noch keine Verknüpfungen"), tr("Sobald Notizen sich verlinken, erscheinen sie hier."), &t))))
             .when(unlinked_hidden, |d| d.child(div().absolute().left_0().right_0().bottom(px(space::L)).flex().justify_center().child(caption(tr("Notizen ohne Verknüpfung: Anzeigen → Ohne Links"), &t))))
             .on_scroll(cx.listener(|v, e: &ScrollEvent, window, cx| {

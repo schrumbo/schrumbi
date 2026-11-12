@@ -10,7 +10,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::inspector::{datetime_picker, picked};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path as FilePath, PathBuf};
+use std::rc::Rc;
 
 use crate::core::vault::index;
 use super::state::{self, act};
@@ -242,6 +244,7 @@ pub struct QuickOpen {
     index: usize,
     focused: bool,
     link_to: Option<String>,
+    cache: Option<(String, u64, usize, u64, Rc<Vec<(CatalogFile, bool)>>, Rc<Vec<VaultHit>>)>,
     _subs: Vec<Subscription>,
 }
 
@@ -324,28 +327,43 @@ impl QuickOpen {
             InputEvent::PressEnter { .. } => this.open(cx),
             _ => {}
         })];
-        Self { query, index: 0, focused: false, link_to, _subs: subs }
+        Self { query, index: 0, focused: false, link_to, cache: None, _subs: subs }
     }
 
-    fn results(&self, cx: &App) -> Vec<(CatalogFile, bool)> {
-        if let Some(id) = &self.link_to {
-            return self.link_results(id, cx);
-        }
+    fn results(&mut self, cx: &App) -> (Rc<Vec<(CatalogFile, bool)>>, Rc<Vec<VaultHit>>) {
         let q = self.query.read(cx).value().to_string();
+        let (revision, tabs) = state::read(cx, |l| (l.revision, l.open_documents.len()));
+        let generation = index::current().generation;
+        if let Some((cq, cr, ct, cg, files, hits)) = &self.cache {
+            if *cq == q && *cr == revision && *ct == tabs && *cg == generation {
+                return (files.clone(), hits.clone());
+            }
+        }
+        let files = Rc::new(match &self.link_to {
+            Some(id) => self.link_results(id, cx),
+            None => self.file_results(&q, cx),
+        });
+        let hits = Rc::new(if self.link_to.is_some() { Vec::new() } else { vault_hits(&q) });
+        self.cache = Some((q, revision, tabs, generation, files.clone(), hits.clone()));
+        (files, hits)
+    }
+
+    fn file_results(&self, q: &str, cx: &App) -> Vec<(CatalogFile, bool)> {
         state::read(cx, |l| {
-            let terms: Vec<String> = fold(&q).split(' ').filter(|t| !t.is_empty()).map(String::from).collect();
+            let terms: Vec<String> = fold(q).split(' ').filter(|t| !t.is_empty()).map(String::from).collect();
             let current = l.current_week().map(|w| w.index);
-            let open: Vec<&std::path::PathBuf> = l.open_documents.iter().collect();
+            let open: HashSet<&FilePath> = l.open_documents.iter().map(|p| p.as_path()).collect();
             let files: Vec<&CatalogFile> = l.catalog.iter().filter(|f| !f.in_project || !terms.is_empty()).collect();
             if terms.is_empty() {
-                let tabs = l.open_documents.iter().filter_map(|p| files.iter().find(|f| f.path() == p.as_path()).map(|f| ((*f).clone(), true)));
-                let mut recent: Vec<&CatalogFile> = files.iter().filter(|f| !open.contains(&&f.file.path) && FileKind::Documents.matches(f.name())).copied().collect();
+                let by_path: HashMap<&FilePath, &CatalogFile> = files.iter().filter(|f| open.contains(f.path())).map(|f| (f.path(), *f)).collect();
+                let tabs = l.open_documents.iter().filter_map(|p| by_path.get(p.as_path()).map(|f| ((*f).clone(), true)));
+                let mut recent: Vec<&CatalogFile> = files.iter().filter(|f| !open.contains(f.file.path.as_path()) && FileKind::Documents.matches(f.name())).copied().collect();
                 recent.sort_by(|a, b| b.date.cmp(&a.date));
                 return tabs.chain(recent.into_iter().map(|f| (f.clone(), false))).take(12).collect();
             }
-            let mut scored: Vec<(&CatalogFile, f64)> = files.iter().filter_map(|f| catalog::score(f, &terms, current).map(|s| (*f, s + if open.contains(&&f.file.path) { 3. } else { 0. }))).collect();
+            let mut scored: Vec<(&CatalogFile, f64)> = files.iter().filter_map(|f| catalog::score(f, &terms, current).map(|s| (*f, s + if open.contains(f.file.path.as_path()) { 3. } else { 0. }))).collect();
             scored.sort_by(|a, b| if a.1 == b.1 { b.0.date.cmp(&a.0.date) } else { b.1.total_cmp(&a.1) });
-            scored.into_iter().take(40).map(|(f, _)| (f.clone(), open.contains(&&f.file.path))).collect()
+            scored.into_iter().take(40).map(|(f, _)| (f.clone(), open.contains(f.file.path.as_path()))).collect()
         })
     }
 
@@ -382,11 +400,8 @@ impl QuickOpen {
         if self.link_to.is_some() {
             return;
         }
-        let files = self.results(cx);
-        let target = files.get(self.index).map(|(f, _)| f.file.path.clone()).or_else(|| {
-            let q = self.query.read(cx).value().to_string();
-            vault_hits(&q).get(self.index.saturating_sub(files.len())).and_then(|h| h.open.as_ref().map(|(p, _)| p.clone()))
-        });
+        let (files, hits) = self.results(cx);
+        let target = files.get(self.index).map(|(f, _)| f.file.path.clone()).or_else(|| hits.get(self.index.saturating_sub(files.len())).and_then(|h| h.open.as_ref().map(|(p, _)| p.clone())));
         if let Some(path) = target.filter(|p| super::vault_tools::in_vault(p, cx)) {
             cx.emit(Dismissed);
             super::vault_tools::open_in_obsidian(&path, cx);
@@ -394,7 +409,7 @@ impl QuickOpen {
     }
 
     fn open(&mut self, cx: &mut Context<Self>) {
-        let files = self.results(cx);
+        let (files, hits) = self.results(cx);
         if let Some(id) = self.link_to.clone() {
             if let Some((f, _)) = files.get(self.index) {
                 let p = f.file.path.clone();
@@ -409,8 +424,6 @@ impl QuickOpen {
             act(cx, |l| l.open_file(&p));
             return;
         }
-        let q = self.query.read(cx).value().to_string();
-        let hits = vault_hits(&q);
         let Some(hit) = hits.get(self.index - files.len()) else { return };
         cx.emit(Dismissed);
         if let Some((path, sub)) = &hit.open {
@@ -434,9 +447,8 @@ impl Render for QuickOpen {
             self.query.update(cx, |s, cx| s.focus(window, cx));
         }
         let t = Theme::get(cx);
-        let items = self.results(cx);
+        let (items, extra) = self.results(cx);
         let linking = self.link_to.is_some();
-        let extra = if linking { Vec::new() } else { vault_hits(&self.query.read(cx).value()) };
         self.index = self.index.min((items.len() + extra.len()).saturating_sub(1));
         let me = cx.entity();
         let mut list = div().flex().flex_col().gap(px(space::XXS)).p(px(space::S));

@@ -668,11 +668,15 @@ impl Settings {
         });
         let activation = cx.observe_window_activation(window, |s, window, cx| {
             if window.is_window_active() {
-                themes::rescan();
                 if let Some(m) = theme::recheck(window, cx) {
                     s.theme_note = Some(ThemeNote::Problem(m));
                 }
                 cx.notify();
+                cx.spawn(async move |s, cx| {
+                    cx.background_spawn(async { themes::rescan() }).await;
+                    let _ = s.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
             }
         });
         let subs = vec![recorder, activation, cx.observe(&lib, |_, _, cx| cx.notify()), cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()), cx.subscribe_in(&search, window, |s, _, e: &InputEvent, window, cx| {

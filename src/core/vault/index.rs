@@ -242,6 +242,101 @@ pub fn rebuild(root: &Path, exclude: &[String]) {
     }
 }
 
+/// Takes in edits to files the index already knows, without listing the vault; `false` when a path is new to it and only `rebuild` can tell.
+pub fn refresh(paths: &[PathBuf]) -> bool {
+    let index = current();
+    if index.root.as_os_str().is_empty() {
+        return false;
+    }
+    let mut file_times = index.file_times.clone();
+    let mut read: Vec<(PathBuf, Arc<NoteFacts>)> = Vec::new();
+    for p in paths {
+        if !file_times.contains_key(p) {
+            return false;
+        }
+        let (modified, size) = stamp_of(p);
+        file_times.insert(p.clone(), modified);
+        if !(markdown::is_markdown(p) || is_canvas(p)) || index.notes.get(p).is_some_and(|old| unchanged(old, modified, size)) {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(p) else { return false };
+        let text = String::from_utf8_lossy(&bytes);
+        let mut facts = if is_canvas(p) { super::canvas::facts_of(&text, modified) } else { facts_of(&text, modified) };
+        facts.size = bytes.len() as u64;
+        read.push((p.clone(), Arc::new(facts)));
+    }
+    let mut notes = index.notes.clone();
+    let mut aliases_moved = false;
+    for (p, facts) in &read {
+        aliases_moved |= notes.get(p).is_none_or(|old| old.aliases != facts.aliases);
+        notes.insert(p.clone(), facts.clone());
+    }
+    let mut next = if aliases_moved {
+        let mut next = assemble(index.root.clone(), index.files.clone(), notes);
+        next.folders = index.folders.clone();
+        next
+    } else {
+        let mut next = VaultIndex { notes, ..(*index).clone() };
+        relink(&mut next, &read);
+        next
+    };
+    next.file_times = file_times;
+    *CACHE.lock().unwrap() = next.notes.clone();
+    publish(next);
+    true
+}
+
+/// Replaces what `changed` notes contribute to backlinks, missing links and tags.
+fn relink(index: &mut VaultIndex, changed: &[(PathBuf, Arc<NoteFacts>)]) {
+    if changed.is_empty() {
+        return;
+    }
+    let sources: std::collections::HashSet<&PathBuf> = changed.iter().map(|(p, _)| p).collect();
+    for list in index.backlinks.values_mut().chain(index.missing.values_mut()) {
+        list.retain(|m| !sources.contains(&m.source));
+    }
+    index.backlinks.retain(|_, l| !l.is_empty());
+    index.missing.retain(|_, l| !l.is_empty());
+    for list in index.tags.values_mut() {
+        list.retain(|p| !sources.contains(p));
+    }
+    index.tags.retain(|_, l| !l.is_empty());
+    let mut touched_backlinks = std::collections::HashSet::new();
+    let mut touched_missing = std::collections::HashSet::new();
+    for (source, facts) in changed {
+        for (link, line, text) in &facts.links {
+            let mention = Mention { source: source.clone(), line: *line, text: text.clone() };
+            match index.resolver.resolve(&link.target, Some(source)) {
+                Some(target) if target != *source => {
+                    touched_backlinks.insert(target.clone());
+                    index.backlinks.entry(target).or_default().push(mention);
+                }
+                Some(_) => {}
+                None => {
+                    touched_missing.insert(link.target.path.clone());
+                    index.missing.entry(link.target.path.clone()).or_default().push(mention);
+                }
+            }
+        }
+        for tag in &facts.tags {
+            let list = index.tags.entry(tag.to_lowercase()).or_default();
+            list.push(source.clone());
+            list.sort();
+        }
+    }
+    let order = |a: &Mention, b: &Mention| a.source.cmp(&b.source).then(a.line.cmp(&b.line));
+    for target in touched_backlinks {
+        if let Some(list) = index.backlinks.get_mut(&target) {
+            list.sort_by(order);
+        }
+    }
+    for target in touched_missing {
+        if let Some(list) = index.missing.get_mut(&target) {
+            list.sort_by(order);
+        }
+    }
+}
+
 fn publish(mut index: VaultIndex) {
     let mut current = CURRENT.write().unwrap();
     index.generation = current.generation + 1;

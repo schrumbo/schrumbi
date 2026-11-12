@@ -1701,6 +1701,43 @@ fn column_widths(cells: &[Vec<(f32, f32)>], columns: usize, longest_word: f32) -
     (natural, least)
 }
 
+/// Cells a table shapes to find its widths; a longer table measures its first rows and the widest of the rest.
+const MEASURED_CELLS: usize = 1500;
+/// Rows a long table measures from its top.
+const MEASURED_TOP: usize = 101;
+/// Rows a long table measures per column beyond its top: those with the most text, and those with the longest word.
+const MEASURED_WIDEST: usize = 20;
+
+fn longest_word(cell: &CellText) -> usize {
+    cell.runs.iter().flat_map(|(t, _, _)| t.split_whitespace()).map(|w| w.chars().count()).max().unwrap_or(0).max(cell.formulas.iter().map(String::len).max().unwrap_or(0))
+}
+
+fn cell_weight(cell: &CellText) -> usize {
+    cell.runs.iter().map(|(t, _, _)| t.chars().count()).sum::<usize>() + cell.formulas.iter().map(String::len).sum::<usize>() + cell.pictures.iter().chain(&cell.figures).map(|p| *p as usize / 4).sum::<usize>()
+}
+
+/// The rows of a table worth shaping: all of a short one; the top and per column the fullest rows of a long one.
+fn measured_rows(rows: &[Vec<CellText>], columns: usize) -> Vec<usize> {
+    if rows.len() * columns.max(1) <= MEASURED_CELLS {
+        return (0..rows.len()).collect();
+    }
+    let mut chosen: Vec<usize> = (0..rows.len().min(MEASURED_TOP)).collect();
+    for c in 0..columns {
+        for weigh in [cell_weight as fn(&CellText) -> usize, longest_word] {
+            let mut fullest: Vec<(usize, usize)> = rows.iter().enumerate().skip(MEASURED_TOP).filter_map(|(r, row)| row.get(c).map(|cell| (weigh(cell), r))).collect();
+            let n = MEASURED_WIDEST.min(fullest.len());
+            if n == 0 {
+                continue;
+            }
+            fullest.select_nth_unstable_by(n - 1, |a, b| b.0.cmp(&a.0));
+            chosen.extend(fullest[..n].iter().map(|(_, r)| *r));
+        }
+    }
+    chosen.sort_unstable();
+    chosen.dedup();
+    chosen
+}
+
 /// The width of a table's rules.
 const TABLE_RULE: f32 = 1.;
 /// About how wide a letter of a formula is while it is not drawn yet.
@@ -1768,7 +1805,8 @@ impl Table {
         }
         let mut drawn_all = true;
         let mut measured: Vec<Vec<(f32, f32)>> = Vec::new();
-        for (r, row) in self.measure.iter().enumerate() {
+        for r in measured_rows(&self.measure, self.columns) {
+            let row = &self.measure[r];
             let mut sizes = Vec::new();
             for cell in row.iter().take(self.columns) {
                 let mut text = String::new();
@@ -2120,8 +2158,8 @@ fn image_at(p: PathBuf, alt: &str, source_written: &str, cx: &Ctx) -> AnyElement
         let picture = img(p).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL));
         let drawn = div().id(("md-image", order)).when(!sample, |d| d.cursor_pointer().soft(cx.t.ink.opacity(0.04), radius::CONTROL)).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::preview::show(&open, cx) });
         let drawn = match natural {
-            Some((w, h)) => drawn.w_full().max_w(px(w)).aspect_ratio(w / h).max_h(px(560.)).child(picture.size_full()),
-            None => drawn.max_w_full().child(picture.when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.))),
+            Some((w, h)) => drawn.w_full().max_w(px(w)).aspect_ratio(w / h).max_h(px(560.)).child(image_cache(super::image_cache::Notes).size_full().child(picture.size_full())),
+            None => drawn.max_w_full().child(image_cache(super::image_cache::Notes).child(picture.when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.)))),
         };
         let source_name = source_written.to_string();
         match (cx.focus.and_then(|f| f.edit_item.clone()), cx.block) {
@@ -2687,6 +2725,11 @@ impl ParsedNote {
     }
 
     /// The room below a reader row: none or a list's gap where the next row goes on with its block, a block's gap otherwise.
+    /// Whether the note refers to a footnote it defines, so a footnote section follows its rows.
+    pub fn has_footnotes(&self) -> bool {
+        self.footnote_order.iter().any(|id| self.footnotes.iter().any(|(f, _)| f == id))
+    }
+
     pub fn row_gap(&self, row: usize) -> f32 {
         let Some(this) = self.rows.get(row) else { return space::M };
         match (self.rows.get(row + 1), self.blocks.get(this.block)) {
@@ -3290,7 +3333,25 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<(ListState, Rc<dyn Fn(us
 
 #[cfg(test)]
 mod tests {
-    use super::{cell_extent, column_widths, space};
+    use super::{cell_extent, column_widths, measured_rows, space, CellText};
+
+    fn cell(text: &str) -> CellText {
+        CellText { runs: vec![(text.to_string(), false, false)], ..Default::default() }
+    }
+
+    #[test]
+    fn a_long_table_measures_its_top_and_its_fullest_rows_only() {
+        let mut rows: Vec<Vec<CellText>> = (0..5000).map(|i| vec![cell(&i.to_string()), cell("x")]).collect();
+        rows[4321][1] = cell("eine sehr lange Zelle weit unten");
+        for r in 200..230 {
+            rows[r][0] = cell("viele kurze Worte in einer langen Zelle");
+        }
+        rows[3000][0] = cell("Donaudampfschifffahrtsgesellschaft");
+        let chosen = measured_rows(&rows, 2);
+        assert!(chosen.len() < 250);
+        assert!(chosen.contains(&0) && chosen.contains(&100) && chosen.contains(&4321) && chosen.contains(&3000));
+        assert_eq!(measured_rows(&rows[..300], 2).len(), 300);
+    }
 
     fn advance(text: &str) -> impl Fn(usize) -> f32 + '_ {
         move |i| text.char_indices().take_while(|(at, _)| *at < i).map(|(_, c)| if c == 'z' { 12. } else { 7. }).sum()

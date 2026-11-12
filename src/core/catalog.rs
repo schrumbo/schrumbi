@@ -101,6 +101,25 @@ static HEADINGS: LazyLock<Mutex<HashMap<PathBuf, Headings>>> = LazyLock::new(|| 
 
 /// Builds the catalog from indexed files; run off the main thread. Headings are read again only for files changed since the last build.
 pub fn build(files: &[IndexedFile], root: &Path, config: &StudyConfig) -> Vec<CatalogFile> {
+    let known = HEADINGS.lock().map(|mut all| all.remove(root)).ok().flatten().unwrap_or_default();
+    let (catalog, kept) = entries(files, root, config, &known);
+    if let Ok(mut all) = HEADINGS.lock() {
+        all.insert(root.to_path_buf(), kept);
+    }
+    catalog
+}
+
+/// Catalog entries of a few changed files under `root`, as `build` would make them.
+pub fn rebuild_some(files: &[IndexedFile], root: &Path, config: &StudyConfig) -> Vec<CatalogFile> {
+    let known: Headings = HEADINGS.lock().map(|all| all.get(root).map(|h| files.iter().filter_map(|f| h.get(&f.path).map(|v| (f.path.clone(), v.clone()))).collect()).unwrap_or_default()).unwrap_or_default();
+    let (catalog, kept) = entries(files, root, config, &known);
+    if let Ok(mut all) = HEADINGS.lock() {
+        all.entry(root.to_path_buf()).or_default().extend(kept);
+    }
+    catalog
+}
+
+fn entries(files: &[IndexedFile], root: &Path, config: &StudyConfig, known: &Headings) -> (Vec<CatalogFile>, Headings) {
     let mut modules: Vec<&Module> = config.modules.iter().collect();
     modules.sort_by_key(|m| std::cmp::Reverse(m.folder.len()));
     let weeks: HashMap<&str, Vec<LectureWeek>> = config.semesters.iter().map(|s| (s.id.as_str(), schedule::lecture_weeks(s))).collect();
@@ -117,7 +136,6 @@ pub fn build(files: &[IndexedFile], root: &Path, config: &StudyConfig) -> Vec<Ca
         }
         false
     };
-    let known = HEADINGS.lock().map(|mut all| all.remove(root)).ok().flatten().unwrap_or_default();
     let mut kept: Headings = HashMap::with_capacity(known.len());
     let catalog = files
         .iter()
@@ -163,10 +181,7 @@ pub fn build(files: &[IndexedFile], root: &Path, config: &StudyConfig) -> Vec<Ca
             })
         })
         .collect();
-    if let Ok(mut all) = HEADINGS.lock() {
-        all.insert(root.to_path_buf(), kept);
-    }
-    catalog
+    (catalog, kept)
 }
 
 /// First Markdown heading, read from the start of the file.
