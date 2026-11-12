@@ -227,6 +227,7 @@ Hat eine andere App die Datei geändert, siehst du einen Hinweis. Nichts geht ve
 ### Nebeneinander
 
 - Rechtsklick auf einen Tab → {ui:Daneben öffnen}, oder einen Tab oder eine Datei aus der Liste in die rechte Hälfte ziehen. Dort steht {ui:Rechts öffnen}.
+- {key:openBeside} öffnet die Notiz, in der du bist, rechts daneben, {key:switchSide} wechselt zwischen den Seiten.
 - Der Tab der rechten Notiz zeigt als Symbol ein Fenster mit gefüllter rechter Hälfte. Ein Klick darauf springt in die rechte Notiz.
 - Eine farbige Linie unter der Leiste zeigt, in welcher Notiz du gerade bist.
 - Links in der rechten Notiz öffnen rechts.

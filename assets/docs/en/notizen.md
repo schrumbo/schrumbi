@@ -227,6 +227,7 @@ If another app changed the file, you see a notice. Nothing is lost until you cho
 ### Side by side
 
 - Right-click a tab → {ui:Daneben öffnen}, or drag a tab or a file from the list into the right half. It says {ui:Rechts öffnen} there.
+- {key:openBeside} opens the note you are in on the right, {key:switchSide} switches between the sides.
 - The tab of the right note shows a window with a filled right half as its icon. Clicking it jumps into the right note.
 - A coloured line under the bar shows which note you are in.
 - Links in the right note open on the right.

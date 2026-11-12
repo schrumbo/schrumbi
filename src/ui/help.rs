@@ -4,7 +4,9 @@ use std::cell::OnceCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::Sizable;
 use gpui_kit::prelude::*;
@@ -21,6 +23,7 @@ use crate::core::prefs::Shortcut;
 use crate::core::shortcuts::ShortcutAction;
 
 const SIDEBAR: f32 = 232.;
+const NARROW: f32 = 720.;
 const MEASURE: f32 = 600.;
 const STEP: f32 = 48.;
 
@@ -93,7 +96,21 @@ fn group_of(page: usize) -> usize {
 
 fn expanded(cx: &App) -> Vec<String> {
     let lang = i18n::lang();
-    PAGES.iter().map(|p| docs::expand(p.source(lang), &|name| key_text(name, cx))).collect()
+    PAGES.iter().map(|p| glue_keys(&docs::expand(p.source(lang), &|name| key_text(name, cx)))).collect()
+}
+
+fn glue_keys(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find("<kbd>") {
+        let (before, tail) = rest.split_at(open + "<kbd>".len());
+        out.push_str(before);
+        let end = tail.find("</kbd>").unwrap_or(tail.len());
+        out.push_str(&tail[..end].replace(' ', "\u{a0}"));
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -480,6 +497,44 @@ impl Help {
         true
     }
 
+    fn page_menu(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let me = cx.entity();
+        let titles: Vec<String> = self.docs.iter().map(|d| d.title.clone()).collect();
+        let current = titles.get(self.page).cloned().unwrap_or_default();
+        let selected = self.page;
+        let search = div()
+            .flex_1()
+            .min_w_0()
+            .key_context("SearchField")
+            .on_action(cx.listener(|h, _: &super::main_window::SearchDown, _, cx| { h.step_hit(1, cx); }))
+            .on_action(cx.listener(|h, _: &super::main_window::SearchUp, _, cx| { h.step_hit(-1, cx); }))
+            .child(Input::new(&self.search).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary)));
+        let pages = Button::new("help-pages-menu").label(current).dropdown_caret(true).dropdown_menu(move |mut menu, _, _| {
+            for (i, title) in titles.iter().enumerate() {
+                let e = me.clone();
+                menu = menu.item(PopupMenuItem::new(title.clone()).checked(i == selected).on_click(move |_, window, cx| e.update(cx, |h, cx| {
+                    h.clear_search(window, cx);
+                    h.go(i, None, cx);
+                })));
+            }
+            menu
+        });
+        div()
+            .w_full()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(space::S))
+            .px(px(space::M))
+            .pt(px(if super::chrome::CUSTOM { space::M } else { TOP }))
+            .pb(px(space::M))
+            .bg(t.sidebar)
+            .border_b_1()
+            .border_color(t.separator)
+            .child(search)
+            .child(pages)
+    }
+
     fn sidebar(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let mut groups = div().id("help-pages").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.pages).px(px(space::S)).pt(px(space::M)).pb(px(space::L)).flex().flex_col().gap(px(space::L));
         let mut current: Option<Group> = None;
@@ -687,6 +742,7 @@ impl Render for Help {
             window.focus(&self.focus, cx);
         }
         let t = Theme::get(cx);
+        let narrow = f32::from(window.viewport_size().width) < NARROW;
         let body: AnyElement = if self.searching(cx) {
             self.results(&t, cx)
         } else {
@@ -697,6 +753,7 @@ impl Render for Help {
             .track_focus(&self.focus)
             .size_full()
             .flex()
+            .when(narrow, |d| d.flex_col())
             .bg(t.content)
             .font_family(Theme::font_family())
             .text_size(px(font::BODY))
@@ -711,17 +768,25 @@ impl Render for Help {
                 window.focus(&h.focus, cx);
                 h.history(true, cx);
             }))
-            .child(self.sidebar(&t, cx))
-            .child(div().flex_1().min_w_0().h_full().child(body));
+            .child(if narrow { self.page_menu(&t, cx).into_any_element() } else { self.sidebar(&t, cx).into_any_element() })
+            .child(div().flex_1().min_w_0().min_h_0().when(!narrow, |d| d.h_full()).child(body));
         super::chrome::frame(tr("Schrumbi-Anleitung"), content, &t)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::glue_keys;
     use crate::core::docs::{self, PAGES, Piece};
     use crate::core::i18n::Lang;
     use crate::core::shortcuts::ShortcutAction;
+
+    #[test]
+    fn a_shortcut_chip_keeps_its_words_together() {
+        assert_eq!(glue_keys("Dann <kbd>Ctrl Alt</kbd> und <kbd>A B</kbd>."), "Dann <kbd>Ctrl\u{a0}Alt</kbd> und <kbd>A\u{a0}B</kbd>.");
+        assert_eq!(glue_keys("kein chip a b"), "kein chip a b");
+        assert_eq!(glue_keys("offen <kbd>a b"), "offen <kbd>a\u{a0}b");
+    }
 
     fn binds(source: &str, name: &str) -> bool {
         regex::Regex::new(&format!(r"(?:kb|KeyBinding::new)\([^\n]*\b{}\b", regex::escape(name))).is_ok_and(|r| r.is_match(source))

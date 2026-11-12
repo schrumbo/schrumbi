@@ -17,10 +17,13 @@ Type, choose with {key:up} {key:down}, {key:return} runs it. With no input, your
 | `synchro` | {ui:Jetzt synchronisieren} |
 | `tages` | {ui:Tagesnotiz öffnen} |
 | `pdf` | {ui:Als PDF exportieren}, when a note is open |
+| `delete` | {ui:Notiz löschen}, when a note is open |
+
+With no match, {ui:In allen Dateien suchen} with your input is on top, {key:return} starts the search.
 
 ## Quick Open
 
-With no input, open tabs and recently opened files are on top.
+With no input, open tabs and recently opened files are on top. With input, the name that matches exactly is first, then names that start with it.
 
 | You type | Result |
 |---|---|

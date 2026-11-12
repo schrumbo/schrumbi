@@ -231,6 +231,11 @@ pub fn module_for<'a>(course: &str, modules: &'a [Module]) -> Option<&'a Module>
 
 /// iCalendar export of deadlines with a display alarm `alarm_hours` before each.
 pub fn export(assignments: &[&Assignment], config: &StudyConfig, alarm_hours: i64) -> String {
+    export_with(assignments, config, alarm_hours, &|_| None)
+}
+
+/// Like `export`, with `own` giving an entry its own alarm: the hours before, or 0 for no alarm at all.
+pub fn export_with(assignments: &[&Assignment], config: &StudyConfig, alarm_hours: i64, own: &dyn Fn(&Assignment) -> Option<i64>) -> String {
     let stamp = utc(Utc::now());
     let mut lines = vec![
         "BEGIN:VCALENDAR".to_string(),
@@ -253,13 +258,18 @@ pub fn export(assignments: &[&Assignment], config: &StudyConfig, alarm_hours: i6
             format!("DTEND:{}", utc(due)),
             format!("SUMMARY:{}", escape(&title)),
             format!("DESCRIPTION:{}", escape(&config.module(&a.module_id).map_or(String::new(), |m| m.name.clone()))),
-            "BEGIN:VALARM".into(),
-            "ACTION:DISPLAY".into(),
-            format!("DESCRIPTION:{}", escape(&title)),
-            format!("TRIGGER:-PT{}H", alarm_hours.max(0)),
-            "END:VALARM".into(),
-            "END:VEVENT".into(),
         ]);
+        let chosen = own(a);
+        if chosen != Some(0) {
+            lines.extend([
+                "BEGIN:VALARM".to_string(),
+                "ACTION:DISPLAY".into(),
+                format!("DESCRIPTION:{}", escape(&title)),
+                format!("TRIGGER:-PT{}H", chosen.unwrap_or(alarm_hours).max(0)),
+                "END:VALARM".into(),
+            ]);
+        }
+        lines.push("END:VEVENT".into());
     }
     for semester in &config.semesters {
         for module in config.modules.iter().filter(|m| m.semester == semester.id) {

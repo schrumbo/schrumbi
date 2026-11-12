@@ -37,7 +37,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     let (sync_setup, conflicts) = lib.update(cx, |l, _| (std::mem::take(&mut l.show_sync_setup), std::mem::take(&mut l.show_conflicts)));
     if sync_setup {
         let view = cx.new(|cx| super::sync_panel::SyncSetup::new(window, cx));
-        show(view, 600., window, cx);
+        show(view, 760., window, cx);
         return;
     }
     if conflicts {
@@ -65,13 +65,13 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     }
     if let Some(id) = lib.update(cx, |l, _| l.link_pick.take()) {
         let view = cx.new(|cx| QuickOpen::linking(id, window, cx));
-        show(view, 620., window, cx);
+        show_picker(view, 620., window, cx);
         return;
     }
     let (palette, shortcuts) = lib.update(cx, |l, _| (std::mem::take(&mut l.show_palette), std::mem::take(&mut l.show_shortcuts)));
     if palette {
         let view = cx.new(|cx| Palette::new(window, cx));
-        show(view, 620., window, cx);
+        show_picker(view, 620., window, cx);
         return;
     }
     if shortcuts {
@@ -115,10 +115,10 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
             crate::core::prefs::mark_used("day_entry");
         }
         let view = cx.new(|cx| QuickAdd::new(module, kind, day, window, cx));
-        show(view, 520., window, cx);
+        show_with(view, 520., false, false, window, cx);
     } else if quick_open {
         let view = cx.new(|cx| QuickOpen::new(window, cx));
-        show(view, 620., window, cx);
+        show_picker(view, 620., window, cx);
     }
 }
 
@@ -164,13 +164,27 @@ pub fn close_popovers(window: &mut Window, cx: &mut App) -> bool {
 
 /// Presents a sheet in a dialog that closes when the sheet emits `Dismissed`.
 fn show<V: Render + EventEmitter<Dismissed>>(view: Entity<V>, width: f32, window: &mut Window, cx: &mut App) {
+    show_with(view, width, true, false, window, cx);
+}
+
+/// Presents a search sheet without a close button, below the title bar and never wider than the window.
+fn show_picker<V: Render + EventEmitter<Dismissed>>(view: Entity<V>, width: f32, window: &mut Window, cx: &mut App) {
+    show_with(view, width, false, true, window, cx);
+}
+
+fn show_with<V: Render + EventEmitter<Dismissed>>(view: Entity<V>, width: f32, close_button: bool, below_bar: bool, window: &mut Window, cx: &mut App) {
     let handle = window.window_handle();
     cx.subscribe(&view, move |_, _: &Dismissed, cx| {
         let _ = handle.update(cx, |_, window, cx| window.close_dialog(cx));
         super::state::return_focus_to_page(cx);
     })
     .detach();
-    window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(width)).p_0().on_ok(pass_enter).child(view.clone()));
+    window.open_dialog(cx, move |d, window, _| {
+        let size = window.viewport_size();
+        let (w, h) = (f32::from(size.width), f32::from(size.height));
+        let d = d.entrance(DialogEntrance::FadeSlide).w(px(width)).p_0().close_button(close_button).on_ok(pass_enter).child(view.clone());
+        if below_bar { d.w(px(width.min(w - 2. * super::theme::space::L).max(0.))).margin_top(px(super::quick::dialog_top(h))) } else { d }
+    });
 }
 
 /// Opens a sheet built on the spot, for pages with their own forms.

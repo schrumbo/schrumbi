@@ -6,10 +6,10 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::app;
-use super::motion::Soft;
+use super::motion::{Soft, row_fill};
 use super::quick::{Dismissed, QuickDown, QuickUp};
 use super::state::{self, act};
-use super::theme::{Theme, font, iconsize, radius, space};
+use super::theme::{Theme, font, hover, iconsize, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Route;
@@ -69,7 +69,7 @@ fn commands(cx: &App) -> Vec<Command> {
     let mut list = Vec::new();
     let mut extra: Vec<Command> = Vec::new();
     let mut add = |group: &str, label: String, icon: &'static str, keys: Option<String>, run: Run| list.push(Command { label, group: group.to_string(), icon, keys, run, aliases: String::new() });
-    let (go, new, file, view, edit, general, cards) = (tr("Gehe zu"), tr("Neu"), tr("Ablage"), tr("Darstellung"), tr("Bearbeiten"), tr("Schrumbi"), tr("Karten"));
+    let (go, new, file, view, edit, general, cards, sync) = (tr("Gehe zu"), tr("Neu"), tr("Ablage"), tr("Darstellung"), tr("Bearbeiten"), tr("Schrumbi"), tr("Karten"), tr("Sync"));
     let (git, conflicts) = (super::sync::enabled_here(cx), !super::sync::get(cx).conflicts.is_empty());
     let in_document = state::read(cx, |l| matches!(l.route(), Route::Doc(_)));
     let in_notes = in_document || state::read(cx, |l| matches!(l.route(), Route::Notes));
@@ -100,7 +100,7 @@ fn commands(cx: &App) -> Vec<Command> {
             add(&group, tr("Meine behalten"), "check", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.keep_note_mine(&keep)))));
         }
         if conflicts {
-            add(&general, tr("Konflikte lösen…"), "git-merge", None, Run::Action(Box::new(app::ResolveConflicts)));
+            add(&sync, tr("Konflikte lösen…"), "cloud", None, Run::Action(Box::new(app::ResolveConflicts)));
         }
         add(&go, S::GoToday.label(), "layout-grid", keys(S::GoToday), Run::Action(Box::new(app::GoToday)));
         if state::read(cx, |l| matches!(l.route(), Route::Today)) {
@@ -252,14 +252,11 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&file, tr("Umbenennen…"), "pencil", keys(S::RenameNote), Run::Call(Rc::new(move |cx| app::rename_file(target.clone(), cx))));
     }
     if in_document && state::read(cx, |l| l.split_document.is_some()) {
-        add(&view, tr("Zur anderen Seite wechseln"), "repeat", None, Run::Call(Rc::new(|cx| act(cx, |l| {
-            l.beside_active = !l.beside_active;
-            if l.beside_active { l.focus_beside = true } else { l.focus_document = true }
-        }))));
+        add(&view, S::SwitchSide.label(), "repeat", keys(S::SwitchSide), Run::Action(Box::new(app::SwitchSide)));
         add(&view, tr("Geteilte Ansicht schließen"), "columns-2", None, Run::Call(Rc::new(|cx| act(cx, |l| l.set_split(None)))));
     }
-    if let Some(doc) = focused.clone().filter(|d| state::read(cx, |l| l.split_document.is_none() && l.can_drop_document(d, crate::core::library::DocDrop::Beside, None))) {
-        add(&view, tr("Daneben öffnen"), "columns-2", None, Run::Call(Rc::new(move |cx| act(cx, |l| l.drop_document(&doc, crate::core::library::DocDrop::Beside, None)))));
+    if focused.as_ref().is_some_and(|d| state::read(cx, |l| l.split_document.is_none() && l.can_drop_document(d, crate::core::library::DocDrop::Beside, None))) {
+        add(&view, S::OpenBeside.label(), "columns-2", keys(S::OpenBeside), Run::Action(Box::new(app::OpenBeside)));
     }
     if state::read(cx, |l| l.can_undo()) {
         add(&edit, tr("Rückgängig"), "undo-2", Some(fixed_keys("Z")), Run::Action(Box::new(app::Undo)));
@@ -275,12 +272,12 @@ fn commands(cx: &App) -> Vec<Command> {
             });
         })));
     }
-    add(&general, S::Sync.label(), "cloud", keys(S::Sync), Run::Action(Box::new(app::SyncNow)));
+    add(&sync, S::Sync.label(), "cloud", keys(S::Sync), Run::Action(Box::new(app::SyncNow)));
     if !git {
-        add(&general, tr("Sync einrichten…"), "git-branch", None, Run::Action(Box::new(app::SyncSetup)));
+        add(&sync, tr("Sync einrichten…"), "cloud", None, Run::Action(Box::new(app::SyncSetup)));
     }
     if git {
-        add(&general, tr("Sync-Einstellungen"), "settings", None, Run::Call(Rc::new(|cx| super::settings::open_sync(cx))));
+        add(&sync, tr("Sync-Einstellungen"), "cloud", None, Run::Call(Rc::new(|cx| super::settings::open_sync(cx))));
     }
     let notes = tr("Notizen");
     let obsidian = state::read(cx, |l| l.is_vault);
@@ -299,6 +296,9 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&notes, tr("Dateien ein- oder ausblenden"), "panel-left", None, Run::Call(Rc::new(|cx| super::notes_page::set_hidden(!crate::core::prefs::get().notes_explorer_hidden, cx))));
     }
     add(&notes, S::ShowGraph.label(), "waypoints", keys(S::ShowGraph), Run::Action(Box::new(app::ShowGraph)));
+    if let Some(doc) = active.clone() {
+        extra.push(Command { label: tr("Notiz löschen"), group: notes.clone(), icon: "trash-2", keys: None, run: Run::Call(Rc::new(move |cx| state::trash(vec![doc.clone()], cx))), aliases: tr("entfernen papierkorb trash delete") });
+    }
     if let Some(note) = active {
         let (a, b, c, d, e) = (note.clone(), note.clone(), note.clone(), note.clone(), note);
         add(&notes, tr("Graph um diese Notiz"), "waypoints", None, Run::Call(Rc::new(move |cx| {
@@ -384,6 +384,10 @@ fn commands(cx: &App) -> Vec<Command> {
         })),
         aliases: appearance.clone(),
     });
+    let sync_aliases = tr("git commit push pull verlauf repository backup");
+    for c in list.iter_mut().filter(|c| c.group == sync) {
+        c.aliases = sync_aliases.clone();
+    }
     list.extend(extra);
     list
 }
@@ -392,10 +396,20 @@ fn fold(s: &str) -> String {
     s.to_lowercase().replace('ä', "a").replace('ö', "o").replace('ü', "u").replace('ß', "ss")
 }
 
-/// How well `query` fits `label`: whole prefix first, then a word start, then anywhere. All words must occur.
+/// How well `query` fits `label`: the whole label or alias first, then a prefix, a word start, then anywhere. All words must occur.
 fn score(label: &str, group: &str, aliases: &str, query: &str) -> Option<u32> {
     let (label, group, aliases, query) = (fold(label), fold(group), fold(aliases), fold(query));
+    let whole = query.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut total = 0;
+    if !whole.is_empty() {
+        if label == whole {
+            total += 100;
+        } else if aliases.split_whitespace().any(|w| w == whole) {
+            total += 50;
+        } else if label.starts_with(&whole) {
+            total += 20;
+        }
+    }
     for term in query.split_whitespace() {
         total += if label.starts_with(term) {
             3
@@ -409,6 +423,9 @@ fn score(label: &str, group: &str, aliases: &str, query: &str) -> Option<u32> {
     }
     Some(total)
 }
+
+const PALETTE_CHROME: f32 = 64.;
+const PALETTE_LIST: f32 = 356.;
 
 /// ⇧⌘P: find and run any action of the app.
 pub struct Palette {
@@ -434,6 +451,7 @@ impl Palette {
             InputEvent::PressEnter { .. } => this.run(window, cx),
             _ => {}
         })];
+        crate::core::themes::rescan();
         Self { query, commands: commands(cx), index: 0, focused: false, scroll: ScrollHandle::new(), _subs: subs }
     }
 
@@ -445,7 +463,7 @@ impl Palette {
                 found.sort_by_key(|(i, _)| recent.0.iter().position(|l| *l == self.commands[*i].label).unwrap_or(usize::MAX));
             }
         } else {
-            found.sort_by(|a, b| b.1.cmp(&a.1));
+            found.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| self.commands[a.0].label.chars().count().cmp(&self.commands[b.0].label.chars().count())));
         }
         found.into_iter().map(|(i, _)| i).collect()
     }
@@ -459,8 +477,28 @@ impl Palette {
         cx.notify();
     }
 
+    fn search_everywhere(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let q = self.query.read(cx).value().trim().to_string();
+        if q.is_empty() {
+            return;
+        }
+        cx.emit(Dismissed);
+        window.defer(cx, move |_, cx| {
+            act(cx, |l| {
+                l.search_query = q.clone();
+                l.set_route(Route::Search);
+            })
+        });
+    }
+
     fn run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(i) = self.matches(cx).get(self.index).copied() else { return };
+        let found = self.matches(cx);
+        let Some(i) = found.get(self.index).copied() else {
+            if found.is_empty() {
+                self.search_everywhere(window, cx);
+            }
+            return;
+        };
         let label = self.commands[i].label.clone();
         let recent = &mut cx.default_global::<Recent>().0;
         recent.retain(|l| *l != label);
@@ -500,8 +538,14 @@ impl Render for Palette {
         let found = self.matches(cx);
         self.index = self.index.min(found.len().saturating_sub(1));
         let me = cx.entity();
-        let rows = found.iter().enumerate().map(|(row, i)| {
-            let c = &self.commands[*i];
+        let typed = self.query.read(cx).value().trim().to_string();
+        let fallback = found.is_empty() && !typed.is_empty();
+        let entries: Vec<(&'static str, String, String, Option<String>)> = if fallback {
+            vec![("search", trf("In allen Dateien suchen: „%@“", &[&typed]), String::new(), keys(S::SearchFiles))]
+        } else {
+            found.iter().map(|i| &self.commands[*i]).map(|c| (c.icon, c.label.clone(), c.group.clone(), c.keys.clone())).collect()
+        };
+        let rows = entries.into_iter().enumerate().map(|(row, (icon_name, label, group, shown))| {
             let selected = row == self.index;
             let (fg, sub) = if selected { (white().into(), Hsla::from(white()).opacity(0.85)) } else { (t.primary, t.secondary) };
             let e = me.clone();
@@ -512,22 +556,22 @@ impl Render for Palette {
                 .gap(px(space::S))
                 .px(px(space::M))
                 .py(px(space::S))
-                .rounded(px(radius::INNER))
                 .cursor_pointer()
                 .text_color(fg)
-                .when(selected, |d| d.bg(t.accent))
-                .when(!selected, |d| d.soft(t.ink.opacity(0.05), radius::INNER))
-                .child(icon(c.icon, iconsize::M, sub))
-                .child(div().flex_1().min_w_0().truncate().child(c.label.clone()))
-                .child(div().text_size(px(font::CAPTION)).text_color(sub).child(c.group.clone()))
-                .when_some(c.keys.clone(), |d, k| d.child(div().min_w(px(space::XXL + space::L)).flex().justify_end().text_size(px(font::CAPTION)).font_features(tabular()).text_color(sub).child(k)))
+                .when(selected, |d| d.relative().child(row_fill(t.accent)))
+                .when(!selected, |d| d.soft_row(t.ink.opacity(hover::ROW)))
+                .child(icon(icon_name, iconsize::M, sub))
+                .child(div().flex_1().min_w_0().truncate().child(label))
+                .when(!group.is_empty(), |d| d.child(div().text_size(px(font::CAPTION)).text_color(sub).child(group)))
+                .when_some(shown, |d, k| d.child(div().min_w(px(space::XXL + space::L)).flex().justify_end().text_size(px(font::CAPTION)).font_features(tabular()).text_color(sub).child(k)))
                 .on_click(move |_, window, cx| e.update(cx, |p, cx| {
                     p.index = row;
                     p.run(window, cx);
                 }))
                 .into_any_element()
         });
-        let list = div().flex().flex_col().gap(px(space::XXS)).p(px(space::S)).children(rows.collect::<Vec<_>>());
+        let list = div().flex().flex_col().gap(px(space::XXS)).px(px(space::XS)).py(px(space::S)).children(rows.collect::<Vec<_>>());
+        let room = super::quick::list_room(f32::from(window.viewport_size().height), PALETTE_CHROME, PALETTE_LIST);
         div()
             .w_full()
             .flex()
@@ -537,11 +581,7 @@ impl Render for Palette {
             .on_action(cx.listener(|p, _: &QuickUp, _, cx| p.step(-1, cx)))
             .child(div().flex().items_center().gap(px(space::S)).p(px(space::L)).child(icon("search", iconsize::M, t.secondary)).child(div().flex_1().child(Input::new(&self.query).appearance(false))))
             .child(div().h(px(1.)).bg(t.separator))
-            .child(if found.is_empty() {
-                unavailable("search", tr("Keine Treffer"), "", &t).h(px(360.)).into_any_element()
-            } else {
-                div().relative().h(px(360.)).child(div().id("pal-list").size_full().overflow_y_scroll().track_scroll(&self.scroll).child(list)).vertical_scrollbar(&self.scroll).into_any_element()
-            })
+            .child(div().relative().max_h(px(room)).child(div().id("pal-list").max_h(px(room)).overflow_y_scroll().track_scroll(&self.scroll).child(list)).vertical_scrollbar(&self.scroll))
     }
 }
 

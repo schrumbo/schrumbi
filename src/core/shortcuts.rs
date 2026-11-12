@@ -28,6 +28,8 @@ pub enum ShortcutAction {
     CloseTab,
     NextTab,
     PreviousTab,
+    OpenBeside,
+    SwitchSide,
     TogglePreview,
     SplitPreview,
     ExportPdf,
@@ -113,7 +115,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 73] = [
+    pub const ALL: [ShortcutAction; 75] = [
         Self::GoToday,
         Self::GoGrid,
         Self::GoRecord,
@@ -136,6 +138,8 @@ impl ShortcutAction {
         Self::CloseTab,
         Self::NextTab,
         Self::PreviousTab,
+        Self::OpenBeside,
+        Self::SwitchSide,
         Self::TogglePreview,
         Self::SplitPreview,
         Self::ExportPdf,
@@ -214,6 +218,8 @@ impl ShortcutAction {
             Self::CloseTab => "closeTab",
             Self::NextTab => "nextTab",
             Self::PreviousTab => "previousTab",
+            Self::OpenBeside => "openBeside",
+            Self::SwitchSide => "switchSide",
             Self::TogglePreview => "togglePreview",
             Self::SplitPreview => "splitPreview",
             Self::ExportPdf => "exportPDF",
@@ -281,7 +287,7 @@ impl ShortcutAction {
             Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::GoModule1 | Self::GoModule2 | Self::GoModule3 | Self::GoBack => Group::Navigation,
             Self::ShowGraph | Self::ToggleFullscreen => Group::View,
             Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::OpenOtherWorkspace | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::ToggleAi | Self::Refresh => Group::General,
-            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote | Self::ToggleLive | Self::MarkText | Self::RotatePagesLeft | Self::RotatePagesRight | Self::MovePagesUp | Self::MovePagesDown | Self::DeletePages | Self::InsertPdf | Self::PenTool | Self::EraserTool | Self::NoteTool | Self::ExportMarkedPdf | Self::PageList | Self::NoteOnSelection | Self::SelectTool | Self::MarkList | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick => Group::Documents,
+            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::OpenBeside | Self::SwitchSide | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote | Self::ToggleLive | Self::MarkText | Self::RotatePagesLeft | Self::RotatePagesRight | Self::MovePagesUp | Self::MovePagesDown | Self::DeletePages | Self::InsertPdf | Self::PenTool | Self::EraserTool | Self::NoteTool | Self::ExportMarkedPdf | Self::PageList | Self::NoteOnSelection | Self::SelectTool | Self::MarkList | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick => Group::Documents,
             _ => Group::Editor,
         }
     }
@@ -329,6 +335,8 @@ impl ShortcutAction {
             Self::CloseTab => "Tab schließen",
             Self::NextTab => "Nächster Tab",
             Self::PreviousTab => "Vorheriger Tab",
+            Self::OpenBeside => "Daneben öffnen",
+            Self::SwitchSide => "Zur anderen Seite wechseln",
             Self::TogglePreview => "Lesen / Bearbeiten wechseln",
             Self::SplitPreview => "Geteilte Ansicht",
             Self::ExportPdf => "Als PDF exportieren",
@@ -400,6 +408,7 @@ impl ShortcutAction {
             match self {
                 Self::Indent => return Some(s("right", true, false, true, false)),
                 Self::Outdent => return Some(s("left", true, false, true, false)),
+                Self::OpenBeside => return Some(s("right", true, true, true, false)),
                 _ => {}
             }
         }
@@ -432,6 +441,8 @@ impl ShortcutAction {
             Self::CloseTab => s("w", true, false, false, false),
             Self::NextTab => s("tab", false, false, false, true),
             Self::PreviousTab => s("tab", false, true, false, true),
+            Self::OpenBeside => s("right", true, false, true, false),
+            Self::SwitchSide => s("f6", false, false, false, false),
             Self::TogglePreview => s("v", true, true, false, false),
             Self::SplitPreview => s("v", true, false, true, false),
             Self::ExportPdf => s("e", true, true, false, false),
@@ -790,7 +801,7 @@ impl Shortcut {
             ("down", _) => "↓".into(),
             ("left", _) => "←".into(),
             ("right", _) => "→".into(),
-            ("space", _) => "Space".into(),
+            ("space", _) => tr("Leertaste"),
             ("home", _) => "Home".into(),
             ("end", _) => "End".into(),
             ("tab", true) => "⇥".into(),
@@ -1134,5 +1145,24 @@ mod tests {
         ShortcutAction::ToggleComment.set(None);
         assert_eq!(ShortcutAction::ToggleComment.shortcut(), None);
         assert!(!ShortcutAction::ToggleComment.is_customized());
+    }
+
+    #[test]
+    fn the_split_actions_have_keys_no_other_action_has() {
+        for os in [Os::Mac, Os::Windows, Os::Linux] {
+            for mine in [ShortcutAction::OpenBeside, ShortcutAction::SwitchSide] {
+                let keys = mine.default_on(os).expect("ships with keys");
+                assert!(mine.reserved_on(&keys, os).is_none(), "{} {}", mine.label(), keys.display());
+                for other in ShortcutAction::ALL.into_iter().filter(|a| *a != mine) {
+                    assert!(other.default_on(os).as_ref() != Some(&keys), "{} shares keys with {}", mine.label(), other.label());
+                }
+            }
+        }
+        assert_eq!(ShortcutAction::SwitchSide.default_on(Os::Windows), Some(s("f6", false, false, false, false)));
+    }
+
+    #[test]
+    fn the_space_key_is_named_in_the_users_language() {
+        assert_eq!(s("space", false, false, false, false).parts(), vec![tr("Leertaste")]);
     }
 }

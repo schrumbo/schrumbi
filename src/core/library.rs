@@ -1804,7 +1804,7 @@ impl Library {
         self.follow_outside_moves();
         if let Some(adopted) = super::cards::take_notice() {
             if self.undo_steps.is_empty() && self.redo_steps.is_empty() {
-                self.cards_known(adopted);
+                self.record(adopted.label(), vec![Change::Cards { root: adopted.root, swaps: adopted.changes }]);
             } else {
                 let message = adopted.message();
                 let (root, swaps) = (adopted.root, adopted.changes);
@@ -2951,6 +2951,35 @@ impl Library {
         self.commit(trf("%lld erledigt", &[&ids.len()]), "circle-check", vec![before]);
     }
 
+    /// Moves every deadline in `ids` to `date` at its own time of day, as one step to take back.
+    pub fn move_all(&mut self, ids: &[String], date: NaiveDate) {
+        let before = self.state_snapshot();
+        let mut moved = 0;
+        for id in ids {
+            let Some(a) = self.assignment(id).cloned() else { continue };
+            let Some(due) = calendar::same_time_on(a.due, date) else { continue };
+            if due.date_naive() == a.due.date_naive() {
+                continue;
+            }
+            let due = due.with_timezone(&Utc);
+            if a.is_manual() {
+                let Some(raw) = id.strip_prefix("manual.") else { continue };
+                let Some(m) = self.state.manual.iter_mut().find(|m| m.id == raw) else { continue };
+                m.due = due;
+            } else {
+                self.state.moved.insert(id.clone(), due);
+            }
+            moved += 1;
+        }
+        if moved == 0 {
+            return;
+        }
+        self.save_state();
+        self.refresh();
+        let when = day::day_header(date, day::local_date(self.now));
+        self.commit(trf("%lld verschoben auf %@", &[&moved, &when]), "calendar", vec![before]);
+    }
+
     pub fn confirm_all(&mut self, ids: &[String]) {
         let before = self.state_snapshot();
         for id in ids {
@@ -4024,7 +4053,7 @@ impl Library {
     pub fn ics(&self) -> Option<String> {
         let c = self.config.as_ref()?;
         let items: Vec<&Assignment> = self.semester_assignments().into_iter().filter(|a| self.status(a) != Status::Skipped).collect();
-        Some(ics::export(&items, c, prefs::get().reminder_hours))
+        Some(ics::export_with(&items, c, prefs::get().reminder_hours, &|a| self.own_reminder(a)))
     }
 
     pub fn ics_file_name(&self) -> String {
@@ -4411,23 +4440,33 @@ impl Library {
 
     // MARK: Reminders
 
+    /// The reminder a manual entry was given when it was made: hours before, 0 for none.
+    pub fn own_reminder(&self, a: &Assignment) -> Option<i64> {
+        let id = a.id.strip_prefix("manual.")?;
+        self.state.manual.iter().find(|m| m.id == id)?.remind_hours
+    }
+
     pub fn reminders(&self) -> Vec<Reminder> {
         let p = prefs::get();
+        self.reminders_with(p.reminders_enabled, p.reminder_hours, p.reminder_day_before)
+    }
+
+    fn reminders_with(&self, enabled: bool, hours: i64, day_before: bool) -> Vec<Reminder> {
         let Some(c) = self.config.as_ref() else { return Vec::new() };
-        if !p.reminders_enabled {
-            return Vec::new();
-        }
         let mut out = Vec::new();
         for a in self.upcoming() {
+            let (before, early_too) = reminder_plan(self.own_reminder(a), enabled, hours, day_before && !a.optional);
             let code = c.module(&a.module_id).map_or("", |m| m.code.as_str());
             let title = format!("{code} · {}", a.title);
             let due = day::due(a.due, self.now);
-            let soon = a.due - Duration::hours(p.reminder_hours);
-            if p.reminder_hours > 0 && soon > self.now {
-                out.push(Reminder { assignment_id: a.id.clone(), upload: a.upload, id: format!("{}.h", a.id), title: title.clone(), body: trf("Fällig in %lld Std. (%@)", &[&p.reminder_hours, &due]), fire: soon });
+            if let Some(h) = before {
+                let soon = a.due - Duration::hours(h);
+                if soon > self.now {
+                    out.push(Reminder { assignment_id: a.id.clone(), upload: a.upload, id: format!("{}.h", a.id), title: title.clone(), body: trf("Fällig in %lld Std. (%@)", &[&h, &due]), fire: soon });
+                }
             }
             let early = a.due - Duration::days(1);
-            if p.reminder_day_before && !a.optional && early > self.now {
+            if early_too && early > self.now {
                 out.push(Reminder { assignment_id: a.id.clone(), upload: a.upload, id: format!("{}.d", a.id), title, body: trf("Fällig morgen (%@)", &[&due]), fire: early });
             }
         }
@@ -4439,6 +4478,15 @@ impl Library {
     /// Snapshot for widgets and the tray: overdue first, then the next mandatory deadlines.
     pub fn tray_items(&self) -> Vec<&Assignment> {
         self.action_items.iter().take(2).chain(self.upcoming().into_iter().filter(|a| !a.optional).take(7)).take(8).collect()
+    }
+}
+
+/// Hours before the due date to remind, and whether to remind a day before too. An entry's own choice replaces the settings, even while they are off.
+fn reminder_plan(own: Option<i64>, enabled: bool, hours: i64, day_before: bool) -> (Option<i64>, bool) {
+    match own {
+        Some(h) => (Some(h).filter(|h| *h > 0), false),
+        None if !enabled => (None, false),
+        None => (Some(hours).filter(|h| *h > 0), day_before),
     }
 }
 
@@ -4951,4 +4999,87 @@ pub fn export_archive(root: &Path, destination: &Path) -> Result<Vec<PathBuf>> {
         return Err(e);
     }
     Ok(skipped)
+}
+
+#[cfg(test)]
+mod reminder_tests {
+    use super::*;
+    use crate::core::model::ManualAssignment;
+
+    fn library(name: &str) -> Library {
+        let root = std::env::temp_dir().join(format!("schrumbi-remind-{}", std::process::id())).join(name);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let today = chrono::Local::now().date_naive();
+        let config = serde_json::json!({
+            "version": 2, "name": "Test", "author": "Muster-M", "inbox": "_Inbox",
+            "semesters": [{ "id": "s", "name": "WS", "start": (today - chrono::Days::new(50)).format("%Y-%m-%d").to_string(), "end": (today + chrono::Days::new(55)).format("%Y-%m-%d").to_string(), "breaks": [], "holidays": [] }],
+            "modules": [{ "id": "m0", "code": "M0", "name": "Modul", "semester": "s", "folder": "M0", "color": "blue", "naming": "{code}_{yy}_{title}_{author}_{date}", "rules": [] }],
+        });
+        std::fs::write(root.join("schrumbi.json"), serde_json::to_vec_pretty(&config).unwrap()).unwrap();
+        let mut lib = Library::new();
+        lib.open(&root);
+        if let Some(job) = lib.scan_job() {
+            lib.apply_scan(job.run());
+        }
+        lib
+    }
+
+    fn due_in(lib: &Library, hours: i64) -> DateTime<Utc> {
+        (lib.now + Duration::hours(hours)).with_timezone(&Utc)
+    }
+
+    #[test]
+    fn an_entry_without_a_choice_follows_the_settings() {
+        let mut lib = library("follows");
+        let due = due_in(&lib, 100);
+        lib.add_manual(ManualAssignment { module: "m0".into(), title: "A".into(), due, ..Default::default() });
+        let fires: Vec<_> = lib.reminders_with(true, 3, true).iter().map(|r| r.fire).collect();
+        assert_eq!(fires.len(), 2);
+        assert!(fires.contains(&(due.with_timezone(&Local) - Duration::hours(3))));
+        assert!(fires.contains(&(due.with_timezone(&Local) - Duration::days(1))));
+        assert!(lib.reminders_with(false, 3, true).is_empty());
+    }
+
+    #[test]
+    fn an_entry_set_to_none_gets_no_reminder_even_when_the_settings_remind() {
+        let mut lib = library("none");
+        let due = due_in(&lib, 100);
+        lib.add_manual(ManualAssignment { module: "m0".into(), title: "A".into(), due, remind_hours: Some(0), ..Default::default() });
+        assert!(lib.reminders_with(true, 3, true).is_empty());
+    }
+
+    #[test]
+    fn an_entry_with_hours_fires_that_long_before_and_only_then() {
+        let mut lib = library("hours");
+        let due = due_in(&lib, 100);
+        lib.add_manual(ManualAssignment { module: "m0".into(), title: "A".into(), due, remind_hours: Some(24), ..Default::default() });
+        for settings in [(true, 3, true), (false, 3, false)] {
+            let found = lib.reminders_with(settings.0, settings.1, settings.2);
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].fire, due.with_timezone(&Local) - Duration::hours(24));
+        }
+    }
+
+    #[test]
+    fn a_reminder_that_would_already_have_passed_is_not_scheduled() {
+        let mut lib = library("passed");
+        let due = due_in(&lib, 2);
+        lib.add_manual(ManualAssignment { module: "m0".into(), title: "A".into(), due, remind_hours: Some(24), ..Default::default() });
+        assert!(lib.reminders_with(true, 3, true).is_empty());
+    }
+
+    #[test]
+    fn the_calendar_export_honours_the_choice_per_entry() {
+        let mut lib = library("ics");
+        let due = due_in(&lib, 100);
+        for (title, hours) in [("Keiner", Some(0)), ("Tag", Some(24)), ("Standard", None)] {
+            lib.add_manual(ManualAssignment { module: "m0".into(), title: title.into(), due, remind_hours: hours, ..Default::default() });
+        }
+        let text = lib.ics().unwrap().replace("\r\n ", "");
+        let event = |title: &str| text.split("BEGIN:VEVENT").find(|e| e.contains(&format!("SUMMARY:M0 · {title}"))).unwrap().to_string();
+        assert!(!event("Keiner").contains("VALARM"));
+        assert!(event("Tag").contains("TRIGGER:-PT24H"));
+        assert!(event("Standard").contains(&format!("TRIGGER:-PT{}H", prefs::get().reminder_hours.max(0))));
+    }
 }
