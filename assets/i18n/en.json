@@ -2105,5 +2105,7 @@
   "%lld Änderungen": "%lld changes",
   "Der Titel darf nicht leer sein.": "The title cannot be empty.",
   "Das Programm wurde unerwartet beendet (Code %@).": "The program quit unexpectedly (code %@).",
-  "Das Programm ist beim Anbieter nicht angemeldet. Melde dich dort an, dann starte neu.": "The program is not signed in with its provider. Sign in there, then restart."
+  "Das Programm ist beim Anbieter nicht angemeldet. Melde dich dort an, dann starte neu.": "The program is not signed in with its provider. Sign in there, then restart.",
+  "Geteilte Ansicht gibt es nur im Quelltext": "Split view is only available in the source editor",
+  "Noch keine Überschriften": "No headings yet"
 }

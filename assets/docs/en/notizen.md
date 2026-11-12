@@ -150,6 +150,8 @@ On the left in {ui:Seiten}, the page list. {key:pageList} shows and hides it. A 
 
 You choose the editor in {key:OpenSettings} → {ui:Notizen}: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} or {ui:Quelltext: Text mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} in the {ui:Darstellung} menu or the {key:CommandPalette} switches at once.
 
+Switching keeps your place in the text, and {key:Undo} also takes back changes made before the switch. The buttons stay where they are; {ui:Geteilte Ansicht} is greyed out in the live editor.
+
 ## Find in a Note
 
 | Shortcut | Effect |

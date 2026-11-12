@@ -616,7 +616,7 @@ pub fn rebuild_menus(cx: &mut App) {
         ]),
         Menu::new(tr("Darstellung")).items([
             MenuItem::action(tr("Lesen / Bearbeiten"), TogglePreview).disabled(!note),
-            MenuItem::action(tr("Geteilte Ansicht"), SplitPreview).disabled(!note),
+            MenuItem::action(tr("Geteilte Ansicht"), SplitPreview).disabled(!note || live_is_on()),
             MenuItem::action(tr("Live-Ansicht"), ToggleLive).checked(live_is_on()).disabled(!note),
             MenuItem::action(tr("Zeilenumbruch ein-/ausschalten"), super::documents::ToggleWrap).disabled(!wrap_is_available(cx)),
             MenuItem::action(tr("Notiz als PDF exportieren"), ExportPdf),

@@ -89,11 +89,22 @@ const NOTICE_AFTER: Duration = Duration::from_millis(300);
 const RICH_EDITOR_UNTIL: usize = 200_000;
 const WRAP_UNTIL: usize = 20_000;
 const WRAP_MAX: usize = 35_000;
+const LONG_LINE_WRAP: usize = 50_000;
 const SPELL_WINDOW: usize = 40_000;
 
 /// Whether a note of this length can be wrapped at all.
-fn can_wrap(len: usize) -> bool {
-    wraps_lines(len, Some(true))
+fn can_wrap(text: &str) -> bool {
+    wraps_note(text, Some(true))
+}
+
+/// Whether one line is so long that the editor cannot show its end without wrapping.
+fn has_long_line(text: &str) -> bool {
+    text.split('\n').any(|line| line.len() > LONG_LINE_WRAP)
+}
+
+/// `wraps_lines` for a note whose text is known: a very long line wraps unless the user chose otherwise.
+fn wraps_note(text: &str, chosen: Option<bool>) -> bool {
+    chosen != Some(false) && has_long_line(text) || wraps_lines(text.len(), chosen)
 }
 
 /// Whether the source editor wraps lines: the user's choice for this note while wrapping it takes under a frame, else only while the note is short.
@@ -341,6 +352,7 @@ pub struct NoteView {
     live: Option<LiveBlock>,
     /// Whole-note states to go back to across blocks; the field only knows its own block.
     history: Vec<(String, usize)>,
+    live_left: Option<Arc<str>>,
     future: Vec<(String, usize)>,
     last_snapshot: Option<std::time::Instant>,
     found: Option<markdown_view::Found>,
@@ -382,7 +394,7 @@ impl NoteView {
     pub fn new(path: PathBuf, embedded: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let text = state::lib(cx).update(cx, |l, _| l.buffer(&path).text.clone());
         let wrap_override = prefs::with(|p| p.note_wraps.get(path.to_string_lossy().as_ref()).copied());
-        let wrap = wraps_lines(text.len(), wrap_override);
+        let wrap = wraps_note(&text, wrap_override);
         let editor = cx.new(|cx| EditorState::new(window, cx).language(editor_language(text.len())).soft_wrap(wrap).line_number(true).default_value(text.clone()));
         editor.update(cx, |s, _| s.lsp_mut().completion_provider = Some(super::completion::provider(path.clone())));
         let block = cx.new(|cx| EditorState::new(window, cx).soft_wrap(true).line_number(false).folding(false).smart_indent(false).scroll_beyond_last_line(Some(0)));
@@ -500,7 +512,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), caret_seen: (0, 0), follow_caret: false, live: None, history: Vec::new(), future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, split_lead: None, reparse: None, parse_hold: false, first_parse: true, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, change_marks: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), pdf_drop: None, pdf_drop_bar: None, fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), caret_seen: (0, 0), follow_caret: false, live: None, history: Vec::new(), live_left: None, future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, split_lead: None, reparse: None, parse_hold: false, first_parse: true, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, change_marks: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), pdf_drop: None, pdf_drop_bar: None, fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -909,14 +921,18 @@ impl NoteView {
                 return;
             }
         }
-        let keep_line = self.top_line();
         self.finish_block(cx);
+        let keep_line = if self.mode == Mode::Source { self.editor_top_line(cx) } else { self.top_line() };
+        if self.mode == Mode::Live && mode != Mode::Live {
+            self.live_left = Some(self.current_text(cx));
+        }
         self.drop_spell_marks(cx);
         let kept_scroll = (self.mode == Mode::Source && mode == Mode::Split).then(|| self.editor.read(cx).scroll_offset());
+        let line_scroll = (mode == Mode::Source && self.mode != Mode::Source).then(|| self.editor_scroll_for(keep_line, cx)).flatten();
         if matches!(mode, Mode::Source | Mode::Split) {
             let text = state::read(cx, |l| l.buffers.get(&self.path).map(|b| b.text.clone()).unwrap_or_default());
             let (plain, language) = (text.len() > RICH_EDITOR_UNTIL, editor_language(text.len()));
-            let wrap = wraps_lines(text.len(), self.wrap_override);
+            let wrap = wraps_note(&text, self.wrap_override);
             (self.editor_plain, self.editor_wrap) = (plain, wrap);
             self.syncing = true;
             self.editor.update(cx, |s, cx| {
@@ -924,12 +940,42 @@ impl NoteView {
                     s.set_highlighter(language, cx);
                 }
                 s.set_soft_wrap(wrap, window, cx);
-                s.set_value(text, window, cx);
+                let old = s.value().to_string();
+                if old != *text {
+                    let (changed, inserted) = edit_ops::minimal_change(&old, &text);
+                    let selected = s.selected_range();
+                    let start = edit_ops::shift_offset(selected.start, &changed, inserted.len());
+                    let end = edit_ops::shift_offset(selected.end, &changed, inserted.len());
+                    s.set_selected_range(changed, cx);
+                    s.replace(inserted.to_string(), window, cx);
+                    if s.value().to_string() != *text {
+                        s.set_value(text.clone(), window, cx);
+                    }
+                    s.set_selected_range(start.min(text.len())..end.min(text.len()), cx);
+                }
                 if let Some(offset) = kept_scroll {
                     s.set_scroll_offset(offset, cx);
                 }
+                if let Some(y) = line_scroll {
+                    s.set_scroll_offset(point(px(0.), px(-y)), cx);
+                }
             });
             self.syncing = false;
+        }
+        if mode == Mode::Live
+            && self.mode != Mode::Live
+            && let Some(left) = self.live_left.take()
+        {
+            let now = self.current_text(cx);
+            if *left != *now {
+                let line = left.get(..edit_ops::minimal_change(&left, &now).0.start).unwrap_or_default().matches('\n').count();
+                self.history.push((left.to_string(), line));
+                if self.history.len() > 500 {
+                    self.history.remove(0);
+                }
+                self.future.clear();
+                self.last_snapshot = None;
+            }
         }
         self.parsed = None;
         self.parse_job = None;
@@ -960,13 +1006,13 @@ impl NoteView {
             return;
         }
         let wrap = !self.editor_wrap;
-        let len = state::read(cx, |l| l.buffers.get(&self.path).map_or(0, |b| b.text.len()));
-        if wrap && !can_wrap(len) {
+        let text = self.current_text(cx);
+        if wrap && !can_wrap(&text) {
             act(cx, |l| l.notify(tr("Lange Notiz: hier geht kein Zeilenumbruch. Lesen zeigt alles umgebrochen."), "text", None, None));
             return;
         }
         self.editor_wrap = wrap;
-        self.wrap_override = Some(wrap).filter(|w| *w != wraps_lines(len, None));
+        self.wrap_override = Some(wrap).filter(|w| *w != wraps_note(&text, None));
         let (key, chosen) = (self.path.to_string_lossy().to_string(), self.wrap_override);
         prefs::update(|p| match chosen {
             Some(w) => {
@@ -1036,6 +1082,41 @@ impl NoteView {
         self.parsed.as_ref().and_then(|(_, p)| p.rows().get(item).map(|r| r.line)).unwrap_or(0)
     }
 
+    fn editor_rows_of(&self, cx: &App) -> impl Fn(&str) -> f32 {
+        let (width, size) = (f32::from(self.editor.read(cx).input_bounds().size.width), prefs::get().editor_font_size);
+        let per_row = if self.editor_wrap && width > 0. { (width / (size * 0.6)).max(20.) } else { f32::INFINITY };
+        move |l: &str| (l.chars().count() as f32 / per_row).ceil().max(1.)
+    }
+
+    /// The first source line in view of the source editor.
+    fn editor_top_line(&self, cx: &App) -> usize {
+        let (y, line) = {
+            let e = self.editor.read(cx);
+            (-f32::from(e.scroll_offset().y), e.line_height().map_or(0., f32::from))
+        };
+        if line <= 0. || y <= 0. {
+            return 0;
+        }
+        let text = self.current_text(cx);
+        let rows_of = self.editor_rows_of(cx);
+        let (target, mut rows) = (y / line, 0.);
+        for (i, l) in text.lines().enumerate() {
+            rows += rows_of(l);
+            if rows > target {
+                return i;
+            }
+        }
+        text.lines().count().saturating_sub(1)
+    }
+
+    /// How far the source editor scrolls to show `line` at the top.
+    fn editor_scroll_for(&self, line: usize, cx: &App) -> Option<f32> {
+        let height = f32::from(self.editor.read(cx).line_height()?);
+        let text = self.current_text(cx);
+        let rows_of = self.editor_rows_of(cx);
+        Some(text.lines().take(line).map(rows_of).sum::<f32>() * height)
+    }
+
     /// The list item a source line is drawn in.
     fn item_of_line(&self, line: usize) -> usize {
         if self.mode == Mode::Live {
@@ -1083,6 +1164,7 @@ impl NoteView {
         if old != text {
             self.history.clear();
             self.future.clear();
+            self.live_left = None;
             let (changed, inserted) = edit_ops::minimal_change(&old, &text);
             self.drop_spell_marks(cx);
             self.syncing = true;
@@ -1163,6 +1245,7 @@ impl NoteView {
         let source = lines.get(first_line..(first_line + line_count).min(lines.len())).unwrap_or_default().join("\n");
         let before: usize = lines.get(first_line..line).unwrap_or_default().iter().map(|l| l.len() + 1).sum();
         let at = caret.map_or(source.len(), |c| before + c).min(source.len());
+        let at = edit_ops::before_cr(&source, at);
         let at = (0..=at).rev().find(|i| source.is_char_boundary(*i)).unwrap_or(0);
         if self.mode == Mode::Live && source.len() > LIVE_LINE_MAX {
             let start: usize = lines.get(..first_line).unwrap_or_default().iter().map(|l| l.len() + 1).sum();
@@ -2555,6 +2638,10 @@ impl NoteView {
         if self.live.is_some() { self.block.clone() } else { self.editor.clone() }
     }
 
+    fn line_break(&self, field: &str, cx: &App) -> &'static str {
+        if self.live.is_some() { edit_ops::eol(&self.current_text(cx)) } else { edit_ops::eol(field) }
+    }
+
     fn with_text(&mut self, cx: &mut Context<Self>) -> (String, std::ops::Range<usize>) {
         let target = self.target();
         let s = target.read(cx);
@@ -2584,11 +2671,12 @@ impl NoteView {
         let me = cx.entity();
         let keyed = |label: &str, m: Mode| format!("{label}{}", if m == Mode::Split { ShortcutAction::SplitPreview } else { ShortcutAction::TogglePreview }.hint());
         let edit_mode = if self.editor_kind == prefs::NoteEditor::Live { Mode::Live } else { Mode::Source };
-        let mode_list: Vec<(Mode, String, &'static str)> = [(Mode::Read, tr("Lesen"), "eye"), (edit_mode, tr("Bearbeiten"), "pencil"), (Mode::Split, tr("Geteilte Ansicht"), "columns-2")].into_iter().filter(|(m, ..)| *m != Mode::Split || self.editor_kind == prefs::NoteEditor::Code).collect();
+        let mode_list: Vec<(Mode, String, &'static str)> = [(Mode::Read, tr("Lesen"), "eye"), (edit_mode, tr("Bearbeiten"), "pencil"), (Mode::Split, tr("Geteilte Ansicht"), "columns-2")].into_iter().collect();
+        let split_off = self.editor_kind != prefs::NoteEditor::Code;
         let entries = self.toc.clone();
         let has_toc = !entries.is_empty();
         let segment = 2. * space::XXS + mode_list.len() as f32 * control::S;
-        let toc_w = if has_toc { control::S } else { 0. };
+        let toc_w = control::S;
         let pdf_w = bar_fit::button_width(&tr("PDF"), window);
         let more = control::S;
         let steps = [bar_fit::row(&[segment, toc_w, pdf_w, more], space::S), bar_fit::row(&[segment, toc_w, more], space::S), bar_fit::row(&[segment, more], space::S), bar_fit::row(&[control::S, more], space::S), more];
@@ -2598,23 +2686,22 @@ impl NoteView {
         for (m, label, icon_name) in mode_list.iter().cloned() {
             let active = m == self.mode;
             let e = me.clone();
-            let hint = keyed(&label, m);
-            modes = modes.child(
-                div()
-                    .id(SharedString::from(format!("mode-{icon_name}")))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .w(px(control::S))
-                    .h(px(control::S - 2. * space::XXS))
-                    .rounded(px(radius::SMALL))
-                    .cursor_pointer().key_nav()
-                    .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
-                    .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm())
-                    .child(icon(icon_name, iconsize::XS, if active { t.primary } else { t.secondary }))
-                    .tooltip(tip(hint))
-                    .on_click(move |_, window, cx| e.update(cx, |n, cx| n.set_mode(m, window, cx))),
-            );
+            let off = split_off && m == Mode::Split;
+            let hint = if off { tr("Geteilte Ansicht gibt es nur im Quelltext") } else { keyed(&label, m) };
+            let slot = div()
+                .id(SharedString::from(format!("mode-{icon_name}")))
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(control::S))
+                .h(px(control::S - 2. * space::XXS))
+                .rounded(px(radius::SMALL))
+                .when(!off, |d| d.cursor_pointer().key_nav())
+                .when(!active && !off, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
+                .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm())
+                .child(icon(icon_name, iconsize::XS, if active { t.primary } else if off { t.secondary.opacity(0.4) } else { t.secondary }))
+                .tooltip(tip(hint));
+            modes = modes.child(if off { slot } else { slot.on_click(move |_, window, cx| e.update(cx, |n, cx| n.set_mode(m, window, cx))) });
         }
         let (e1, e2, path, p2, p3) = (me.clone(), me.clone(), self.path.clone(), self.path.clone(), self.path.clone());
         let current_mode = self.mode;
@@ -2634,9 +2721,13 @@ impl NoteView {
                 menu
             }
         };
-        let toc = (has_toc && !toc_out).then(|| {
+        let toc = (!toc_out).then(|| {
             let toc_menu = toc_menu.clone();
-            Button::new("note-toc").ghost().small().icon(menu_icon("list")).tooltip(tr("Inhalt")).dropdown_menu(move |menu, _, _| toc_menu(menu))
+            if has_toc {
+                Button::new("note-toc").ghost().small().icon(menu_icon("list")).tooltip(tr("Inhalt")).dropdown_menu(move |menu, _, _| toc_menu(menu)).into_any_element()
+            } else {
+                Button::new("note-toc").ghost().small().icon(menu_icon("list")).tooltip(tr("Noch keine Überschriften")).disabled(true).into_any_element()
+            }
         });
         let pdf_tip = tr("Als PDF neben der Notiz sichern (⇧⌘E)");
         let shown_mode = mode_list.iter().find(|(m, ..)| *m == current_mode || (*m == edit_mode && current_mode == Mode::Source)).cloned();
@@ -2646,7 +2737,7 @@ impl NoteView {
             Button::new("note-mode").ghost().small().icon(menu_icon(icon_name)).tooltip(keyed(&label, current_mode)).dropdown_menu(move |mut menu, _, _| {
                 for (m, label, _) in list.iter().cloned() {
                     let e = e.clone();
-                    menu = menu.item(PopupMenuItem::new(label).checked(m == current_mode || (m == edit_mode && current_mode == Mode::Source)).on_click(move |_, window, cx| e.update(cx, |n, cx| n.set_mode(m, window, cx))));
+                    menu = menu.item(PopupMenuItem::new(label).disabled(split_off && m == Mode::Split).checked(m == current_mode || (m == edit_mode && current_mode == Mode::Source)).on_click(move |_, window, cx| e.update(cx, |n, cx| n.set_mode(m, window, cx))));
                 }
                 menu
             })
@@ -2666,7 +2757,7 @@ impl NoteView {
                 if modes_out {
                     for (m, label, _) in mode_list.iter().cloned() {
                         let e = modes_me.clone();
-                        menu = menu.item(PopupMenuItem::new(label).checked(m == current_mode || (m == edit_mode && current_mode == Mode::Source)).on_click(move |_, window, cx| e.update(cx, |n, cx| n.set_mode(m, window, cx))));
+                        menu = menu.item(PopupMenuItem::new(label).disabled(split_off && m == Mode::Split).checked(m == current_mode || (m == edit_mode && current_mode == Mode::Source)).on_click(move |_, window, cx| e.update(cx, |n, cx| n.set_mode(m, window, cx))));
                     }
                     menu = menu.separator();
                 }
@@ -3533,9 +3624,11 @@ impl NoteView {
                 if n.live.is_some_and(|l| l.cell.is_some()) {
                     return;
                 }
-                let (_, r) = n.with_text(cx);
-                let end = r.start + 1;
-                n.apply(Edit { range: r, text: "\n".into(), select: end..end }, w, cx);
+                let (s, r) = n.with_text(cx);
+                let r = if r.is_empty() { edit_ops::before_cr(&s, r.start)..edit_ops::before_cr(&s, r.start) } else { r };
+                let nl = n.line_break(&s, cx);
+                let end = r.start + nl.len();
+                n.apply(Edit { range: r, text: nl.into(), select: end..end }, w, cx);
             }))
             .on_action(cx.listener(|n, _: &Strike, w, cx| {
                 let (s, r) = n.with_text(cx);
@@ -3588,20 +3681,22 @@ impl NoteView {
                     return;
                 }
                 let (s, r) = n.with_text(cx);
+                let r = if r.is_empty() { edit_ops::before_cr(&s, r.start)..edit_ops::before_cr(&s, r.start) } else { r };
+                let nl = n.line_break(&s, cx);
                 if r.is_empty() {
                     let (full, line) = match n.live {
                         Some(live) => (n.current_text(cx), live.first_line + s[..r.start].matches('\n').count()),
                         None => (Arc::from(s.as_str()), s[..r.start].matches('\n').count()),
                     };
                     if let Some(mark) = edit_ops::closing_mark(&full, line).filter(|_| s[r.start..].split('\n').next().is_some_and(|rest| rest.trim().is_empty())) {
-                        let inside = r.start + 1;
-                        n.apply(Edit { range: r.clone(), text: format!("\n\n{mark}"), select: inside..inside }, w, cx);
+                        let inside = r.start + nl.len();
+                        n.apply(Edit { range: r.clone(), text: format!("{nl}{nl}{mark}"), select: inside..inside }, w, cx);
                         return;
                     }
                 }
-                match (r.is_empty(), edit_ops::newline(&s, r.start)) {
+                match (r.is_empty(), edit_ops::newline_in(&s, r.start, nl)) {
                     (true, Some(e)) => n.apply(e, w, cx),
-                    _ => n.apply(Edit { range: r.clone(), text: "\n".into(), select: r.start + 1..r.start + 1 }, w, cx),
+                    _ => n.apply(Edit { range: r.clone(), text: nl.into(), select: r.start + nl.len()..r.start + nl.len() }, w, cx),
                 }
             }))
             .on_action(cx.listener(|n, _: &ListTab, w, cx| {
@@ -4696,7 +4791,7 @@ fn writing_menu(field: Editor) -> Editor {
 
 #[cfg(test)]
 mod window_tests {
-    use super::{Mode, PARSE_IN_BACKGROUND_FROM, WRAP_MAX, WRAP_UNTIL, first_parse_in_background, parses_in_background, save_reason, spell_window, unsaved_message, wraps_lines};
+    use super::{Mode, PARSE_IN_BACKGROUND_FROM, WRAP_MAX, WRAP_UNTIL, can_wrap, first_parse_in_background, has_long_line, wraps_note, parses_in_background, save_reason, spell_window, unsaved_message, wraps_lines};
 
     fn prose() -> String {
         (0..3000).map(|i| format!("Zeile {i} mit etwas Text darin\n")).collect()
@@ -4709,6 +4804,16 @@ mod window_tests {
         assert!(wraps_lines(WRAP_UNTIL + 1, Some(true)));
         assert!(!wraps_lines(WRAP_MAX + 1, Some(true)));
         assert!(!wraps_lines(10, Some(false)));
+    }
+
+    #[test]
+    fn a_very_long_line_wraps_unless_the_user_turned_wrapping_off() {
+        let long = format!("kurz\n{}\nkurz", "wort ".repeat(20_000));
+        assert!(has_long_line(&long) && wraps_note(&long, None) && can_wrap(&long));
+        assert!(!wraps_note(&long, Some(false)));
+        let short = "wort ".repeat(20_000);
+        assert!(!has_long_line("wort\n".repeat(50_000).as_str()) && has_long_line(&short));
+        assert!(!wraps_note(&"wort\n".repeat(50_000), None));
     }
 
     #[test]
