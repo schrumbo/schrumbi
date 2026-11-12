@@ -561,7 +561,7 @@ pub fn write(package: Package, folder: &Path, keep_progress: bool, known: &HashS
                 seen.insert(card.id.clone());
                 by_anki.insert(progress.anki_id, card.id.clone());
                 result.added += 1;
-                if keep_progress && (progress.phase != Phase::New || progress.suspended) {
+                if keep_progress && (progress.phase != Phase::New || progress.suspended) && !known.contains(&card.id) {
                     result.states.push((card.id.clone(), CardState {
                         phase: progress.phase,
                         stability: progress.stability,
@@ -793,6 +793,20 @@ mod tests {
         assert!(note.contains("Haus (2) ::: home"), "{note}");
         assert!(note.len() < 200, "{note}");
         assert_eq!((result.added, result.duplicates), (4, 0));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn imported_progress_never_replaces_the_progress_of_a_card_already_there() {
+        let dir = scratch("known-back");
+        let existing = parse::cards_in("anfangen ::: to begin");
+        let known: HashSet<String> = existing.iter().map(|c| c.id.clone()).collect();
+        let learned = |anki_id| Progress { anki_id, phase: Phase::Review, ..Default::default() };
+        let notes = vec![ImportNote { text: "beginnen ::: to begin".to_string(), progress: vec![learned(1), learned(2)], tags: Vec::new() }];
+        let package = Package { decks: BTreeMap::from([(vec!["Vokabeln".to_string()], notes)]), ..Default::default() };
+        let result = write(package, &dir, true, &known, |p| p.to_string_lossy().to_string()).unwrap();
+        assert_eq!(result.states.len(), 1, "{:?}", result.states.iter().map(|s| &s.0).collect::<Vec<_>>());
+        assert!(result.states.iter().all(|s| !known.contains(&s.0)));
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -270,12 +270,14 @@ fn fetch_only(cx: &mut App) {
 
 /// Syncs once and records many files gone at once, after the user confirmed it.
 pub fn run_anyway(cx: &mut App) {
+    if get(cx).git.is_none() {
+        return;
+    }
     cx.global_mut::<Sync>().deletions_allowed = true;
     run(None, true, cx);
 }
 
 /// One sync. A second request while one runs is remembered and follows it.
-
 pub fn run(message: Option<String>, manual: bool, cx: &mut App) {
     let Some(git) = get(cx).git.clone() else { return };
     if get(cx).step.is_some() {

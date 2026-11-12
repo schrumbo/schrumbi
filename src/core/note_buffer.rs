@@ -334,8 +334,12 @@ impl NoteBuffer {
 
 /// Text saved in an older encoding: UTF-16 when it says so or looks like it, else Windows-1252, which is what Windows editors wrote.
 pub fn decode_legacy(bytes: &[u8]) -> String {
+    let mut bytes = bytes;
     if let Some((encoding, skip)) = encoding_rs::Encoding::for_bom(bytes) {
-        return encoding.decode_without_bom_handling(&bytes[skip..]).0.into_owned();
+        if encoding != encoding_rs::UTF_8 {
+            return encoding.decode_without_bom_handling(&bytes[skip..]).0.into_owned();
+        }
+        bytes = &bytes[skip..];
     }
     let pairs = bytes.len() / 2;
     let zeros = |odd: usize| bytes.iter().skip(odd).step_by(2).filter(|b| **b == 0).count();

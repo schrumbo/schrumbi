@@ -2759,6 +2759,7 @@ impl Library {
             }
         }
         inverse.retain(|c| !matches!(c, Change::Cards { swaps, .. } if swaps.is_empty()));
+        inverse.sort_by_key(|c| matches!(c, Change::Replaced { .. }));
         failed.retain(|c| !matches!(c, Change::InTrash(_)));
         failed.reverse();
         self.refresh();

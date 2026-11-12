@@ -269,6 +269,9 @@ fn a_note_in_an_old_encoding_gets_a_readable_copy_and_stays_as_it_is() {
     let mixed = root.join("Physik.md");
     std::fs::write(&mixed, b"Gr\xc3\xbc\xc3\x9fe und M\xfcller\n").unwrap();
     assert_eq!(std::fs::read_to_string(lib.utf8_copy(&mixed).unwrap()).unwrap(), "Grüße und Müller\n", "UTF-8 with one stray byte keeps its umlauts");
+    let marked = root.join("Mathe.md");
+    std::fs::write(&marked, b"\xef\xbb\xbfGr\xc3\xbc\xc3\x9fe M\xfcller").unwrap();
+    assert_eq!(std::fs::read_to_string(lib.utf8_copy(&marked).unwrap()).unwrap(), "Grüße Müller");
     std::fs::write(&copy, "bearbeitet").unwrap();
     assert_eq!(lib.utf8_copy(&latin).unwrap().file_name().unwrap(), "Bio (UTF-8)-2.md");
     assert_eq!(std::fs::read_to_string(&copy).unwrap(), "bearbeitet");

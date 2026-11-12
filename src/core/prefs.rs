@@ -538,13 +538,20 @@ pub fn mark_used(feature: &str) {
 /// The setup list state of the workspace at `root`.
 pub fn setup_of(root: &std::path::Path) -> SetupPrefs {
     let key = workspace_key(root);
-    with(|p| p.setup.get(&key).cloned().unwrap_or_default())
+    with(|p| p.setup.get(&key).or_else(|| p.setup.get(&spelled(root))).cloned().unwrap_or_default())
 }
 
 /// Changes the setup list state of the workspace at `root`.
 pub fn update_setup(root: &std::path::Path, f: impl FnOnce(&mut SetupPrefs)) {
     let key = workspace_key(root);
-    update(|p| f(p.setup.entry(key).or_default()));
+    update(|p| {
+        if !p.setup.contains_key(&key)
+            && let Some(old) = p.setup.remove(&spelled(root))
+        {
+            p.setup.insert(key.clone(), old);
+        }
+        f(p.setup.entry(key).or_default())
+    });
 }
 
 /// Recently opened workspaces, most recent first, keeping eight.
