@@ -189,10 +189,20 @@ impl InputBaseState<EditorMode> {
             new_text.clone_from(insert_text);
             range = range.end..range.end;
         }
+        let caret = (item.insert_text_format == Some(lsp_types::InsertTextFormat::SNIPPET))
+            .then(|| new_text.find("$0"))
+            .flatten();
+        if let Some(at) = caret {
+            new_text.replace_range(at..at + 2, "");
+        }
+        let start = range.start;
         self.completion_inserting = true;
         let range = self.range_to_utf16(&range);
         self.replace_text_in_range_silent(Some(range), &new_text, window, cx);
         self.completion_inserting = false;
+        if let Some(at) = caret {
+            self.set_selected_range(start + at..start + at, cx);
+        }
         self.focus(window, cx);
     }
 

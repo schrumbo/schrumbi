@@ -1,17 +1,67 @@
-use std::{ops::Range, rc::Rc};
+use std::{ops::Range, rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
-    Action, AnyElement, App, AppContext, Context, DismissEvent, Empty, Entity, EventEmitter,
-    HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels, Render,
-    RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity, Window, deferred, div,
-    prelude::FluentBuilder, px, rems,
+    Action, AnyElement, App, AppContext, Context, DismissEvent, ElementId, Empty, Entity,
+    EventEmitter, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels,
+    Render, RenderOnce, Role, ScrollStrategy, SharedString, StatefulInteractiveElement as _,
+    Styled, StyledText, Subscription, TextRun, WeakEntity, Window, deferred, div,
+    prelude::FluentBuilder, px, relative,
 };
 use gpui_base::TestSupportExt as _;
 use gpui_base::input::CompletionHighlighter;
 use lsp_types::CompletionItem;
 
-const MAX_MENU_HEIGHT: Pixels = px(240.);
+const ROW_HEIGHT: Pixels = px(28.);
+const ROW_GAP: Pixels = px(2.);
+const MAX_MENU_HEIGHT: Pixels = px(255.);
+const MENU_CHROME: Pixels = px(12.);
+const MIN_MENU_WIDTH: Pixels = px(120.);
+const ROW_PADDING: Pixels = px(8.);
+const ROW_SPACING: Pixels = px(8.);
+const ICON_SIZE: Pixels = px(16.);
+const SCROLLBAR_ROOM: Pixels = px(10.);
 const POPOVER_GAP: Pixels = px(4.);
+
+fn natural_width(items: &[CompletionItem], window: &mut Window) -> Pixels {
+    let style = window.text_style();
+    let rem = window.rem_size();
+    let mut shape = |text: &str, size: Pixels| {
+        let run = TextRun {
+            len: text.len(),
+            font: style.font(),
+            color: style.color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        window
+            .text_system()
+            .shape_line(SharedString::from(text.replace('\n', " ")), size, &[run], None)
+            .width
+    };
+    items
+        .iter()
+        .map(|item| {
+            let label = shape(&item.label, rem * 0.875);
+            let icon = if item_icon(item).is_some() {
+                ICON_SIZE + ROW_SPACING
+            } else {
+                Pixels::ZERO
+            };
+            let detail = item
+                .detail
+                .as_ref()
+                .map_or(Pixels::ZERO, |detail| ROW_SPACING + shape(detail, rem * 0.75));
+            ROW_PADDING * 2. + icon + label + detail
+        })
+        .fold(Pixels::ZERO, Pixels::max)
+        + MENU_CHROME
+}
+
+fn item_icon(item: &CompletionItem) -> Option<SharedString> {
+    let icon = item.data.as_ref()?.get("icon")?.as_str()?;
+    Some(SharedString::from(icon.to_string()))
+}
 
 /// Drop ranges a custom highlighter cannot safely paint, then order the rest.
 ///
@@ -49,14 +99,13 @@ fn retained_highlight_ranges(
 }
 
 use crate::{
-    ActiveTheme, IndexPath, Selectable, ThemeStyled as _, actions, h_flex,
+    ActiveTheme, Icon, IndexPath, Selectable, ThemeStyled as _, actions, h_flex,
     input::{
         self, EditorState,
         popovers::{CaretAnchoredPopup, editor_popover, render_markdown},
     },
     label::Label,
     list::{List, ListDelegate, ListEvent, ListState},
-    menu::MenuItemElement,
 };
 
 struct ContextMenuDelegate {
@@ -122,7 +171,7 @@ impl ParentElement for CompletionMenuItem {
     }
 }
 impl RenderOnce for CompletionMenuItem {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let item = self.item;
 
         let deprecated = item.deprecated.unwrap_or(false);
@@ -142,31 +191,77 @@ impl RenderOnce for CompletionMenuItem {
         })
         .collect::<Vec<_>>();
 
-        MenuItemElement::new(self.ix)
+        let radius = cx.theme().radius;
+        let hover_layer = {
+            let key = ElementId::NamedInteger("completion-item-soft".into(), self.ix as u64);
+            let hovered = window.use_keyed_state(key.clone(), cx, |_, _| false);
+            let level = gpui_base::transition(
+                ElementId::NamedChild(Arc::new(key), "level".into()),
+                if *hovered.read(cx) { 1. } else { 0. },
+                gpui_base::Transition::new(Duration::from_millis(120)),
+                window,
+                cx,
+            );
+            div()
+                .id("soft")
+                .absolute()
+                .inset_0()
+                .rounded(radius)
+                .when(level > 0. && !self.selected, |this| {
+                    this.bg(cx.theme().list_hover).opacity(level.min(1.))
+                })
+                .on_hover(move |over, _, cx| {
+                    hovered.update(cx, |hovered, cx| {
+                        *hovered = *over;
+                        cx.notify();
+                    })
+                })
+        };
+
+        h_flex()
+            .id(self.ix)
+            .test_support()
+            .cursor_pointer()
+            .role(Role::MenuItem)
             .aria_label(item.label.clone())
-            .selected(self.selected)
+            .aria_selected(self.selected)
+            .relative()
+            .gap(ROW_SPACING)
+            .px(ROW_PADDING)
+            .h(ROW_HEIGHT)
+            .mb(ROW_GAP)
+            .rounded(radius)
             .text_sm()
-            .py_0()
-            .px_2()
-            .h(rems(26. / 16.))
-            .mb_0p5()
-            .rounded(cx.theme().radius)
-            .when(item.deprecated.unwrap_or(false), |this| this.line_through())
+            .text_color(cx.theme().foreground)
+            .when(self.selected, |this| this.bg(cx.theme().list_active))
+            .child(hover_layer)
+            .when_some(item_icon(&item), |this, icon| {
+                this.child(
+                    Icon::empty()
+                        .path(icon)
+                        .size(ICON_SIZE)
+                        .flex_none()
+                        .text_color(cx.theme().muted_foreground),
+                )
+            })
             .child(
-                h_flex()
-                    .w_full()
-                    .gap_3()
-                    .justify_between()
-                    .child(StyledText::new(item.label.clone()).with_highlights(highlights))
-                    .when_some(item.detail.as_ref(), |this, detail| {
-                        this.child(
-                            Label::new(detail.clone())
-                                .text_color(cx.theme().muted_foreground)
-                                .when(deprecated, |this| this.line_through())
-                                .italic(),
-                        )
-                    }),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .when(deprecated, |this| this.line_through())
+                    .child(StyledText::new(item.label.clone()).with_highlights(highlights)),
             )
+            .when_some(item.detail.as_ref(), |this, detail| {
+                this.child(
+                    div().min_w_0().max_w(relative(0.5)).truncate().child(
+                        Label::new(detail.clone())
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .when(deprecated, |this| this.line_through()),
+                    ),
+                )
+            })
             .children(self.children)
     }
 }
@@ -226,6 +321,8 @@ pub struct CompletionMenu {
     /// The offset of the first character that triggered the completion.
     pub(crate) trigger_start_offset: Option<usize>,
     query: SharedString,
+    opened_with: usize,
+    natural_width: Pixels,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -270,6 +367,8 @@ impl CompletionMenu {
                 open: false,
                 trigger_start_offset: None,
                 query: SharedString::default(),
+                opened_with: 0,
+                natural_width: MIN_MENU_WIDTH,
                 _subscriptions,
             }
         })
@@ -301,7 +400,6 @@ impl CompletionMenu {
             return false;
         }
 
-        cx.propagate();
         if input::Enter::is_primary(&*action) {
             self.on_action_enter(window, cx);
         } else if action.partial_eq(&input::Escape) {
@@ -373,6 +471,13 @@ impl CompletionMenu {
         cx: &mut Context<Self>,
     ) {
         let items = items.into();
+        let width = natural_width(&items, window);
+        if self.open {
+            self.natural_width = self.natural_width.max(width);
+        } else {
+            self.opened_with = items.len();
+            self.natural_width = width;
+        }
         self.offset = offset;
         self.open = true;
         self.list.update(cx, |this, cx| {
@@ -388,6 +493,7 @@ impl CompletionMenu {
             this.delegate_mut().query = self.query.clone();
             this.delegate_mut().set_items(items);
             this.set_selected_index(Some(IndexPath::new(0)), window, cx);
+            this.scroll_to_item(IndexPath::new(0), ScrollStrategy::Top, window, cx);
             this.set_item_to_measure_index(IndexPath::new(longest_ix), window, cx);
         });
 
@@ -427,14 +533,18 @@ impl Render for CompletionMenu {
         // The anchor is resolved in the popup's deferred prepaint from the
         // input's current-frame geometry; the content below is built there.
         let configured_max = editor.read(cx).lsp().completion_menu.max_width;
+        let rows = self.list.read(cx).delegate().items.len();
+        let natural = self.natural_width;
         let list = self.list.clone();
         let menu = cx.weak_entity();
 
-        deferred(CaretAnchoredPopup::new(
-            self.editor.clone(),
-            move |anchor, window, cx| {
+        deferred(
+            CaretAnchoredPopup::new(self.editor.clone(), move |anchor, room, window, cx| {
                 // `anchor` is in window coordinates, from the current frame.
-                let max_width = configured_max.min(window.bounds().size.width - anchor.x);
+                let max_width =
+                    configured_max.min(window.bounds().size.width - POPOVER_GAP * 2.);
+                let list_height = MAX_MENU_HEIGHT.min(room - MENU_CHROME).max(ROW_HEIGHT);
+                let scrolls = (ROW_HEIGHT + ROW_GAP) * rows as f32 > list_height;
                 let vertical_layout =
                     anchor.x + configured_max + POPOVER_GAP + configured_max + POPOVER_GAP
                         > window.bounds().size.width;
@@ -458,9 +568,13 @@ impl Render for CompletionMenu {
                             // Each virtual row includes the menu's inter-item gap.
                             .pb_0p5()
                             .test_support()
-                            .max_w(max_width)
-                            .min_w(px(120.))
-                            .child(List::new(&list).max_h(MAX_MENU_HEIGHT)),
+                            .w((natural + if scrolls { SCROLLBAR_ROOM } else { Pixels::ZERO })
+                                .clamp(MIN_MENU_WIDTH, max_width.max(MIN_MENU_WIDTH)))
+                            .child(
+                                List::new(&list)
+                                    .max_h(list_height)
+                                    .when(scrolls, |this| this.pr(SCROLLBAR_ROOM)),
+                            ),
                     )
                     .when_some(selected_documentation, |this, documentation| {
                         let mut doc = match documentation {
@@ -491,8 +605,12 @@ impl Render for CompletionMenu {
                         }
                     })
                     .into_any_element()
-            },
-        ))
+            })
+            .planned_height(
+                ((ROW_HEIGHT + ROW_GAP) * self.opened_with as f32).min(MAX_MENU_HEIGHT)
+                    + MENU_CHROME,
+            ),
+        )
         .into_any_element()
     }
 }

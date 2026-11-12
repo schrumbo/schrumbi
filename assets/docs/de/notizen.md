@@ -159,7 +159,7 @@ Notizen öffnen in der Live-Ansicht, in einer Spalte gut lesbarer Breite. Welche
 
 Beim Wechsel bleibt der Cursor an seiner Stelle im Text, und {key:Undo} nimmt auch Änderungen vor dem Wechsel zurück. Die Knöpfe bleiben an ihrem Platz; die {ui:Geteilte Ansicht} ist im Live-Editor ausgegraut.
 
-`/` am Zeilenanfang öffnet eine Liste zum Einfügen: Überschriften, Listen, Aufgaben, Tabelle, {ui:Formelblock}, {ui:Hinweisbox}, {ui:Notiz einbetten} und mehr. Tippen filtert, rechts steht das Markdown-Zeichen dazu.
+`/` am Zeilenanfang öffnet eine Liste zum Einfügen: Überschriften, Listen, Aufgaben, Tabelle, {ui:Formelblock}, {ui:Hinweisbox}, {ui:Notiz einbetten} und mehr. Tippen filtert, was mit den Buchstaben beginnt, steht oben. Rechts steht das Kürzel, wo es eins gibt. {key:return} oder {key:tab} fügt ein.
 
 ## In der Notiz suchen
 
@@ -206,7 +206,7 @@ Hat eine andere App die Datei geändert, siehst du einen Hinweis. Nichts geht ve
 
 ## Verknüpfen
 
-- `[[` tippen und eine Notiz wählen.
+- `[[` tippen und eine Notiz wählen. {key:escape} gleich danach nimmt die leeren Klammern wieder weg.
 - {key:toggleInspector} zeigt {ui:Rückverweise}, {ui:Ausgehend} und {ui:Erwähnungen ohne Link}.
 - {key:showGraph} zeigt alle Notizen als Graph.
 

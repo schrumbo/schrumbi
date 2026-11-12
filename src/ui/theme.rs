@@ -258,6 +258,12 @@ pub mod coach {
     pub const LABEL_ROOM: f32 = 96.;
 }
 
+/// The suggestion list under the caret.
+pub mod suggestions {
+    /// The widest the list gets; longer names end in an ellipsis.
+    pub const WIDTH: f32 = 400.;
+}
+
 /// The tip of the day and the setup list.
 pub mod hints {
     pub const TIP_WIDTH: f32 = 340.;
