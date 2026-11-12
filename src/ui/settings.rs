@@ -2665,7 +2665,7 @@ impl Settings {
         } else {
             let mac = cfg!(target_os = "macos");
             let s = Shortcut { key, command: if mac { m.platform } else { m.control }, shift: m.shift, option: m.alt, control: if mac { m.control } else { false } };
-            if let Some(why) = action.reserved_for(&s) {
+            if let Some(why) = action.refused_for(&s) {
                 self.rejected = Some(Rejected::Reserved(why));
                 cx.notify();
                 return;

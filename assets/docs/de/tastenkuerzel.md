@@ -23,7 +23,7 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Details ein-/ausblenden} | {key:toggleInspector} |
 | {ui:KI ein-/ausblenden} | {key:toggleAi} |
 
-{key:Undo} nimmt auch in einer Notiz Umbenennen, Verschieben und Ablegen zurück, sobald es im Text nichts mehr zurückzunehmen gibt. Solange ein Fenster wie {ui:Neuer Eintrag} offen ist, wirken die übrigen Kürzel nicht.
+{key:Undo} nimmt auch in einer Notiz {ui:Umbenennen}, {ui:Verschieben} und {ui:Ablegen} zurück, sobald es im Text nichts mehr zurückzunehmen gibt. Solange ein Fenster wie {ui:Neuer Eintrag} offen ist, wirken die übrigen Kürzel nicht.
 
 ## Navigation
 

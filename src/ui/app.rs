@@ -445,11 +445,11 @@ fn host_os() -> OperatingSystem {
     }
 }
 
-/// Keys that would act on the page behind an open dialog: the app's shortcuts, and undo while no field has the keyboard.
 fn acts_behind_dialog(k: &Keystroke, window: &Window) -> bool {
     let os = host_os();
     let same = |keys: &str| Keystroke::parse_with_os(keys, os).is_ok_and(|p| p.modifiers == k.modifiers && p.key == k.key);
-    if !super::sheets::typing(window) && [cmd("z"), cmd("shift-z"), cmd("y")].iter().any(|keys| same(keys)) {
+    let typing = super::sheets::typing(window);
+    if !typing && [cmd("z"), cmd("shift-z"), cmd("y")].iter().any(|keys| same(keys)) {
         return true;
     }
     [cmd("p"), cmd("shift-p"), cmd("shift-7"), cmd("/"), "f1".to_string()].iter().any(|keys| same(keys))
@@ -457,7 +457,7 @@ fn acts_behind_dialog(k: &Keystroke, window: &Window) -> bool {
             .into_iter()
             .filter(|a| a.group() != Group::Editor)
             .filter_map(ShortcutAction::active_shortcut)
-            .any(|s| (s.command || s.option || s.control || (s.key.len() > 1 && s.key.starts_with('f') && s.key[1..].chars().all(|c| c.is_ascii_digit()))) && same(&s.keystroke()))
+            .any(|s| (!typing || s.command || s.control || (s.key.len() > 1 && s.key.starts_with('f') && s.key[1..].chars().all(|c| c.is_ascii_digit()))) && same(&s.keystroke()))
 }
 
 fn bound_pairs(bindings: &[KeyBinding]) -> std::collections::BTreeSet<Bound> {

@@ -23,7 +23,7 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Details ein-/ausblenden} | {key:toggleInspector} |
 | {ui:KI ein-/ausblenden} | {key:toggleAi} |
 
-{key:Undo} also takes back renaming, moving and filing in a note once there is nothing left to undo in the text. While a window such as {ui:Neuer Eintrag} is open, the other shortcuts do nothing.
+{key:Undo} also takes back {ui:Umbenennen}, {ui:Verschieben} and {ui:Ablegen} in a note once there is nothing left to undo in the text. While a window such as {ui:Neuer Eintrag} is open, the other shortcuts do nothing.
 
 ## Navigation
 
