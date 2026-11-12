@@ -72,6 +72,38 @@ fn item(label: String, detail: Option<String>, sort: String, range: Range, new_t
     CompletionItem { label, detail, sort_text: Some(sort), text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text })), ..Default::default() }
 }
 
+struct SlashCommand {
+    name: &'static str,
+    text: &'static str,
+    mark: &'static str,
+    icon: &'static str,
+    action: Option<&'static str>,
+}
+
+const fn slash(name: &'static str, text: &'static str, mark: &'static str, icon: &'static str, action: Option<&'static str>) -> SlashCommand {
+    SlashCommand { name, text, mark, icon, action }
+}
+
+const SLASH: [SlashCommand; 17] = [
+    slash("Überschrift 1", "# ", "#", "heading-1", Some("Heading1")),
+    slash("Überschrift 2", "## ", "##", "heading-2", Some("Heading2")),
+    slash("Überschrift 3", "### ", "###", "heading-3", Some("Heading3")),
+    slash("Überschrift 4", "#### ", "####", "heading", None),
+    slash("Aufgabe", "- [ ] ", "- [ ]", "square-check", Some("ToggleTask")),
+    slash("Liste", "- ", "-", "list", Some("BulletList")),
+    slash("Nummerierte Liste", "1. ", "1.", "list-ordered", Some("NumberedList")),
+    slash("Tabelle", "| $0 |  |\n|--|--|\n|  |  |\n", "|", "table", None),
+    slash("Formelblock", "$$\n$0\n$$", "$$", "sigma", Some("MathBlock")),
+    slash("Zitat", "> ", ">", "quote", Some("Quote")),
+    slash("Hinweisbox", "> [!note] ", "> [!note]", "info", None),
+    slash("Notiz einbetten", "![[", "![[", "file-text", None),
+    slash("Code", "```\n$0\n```", "```", "code", None),
+    slash("Trennlinie", "---\n", "---", "minus", None),
+    slash("Fußnote", "[^1]", "[^1]", "sticky-note", None),
+    slash("Karteikarte", " :: ", "::", "layers", None),
+    slash("Lückentext", "{{c1::$0}}", "{{c1::}}", "square-dashed", None),
+];
+
 /// Suggestions while writing a link or a slash command.
 pub struct NoteCompletion {
     pub note: PathBuf,
@@ -142,7 +174,6 @@ impl NoteCompletion {
                     Some(alias) => (format!("{alias} → {name}"), format!("[[{link}|{alias}{close}")),
                     None => (name, format!("[[{link}{close}")),
                 };
-                let label = if label.chars().count() > 48 { format!("{}…", label.chars().take(47).collect::<String>()) } else { label };
                 item(label, detail, format!("{i:05}"), range, text)
             })
             .collect();
@@ -160,29 +191,14 @@ impl NoteCompletion {
         found.into_iter().enumerate().map(|(i, (_, tag, count))| item(format!("#{tag}"), Some(count.to_string()), format!("{i:05}"), range, format!("#{tag}"))).collect()
     }
 
-    fn slash_items(&self, typed: &str, range: Range) -> Vec<CompletionItem> {
-        let commands: [(&str, &str, &str); 17] = [
-            ("Überschrift 1", "# ", "#"),
-            ("Überschrift 2", "## ", "##"),
-            ("Überschrift 3", "### ", "###"),
-            ("Überschrift 4", "#### ", "####"),
-            ("Aufgabe", "- [ ] ", "- [ ]"),
-            ("Liste", "- ", "-"),
-            ("Nummerierte Liste", "1. ", "1."),
-            ("Tabelle", "|  |  |\n|--|--|\n|  |  |\n", "|"),
-            ("Formelblock", "$$\n\n$$", "$$"),
-            ("Zitat", "> ", ">"),
-            ("Hinweisbox", "> [!note] ", "> [!note]"),
-            ("Notiz einbetten", "![[", "![["),
-            ("Code", "```\n\n```", "```"),
-            ("Trennlinie", "---\n", "---"),
-            ("Fußnote", "[^1]", "[^1]"),
-            ("Karteikarte", " :: ", "::"),
-            ("Lückentext", "{{c1::}}", "{{c1::}}"),
-        ];
-        let mut found: Vec<(i64, usize, String, &str, &str)> = commands.iter().enumerate().filter_map(|(i, (name, text, mark))| score(&tr(name), typed).map(|s| (s, i, tr(name), *text, *mark))).collect();
+    fn slash_items(&self, typed: &str, range: Range, keys: impl Fn(&str) -> Option<String>) -> Vec<CompletionItem> {
+        let mut found: Vec<(i64, usize, String, &SlashCommand)> = SLASH.iter().enumerate().filter_map(|(i, c)| score(&tr(c.name), typed).map(|s| (s, i, tr(c.name), c))).collect();
         found.sort_by_key(|f| (f.0, f.1));
-        found.into_iter().enumerate().map(|(i, (_, _, name, text, mark))| item(name, Some(mark.to_string()), format!("{i:05}"), range, text.to_string())).collect()
+        found
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, _, name, c))| CompletionItem { data: Some(serde_json::json!({ "icon": format!("icons/{}.svg", c.icon) })), insert_text_format: Some(lsp_types::InsertTextFormat::SNIPPET), ..item(name, c.action.and_then(&keys).or_else(|| Some(c.mark.to_string())), format!("{i:05}"), range, c.text.to_string()) })
+            .collect()
     }
 
     fn command_items(&self, typed: &str, range: Range) -> Vec<CompletionItem> {
@@ -243,27 +259,34 @@ fn in_formula(all: &str, line_start: usize, offset: usize) -> bool {
     blocks % 2 == 1 || line.matches('$').count() % 2 == 1
 }
 
-/// Colours what was typed where it occurs in a suggestion, nothing while nothing is typed.
+/// Colours the letters of a suggestion that what was typed matched: the run where it occurs, else each letter in order; nothing while nothing is typed.
 fn highlight_typed(query: &str, item: &CompletionItem) -> Vec<std::ops::Range<usize>> {
     let typed = query.trim_start_matches(['[', '/', '#', '!', '\\']).to_lowercase();
     if typed.is_empty() {
         return Vec::new();
     }
     let label = item.label.to_lowercase();
-    match label.find(&typed) {
-        Some(at) if label.len() == item.label.len() => vec![at..at + typed.len()],
-        _ => Vec::new(),
+    if let Some(at) = label.find(&typed).filter(|_| label.len() == item.label.len()) {
+        return vec![at..at + typed.len()];
     }
+    let mut wanted = typed.chars().peekable();
+    let mut ranges = Vec::new();
+    for (at, c) in item.label.char_indices() {
+        let Some(next) = wanted.peek() else { break };
+        if c.to_lowercase().eq(std::iter::once(*next)) {
+            ranges.push(at..at + c.len_utf8());
+            wanted.next();
+        }
+    }
+    if wanted.peek().is_some() { Vec::new() } else { ranges }
 }
 
 /// Sets the suggestions and their highlighting on a note's editor.
 pub fn attach(state: &mut gpui_kit::component::input::EditorState, note: PathBuf) {
     let lsp = state.lsp_mut();
     lsp.completion_provider = Some(provider(note));
+    lsp.completion_menu.max_width = px(super::theme::suggestions::WIDTH);
     lsp.set_completion_highlighter(Rc::new(highlight_typed));
-}
-
-impl NoteCompletion {
 }
 
 impl CompletionProvider for NoteCompletion {
@@ -298,7 +321,7 @@ impl CompletionProvider for NoteCompletion {
             Some(Context_::Slash { typed, start }) => {
                 let start_utf16: u32 = line.chars().take(start).map(|c| c.len_utf16() as u32).sum();
                 let range = Range { start: Position { line: line_number, character: start_utf16 }, end: Position { line: line_number, character: caret } };
-                self.slash_items(&typed, range)
+                self.slash_items(&typed, range, |action| super::help::key_text(action, cx))
             }
             None => Vec::new(),
         };
@@ -359,8 +382,17 @@ mod tests {
     #[test]
     fn slash_commands_that_start_with_the_letters_come_first() {
         let menu = super::NoteCompletion { note: "a.md".into() };
-        let labels: Vec<String> = menu.slash_items("t", lsp_types::Range::default()).into_iter().map(|i| i.label).collect();
+        let labels: Vec<String> = menu.slash_items("t", lsp_types::Range::default(), |_| None).into_iter().map(|i| i.label).collect();
         assert_eq!(labels.first().map(String::as_str), Some("Tabelle"));
+    }
+
+    #[test]
+    fn only_matched_letters_are_coloured() {
+        let named = |label: &str| lsp_types::CompletionItem { label: label.into(), ..Default::default() };
+        assert_eq!(super::highlight_typed("[[", &named("Radar")), Vec::<std::ops::Range<usize>>::new());
+        assert_eq!(super::highlight_typed("/ab", &named("Tabelle")), vec![1..3]);
+        assert_eq!(super::highlight_typed("/üs", &named("Überschrift 1")), vec![0..2, 5..6]);
+        assert_eq!(super::highlight_typed("/xq", &named("Tabelle")), Vec::<std::ops::Range<usize>>::new());
     }
 
     #[test]

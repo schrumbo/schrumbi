@@ -423,16 +423,19 @@ pub fn table_with_column(lines: &[&str]) -> Vec<String> {
         .collect()
 }
 
-/// The whole `$$` block a line stands in, while it is being written line by line.
-pub fn open_formula(lines: &[String], line: usize) -> Option<String> {
-    let is_mark = |l: &String| l.trim() == "$$";
-    let above = lines.iter().take(line).filter(|l| is_mark(l)).count();
-    if above % 2 == 0 || lines.get(line).is_some_and(is_mark) {
+/// The whole `$$` block a line stands in, while it is being written line by line; `written` is that line as it stands now.
+pub fn open_formula(lines: &[String], line: usize, written: &str) -> Option<String> {
+    let is_mark = |l: &str| l.trim() == "$$";
+    let mark_at = |i: usize| lines.get(i).is_some_and(|l| is_mark(l));
+    let above = (0..line).filter(|i| mark_at(*i)).count();
+    if above % 2 == 0 || is_mark(written) {
         return None;
     }
-    let first = (0..line).rev().find(|i| is_mark(&lines[*i]))?;
-    let last = (line + 1..lines.len()).find(|i| is_mark(&lines[*i])).unwrap_or(lines.len());
-    Some(format!("$$\n{}\n$$", lines[first + 1..last].join("\n")))
+    let first = (0..line).rev().find(|i| mark_at(*i))?;
+    let last = (line + 1..lines.len()).find(|i| mark_at(*i)).unwrap_or(lines.len().max(line + 1));
+    let around = |range: std::ops::Range<usize>| lines.get(range).unwrap_or_default().iter().map(String::as_str);
+    let body: Vec<&str> = around(first + 1..line).chain([written]).chain(around(line + 1..last)).collect();
+    Some(format!("$$\n{}\n$$", body.join("\n")))
 }
 
 /// The formula around a position in a line, without its dollar signs.
@@ -591,5 +594,15 @@ mod tests {
         assert_eq!(formula_at("a $x^2$ b $y$", 1), None);
         assert_eq!(formula_at("preis 5\\$ und $y$", 15), Some("y"));
         assert_eq!(formula_at("Preis 5$ und 7$ gesamt", 10), None);
+    }
+
+    #[test]
+    fn an_open_formula_shows_the_line_as_it_is_typed() {
+        let lines: Vec<String> = ["Text", "$$", "", "$$"].map(String::from).to_vec();
+        assert_eq!(open_formula(&lines, 2, "x^2").as_deref(), Some("$$\nx^2\n$$"));
+        assert_eq!(open_formula(&lines, 0, "Text"), None);
+        assert_eq!(open_formula(&lines, 2, "$$"), None);
+        let open: Vec<String> = ["$$", "a"].map(String::from).to_vec();
+        assert_eq!(open_formula(&open, 2, "b").as_deref(), Some("$$\na\nb\n$$"));
     }
 }
