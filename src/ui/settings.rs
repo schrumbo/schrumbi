@@ -3015,8 +3015,7 @@ impl Settings {
                 return;
             };
             let (at, handle) = &stops[next];
-            let head = at.saturating_sub(1);
-            scroll.scroll_to_item(if back || stops.get(next.wrapping_sub(1)).is_none_or(|(prev, _)| prev + 1 != *at) { head } else { *at }, ScrollStrategy::Nearest);
+            scroll.scroll_to_item(if back { at.saturating_sub(1) } else { *at }, ScrollStrategy::Nearest);
             window.focus(handle, cx);
             cx.notify();
         };

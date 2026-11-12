@@ -28,6 +28,8 @@ pub struct CatalogFile {
     pub in_project: bool,
     pub haystack: String,
     pub folded_name: String,
+    /// The file name without extension, folded for matching.
+    pub folded_stem: String,
     /// Readable title: a note's first heading or the title part of a convention name.
     pub title: Option<String>,
 }
@@ -177,6 +179,7 @@ fn entries(files: &[IndexedFile], root: &Path, config: &StudyConfig, known: &Hea
                 in_project: is_project(&all, &base),
                 haystack,
                 folded_name: fold(&format!("{} {}", f.name, title.as_deref().unwrap_or(""))),
+                folded_stem: fold(stem(&f.name)),
                 title,
             })
         })

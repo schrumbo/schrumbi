@@ -1108,12 +1108,13 @@ fn ask_keys(order: Vec<(FocusHandle, AskAction)>, focus: Entity<AskFocus>) -> im
         if focus.read(cx).since.elapsed() < ASK_ENTER_GRACE {
             return;
         }
-        let at = order.iter().position(|(h, _)| h.is_focused(window));
-        (order[at.unwrap_or(order.len() - 1)].1)(window, cx);
+        if let Some((_, act)) = order.iter().find(|(h, _)| h.is_focused(window)) {
+            act(window, cx);
+        }
     }
 }
 
-/// The inside of a permission card: one request with its change, or several of the same kind, answered together or one by one. With `focus` the card takes keys: Tab walks the buttons, Enter does the focused one or allows, Esc declines.
+/// The inside of a permission card: one request with its change, or several of the same kind, answered together or one by one. With `focus` the card takes keys: Tab walks the buttons, Enter does the focused one, Esc declines.
 pub fn ask_body(group: &[Waiting], focus: Option<&Entity<AskFocus>>, cx: &App, t: &Theme) -> Option<Div> {
     let first = group.first()?;
     let stops = focus.map(|f| (f.clone(), f.read(cx).card.clone(), f.read(cx).buttons.clone()));
