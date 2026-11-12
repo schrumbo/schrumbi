@@ -1103,7 +1103,7 @@ impl NoteView {
                     .into_any_element(),
             );
         }
-        let spelling = prefs::get().spell_check && len > 2 * SPELL_WINDOW;
+        let spelling = super::spelling::SUPPORTED && prefs::get().spell_check && len > 2 * SPELL_WINDOW;
         let caption = div().id("plain-note").min_w_0().truncate().rounded(px(radius::SMALL)).px(px(space::XS));
         if !self.editor_plain {
             if let Some(notice) = notice {

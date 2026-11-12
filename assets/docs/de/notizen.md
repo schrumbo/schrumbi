@@ -174,7 +174,7 @@ Alle Treffer sind markiert, der aktuelle kräftiger. Groß- und Kleinschreibung 
 
 ## Rechtschreibung
 
-Nur auf dem Mac. Unbekannte Wörter sind unterstrichen. Zeige auf eins, dann {ui:Zum Wörterbuch hinzufügen}, auch im Rechtsklick-Menü. Ohne Maus: {ui:Zum Wörterbuch hinzufügen} in der {key:CommandPalette} nimmt das Wort an der Schreibmarke auf.
+Nur auf dem Mac; unter Windows und Linux fehlen die Einstellung und der Befehl, bis die Prüfung dort angebunden ist. Unbekannte Wörter sind unterstrichen. Zeige auf eins, dann {ui:Zum Wörterbuch hinzufügen}, auch im Rechtsklick-Menü. Ohne Maus: {ui:Zum Wörterbuch hinzufügen} in der {key:CommandPalette} nimmt das Wort an der Schreibmarke auf.
 
 Die Wörter stehen in den Einstellungen unter {ui:Eigenes Wörterbuch}; das Kreuz nimmt eins wieder heraus. Alle offenen Notizen übernehmen das sofort.
 
@@ -186,7 +186,7 @@ Eine einzelne Zeile über etwa 250 KB öffnet Schrumbi im Quelltext statt in der
 
 Die Live-Ansicht zeigt eine Zeile über etwa 32 KB nur mit ihrem Anfang; {ui:Lesen} zeigt sie ganz, und ein Klick auf den Hinweis darunter öffnet die Zeile im Quelltext.
 
-Ab etwa 80 KB prüft die Rechtschreibung nur den Text um die Schreibmarke. Das steht unten als {ui:Rechtschreibung nur um die Schreibmarke}.
+Auf dem Mac prüft die Rechtschreibung ab etwa 80 KB nur den Text um die Schreibmarke. Das steht unten als {ui:Rechtschreibung nur um die Schreibmarke}.
 
 ## Sichern
 

@@ -2118,11 +2118,11 @@ impl Settings {
         let editor = section(
             Some(tr("Editor")),
             Some(tr("Doppelklick auf .md-Dateien in Schrumbi öffnet immer den eigenen Editor.")),
-            vec![editor_row, markdown_row, row(tr("Rechtschreibung prüfen"), if super::spelling::SUPPORTED { Switch::new("n-spell").checked(p.spell_check).on_click(|v, _, cx| {
+            [editor_row, markdown_row].into_iter().chain(super::spelling::SUPPORTED.then(|| row(tr("Rechtschreibung prüfen"), Switch::new("n-spell").checked(p.spell_check).on_click(|v, _, cx| {
                 let on = *v;
                 prefs::update(|p| p.spell_check = on);
                 cx.refresh_windows();
-            }).into_any_element() } else { div().text_size(px(font::CAPTION)).text_color(t.secondary).child(tr("Gibt es bisher nur auf dem Mac")).into_any_element() }, t), row(
+            }), t))).chain([row(
                 tr("Schriftgröße"),
                 stepper(
                     "n-size",
@@ -2131,7 +2131,7 @@ impl Settings {
                     Box::new(move |cx| super::documents::set_font_size((size + 1.).min(24.), cx)),
                 ),
                 t,
-            ), row(tr("Text in voller Breite"), Switch::new("n-full-width").checked(p.reader_full_width).on_click(|v, _, cx| super::documents::set_reader_full_width(*v, cx)), t)],
+            ), row(tr("Text in voller Breite"), Switch::new("n-full-width").checked(p.reader_full_width).on_click(|v, _, cx| super::documents::set_reader_full_width(*v, cx)), t)]).collect(),
             t,
         );
         let mut save_rows = vec![row(
@@ -2218,8 +2218,8 @@ impl Settings {
         );
         let obsidian = self.obsidian_section(&mut fields, window, cx, t);
         self.fields = fields;
-        let dictionary = self.dictionary_section(&p.spell_words, t);
-        div().flex().flex_col().gap(px(space::XL)).child(editor).child(dictionary).child(section(Some(tr("Sichern")), Some(save_footer), save_rows, t)).child(pdf).child(obsidian)
+        let dictionary = super::spelling::SUPPORTED.then(|| self.dictionary_section(&p.spell_words, t));
+        div().flex().flex_col().gap(px(space::XL)).child(editor).children(dictionary).child(section(Some(tr("Sichern")), Some(save_footer), save_rows, t)).child(pdf).child(obsidian)
     }
 
     fn dictionary_section(&self, words: &[String], t: &Theme) -> Div {

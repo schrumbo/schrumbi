@@ -174,7 +174,7 @@ All matches are marked, the current one stronger. Case and umlauts do not matter
 
 ## Spelling
 
-Mac only. Unknown words are underlined. Point at one, then {ui:Zum Wörterbuch hinzufügen}, also in the right-click menu. Without a mouse: {ui:Zum Wörterbuch hinzufügen} in the {key:CommandPalette} adds the word at the caret.
+Mac only; on Windows and Linux the setting and the command are hidden until checking is available there. Unknown words are underlined. Point at one, then {ui:Zum Wörterbuch hinzufügen}, also in the right-click menu. Without a mouse: {ui:Zum Wörterbuch hinzufügen} in the {key:CommandPalette} adds the word at the caret.
 
 The words are listed in the settings under {ui:Eigenes Wörterbuch}; the cross removes one. All open notes pick it up at once.
 
@@ -186,7 +186,7 @@ A single line over about 250 KB opens in the source instead of the Live view. Th
 
 The Live view shows only the start of a line over about 32 KB; {ui:Lesen} shows all of it, and a click on the note under it opens the line in the source.
 
-From about 80 KB spelling checks only the text around the caret. The bar below says {ui:Rechtschreibung nur um die Schreibmarke}.
+On the Mac, from about 80 KB spelling checks only the text around the caret. The bar below says {ui:Rechtschreibung nur um die Schreibmarke}.
 
 ## Saving
 

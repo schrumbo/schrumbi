@@ -164,7 +164,9 @@ fn commands(cx: &App) -> Vec<Command> {
         }
         add(&view, S::ExportPdf.label(), "share", keys(S::ExportPdf), Run::NoteAction(Box::new(app::ExportPdf)));
         add(&edit, S::FindInNote.label(), "search", keys(S::FindInNote), Run::NoteAction(Box::new(super::find_bar::FindInNote)));
-        add(&edit, tr("Zum Wörterbuch hinzufügen"), "plus", None, Run::NoteAction(Box::new(super::spell_card::AddWordAtCaret)));
+        if super::spelling::SUPPORTED {
+            add(&edit, tr("Zum Wörterbuch hinzufügen"), "plus", None, Run::NoteAction(Box::new(super::spell_card::AddWordAtCaret)));
+        }
         add(&edit, tr("In Notiz ersetzen"), "replace", Some(if cfg!(target_os = "macos") { Shortcut { key: "f".into(), command: true, shift: false, option: true, control: false } } else { fixed_shortcut("h", false) }.display()), Run::NoteAction(Box::new(super::find_bar::ReplaceInNote)));
         use super::documents as d;
         let chord = |key: &str, shift: bool, option: bool| Shortcut { key: key.into(), command: true, shift, option, control: false }.display();
