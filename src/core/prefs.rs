@@ -182,7 +182,7 @@ pub struct Prefs {
     pub pdf_properties: bool,
     pub editor_font_size: f32,
     pub theme: ThemeChoice,
-    /// A loaded design by its id, the stem of its file in `themes`; wins over `theme` while that file is there. `theme` keeps a value older versions can read.
+    /// A loaded design by its id, the stem of its file in `themes`; wins over `theme` while that file is there. `theme` stays the built-in choice from before and shows again when the file goes.
     pub theme_file: String,
     /// The chance of remembering a card that reviews aim for.
     pub card_retention: f64,

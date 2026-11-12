@@ -167,6 +167,18 @@ impl Render for TimeField {
         let me = cx.entity();
         let presets = self.presets.clone();
         let current = self.value.clone();
+        let none = presets.is_empty();
+        let chevron = Button::new("time-presets").ghost().xsmall().icon(menu_icon("chevron-down")).disabled(none).tooltip(if none { tr("Keine Schnellauswahl für diese Uhrzeit") } else { tr("Schnellauswahl") }).dropdown_menu(move |mut menu, _, _| {
+            for p in &presets {
+                let (me, v) = (me.clone(), p.time.clone());
+                menu = menu.item(PopupMenuItem::new(p.label.clone()).checked(p.time == current).on_click(move |_, window, cx| {
+                    let v = v.clone();
+                    me.update(cx, |f, cx| f.pick(v, window, cx));
+                }));
+            }
+            menu
+        });
+        let suffix = div().flex().items_center().gap(px(space::XXS)).children(suffix).child(chevron);
         div()
             .relative()
             .flex()
@@ -202,22 +214,9 @@ impl Render for TimeField {
                             cx.notify();
                         }
                     }))
-                    .w(px(control::TIME))
-                    .child(Input::new(&self.input).small().when(invalid, |i| i.border_color(t.red).text_color(t.readable(t.red))).when_some(suffix, Input::suffix))
+                    .w(px(control::TIME + control::S))
+                    .child(Input::new(&self.input).small().when(invalid, |i| i.border_color(t.red).text_color(t.readable(t.red))).suffix(suffix))
                     .tip(tr("Tippe z. B. 18, 1830 oder 18:30. ↑↓ in Viertelstunden, mit ⇧ in vollen Stunden.")),
             )
-            .child({
-                let none = presets.is_empty();
-                Button::new("time-presets").ghost().xsmall().icon(menu_icon("chevron-down")).disabled(none).tooltip(if none { tr("Keine Schnellauswahl für diese Uhrzeit") } else { tr("Schnellauswahl") }).dropdown_menu(move |mut menu, _, _| {
-                    for p in &presets {
-                        let (me, v) = (me.clone(), p.time.clone());
-                        menu = menu.item(PopupMenuItem::new(p.label.clone()).checked(p.time == current).on_click(move |_, window, cx| {
-                            let v = v.clone();
-                            me.update(cx, |f, cx| f.pick(v, window, cx));
-                        }));
-                    }
-                    menu
-                })
-            })
     }
 }

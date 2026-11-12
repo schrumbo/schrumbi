@@ -556,6 +556,23 @@ pub fn link_button(id: impl Into<ElementId>, label: impl Into<SharedString>, t: 
     div().id(id).mark("link", label.clone()).min_h(px(control::S)).flex().items_center().px(px(space::XS)).mx(px(-space::XS)).text_color(t.accent_text).cursor_pointer().key_nav().soft(t.accent.opacity(hover::CONTROL), radius::SMALL).child(label)
 }
 
+/// A row whose label and switch or checkbox are one click target with hover. Pass a `switch` without a click handler of its own and not focusable; `on_toggle` flips the value, also for Enter and Space on the focused row.
+pub fn toggle_row(id: impl Into<ElementId>, label: impl IntoElement, switch: impl IntoElement, t: &Theme, on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(space::M))
+        .min_h(px(control::S))
+        .cursor_pointer()
+        .key_nav()
+        .soft(t.ink.opacity(hover::ROW), radius::INNER)
+        .on_click(on_toggle)
+        .child(div().flex_1().min_w_0().child(label))
+        .child(div().flex_none().child(switch))
+}
+
 /// Keyboard-shortcut chip.
 pub fn kbd(s: impl Into<SharedString>, t: &Theme) -> Div {
     div().px(px(space::XS)).py(px(space::XXS)).rounded(px(radius::SMALL)).bg(t.ink.opacity(0.08)).text_size(px(font::CAPTION)).text_color(t.secondary).child(s.into())

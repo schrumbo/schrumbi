@@ -501,27 +501,49 @@ fn write_file(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
         })
 }
 
-/// Keeps a copy of a checked design in the folder; an existing file is never replaced, the same bytes keep their id. Returns its id.
-pub fn install(bytes: &[u8], design: &Design) -> io::Result<String> {
+/// What `install` did with a design: where its copy lies and what it replaced.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Placed {
+    pub id: String,
+    /// The bytes of the earlier copy of the same design this one took the place of, for undo.
+    pub replaced: Option<Vec<u8>>,
+}
+
+/// Keeps a copy of a checked design in the folder. The same bytes keep their id, a changed design of the same name or a broken copy is replaced and its bytes handed back, another design with the same file name gets a number.
+pub fn install(bytes: &[u8], design: &Design) -> io::Result<Placed> {
     let base = slug(&design.name);
     let mut n = 1;
-    let (id, path) = loop {
+    loop {
         let id = if n == 1 { base.clone() } else { format!("{base}-{n}") };
         let path = path_of(&id).ok_or_else(|| io::Error::other("no folder"))?;
-        let same = match std::fs::read(&path) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => true,
+        let replaced = match std::fs::read(&path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
             Err(e) => return Err(e),
-            Ok(old) if old == bytes => return Ok(id),
-            Ok(_) => false,
+            Ok(old) if old == bytes => return Ok(Placed { id, replaced: None }),
+            Ok(old) => {
+                let same = match parse(&old) {
+                    Ok(d) => d.name == design.name,
+                    Err(_) => true,
+                };
+                if !same {
+                    n += 1;
+                    continue;
+                }
+                Some(old)
+            }
         };
-        if same {
-            break (id, path);
-        }
-        n += 1;
-    };
+        write_file(&path, bytes)?;
+        rescan();
+        return Ok(Placed { id, replaced });
+    }
+}
+
+/// Writes the bytes back that a replacing `install` took the place of.
+pub fn revert(id: &str, bytes: &[u8]) -> io::Result<()> {
+    let path = path_of(id).ok_or_else(|| io::Error::other("no such design"))?;
     write_file(&path, bytes)?;
     rescan();
-    Ok(id)
+    Ok(())
 }
 
 /// Deletes a loaded design and gives back its bytes so the removal can be undone.
@@ -635,15 +657,24 @@ mod tests {
     fn install_replace_suffix_remove_restore() {
         let a = minimal("").replace("Probe", "Install Probe");
         let da = parse(a.as_bytes()).unwrap();
-        let id = install(a.as_bytes(), &da).unwrap();
-        assert_eq!(id, "install-probe");
+        let first = install(a.as_bytes(), &da).unwrap();
+        assert_eq!(first, Placed { id: "install-probe".into(), replaced: None });
+        let id = first.id;
         assert_eq!(read(&id).unwrap().1, a.as_bytes());
+        assert_eq!(install(a.as_bytes(), &da).unwrap(), Placed { id: id.clone(), replaced: None });
         let changed = a.replace("#1E66F5", "#2266F5");
-        assert_eq!(install(a.as_bytes(), &da).unwrap(), id);
-        let id2 = install(changed.as_bytes(), &parse(changed.as_bytes()).unwrap()).unwrap();
-        assert_eq!(id2, "install-probe-2");
+        let swapped = install(changed.as_bytes(), &parse(changed.as_bytes()).unwrap()).unwrap();
+        assert_eq!(swapped.id, id);
+        assert_eq!(swapped.replaced.as_deref(), Some(a.as_bytes()));
+        assert_eq!(read(&id).unwrap().1, changed.as_bytes());
+        revert(&id, a.as_bytes()).unwrap();
         assert_eq!(read(&id).unwrap().1, a.as_bytes());
-        assert_eq!(read(&id2).unwrap().1, changed.as_bytes());
+        let other = a.replace("Install Probe", "Install-Probe");
+        let numbered = install(other.as_bytes(), &parse(other.as_bytes()).unwrap()).unwrap();
+        assert_eq!(numbered, Placed { id: "install-probe-2".into(), replaced: None });
+        let id2 = numbered.id;
+        assert_eq!(read(&id).unwrap().1, a.as_bytes());
+        assert_eq!(read(&id2).unwrap().1, other.as_bytes());
         assert!(installed().iter().any(|i| i.id == id2 && i.problem.is_none()));
         let bytes = remove(&id2).unwrap();
         assert!(read(&id2).is_none());
