@@ -2670,6 +2670,7 @@ impl Library {
         }
         self.coalescing = None;
         if !failed.is_empty() {
+            self.partly(&label, false);
             self.undo_steps.push(Step { label, changes: failed, series: false });
             return;
         }
@@ -2693,6 +2694,7 @@ impl Library {
         }
         self.coalescing = None;
         if !failed.is_empty() {
+            self.partly(&label, true);
             self.redo_steps.push(Step { label, changes: failed, series: false });
             return;
         }
@@ -2701,6 +2703,17 @@ impl Library {
         }
         let undo = self.undo_latest();
         self.notify(trf("Wiederholt: %@", &[&label]), "redo-2", None, Some(undo));
+    }
+
+    fn partly(&mut self, label: &str, redo: bool) {
+        let why = self.last_error.take().unwrap_or_default();
+        let message = match (redo, why.is_empty()) {
+            (false, true) => trf("„%@“ ließ sich nicht ganz rückgängig machen", &[&label]),
+            (false, false) => trf("„%@“ ließ sich nicht ganz rückgängig machen: %@", &[&label, &why]),
+            (true, true) => trf("„%@“ ließ sich nicht ganz wiederholen", &[&label]),
+            (true, false) => trf("„%@“ ließ sich nicht ganz wiederholen: %@", &[&label, &why]),
+        };
+        self.notify(message, "triangle-alert", None, None);
     }
 
     /// Applies a step; returns its reverse and the changes that failed, so they can be tried again.

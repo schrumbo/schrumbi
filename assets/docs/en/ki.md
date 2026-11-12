@@ -4,7 +4,15 @@ Schrumbi works with Claude Code, Codex or OpenCode when one of them is installed
 
 ## On and off
 
-When a program is installed, the AI is on. {ui:KI-Assistent verwenden} in {key:OpenSettings} → {ui:KI} switches it off, {ui:Knopf in der Werkzeugleiste} hides the button.
+When a program is installed, the AI is on. {ui:KI-Assistent verwenden} in {key:OpenSettings} → {ui:KI} switches it off, {ui:Knopf in der Werkzeugleiste} under {ui:Für Fortgeschrittene} hides the button.
+
+None installed yet? You need an account with Claude or ChatGPT.
+
+1. Command search → {ui:KI-Assistent einrichten}
+2. {ui:Claude Code installieren} opens the official guide.
+3. Then {ui:Erneut suchen}. If the program is not signed in, it shows {ui:Anmeldung prüfen}.
+
+The first start can take a minute; {ui:Abbrechen} stops it, {ui:Noch einmal} tries again.
 
 ## The column
 
@@ -18,7 +26,7 @@ Chips at the bottom show what the AI gets to see: open note, PDF page, selection
 
 | Button | What happens |
 |---|---|
-| {ui:Folgen} | Changed files open and show the spot |
+| {ui:Folgen} | Changed files open and show the spot; off until you switch it on |
 | {ui:Ansehen} | Before and after, one below the other |
 | {ui:Rückgängig} | Takes back only this one change |
 | {ui:Stopp} | Stops the request |
@@ -47,11 +55,11 @@ In the filing window, {ui:Mit KI ausfüllen} fills the fields from the file. Wha
 
 ## In the terminal
 
-1. {key:OpenSettings} → {ui:KI} → {ui:Für die Kommandozeile}
+1. {key:OpenSettings} → {ui:KI} → {ui:Für Fortgeschrittene} → {ui:Für die Kommandozeile}
 2. {ui:Eintragen} next to your program.
-3. Start it in the terminal, for example with {ui:Im Terminal öffnen}.
+3. Start it in your study folder, for example with {ui:Im Terminal öffnen}.
 
-While Schrumbi runs, it reads your notes, PDFs, deadlines and cards. Ask for example: Which submissions are due in the next 7 days?
+While Schrumbi has this folder open, it reads your notes, PDFs, deadlines and cards. Started in another folder, it only gets told where to start. Ask for example: Which submissions are due in the next 7 days?
 
 The column's tasks are there as commands:
 
@@ -68,11 +76,14 @@ Before every change Schrumbi asks in the column, or at the bottom right of the w
 | Button | What happens |
 |---|---|
 | {ui:Erlauben} | This one change |
-| {ui:Immer heute} | This kind of change without asking until midnight |
+| {ui:In dieser Notiz heute erlauben} | The same kind of change in this note without asking until midnight; for new notes {ui:In diesem Ordner heute erlauben} |
 | {ui:Ablehnen} | Nothing is written |
+| {ui:Ansehen} | The whole change, before you decide |
 
-The changes of one request are one step: {key:Undo} takes them back together. If you changed the note in the meantime, the AI writes nothing and reads it again.
+Long changes show the first lines, every line with a link and how many lines are left out. Filing, inbox, setup, status and deadlines always ask. Several changes of the same kind come as one card: {ui:Alle erlauben}, {ui:Alle ablehnen} or {ui:Einzeln ansehen}.
+
+The changes of one request in the column are one step: {key:Undo} takes them back together. From the terminal every change is its own step. If you changed the note in the meantime, the AI writes nothing and reads it again.
 
 ## What the AI never does
 
-It deletes nothing, renames nothing and never rates cards. Codex runs only in its read-only mode, OpenCode without its own file edits; both change things only through Schrumbi. It never overwrites unsaved text. It runs commands only when you switch on {ui:Befehle ausführen erlauben}.
+It deletes nothing, renames nothing and never rates cards. Codex runs only in its read-only mode, OpenCode without its own file edits; both change things only through Schrumbi. It never overwrites unsaved text. Hidden files and folders whose name starts with a dot, and Schrumbi's own files, it neither reads nor changes. Instructions written in your notes or PDFs it does not follow; it tells you about them instead. It runs commands only when you switch on {ui:Befehle ausführen erlauben}.

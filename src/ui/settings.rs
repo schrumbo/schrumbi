@@ -219,14 +219,14 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("KI-Assistent verwenden", Tab::Ai),
     ("Programme", Tab::Ai),
     ("Knopf in der Werkzeugleiste", Tab::Ai),
+    ("Für Fortgeschrittene", Tab::Ai),
     ("Für die Kommandozeile", Tab::Ai),
     ("Befehl", Tab::Ai),
     ("Im Terminal öffnen", Tab::Ai),
     ("Spalte öffnen", Tab::Ai),
     ("Spalte", Tab::Ai),
     ("Programm in der Spalte", Tab::Ai),
-    ("Verbindung zu Claude", Tab::Ai),
-    ("Anmeldung", Tab::Ai),
+    ("Claude verbinden", Tab::Ai),
     ("Bei Änderungen zur Datei springen", Tab::Ai),
     ("Sitzung beenden nach", Tab::Ai),
     ("Eigener Befehl", Tab::Ai),
@@ -289,6 +289,7 @@ pub struct Settings {
     notices: u64,
     focus: FocusHandle,
     launch_at_login: bool,
+    ai_rescanned: bool,
     markdown_default: Option<bool>,
     _subs: Vec<Subscription>,
 }
@@ -442,6 +443,15 @@ fn jump_target(label: &str, content: Div, t: &Theme) -> Div {
             .size_full(),
         )
     })
+}
+
+const CLAUDE_INSTALL: &str = "https://code.claude.com/docs/en/setup";
+const AI_ADVANCED: &str = "ai-advanced";
+const ADVANCED_LABELS: &[&str] = &["Knopf in der Werkzeugleiste", "Für die Kommandozeile", "Befehl", "Im Terminal öffnen", "Spalte öffnen", "Spalte", "Programm in der Spalte", "Claude verbinden", "Bei Änderungen zur Datei springen", "Sitzung beenden nach", "Eigener Befehl"];
+
+/// Whether a jump leads to one of these labels right now.
+fn jumping_to(labels: &[&str]) -> bool {
+    JUMP.with(|j| j.borrow().as_ref().is_some_and(|j| labels.contains(&j.label.as_str())))
 }
 
 fn section(title: Option<String>, footer: Option<String>, rows: Vec<AnyElement>, t: &Theme) -> Div {
@@ -686,6 +696,7 @@ impl Settings {
             notices: 0,
             focus: cx.focus_handle(),
             launch_at_login: super::platform::launches_at_login(),
+            ai_rescanned: false,
             markdown_default: super::platform::markdown_is_default(),
             _subs: subs,
         }
@@ -2215,32 +2226,92 @@ impl Settings {
         let prefs = prefs::with(|p| p.ai.clone());
         let found = detect::found();
         let names = found.iter().map(|c| c.agent.label()).collect::<Vec<_>>().join(", ");
-        let rescan = Button::new("ai-rescan").label(tr("Erneut suchen")).on_click(|_, _, cx| ai::recheck(cx));
-        let programs = div().flex().items_center().gap(px(space::M)).child(caption(if found.is_empty() { tr("Keins gefunden") } else { names }, t)).child(rescan);
+        let chosen = agents::chosen(&prefs);
+        let signed_out = match chosen {
+            Some(Runner::Known(a)) if a != Agent::OpenCode && ai::login_state(a, cx) == Some(false) => Some(a),
+            _ => None,
+        };
+        let scanning = ai::scanning(cx);
+        let nothing = found.is_empty() && prefs.custom_command.trim().is_empty();
+        let status = if scanning {
+            tr("Sucht …")
+        } else if found.is_empty() {
+            if self.ai_rescanned { tr("Noch nichts gefunden") } else { tr("Keins gefunden") }
+        } else if self.ai_rescanned {
+            trf("Gefunden: %@", &[&names])
+        } else {
+            names
+        };
+        let next: Option<AnyElement> = if nothing {
+            Some(Button::new("ai-install").primary().label(tr("Claude Code installieren")).tooltip(tr("Öffnet die offizielle Anleitung im Browser")).on_click(|_, _, cx| {
+                if !crate::core::drive::fenced("open", CLAUDE_INSTALL) {
+                    cx.open_url(CLAUDE_INSTALL);
+                }
+            }).into_any_element())
+        } else {
+            signed_out.map(|a| {
+                let tip = if a == Agent::Claude { tr("Öffnet die Anmeldung bei Claude im Terminal") } else { tr("Öffnet die Anmeldung bei ChatGPT im Terminal") };
+                Button::new("ai-login").primary().label(tr("Anmeldung prüfen")).tooltip(tip).on_click(move |_, _, cx| ai::login(a, cx)).into_any_element()
+            })
+        };
+        let rescan = Button::new("ai-rescan").label(tr("Erneut suchen")).loading(scanning).on_click(cx.listener(|s, _, _, cx| {
+            s.ai_rescanned = true;
+            ai::recheck(cx);
+            cx.notify();
+        }));
+        let programs = div().flex().flex_wrap().justify_end().items_center().gap(px(space::M)).child(caption(status, t)).children(next).child(rescan);
         let mut sections = div().w_full().flex().flex_col().gap(px(space::L)).child(section(
             None,
-            Some(if found.is_empty() {
-                tr("Schrumbi arbeitet mit Claude Code, Codex oder OpenCode zusammen, sobald eins davon installiert ist.")
+            Some(if nothing {
+                tr("Der KI-Assistent beantwortet Fragen zu deinen Notizen, PDFs und Fristen und schlägt Änderungen vor, die du erst bestätigst. Du brauchst ein Konto bei Claude oder ChatGPT.")
             } else {
                 tr("Das Programm nutzt dein eigenes Konto dort; was du ihm zeigst, geht an diesen Anbieter. Lesen darf es in deinem Studienordner, ändern nur mit deinem Ja, und jede Änderung ist rückgängig.")
             }),
-            vec![
-                row(tr("KI-Assistent verwenden"), Switch::new("ai-on").checked(prefs.enabled).on_click(|v, _, cx| ai::set_enabled(*v, cx)), t),
-                row(tr("Programme"), programs, t),
-                row(tr("Knopf in der Werkzeugleiste"), Switch::new("ai-toolbar").checked(prefs.toolbar_button).disabled(!prefs.enabled).on_click(|v, _, cx| {
-                    let v = *v;
-                    prefs::update(|p| p.ai.toolbar_button = v);
-                    cx.refresh_windows();
-                }), t),
-            ],
+            vec![row(tr("KI-Assistent verwenden"), Switch::new("ai-on").checked(prefs.enabled && !nothing).disabled(nothing).on_click(|v, _, cx| ai::set_enabled(*v, cx)), t), row(tr("Programme"), programs, t)],
             t,
         ));
         if !ai::active() {
             return sections;
         }
+        sections = sections.child(section(
+            None,
+            Some(tr("Riskant: Ein Befehl kann Dateien ändern, ohne dass Schrumbi es rückgängig machen kann. Die KI fragt vor jedem Befehl.")),
+            vec![row(tr("Befehle ausführen erlauben"), Switch::new("ai-execute").checked(prefs.allow_execute).on_click(|v, _, cx| {
+                let v = *v;
+                prefs::update(|p| p.ai.allow_execute = v);
+                cx.refresh_windows();
+            }), t)],
+            t,
+        ));
+        let open = self.advanced.contains(AI_ADVANCED) || jumping_to(ADVANCED_LABELS);
+        sections = sections.child(
+            link_button("ai-advanced", tr("Für Fortgeschrittene"), t)
+                .flex()
+                .items_center()
+                .gap(px(space::XS))
+                .child(motion::chevron("chevron", open, t.accent))
+                .on_click(cx.listener(|s, _, _, cx| {
+                    if !s.advanced.remove(AI_ADVANCED) {
+                        s.advanced.insert(AI_ADVANCED.to_string());
+                    }
+                    cx.notify();
+                })),
+        );
+        if !open {
+            return sections;
+        }
+        sections = sections.child(section(
+            None,
+            None,
+            vec![row(tr("Knopf in der Werkzeugleiste"), Switch::new("ai-toolbar").checked(prefs.toolbar_button).on_click(|v, _, cx| {
+                let v = *v;
+                prefs::update(|p| p.ai.toolbar_button = v);
+                cx.refresh_windows();
+            }), t)],
+            t,
+        ));
         let mut column = Vec::new();
         let runners = agents::runners(&prefs);
-        let chosen = agents::chosen(&prefs);
         if runners.len() > 1 {
             let label = chosen.map(|r| tr(r.label())).unwrap_or_default();
             let menu_runners = runners.clone();
@@ -2263,16 +2334,7 @@ impl Settings {
                 None if install::downloadable() => Button::new("ai-fetch").label(tr("Holen")).on_click(|_, _, cx| ai::install_claude(cx)).into_any_element(),
                 None => caption(tr("Braucht Node.js"), t).into_any_element(),
             };
-            column.push(detail_row(tr("Verbindung zu Claude"), tr("Ein kleines Zusatzprogramm, das Claude Code mit Schrumbi sprechen lässt"), control, t));
-        }
-        for cli in found.iter().filter(|c| Some(Runner::Known(c.agent)) == chosen && c.agent != Agent::OpenCode) {
-            let agent = cli.agent;
-            let control: AnyElement = match ai::login_state(agent, cx) {
-                Some(true) => caption(tr("Angemeldet"), t).into_any_element(),
-                Some(false) => Button::new("ai-login").label(if agent == Agent::Claude { tr("Bei Claude anmelden") } else { tr("Bei ChatGPT anmelden") }).on_click(move |_, _, cx| ai::login(agent, cx)).into_any_element(),
-                None => caption(tr("Prüft …"), t).into_any_element(),
-            };
-            column.push(row(tr("Anmeldung"), control, t));
+            column.push(detail_row(tr("Claude verbinden"), tr("Ein kleines Zusatzprogramm, das Claude Code mit Schrumbi sprechen lässt"), control, t));
         }
         column.push(row(tr("Spalte öffnen"), Button::new("ai-open").label(format!("{}{}", tr("Öffnen"), crate::core::shortcuts::ShortcutAction::ToggleAi.hint())).on_click(|_, _, cx| {
             ai::open_column(cx);
@@ -2325,6 +2387,7 @@ impl Settings {
         let server_copy = server.clone();
         rows.push(detail_row(tr("Befehl"), server, Button::new("ai-copy-server").ghost().icon(menu_icon("copy")).tooltip(tr("Kopieren")).on_click(move |_, _, cx| super::drive::copy(server_copy.clone(), cx)), t));
         let root = state::read(cx, |l| l.root.clone());
+        let shown_root = root.clone();
         rows.push(row(tr("Im Terminal öffnen"), Button::new("ai-terminal").label(tr("Öffnen")).disabled(root.is_none()).on_click(move |_, _, _| {
             if let Some(root) = root.clone()
                 && !crate::core::drive::fenced("terminal", root.display())
@@ -2337,12 +2400,12 @@ impl Settings {
             ai::rescan(cx);
         });
         rows.push(detail_row(tr("Eigener Befehl"), tr("Startet ein anderes Programm, das ACP spricht, in der Spalte"), div().w(px(control::ROW_CONTROL)).child(Input::new(&command)), t));
-        rows.push(detail_row(tr("Befehle ausführen erlauben"), tr("Die KI darf nach Rückfrage Befehle in deinem Studienordner starten"), Switch::new("ai-execute").checked(prefs.allow_execute).on_click(|v, _, cx| {
-            let v = *v;
-            prefs::update(|p| p.ai.allow_execute = v);
-            cx.refresh_windows();
-        }), t));
-        sections = sections.child(section(Some(tr("Für die Kommandozeile")), Some(tr("Danach kann dein Programm im Terminal deine Notizen, PDFs und Fristen nutzen, solange Schrumbi läuft. Jede Änderung fragt hier zuerst.")), rows, t));
+        let reach = tr("Danach kann jedes Claude oder Codex, das du in deinem Studienordner startest, deine Notizen, PDFs und Fristen lesen, solange Schrumbi läuft. Jede Änderung fragt hier zuerst.");
+        let reach = match &shown_root {
+            Some(r) => format!("{reach} {}", trf("Studienordner gerade: %@", &[&r.display().to_string()])),
+            None => reach,
+        };
+        sections = sections.child(section(Some(tr("Für die Kommandozeile")), Some(reach), rows, t));
         sections
     }
 

@@ -51,16 +51,52 @@ pub struct Cli {
 
 static FOUND: RwLock<Option<Vec<Cli>>> = RwLock::new(None);
 
-/// The program `name` on `PATH`; on Windows also its `.exe`, `.cmd` or `.bat`.
+/// The program `name` on `PATH`, on Windows also in the install folders a fresh install has not put on this app's `PATH` yet;
+/// on Windows its `.exe`, `.cmd` or `.bat`.
 pub fn which(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).find_map(|dir| {
-        if cfg!(windows) {
-            ["exe", "cmd", "bat"].iter().map(|ext| dir.join(format!("{name}.{ext}"))).find(|p| p.is_file())
-        } else {
-            Some(dir.join(name)).filter(|p| p.is_file())
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let extra = if cfg!(windows) { windows_dirs(&|k| std::env::var_os(k)) } else { Vec::new() };
+    std::env::split_paths(&path).chain(extra).find_map(|dir| find_in(&dir, name))
+}
+
+fn find_in(dir: &Path, name: &str) -> Option<PathBuf> {
+    if cfg!(windows) {
+        ["exe", "cmd", "bat"].iter().map(|ext| dir.join(format!("{name}.{ext}"))).find(|p| p.is_file())
+    } else {
+        Some(dir.join(name)).filter(|p| p.is_file())
+    }
+}
+
+/// Where Windows installers put Claude Code, Codex, OpenCode and Node: the native installer, npm, winget and Node's own setup.
+pub fn windows_dirs(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    let at = |key: &str, rest: &[&str]| var(key).filter(|v| !v.is_empty()).map(|v| rest.iter().fold(PathBuf::from(v), |p, r| p.join(r)));
+    [
+        at("USERPROFILE", &[".local", "bin"]),
+        at("APPDATA", &["npm"]),
+        at("LOCALAPPDATA", &["Microsoft", "WinGet", "Links"]),
+        at("LOCALAPPDATA", &["Programs", "claude"]),
+        at("LOCALAPPDATA", &["Programs", "opencode"]),
+        at("ProgramFiles", &["nodejs"]),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// `PATH` for a program started now, with the Windows install folders that exist but are missing, so an `npm` shim finds Node; `None` elsewhere or when nothing is missing.
+pub fn child_path() -> Option<std::ffi::OsString> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths: Vec<PathBuf> = std::env::split_paths(&current).collect();
+    let before = paths.len();
+    for dir in windows_dirs(&|k| std::env::var_os(k)) {
+        if dir.is_dir() && !paths.iter().any(|p| p.as_os_str().eq_ignore_ascii_case(dir.as_os_str())) {
+            paths.push(dir);
         }
-    })
+    }
+    (paths.len() > before).then(|| std::env::join_paths(paths).ok()).flatten()
 }
 
 /// Folders where installers put command-line programs that a terminal finds through the shell profile.
@@ -140,18 +176,45 @@ pub fn active() -> bool {
     prefs::with(|p| p.ai.enabled && (!p.ai.custom_command.trim().is_empty() || !found().is_empty()))
 }
 
-/// A command for `cli` with the given arguments; `.cmd` shims on Windows run through `cmd`.
-fn command(cli: &Cli, args: &[&str]) -> Command {
-    let shim = cli.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
-    if cfg!(windows) && shim {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(&cli.path).args(args);
-        c
-    } else {
-        let mut c = Command::new(&cli.path);
-        c.args(args);
-        c
+/// One argument for a `cmd` line: quoted when it has spaces or characters `cmd` would read itself.
+pub fn cmd_quoted(arg: &str) -> String {
+    if !arg.is_empty() && !arg.contains([' ', '\t', '&', '|', '<', '>', '^', '(', ')', ',', ';', '=', '"']) {
+        return arg.to_string();
     }
+    format!("\"{}\"", arg.replace('"', "\"\""))
+}
+
+/// A program and its arguments as one `cmd` line, each part quoted on its own.
+pub fn cmd_line(program: &Path, args: &[&str]) -> String {
+    std::iter::once(cmd_quoted(&program.to_string_lossy())).chain(args.iter().map(|a| cmd_quoted(a))).collect::<Vec<_>>().join(" ")
+}
+
+/// `cmd` running `line` exactly: `/S` strips only the outer quotes, so quoted paths with spaces survive.
+#[cfg(windows)]
+fn cmd_running(line: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    let mut c = Command::new("cmd");
+    c.raw_arg(format!("/D /S /C \"{line}\""));
+    c
+}
+
+/// A command for `cli` with the given arguments; `.cmd` shims on Windows run through `cmd`.
+pub(crate) fn command(cli: &Cli, args: &[&str]) -> Command {
+    let mut c = shim_or_program(cli, args);
+    if let Some(path) = child_path() {
+        c.env("PATH", path);
+    }
+    c
+}
+
+fn shim_or_program(cli: &Cli, args: &[&str]) -> Command {
+    #[cfg(windows)]
+    if cli.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat")) {
+        return cmd_running(&cmd_line(&cli.path, args));
+    }
+    let mut c = Command::new(&cli.path);
+    c.args(args);
+    c
 }
 
 /// The arguments that register Schrumbi's tools with the program, after the program itself; `None` when it has no such command.
@@ -226,20 +289,38 @@ pub fn open_login(cli: &Cli, root: &Path) -> std::io::Result<()> {
         c.arg("-e").arg(format!("tell application \"Terminal\" to do script \"{}\"", line.replace('\\', "\\\\").replace('"', "\\\"")));
         c
     } else if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg("start").arg("").arg("/D").arg(root).arg("cmd").arg("/K").arg(&line);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            c.creation_flags(0x0800_0000);
-        }
-        c
+        windows_terminal(root, Some(&cmd_line(&cli.path, login_args(cli.agent))))
     } else {
         let mut c = Command::new("x-terminal-emulator");
         c.arg("-e").arg(&line).current_dir(root);
         c
     };
     c.spawn().map(drop)
+}
+
+/// What `cmd` runs to open a console window in `root`, running `line` there when given.
+pub fn terminal_line(root: &Path, line: Option<&str>) -> String {
+    let start = format!("start \"\" /D {} cmd", cmd_quoted(&root.to_string_lossy()));
+    match line {
+        Some(line) => format!("{start} /S /K \"{line}\""),
+        None => start,
+    }
+}
+
+#[cfg(windows)]
+fn windows_terminal(root: &Path, line: Option<&str>) -> Command {
+    use std::os::windows::process::CommandExt;
+    let mut c = cmd_running(&terminal_line(root, line));
+    c.creation_flags(0x0800_0000);
+    if let Some(path) = child_path() {
+        c.env("PATH", path);
+    }
+    c
+}
+
+#[cfg(not(windows))]
+fn windows_terminal(_: &Path, _: Option<&str>) -> Command {
+    Command::new("cmd")
 }
 
 /// Opens the system terminal in `root`.
@@ -249,14 +330,7 @@ pub fn open_terminal(root: &Path) -> std::io::Result<()> {
         c.arg("-a").arg("Terminal").arg(root);
         c
     } else if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg("start").arg("").arg("/D").arg(root).arg("cmd");
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            c.creation_flags(0x0800_0000);
-        }
-        c
+        windows_terminal(root, None)
     } else {
         let mut c = Command::new("x-terminal-emulator");
         c.current_dir(root);

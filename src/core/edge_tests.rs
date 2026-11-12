@@ -2068,7 +2068,7 @@ fn a_failed_restore_leaves_the_marks_with_the_file_that_is_still_there() {
     lib.replace_pdf(&path, new.clone(), &old_key, vec![pdf_mark(1, 1)], "x".into());
     std::fs::remove_file(&path).unwrap();
     lib.undo();
-    assert!(lib.last_error.is_some() && !path.exists());
+    assert!(lib.last_error.is_none() && lib.toast.as_ref().is_some_and(|t| t.message.contains("nicht ganz")) && !path.exists(), "a failed undo is a toast, not a dialog");
     assert_eq!(lib.highlights_of(&new_key), vec![pdf_mark(1, 1)], "the marks stay with the edited content");
     std::fs::write(&path, &new).unwrap();
     lib.undo();

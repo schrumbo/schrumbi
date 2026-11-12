@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,13 +22,17 @@ use crate::core::ai::instance::{self, Instance};
 use crate::core::ai::prompts::Flow;
 use crate::core::ai::tools::{self, Preview};
 use crate::core::ai::turn::Turns;
-use crate::core::i18n::tr;
+use crate::core::i18n::{tr, trf};
 use crate::core::prefs;
 
 const ASK_WAIT: Duration = Duration::from_secs(600);
 const OFF: &str = "The assistant is switched off in Schrumbi (Settings → KI).";
 const DECLINED: &str = "The user declined this change in Schrumbi. Nothing was written.";
 const UNANSWERED: &str = "Nobody answered the permission request in Schrumbi within ten minutes. Nothing was written.";
+const GONE: &str = "The caller of this tool went away before the user answered. Nothing was written.";
+const LINE_LIMIT: usize = 1 << 20;
+const FIRST_LINE: Duration = Duration::from_secs(30);
+const PROBE: Duration = Duration::from_millis(500);
 const READ_ONLY: &str = "This turn is read-only (explaining or quizzing): Schrumbi writes nothing now. The user can insert your answer into a note themselves or ask for the change in a new message.";
 
 struct Server {
@@ -43,15 +47,37 @@ struct Ask {
     id: u64,
     session: String,
     tool: String,
+    scope: Option<Scope>,
+    terminal: bool,
     preview: Preview,
     reply: async_channel::Sender<Answer>,
+}
+
+/// What „heute erlauben“ covers: one tool on one note, file or folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Scope {
+    pub key: String,
+    pub folder: bool,
+}
+
+impl Scope {
+    /// One tool on one path.
+    pub fn of(tool: &str, path: &std::path::Path, folder: bool) -> Self {
+        Self { key: format!("{tool} {}", path.display()), folder }
+    }
 }
 
 /// A waiting permission request as the column shows it.
 #[derive(Clone)]
 pub struct Waiting {
     pub id: u64,
+    pub session: String,
+    pub tool: String,
     pub preview: Preview,
+    /// Whether „heute erlauben“ is offered, and for a folder rather than a file.
+    pub today: Option<bool>,
+    /// From a program in the terminal rather than the column.
+    pub terminal: bool,
 }
 
 /// What the column should do next, queued from menus, the palette or shortcuts.
@@ -91,7 +117,8 @@ pub enum Registration {
 struct Ai {
     server: Option<Server>,
     turns: Turns,
-    allowed: Option<(NaiveDate, HashSet<String>)>,
+    allowed: Option<(NaiveDate, Option<PathBuf>, HashSet<String>)>,
+    open_groups: HashSet<String>,
     asks: VecDeque<Ask>,
     next: u64,
     scanning: bool,
@@ -280,7 +307,12 @@ fn set_column(on: bool) {
     if prefs::with(|p| p.ai.column_open) != on {
         prefs::update(|p| p.ai.column_open = on);
     }
+    if on {
+        prefs::mark_used(COLUMN_USED);
+    }
 }
+
+const COLUMN_USED: &str = "ai-column";
 
 /// The KI button and its shortcut: opens the right panel on the KI tab, or closes the panel when that tab is shown.
 pub fn toggle_column(cx: &mut App) {
@@ -290,6 +322,7 @@ pub fn toggle_column(cx: &mut App) {
 /// Closes the right panel, whichever tab it shows.
 pub fn close_panel(cx: &mut App) {
     set_column(false);
+    forget_allowed(cx);
     if state::read(cx, |l| l.show_inspector()) {
         act(cx, |l| l.toggle_inspector());
     }
@@ -357,7 +390,14 @@ pub fn toggle_details(cx: &mut App) {
 /// Closes the column; a running session keeps going until it idles out.
 pub fn close_column(cx: &mut App) {
     set_column(false);
+    forget_allowed(cx);
     cx.refresh_windows();
+}
+
+fn forget_allowed(cx: &mut App) {
+    if cx.has_global::<Ai>() {
+        cx.global_mut::<Ai>().allowed = None;
+    }
 }
 
 /// Queues something for the column and opens it.
@@ -395,18 +435,36 @@ pub fn set_panel(panel: WeakEntity<super::ai_panel::AiPanel>, cx: &mut App) {
 
 /// The permission requests waiting for an answer, oldest first.
 pub fn waiting(cx: &App) -> Vec<Waiting> {
-    cx.try_global::<Ai>().map(|ai| ai.asks.iter().map(|a| Waiting { id: a.id, preview: a.preview.clone() }).collect()).unwrap_or_default()
+    cx.try_global::<Ai>()
+        .map(|ai| ai.asks.iter().map(|a| Waiting { id: a.id, session: a.session.clone(), tool: a.tool.clone(), preview: a.preview.clone(), today: a.scope.as_ref().map(|s| s.folder), terminal: a.terminal }).collect())
+        .unwrap_or_default()
 }
 
-/// Asks the user about a change the agent wants to make, in the column or the floating card; `key` names the kind of change for „Immer heute“.
-pub fn ask_change(key: &str, preview: Preview, cx: &mut App) -> (Option<u64>, async_channel::Receiver<Answer>) {
-    if allowed_today(key, cx) {
+/// The waiting requests in groups of the same tool from the same session, in the order they came; a group of several is answered together or entry by entry.
+pub fn waiting_groups(cx: &App) -> Vec<Vec<Waiting>> {
+    let mut groups: Vec<Vec<Waiting>> = Vec::new();
+    for w in waiting(cx) {
+        match groups.iter_mut().find(|g| g[0].session == w.session && g[0].tool == w.tool) {
+            Some(g) => g.push(w),
+            None => groups.push(vec![w]),
+        }
+    }
+    groups
+}
+
+fn group_key(w: &Waiting) -> String {
+    format!("{} {}", w.session, w.tool)
+}
+
+/// Asks the user about a change the agent wants to make, in the column or the floating card; `scope` is what „heute erlauben“ would cover, `None` offers no such button.
+pub fn ask_change(tool: &str, scope: Option<Scope>, preview: Preview, cx: &mut App) -> (Option<u64>, async_channel::Receiver<Answer>) {
+    if scope.as_ref().is_some_and(|s| allowed_today(s, cx)) {
         let (tx, rx) = async_channel::bounded(1);
         let _ = tx.try_send(Answer::Allow);
         return (None, rx);
     }
-    let rx = ask(key, preview, cx);
-    (Some(cx.global::<Ai>().next), rx)
+    let (id, rx) = ask_for("", tool, scope, false, preview, cx);
+    (Some(id), rx)
 }
 
 /// Runs a change for a column session as one step of its turn.
@@ -441,6 +499,7 @@ pub fn close_session(session: &str, cx: &mut App) {
 struct Call {
     body: Value,
     reply: mpsc::Sender<Value>,
+    alive: Arc<AtomicBool>,
 }
 
 /// Looks for the programs in the background and starts the local channel when the assistant is active.
@@ -464,6 +523,11 @@ pub fn rescan(cx: &mut App) {
 /// Looks again and asks each program whether the user is signed in; for the settings.
 pub fn recheck(cx: &mut App) {
     scan(true, cx);
+}
+
+/// Whether a search for the programs is running.
+pub fn scanning(cx: &App) -> bool {
+    cx.try_global::<Ai>().is_some_and(|ai| ai.scanning)
 }
 
 fn scan(logins: bool, cx: &mut App) {
@@ -648,7 +712,7 @@ fn start(root: Option<PathBuf>, cx: &mut App) -> Option<Server> {
     cx.spawn(async move |cx| {
         while let Ok(call) = rx.recv().await {
             cx.spawn(async move |cx| {
-                let out = respond(&call.body, cx).await;
+                let out = respond(&call.body, &call.alive, cx).await;
                 let _ = call.reply.send(out);
             })
             .detach();
@@ -664,40 +728,96 @@ fn stop(server: &Server) {
     instance::remove(std::process::id());
 }
 
+/// Reads one line of at most `LINE_LIMIT` bytes; `None` at the end, on a read error or for a longer line.
+pub(crate) fn read_line(reader: &mut impl BufRead) -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    match reader.by_ref().take(LINE_LIMIT as u64 + 1).read_until(b'\n', &mut buf) {
+        Ok(0) | Err(_) => None,
+        Ok(_) if buf.len() > LINE_LIMIT => None,
+        Ok(_) => Some(buf),
+    }
+}
+
+/// Whether the other end of a waiting connection has closed it.
+fn gone(stream: &TcpStream) -> bool {
+    if stream.set_nonblocking(true).is_err() {
+        return false;
+    }
+    let closed = match stream.peek(&mut [0; 1]) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(e) => e.kind() != std::io::ErrorKind::WouldBlock,
+    };
+    let _ = stream.set_nonblocking(false);
+    closed
+}
+
+/// One local connection: a caller has `FIRST_LINE` to send a line with the token, lines are capped, a wrong token closes it,
+/// and while a call waits for the user the connection is watched so a card never outlives its caller.
 fn serve(stream: TcpStream, token: &str, stop: &AtomicBool, tx: &async_channel::Sender<Call>) {
-    let Ok(mut writer) = stream.try_clone() else { return };
-    for line in BufReader::new(stream).lines() {
-        let Ok(line) = line else { break };
-        let out = match serde_json::from_str::<Value>(&line) {
+    let (Ok(mut writer), Ok(probe)) = (stream.try_clone(), stream.try_clone()) else { return };
+    let _ = stream.set_read_timeout(Some(FIRST_LINE));
+    let mut reader = BufReader::new(stream);
+    let mut trusted = false;
+    while let Some(line) = read_line(&mut reader) {
+        let mut close = false;
+        let out = match serde_json::from_slice::<Value>(&line) {
             _ if stop.load(Ordering::Relaxed) => json!({ "ok": false, "error": OFF }),
-            Err(e) => json!({ "ok": false, "error": format!("bad request: {e}") }),
-            Ok(body) if body["token"].as_str() != Some(token) => json!({ "ok": false, "error": "wrong token" }),
+            Err(e) => {
+                close = !trusted;
+                json!({ "ok": false, "error": format!("bad request: {e}") })
+            }
+            Ok(body) if body["token"].as_str() != Some(token) => {
+                close = true;
+                json!({ "ok": false, "error": "wrong token" })
+            }
             Ok(body) => {
+                if !trusted {
+                    trusted = true;
+                    let _ = probe.set_read_timeout(None);
+                }
                 let (reply, answer) = mpsc::channel();
-                if tx.send_blocking(Call { body, reply }).is_err() {
+                let alive = Arc::new(AtomicBool::new(true));
+                if tx.send_blocking(Call { body, reply, alive: alive.clone() }).is_err() {
                     json!({ "ok": false, "error": OFF })
                 } else {
-                    answer.recv().unwrap_or_else(|_| json!({ "ok": false, "error": OFF }))
+                    loop {
+                        match answer.recv_timeout(PROBE) {
+                            Ok(out) => break out,
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                if alive.load(Ordering::Relaxed) && gone(&probe) {
+                                    alive.store(false, Ordering::Relaxed);
+                                }
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break json!({ "ok": false, "error": OFF }),
+                        }
+                    }
                 }
             }
         };
-        if writeln!(writer, "{out}").and_then(|()| writer.flush()).is_err() {
+        if writeln!(writer, "{out}").and_then(|()| writer.flush()).is_err() || close {
             break;
         }
     }
 }
 
-async fn respond(body: &Value, cx: &mut AsyncApp) -> Value {
+async fn respond(body: &Value, alive: &AtomicBool, cx: &mut AsyncApp) -> Value {
     let session = body["session"].as_str().unwrap_or_default().to_string();
     let name = body["tool"].as_str().unwrap_or_default().to_string();
     let args = body.get("args").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
-    match run(&session, &name, &args, cx).await {
+    match run(&session, &name, &args, alive, cx).await {
         Ok(value) => json!({ "ok": true, "value": value }),
         Err(error) => json!({ "ok": false, "error": error }),
     }
 }
 
-async fn run(session: &str, name: &str, args: &Value, cx: &mut AsyncApp) -> Result<Value, String> {
+/// What „heute erlauben“ would cover for an MCP write: the note for note writes, the folder for new notes, nothing for the rest.
+fn scope_of(name: &str, args: &Value, cx: &App) -> Option<Scope> {
+    let folder = name == "create_note";
+    state::read(cx, |l| tools::scope(l, name, args)).map(|p| Scope::of(name, &p, folder))
+}
+
+async fn run(session: &str, name: &str, args: &Value, alive: &AtomicBool, cx: &mut AsyncApp) -> Result<Value, String> {
     if !cx.update(|cx| active() && cx.global::<Ai>().server.is_some()) {
         return Err(OFF.into());
     }
@@ -707,9 +827,25 @@ async fn run(session: &str, name: &str, args: &Value, cx: &mut AsyncApp) -> Resu
             return Err(READ_ONLY.into());
         }
         let preview = cx.update(|cx| state::read(cx, |l| tools::preview(l, name, args)))?;
-        if !cx.update(|cx| allowed_today(name, cx)) {
-            let answer = cx.update(|cx| ask_for(session, name, preview, cx));
-            match answer.recv().await.unwrap_or(Answer::Decline) {
+        let scope = cx.update(|cx| scope_of(name, args, cx));
+        if !cx.update(|cx| scope.as_ref().is_some_and(|s| allowed_today(s, cx))) {
+            let terminal = cx.update(|cx| !cx.global::<Ai>().turns.is_bounded(session));
+            let (id, answer) = cx.update(|cx| ask_for(session, name, scope, terminal, preview, cx));
+            let mut reply = Box::pin(answer.recv());
+            let answer = loop {
+                let tick = Box::pin(cx.background_executor().timer(PROBE));
+                match futures::future::select(reply, tick).await {
+                    futures::future::Either::Left((answer, _)) => break answer.unwrap_or(Answer::Decline),
+                    futures::future::Either::Right((_, pending)) => {
+                        reply = pending;
+                        if !alive.load(Ordering::Relaxed) {
+                            cx.update(|cx| answer_ask(id, Answer::Decline, cx));
+                            return Err(GONE.into());
+                        }
+                    }
+                }
+            };
+            match answer {
                 Answer::Allow | Answer::Today => {}
                 Answer::Decline => {
                     cx.update(|cx| cx.global_mut::<Ai>().turns.end(session));
@@ -720,6 +856,9 @@ async fn run(session: &str, name: &str, args: &Value, cx: &mut AsyncApp) -> Resu
             if !cx.update(|_| active()) {
                 return Err(OFF.into());
             }
+        }
+        if !alive.load(Ordering::Relaxed) {
+            return Err(GONE.into());
         }
     }
     cx.update(|cx| call(session, name, args, cx))
@@ -787,13 +926,10 @@ fn follow_root(cx: &mut App) {
     }
 }
 
-fn allowed_today(name: &str, cx: &App) -> bool {
+fn allowed_today(scope: &Scope, cx: &App) -> bool {
     let today = Local::now().date_naive();
-    cx.global::<Ai>().allowed.as_ref().is_some_and(|(day, tools)| *day == today && tools.contains(name))
-}
-
-fn ask(name: &str, preview: Preview, cx: &mut App) -> async_channel::Receiver<Answer> {
-    ask_for("", name, preview, cx)
+    let root = state::read(cx, |l| l.root.clone());
+    cx.global::<Ai>().allowed.as_ref().is_some_and(|(day, at, keys)| *day == today && *at == root && keys.contains(&scope.key))
 }
 
 /// Declines every waiting change of `session`, e.g. when its turn was stopped.
@@ -804,35 +940,53 @@ pub fn decline_session(session: &str, cx: &mut App) {
     }
 }
 
-fn ask_for(session: &str, name: &str, preview: Preview, cx: &mut App) -> async_channel::Receiver<Answer> {
+fn ask_for(session: &str, name: &str, scope: Option<Scope>, terminal: bool, preview: Preview, cx: &mut App) -> (u64, async_channel::Receiver<Answer>) {
     let (reply, answer) = async_channel::bounded(1);
     let ai = cx.global_mut::<Ai>();
     ai.next += 1;
     let id = ai.next;
-    ai.asks.push_back(Ask { id, session: session.to_string(), tool: name.to_string(), preview, reply });
+    ai.asks.push_back(Ask { id, session: session.to_string(), tool: name.to_string(), scope, terminal, preview, reply });
     cx.refresh_windows();
     cx.spawn(async move |cx| {
         cx.background_executor().timer(ASK_WAIT).await;
         cx.update(|cx| answer_ask(id, Answer::Timeout, cx));
     })
     .detach();
-    answer
+    (id, answer)
 }
 
-/// Answers the waiting write `id`; „Immer heute“ lets this kind of change through until midnight.
+/// Answers the waiting write `id`; „heute erlauben“ lets the same tool on the same note or folder through until midnight, in this study folder.
 pub fn answer_ask(id: u64, answer: Answer, cx: &mut App) {
+    let root = state::read(cx, |l| l.root.clone());
     let ai = cx.global_mut::<Ai>();
     let Some(at) = ai.asks.iter().position(|a| a.id == id) else { return };
     let Some(ask) = ai.asks.remove(at) else { return };
-    if answer == Answer::Today {
+    if answer == Answer::Today
+        && let Some(scope) = &ask.scope
+    {
         let today = Local::now().date_naive();
-        let allowed = ai.allowed.get_or_insert_with(|| (today, HashSet::new()));
-        if allowed.0 != today {
-            *allowed = (today, HashSet::new());
+        let allowed = ai.allowed.get_or_insert_with(|| (today, root.clone(), HashSet::new()));
+        if allowed.0 != today || allowed.1 != root {
+            *allowed = (today, root, HashSet::new());
         }
-        allowed.1.insert(ask.tool.clone());
+        allowed.2.insert(scope.key.clone());
     }
     let _ = ask.reply.try_send(answer);
+    cx.refresh_windows();
+}
+
+/// Answers every request of a group at once.
+pub fn answer_all(ids: &[u64], answer: Answer, cx: &mut App) {
+    for id in ids {
+        answer_ask(*id, answer, cx);
+    }
+}
+
+fn toggle_group(key: String, cx: &mut App) {
+    let open = &mut cx.global_mut::<Ai>().open_groups;
+    if !open.remove(&key) {
+        open.insert(key);
+    }
     cx.refresh_windows();
 }
 
@@ -846,8 +1000,88 @@ pub fn toolbar_button(t: &Theme) -> Option<Button> {
     toolbar_button_shown().then(|| {
         let open = column_open();
         let tip = format!("{}{}", if open { tr("KI ausblenden") } else { tr("KI einblenden") }, crate::core::shortcuts::ShortcutAction::ToggleAi.hint());
-        Button::new("ai-button").ghost().size(px(control::M)).rounded_full().bg(t.ink.opacity(if open { 0.14 } else { 0.06 })).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("bot")).tooltip(tip).on_click(|_, _, cx| toggle_column(cx))
+        let named = !prefs::with(|p| p.used_features.contains(COLUMN_USED));
+        let button = Button::new("ai-button").ghost().rounded_full().bg(t.ink.opacity(if open { 0.14 } else { 0.06 })).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("bot")).tooltip(tip).on_click(|_, _, cx| toggle_column(cx));
+        if named { button.h(px(control::M)).px(px(space::M)).label(tr("KI")) } else { button.size(px(control::M)) }
     })
+}
+
+const SHOWN_CHARS: usize = 400;
+
+fn shortened(line: &str) -> String {
+    if line.chars().count() <= SHOWN_CHARS { line.to_string() } else { format!("{}…", line.chars().take(SHOWN_CHARS).collect::<String>()) }
+}
+
+/// The lines of a change, how many are left out, and „Ansehen“ for the whole text side by side.
+fn change_box(id: u64, preview: &Preview, t: &Theme) -> Option<AnyElement> {
+    if preview.lines.is_empty() && preview.hidden == 0 && preview.full.is_none() {
+        return None;
+    }
+    let mut lines = div().id(("ai-ask-lines", id)).max_h(px(320.)).overflow_y_scroll().flex().flex_col().gap(px(space::XXS)).font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.secondary);
+    for line in &preview.lines {
+        lines = lines.child(div().child(shortened(line)));
+    }
+    let more = match preview.hidden {
+        0 => None,
+        1 => Some(tr("1 weitere Zeile nicht gezeigt")),
+        n => Some(trf("%lld weitere Zeilen nicht gezeigt", &[&n])),
+    };
+    let look = preview.full.clone().map(|full| {
+        Button::new(("ai-ask-look", id)).ghost().xsmall().label(tr("Ansehen")).tooltip(tr("Die ganze Änderung ansehen, bevor du entscheidest")).on_click(move |_, window, cx| super::ai_panel::show_diff(&full.path, &full.before, &full.after, None, window, cx))
+    });
+    let footer = (more.is_some() || look.is_some()).then(|| div().flex().items_center().gap(px(space::S)).child(div().flex_1().min_w_0().text_size(px(font::CAPTION)).text_color(t.tertiary).children(more)).children(look));
+    Some(div().flex().flex_col().gap(px(space::XS)).p(px(space::S)).rounded(px(radius::INNER)).bg(t.ink.opacity(0.05)).when(!preview.lines.is_empty(), |d| d.child(lines)).children(footer).into_any_element())
+}
+
+fn today_label(w: &Waiting) -> Option<String> {
+    w.today.map(|folder| if folder { tr("In diesem Ordner heute erlauben") } else if w.tool == "write_file" { tr("In dieser Datei heute erlauben") } else { tr("In dieser Notiz heute erlauben") })
+}
+
+/// The inside of a permission card: one request with its change, or several of the same kind, answered together or one by one.
+pub fn ask_body(group: &[Waiting], cx: &App, t: &Theme) -> Option<Div> {
+    let first = group.first()?;
+    let header = if first.terminal { tr("Ein KI-Programm im Terminal möchte etwas ändern") } else { tr("Die KI möchte etwas ändern") };
+    let body = div().flex().flex_col().gap(px(space::S)).child(div().flex().items_center().gap(px(space::S)).child(icon("bot", iconsize::S, t.secondary)).child(div().flex_1().text_size(px(font::CAPTION)).text_color(t.secondary).child(header)));
+    let buttons = div().flex().flex_wrap().justify_end().gap(px(space::S));
+    if let [w] = group {
+        let id = w.id;
+        let today = today_label(w).map(|label| Button::new(("ai-today", id)).small().label(label).tooltip(tr("Weitere Änderungen dieser Art hier bis Mitternacht ohne Nachfrage")).on_click(move |_, _, cx| answer_ask(id, Answer::Today, cx)));
+        return Some(
+            body.child(div().font_weight(FontWeight::SEMIBOLD).child(w.preview.title.clone()))
+                .children(change_box(id, &w.preview, t))
+                .child(
+                    buttons
+                        .child(Button::new(("ai-decline", id)).ghost().small().label(tr("Ablehnen")).on_click(move |_, _, cx| answer_ask(id, Answer::Decline, cx)))
+                        .children(today)
+                        .child(Button::new(("ai-allow", id)).primary().small().label(tr("Erlauben")).on_click(move |_, _, cx| answer_ask(id, Answer::Allow, cx))),
+                ),
+        );
+    }
+    let key = group_key(first);
+    let open = cx.try_global::<Ai>().is_some_and(|ai| ai.open_groups.contains(&key));
+    let ids: Vec<u64> = group.iter().map(|w| w.id).collect();
+    let mut rows = div().flex().flex_col().gap(px(space::XS));
+    for w in group {
+        let id = w.id;
+        let row = div().flex().items_center().gap(px(space::S)).child(div().flex_1().min_w_0().text_size(px(font::CALLOUT)).child(w.preview.title.clone()));
+        rows = rows.child(if open {
+            div().flex().flex_col().gap(px(space::XS)).child(row.child(Button::new(("ai-row-decline", id)).ghost().xsmall().label(tr("Ablehnen")).on_click(move |_, _, cx| answer_ask(id, Answer::Decline, cx)))).children(change_box(id, &w.preview, t))
+        } else {
+            row
+        });
+    }
+    let (decline, allow) = (ids.clone(), ids);
+    let first_id = first.id;
+    Some(
+        body.child(div().font_weight(FontWeight::SEMIBOLD).child(trf("%lld Änderungen auf einmal", &[&group.len()])))
+            .child(rows)
+            .child(
+                buttons
+                    .child(Button::new(("ai-group-open", first_id)).ghost().small().label(if open { tr("Einklappen") } else { tr("Einzeln ansehen") }).on_click(move |_, _, cx| toggle_group(key.clone(), cx)))
+                    .child(Button::new(("ai-group-decline", first_id)).ghost().small().label(tr("Alle ablehnen")).on_click(move |_, _, cx| answer_all(&decline, Answer::Decline, cx)))
+                    .child(Button::new(("ai-group-allow", first_id)).primary().small().label(tr("Alle erlauben")).on_click(move |_, _, cx| answer_all(&allow, Answer::Allow, cx))),
+            ),
+    )
 }
 
 /// The card that asks before the agent changes something; it never takes the focus.
@@ -855,14 +1089,10 @@ pub fn ask_card(cx: &App, t: &Theme) -> Option<Stateful<Div>> {
     if column_open() {
         return None;
     }
-    let ai = cx.try_global::<Ai>()?;
-    let ask = ai.asks.front()?;
-    let (id, more) = (ask.id, ai.asks.len() - 1);
-    let mut lines = div().flex().flex_col().gap(px(space::XXS)).font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.secondary);
-    for line in &ask.preview.lines {
-        lines = lines.child(div().truncate().child(line.clone()));
-    }
-    let shown = !ask.preview.lines.is_empty();
+    let groups = waiting_groups(cx);
+    let group = groups.first()?;
+    let more: usize = groups.iter().skip(1).map(Vec::len).sum();
+    let body = ask_body(group, cx, t)?;
     Some(
         super::drive::marked(div().id("ai-ask"), "dialog")
             .occlude()
@@ -878,26 +1108,43 @@ pub fn ask_card(cx: &App, t: &Theme) -> Option<Stateful<Div>> {
             .shadow_lg()
             .flex()
             .flex_col()
-            .gap(px(space::M))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(space::S))
-                    .child(icon("bot", iconsize::S, t.secondary))
-                    .child(div().flex_1().text_size(px(font::CAPTION)).text_color(t.secondary).child(tr("Die KI möchte etwas ändern")))
-                    .when(more > 0, |d| d.child(caption(format!("+{more}"), t))),
-            )
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(ask.preview.title.clone()))
-            .when(shown, |d| d.child(div().p(px(space::S)).rounded(px(radius::INNER)).bg(t.ink.opacity(0.05)).child(lines)))
-            .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap(px(space::S))
-                    .child(Button::new("ai-decline").ghost().small().label(tr("Ablehnen")).on_click(move |_, _, cx| answer_ask(id, Answer::Decline, cx)))
-                    .child(Button::new("ai-today").small().label(tr("Immer heute")).tooltip(tr("Erlaubt diese Art Änderung bis Mitternacht ohne Nachfrage")).on_click(move |_, _, cx| answer_ask(id, Answer::Today, cx)))
-                    .child(Button::new("ai-allow").primary().small().label(tr("Erlauben")).on_click(move |_, _, cx| answer_ask(id, Answer::Allow, cx))),
-            ),
+            .gap(px(space::S))
+            .child(body)
+            .when(more > 0, |d| d.child(caption(if more == 1 { tr("Danach wartet noch 1 Anfrage") } else { trf("Danach warten noch %lld Anfragen", &[&more]) }, t))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LINE_LIMIT, gone, read_line};
+    use std::io::{BufReader, Cursor};
+    use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn a_line_longer_than_the_limit_ends_the_connection() {
+        let mut ok = BufReader::new(Cursor::new(b"{\"a\":1}\nrest".to_vec()));
+        assert_eq!(read_line(&mut ok).unwrap(), b"{\"a\":1}\n");
+        let mut huge = BufReader::new(Cursor::new(vec![b'x'; LINE_LIMIT + 10]));
+        assert!(read_line(&mut huge).is_none());
+        let mut empty = BufReader::new(Cursor::new(Vec::new()));
+        assert!(read_line(&mut empty).is_none());
+    }
+
+    #[test]
+    fn a_caller_that_hangs_up_is_noticed_while_its_card_waits() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let caller = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        assert!(!gone(&server), "a waiting caller is still there");
+        drop(caller);
+        let mut seen = false;
+        for _ in 0..50 {
+            if gone(&server) {
+                seen = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(seen, "the hang-up is seen");
+    }
 }

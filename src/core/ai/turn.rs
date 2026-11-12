@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -9,13 +8,9 @@ use crate::core::library::Library;
 
 const BUSY: &str = "Schrumbi is syncing or moving files right now. Try again in a moment.";
 
-/// Writes of one session this close together count as one turn when nothing else happened in between.
-pub const GAP: Duration = Duration::from_secs(120);
-
 struct Turn {
     recorded: u64,
     top: String,
-    at: Instant,
     labels: Vec<String>,
 }
 
@@ -23,7 +18,7 @@ struct Turn {
 #[derive(Default)]
 pub struct Turns {
     open: HashMap<String, Turn>,
-    /// Sessions whose turns have real boundaries: `begin` and `end` replace the time gap.
+    /// Sessions whose turns have real boundaries; any other session's writes are one undo step each.
     bounded: HashSet<String>,
 }
 
@@ -39,8 +34,7 @@ impl Turns {
     /// Runs any change for `session` and folds the steps it records into the turn.
     pub fn run(&mut self, lib: &mut Library, session: &str, change: impl FnOnce(&mut Library) -> Result<Outcome, String>) -> Result<Value, String> {
         let before = lib.recorded_steps();
-        let fresh = |t: &Turn| self.bounded.contains(session) || t.at.elapsed() < GAP;
-        let joins = self.open.get(session).is_some_and(|t| fresh(t) && t.recorded == before && lib.undo_label() == Some(t.top.as_str()));
+        let joins = self.bounded.contains(session) && self.open.get(session).is_some_and(|t| t.recorded == before && lib.undo_label() == Some(t.top.as_str()));
         let result = change(lib);
         let added = usize::try_from(lib.recorded_steps() - before).unwrap_or(usize::MAX);
         if added > 0 {
@@ -49,7 +43,7 @@ impl Turns {
             labels.push(changed);
             let label = if labels.len() == 1 { trf("KI: %@", &[&labels[0]]) } else { trf("KI: %lld Änderungen", &[&labels.len()]) };
             lib.join_latest(added + usize::from(joins), "pencil", label.clone());
-            self.open.insert(session.to_string(), Turn { recorded: lib.recorded_steps(), top: label, at: Instant::now(), labels });
+            self.open.insert(session.to_string(), Turn { recorded: lib.recorded_steps(), top: label, labels });
         }
         result.map(|o| o.value)
     }
@@ -58,6 +52,11 @@ impl Turns {
     pub fn begin(&mut self, session: &str) {
         self.open.remove(session);
         self.bounded.insert(session.to_string());
+    }
+
+    /// Whether `session` is a column session with real turns, not a program in the terminal.
+    pub fn is_bounded(&self, session: &str) -> bool {
+        self.bounded.contains(session)
     }
 
     /// Ends the turn of `session`: its next write starts a new undo step.
