@@ -262,6 +262,8 @@ pub struct Prefs {
     pub inspector_width: Option<f32>,
     /// Sidebar entries the user hid; they stay reachable by shortcut and palette.
     pub hidden_tabs: Vec<String>,
+    /// Whether the sidebar shows only icons; by default it shows their names too.
+    pub sidebar_compact: bool,
     /// Last position and size of the main window: x, y, width, height.
     pub main_window: Option<[f32; 4]>,
     /// Last position of the upload panel: x, y.
@@ -346,6 +348,7 @@ impl Default for Prefs {
             inspector_pinned: BTreeSet::new(),
             inspector_width: None,
             hidden_tabs: Vec::new(),
+            sidebar_compact: false,
             main_window: None,
             upload_window: None,
             setup: BTreeMap::new(),
