@@ -5,13 +5,13 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{Disableable, Selectable, Sizable};
+use gpui_kit::component::{Selectable, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
 use super::motion::{self, Soft};
-use super::theme::{Theme, calendar as cal, control, font, radius, space, iconsize};
+use super::theme::{Theme, calendar as cal, control, font, hover, radius, space, iconsize};
 use super::widgets::{KeyNav, file_target, icon, menu_icon, section_title, status_menu, status_toggle, tabular, Tip};
 use crate::core::calendar::{self, CalendarView};
 use crate::core::i18n::{tr, trf};
@@ -113,7 +113,7 @@ fn header(l: &Library, view: CalendarView, segment: f32, t: &Theme) -> Div {
                 .gap(px(space::XXS))
                 .child(Button::new("board-prev").ghost().small().icon(menu_icon("chevron-left")).tooltip(format!("{back} (←)")).on_click(|_, _, cx| act(cx, |l| l.turn_calendar(-1))))
                 .child(Button::new("board-next").ghost().small().icon(menu_icon("chevron-right")).tooltip(format!("{forward} (→)")).on_click(|_, _, cx| act(cx, |l| l.turn_calendar(1))))
-                .child(Button::new("board-today").small().label(tr("Heute")).disabled(at_today).tooltip(format!("{} (T)", tr("Zu heute springen"))).on_click(|_, _, cx| act(cx, Library::calendar_today))),
+                .child(Button::new("board-today").small().label(tr("Heute")).when(at_today, |b| b.ghost()).tooltip(format!("{} (T)", tr("Zu heute springen"))).on_click(|_, _, cx| act(cx, Library::calendar_today))),
         )
         .child(
             div()
@@ -153,7 +153,7 @@ fn segment_button(id: &'static str, label: String, key: &str, on: bool, view: Ca
         .items_center()
         .justify_center()
         .rounded(px(radius::INNER))
-        .soft(t.ink.opacity(0.05), radius::INNER)
+        .soft(t.ink.opacity(hover::RAISED), radius::INNER)
         .cursor_pointer()
         .key_nav()
         .tip(help)
@@ -242,7 +242,7 @@ fn cell(lib: &Library, d: NaiveDate, month: u32, items: &[&Assignment], first: N
         .justify_center()
         .rounded_full()
         .when(is_today, |n| n.bg(accent))
-        .soft(if is_today { t.on_accent.opacity(0.2) } else { t.ink.opacity(0.08) }, radius::FULL)
+        .soft(if is_today { t.on_accent.opacity(hover::RAISED) } else { t.ink.opacity(hover::CONTROL) }, radius::FULL)
         .cursor_pointer()
         .key_nav()
         .tip(tr("Woche öffnen"))
@@ -288,7 +288,7 @@ fn empty_area(d: NaiveDate, height: f32, t: &Theme) -> Stateful<Div> {
         .w_full()
         .h(px(height))
         .rounded(px(radius::INNER))
-        .soft(t.ink.opacity(0.04), radius::INNER)
+        .soft(t.ink.opacity(hover::ROW), radius::INNER)
         .cursor_pointer()
         .key_nav()
         .on_click(move |e, _, cx| {

@@ -40,7 +40,7 @@ pub fn render(error: Option<String>, t: &Theme) -> Div {
         .child(logo(56., t))
         .child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).child(tr("Deadlines, Dateien und Notizen fürs Studium an einem Ort")))
         .child(div().max_w(px(380.)).text_center().text_color(t.secondary).child(tr("Wähle den Ordner mit deinen Unterlagen. Die App liest nur diesen Ordner und legt dort `schrumbi.json` an.").replace('`', "")))
-        .when_some(error, |d, e| d.child(div().max_w(px(480.)).text_center().text_color(t.red).child(e)))
+        .when_some(error, |d, e| d.child(div().max_w(px(480.)).text_center().text_color(t.red_text).child(e)))
         .child(Button::new("choose").primary().label(tr("Ordner wählen…")).on_click(|_, _, cx| {
             super::platform::choose_folder(cx, |path, cx| state::open_workspace(&path, cx));
         }))

@@ -239,7 +239,7 @@ impl Render for TrayPopup {
         if l.root.is_none() {
             body = body.child(div().p(px(space::L)).text_color(t.secondary).child(tr("Kein Ordner gewählt")));
         } else {
-            body = body.children(super::sync::tray_warning(cx).map(|w| div().px(px(space::L)).pt(px(space::M)).flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.orange).child(icon("cloud-alert", iconsize::S, t.orange)).child(w)));
+            body = body.children(super::sync::tray_warning(cx).map(|w| div().px(px(space::L)).pt(px(space::M)).flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.orange_text).child(icon("cloud-alert", iconsize::S, t.orange)).child(w)));
             if let Some(a) = l.next_deadline() {
                 body = body
                     .child(
