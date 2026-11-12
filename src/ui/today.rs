@@ -1,5 +1,5 @@
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::menu::ContextMenuExt;
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::Sizable;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -7,7 +7,7 @@ use gpui_kit::*;
 use super::board;
 use super::state::act;
 use super::motion::Soft;
-use super::theme::{Theme, control, font, space, iconsize, radius};
+use super::theme::{Theme, control, font, hover, space, iconsize, radius};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::{tr, trf};
@@ -158,8 +158,7 @@ fn top_row(lib: &Library, narrow: bool, t: &Theme) -> Div {
 /// The card for the one thing to do now: neutral, the urgency is the order in which things are offered.
 fn next_action(lib: &Library, t: &Theme) -> Stateful<Div> {
     let card = || div().id("next-card").p(px(space::L)).rounded(px(radius::CARD)).bg(t.secondary_bg).border_1().border_color(t.ink.opacity(0.1)).flex().items_center().gap(px(space::L)).min_h(px(112.));
-    let hover = t.ink.opacity(0.05);
-    let open = |a: &Assignment| card().soft(hover, radius::CARD).cursor_pointer().on_click(select(a.id.clone()));
+    let open = |a: &Assignment| card().soft(t.ink.opacity(hover::ROW), radius::CARD).cursor_pointer().on_click(select(a.id.clone()));
     let label = || div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.accent_text).child(tr("Jetzt"));
     let assignment = |a: &Assignment, when: String| {
         let m = lib.module(a);
@@ -250,7 +249,7 @@ fn chips(lib: &Library, items: &[&Assignment], t: &Theme) -> Div {
         let m = lib.module(a);
         let tint = t.palette(m.map_or("blue", |m| m.color.as_str()));
         let selected = lib.is_selected(&a.id);
-        let (hover, menu_id) = (t.content.blend(t.ink.opacity(0.1)), a.id.clone());
+        let (over, menu_id) = (t.content.blend(t.ink.opacity(hover::CONTROL)), a.id.clone());
         let chip = div()
             .id(SharedString::from(format!("chip-{}", a.id)))
             .flex()
@@ -260,7 +259,7 @@ fn chips(lib: &Library, items: &[&Assignment], t: &Theme) -> Div {
             .py(px(space::S))
             .rounded_full()
             .bg(t.content)
-            .soft(hover, radius::FULL)
+            .soft(over, radius::FULL)
             .cursor_pointer().key_nav()
             .when(selected, |c| c.border(px(2.)).border_color(t.accent))
             .on_click(select(a.id.clone()))
@@ -322,7 +321,7 @@ fn bundle(id: &'static str, title: String, open: bool, toggle: fn(&mut Library),
                         .gap(px(space::S))
                         .when(!fixed, |d| d.mx(px(-space::S)).px(px(space::S)).my(px(-space::XS)).py(px(space::XS)).min_h(px(control::S)).rounded(px(radius::CONTROL)))
                         .when(!fixed, |d| {
-                            d.soft(t.ink.opacity(0.05), radius::CONTROL).cursor_pointer().key_nav().on_click(move |_, _, cx| {
+                            d.soft(t.ink.opacity(hover::ROW), radius::CONTROL).cursor_pointer().key_nav().on_click(move |_, _, cx| {
                                 super::state::lib(cx).update(cx, |l, cx| {
                                     toggle(l);
                                     cx.notify();
@@ -350,7 +349,15 @@ fn open_row(lib: &Library, t: &Theme) -> Option<Div> {
         return None;
     }
     let ids: Vec<String> = items.iter().map(|a| a.id.clone()).collect();
-    let settle = Button::new("complete-all").small().label(tr("Alle erledigt")).on_click(move |_, _, cx| act(cx, |l| l.complete_all(&ids))).into_any_element();
+    let today = day::local_date(lib.now);
+    let (tomorrow, next_week) = (today + chrono::Days::new(1), day::monday(today) + chrono::Days::new(7));
+    let moving = ids.clone();
+    let shift = Button::new("move-all").small().ghost().label(tr("Alle verschieben")).dropdown_caret(true).dropdown_menu(move |menu, _, _| {
+        let (a, b) = (moving.clone(), moving.clone());
+        menu.item(PopupMenuItem::new(tr("Auf morgen")).on_click(move |_, _, cx| act(cx, |l| l.move_all(&a, tomorrow))))
+            .item(PopupMenuItem::new(tr("Auf nächsten Montag")).on_click(move |_, _, cx| act(cx, |l| l.move_all(&b, next_week))))
+    });
+    let settle = div().flex().items_center().gap(px(space::XS)).child(shift).child(Button::new("complete-all").small().label(tr("Alle erledigt")).on_click(move |_, _, cx| act(cx, |l| l.complete_all(&ids)))).into_any_element();
     Some(bundle("overdue", format!("{} ({})", tr("Offen"), items.len()), lib.show_overdue, |l| l.show_overdue = !l.show_overdue, Some(settle), lib, &items, t))
 }
 
@@ -359,7 +366,7 @@ fn inbox_text(count: usize) -> String {
 }
 
 fn hint_banner(id: &'static str, t: &Theme, go: impl Fn(&mut App) + 'static) -> Stateful<Div> {
-    banner(t.accent).id(id).py(px(space::S)).flex().items_center().gap(px(space::S)).soft(t.ink.opacity(0.05), radius::CARD).cursor_pointer().on_click(move |_, _, cx| go(cx))
+    banner(t.accent).id(id).py(px(space::S)).flex().items_center().gap(px(space::S)).soft(t.ink.opacity(hover::ROW), radius::CARD).cursor_pointer().on_click(move |_, _, cx| go(cx))
 }
 
 fn hint_button(id: &'static str, label: String, go: impl Fn(&mut App) + 'static) -> Button {

@@ -113,7 +113,7 @@ impl RenderOnce for Example {
             .cursor_pointer()
             .key_nav()
             .soft(t.ink.opacity(0.06), radius::SMALL)
-            .tooltip(tip(if copied { tr("Kopiert") } else { tr("Markdown kopieren") }))
+            .tip(if copied { tr("Kopiert") } else { tr("Markdown kopieren") })
             .on_click(move |_, window, cx| copy(window, cx))
             .child(icon(if copied { "check" } else { "copy" }, iconsize::S, if copied { t.green } else { t.secondary }));
         let bar = div()

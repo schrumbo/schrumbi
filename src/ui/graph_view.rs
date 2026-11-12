@@ -403,11 +403,19 @@ impl Render for GraphView {
         let neighbors: std::collections::HashSet<u32> = highlight.map_or_else(Default::default, |h| graph.neighbors(h).into_iter().collect());
         let tints = self.tints.clone();
         let order = self.order.clone();
-        let colors = (t.secondary, t.accent, t.ink, t.separator, t.content);
+        let colors = (t.secondary, t.accent, t.ink, t.separator, t.content, t.dark);
         let view = canvas(
             move |b, _, _| measured.set(b),
             move |bounds, _, window, cx| {
-                let (secondary, accent, ink, line, bg) = colors;
+                let (secondary, accent, ink, line, bg, dark) = colors;
+                let own = |i: usize, kind: &NodeKind| match kind {
+                    NodeKind::Note(_) => tints.get(i).copied().flatten().unwrap_or(secondary),
+                    NodeKind::Attachment(_) => ink.opacity(0.35),
+                    NodeKind::Tag(_) => accent,
+                    NodeKind::Missing(_) => secondary,
+                };
+                let lift = |c: Hsla| if dark { Hsla { l: c.l + (1. - c.l) * 0.35, ..c } } else { Hsla { l: c.l * 0.72, ..c } };
+                let edge_color = highlight.and_then(|h| graph.nodes.get(h as usize).map(|n| own(h as usize, &n.kind))).unwrap_or(accent);
                 let origin = bounds.origin;
                 let screen = |p: (f32, f32)| point(origin.x + px(p.0 * zoom + pan.0), origin.y + px(p.1 * zoom + pan.1));
                 window.paint_layer(bounds, |window| {
@@ -440,7 +448,7 @@ impl Render for GraphView {
                         window.paint_path(path, ink.opacity(if highlight.is_some() { fade * 0.12 } else { fade * 0.3 }));
                     }
                     if any_strong && let Ok(path) = strong.build() {
-                        window.paint_path(path, accent);
+                        window.paint_path(path, edge_color);
                     }
                 });
                 window.paint_layer(bounds, |window| {
@@ -455,17 +463,17 @@ impl Render for GraphView {
                         let on = highlight == Some(i);
                         let near = neighbors.contains(&i);
                         let dim = highlight.is_some() && !on && !near;
-                        let color = match node.kind {
-                            _ if on => accent,
-                            NodeKind::Note(_) => tints.get(i as usize).copied().flatten().unwrap_or(secondary),
-                            NodeKind::Attachment(_) => ink.opacity(0.35),
-                            NodeKind::Tag(_) => accent,
-                            NodeKind::Missing(_) => bg,
-                        };
-                        let color = if dim { color.opacity(0.3) } else { color };
                         let hollow = matches!(node.kind, NodeKind::Missing(_));
+                        let base = if hollow { bg } else { own(i as usize, &node.kind) };
+                        let color = if on { lift(base) } else { base };
+                        let color = if dim { color.opacity(0.3) } else { color };
+                        let r = if on { r * 1.3 } else { r };
                         let area = Bounds::new(point(c.x - px(r), c.y - px(r)), size(px(r * 2.), px(r * 2.)));
                         let border = if hollow { secondary } else { transparent_black() };
+                        if on {
+                            let halo = r + 3.;
+                            window.paint_quad(PaintQuad { bounds: Bounds::new(point(c.x - px(halo), c.y - px(halo)), size(px(halo * 2.), px(halo * 2.))), corner_radii: Corners::all(px(halo)), background: transparent_black().into(), border_widths: Edges::all(px(1.5)), border_color: own(i as usize, &node.kind).opacity(0.6), border_style: BorderStyle::Solid });
+                        }
                         window.paint_quad(PaintQuad { bounds: area, corner_radii: Corners::all(px(r)), background: color.into(), border_widths: Edges::all(px(if hollow { 1. } else { 0. })), border_color: border, border_style: BorderStyle::Solid });
                     }
                     let mut taken: Vec<(f32, f32, f32, f32)> = Vec::new();

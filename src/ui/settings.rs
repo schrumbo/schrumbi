@@ -6,7 +6,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Disableable, Sizable, ThemeStyled};
+use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -15,7 +15,7 @@ use super::fields::Fields;
 use super::time_field::Preset;
 use super::state::{self, act, edit_config};
 use super::motion::{self, Soft};
-use super::theme::{self, Theme, font, radius, space, iconsize, control};
+use super::theme::{self, Theme, font, hover, radius, space, iconsize, control, tint};
 use super::widgets::*;
 use crate::core::text::fold;
 use crate::core::i18n::{ctrl_name, tr, trf};
@@ -38,6 +38,8 @@ enum Tab {
     Ai,
     Shortcuts,
 }
+
+const TABS: usize = 8;
 
 const ACCENTS: [(&str, &str); 8] = [
     ("#0EA5E9", "Himmelblau"),
@@ -87,8 +89,9 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("markdown", "Notizen schreiben"),
     ("speichern", "Sichern"),
     ("autosave", "Sichern"),
-    ("benachrichtigung", "Mitteilungen vor Deadlines"),
-    ("notification", "Mitteilungen vor Deadlines"),
+    ("benachrichtigung", "Mitteilungen vor Abgaben"),
+    ("notification", "Mitteilungen vor Abgaben"),
+    ("deadline", "Mitteilungen vor Abgaben"),
     ("ics", "Kalenderdatei aktuell halten"),
     ("apple", "Mit Apple Kalender abgleichen"),
     ("icloud", "Mit Apple Kalender abgleichen"),
@@ -135,6 +138,12 @@ const TABS_WITH_SEARCH: f32 = (if super::chrome::CUSTOM { space::M } else { 72. 
 /// The window width below which the module editor stacks its colours under the code and narrows its fields.
 const COMPACT_MODULE: f32 = 720.;
 
+/// The window width below which a link of a module puts its buttons on a line of their own.
+const COMPACT_LINKS: f32 = 760.;
+
+/// The least width of a link's address, so it stays readable when the window is narrow.
+const URL_MIN: f32 = 160.;
+
 const NEEDS_CONVENTION: &[&str] = &["Matrikelnummer", "Mitautor:innen", "Muster", "Beispiel"];
 
 /// Every labelled setting and the tab it lives on, for the search field.
@@ -165,7 +174,7 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Konfiguration", Tab::General),
     ("Sprache", Tab::General),
     ("Erinnerungen", Tab::General),
-    ("Mitteilungen vor Deadlines", Tab::General),
+    ("Mitteilungen vor Abgaben", Tab::General),
     ("Erinnern", Tab::General),
     ("Zusätzlich am Vortag (Pflichtabgaben)", Tab::General),
     ("Kalenderdatei aktuell halten", Tab::General),
@@ -274,6 +283,7 @@ struct Notice {
 enum ThemeNote {
     Problem(String),
     Removed { id: String, name: String, bytes: Vec<u8>, was_active: bool, stamp: u64 },
+    Replaced { id: String, name: String, bytes: Vec<u8>, previous: String, stamp: u64 },
 }
 
 /// The settings window: Allgemein, Semester, Module, Notizen, Tastenkürzel.
@@ -284,12 +294,11 @@ pub struct Settings {
     module: Option<String>,
     expanded_rule: Option<String>,
     advanced: HashSet<String>,
-    filter: Entity<InputState>,
     search: Entity<InputState>,
     /// The search hit Enter opens.
     hit: usize,
-    /// The scrolling page of the tabs that scroll as a whole.
-    page: ScrollHandle,
+    /// The scrolling page of each tab that scrolls as a whole, so a tab opens at its top.
+    pages: [ScrollHandle; TABS],
     recording: Option<ShortcutAction>,
     rejected: Option<Rejected>,
     key_buttons: HashMap<&'static str, FocusHandle>,
@@ -423,7 +432,7 @@ thread_local! {
 }
 
 /// The row or heading with this label, marked and brought into view while a jump leads to it.
-fn jump_target(label: &str, content: Div, t: &Theme) -> Div {
+fn jump_target<E: Styled + ParentElement + IntoElement>(label: &str, content: E, t: &Theme) -> E {
     let hit = JUMP.with(|j| j.borrow().as_ref().filter(|j| j.label == label).map(|j| (j.handle.clone(), !j.scrolled)));
     let Some((handle, scroll)) = hit else { return content };
     if scroll {
@@ -512,7 +521,7 @@ fn apple_calendar_row(t: &Theme) -> AnyElement {
         .px(px(space::L))
         .min_h(px(control::ROW))
         .py(px(space::S))
-        .child(div().flex_1().min_w_0().flex().items_center().gap(px(space::S)).text_color(t.primary).child(div().flex_none().child(indicator)).child(div().id("apple-cal-state").min_w_0().truncate().child(label.clone()).tooltip(tip(label))))
+        .child(div().flex_1().min_w_0().flex().items_center().gap(px(space::S)).text_color(t.primary).child(div().flex_none().child(indicator)).child(div().id("apple-cal-state").min_w_0().truncate().child(label.clone()).tip(label)))
         .children(button.map(|b| div().flex_none().max_w(px(control::ROW_CONTROL)).child(b)))
         .into_any_element()
 }
@@ -521,6 +530,53 @@ fn row(label: impl Into<SharedString>, control: impl IntoElement, t: &Theme) -> 
     let label: SharedString = label.into();
     let key = label.to_string();
     jump_target(&key, div().flex().items_center().gap(px(space::M)).px(px(space::L)).min_h(px(control::ROW)).py(px(space::S)).child(div().flex_1().min_w_0().text_color(t.primary).child(label)).child(div().flex_none().max_w(px(control::ROW_CONTROL)).child(control)), t).into_any_element()
+}
+
+fn switch_row(id: impl Into<SharedString>, label: impl Into<SharedString>, on: bool, disabled: bool, toggle: impl Fn(bool, &mut Window, &mut App) + 'static, t: &Theme) -> AnyElement {
+    let (id, label): (SharedString, SharedString) = (id.into(), label.into());
+    if disabled {
+        return row(label, Switch::new(id).checked(on).disabled(true), t);
+    }
+    let key = label.to_string();
+    let switch = Switch::new(SharedString::from(format!("{id}-switch"))).checked(on).tab_stop(false);
+    jump_target(&key, toggle_row(id, label, switch, t, move |_, window, cx| toggle(!on, window, cx)).px(px(space::L)).min_h(px(control::ROW)).py(px(space::S)), t).into_any_element()
+}
+
+fn detail_switch_row(id: impl Into<SharedString>, label: impl Into<SharedString>, detail: String, on: bool, toggle: impl Fn(bool, &mut Window, &mut App) + 'static, t: &Theme) -> AnyElement {
+    let (id, label): (SharedString, SharedString) = (id.into(), label.into());
+    let key = label.to_string();
+    let text = div().flex().flex_col().gap(px(space::XXS)).child(div().text_color(t.primary).child(label)).child(caption(detail, t));
+    let switch = Switch::new(SharedString::from(format!("{id}-switch"))).checked(on).tab_stop(false);
+    jump_target(&key, toggle_row(id, text, switch, t, move |_, window, cx| toggle(!on, window, cx)).px(px(space::L)).min_h(px(control::ROW)).py(px(space::S)), t).into_any_element()
+}
+
+/// A square icon button of the minimum hit size with the hover every icon control has.
+fn icon_button(id: impl Into<ElementId>, name: &str, help: String, disabled: bool, t: &Theme, on_click: impl Fn(&mut Window, &mut App) + 'static) -> Stateful<Div> {
+    div()
+        .id(id)
+        .size(px(control::S))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(radius::INNER))
+        .when(disabled, |d| d.opacity(tint::DISABLED))
+        .when(!disabled, |d| d.cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::INNER).on_click(move |_, window, cx| on_click(window, cx)))
+        .child(icon(name, iconsize::M, t.primary))
+        .tip(help)
+}
+
+/// The line that adds an entry to a list: a link on the left, an optional second action on the right.
+fn add_row(id: &'static str, label: String, secondary: Option<AnyElement>, t: &Theme, on_click: impl Fn(&mut App) + 'static) -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .px(px(space::L))
+        .py(px(space::S))
+        .child(link_button(id, label, t).flex_row_reverse().gap(px(space::XS)).on_click(move |_, _, cx| on_click(cx)).child(icon("plus", iconsize::S, t.accent_text)))
+        .child(div().flex_1())
+        .children(secondary)
+        .into_any_element()
 }
 
 /// A pop-up button like SwiftUI's menu-style `Picker`.
@@ -559,11 +615,9 @@ fn detail_row(label: impl Into<SharedString>, detail: String, control: impl Into
     jump_target(&key, div().flex().items_center().gap(px(space::M)).px(px(space::L)).min_h(px(control::ROW)).py(px(space::S)).child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().text_color(t.primary).child(label)).child(caption(detail, t))).child(div().flex_none().child(control)), t).into_any_element()
 }
 
-fn naming_switch(id: &'static str, c: &StudyConfig) -> Switch {
-    Switch::new(id).checked(c.naming_convention()).on_click(|v, _, cx| {
-        let v = *v;
-        edit_config(cx, |c| c.set_naming_convention(v));
-    })
+fn naming_row(id: &'static str, c: &StudyConfig, t: &Theme) -> AnyElement {
+    let on = c.naming_convention();
+    detail_switch_row(id, tr("Nach einem Muster benennen"), naming_detail(on), on, |v, _, cx| edit_config(cx, |c| c.set_naming_convention(v)), t)
 }
 
 pub(crate) fn naming_detail(on: bool) -> String {
@@ -577,18 +631,14 @@ fn sub_row(label: impl Into<SharedString>, control: impl IntoElement, t: &Theme)
 }
 
 fn filing_sections(c: &StudyConfig, extra: Vec<AnyElement>, submissions: AnyElement, t: &Theme) -> (Div, Div) {
-    let switch = |id: &'static str, on: bool, set: fn(&mut StudyConfig, bool)| Switch::new(id).checked(on).on_click(move |v, _, cx| {
-        let v = *v;
-        edit_config(cx, |c| set(c, v));
-    });
     let on = c.naming_convention();
-    let mut naming = vec![detail_row(tr("Nach einem Muster benennen"), naming_detail(on), naming_switch("g-naming", c), t)];
+    let mut naming = vec![naming_row("g-naming", c, t)];
     if on {
         naming.extend(extra);
     }
     let folders = vec![
         detail_row(tr("Abgabeordner"), tr("In jedem Modul. Hier landen abgelegte Dateien und neue Notizen für eine Abgabe. Leer: der Modulordner."), submissions, t),
-        row(tr("Ordner anlegen"), switch("g-create-folders", c.create_folders, |c, v| c.create_folders = v), t),
+        switch_row("g-create-folders", tr("Ordner anlegen"), c.create_folders, false, |v, _, cx| edit_config(cx, |c| c.create_folders = v), t),
     ];
     (
         section(Some(tr("Namensmuster")), on.then(|| tr("Das Muster steht in den Einstellungen jedes Moduls.")), naming, t),
@@ -596,8 +646,8 @@ fn filing_sections(c: &StudyConfig, extra: Vec<AnyElement>, submissions: AnyElem
     )
 }
 
-fn minus(id: impl Into<ElementId>, help: String, f: impl Fn(&mut App) + 'static) -> Button {
-    Button::new(id).ghost().small().icon(menu_icon("circle-minus")).tooltip(help).on_click(move |_, _, cx| f(cx))
+fn minus(id: impl Into<ElementId>, help: String, t: &Theme, f: impl Fn(&mut App) + 'static) -> Stateful<Div> {
+    icon_button(id, "circle-minus", help, false, t, move |_, cx| f(cx))
 }
 
 fn break_summary(b: &Break) -> String {
@@ -657,7 +707,6 @@ fn theme_label(choice: prefs::ThemeChoice, file: &str, designs: &[themes::Instal
 
 impl Settings {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Kürzel suchen")));
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Suchen")));
         let lib = state::lib(cx);
         let (me, handle) = (cx.weak_entity(), window.window_handle());
@@ -679,9 +728,9 @@ impl Settings {
                 .detach();
             }
         });
-        let subs = vec![recorder, activation, cx.observe(&lib, |_, _, cx| cx.notify()), cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()), cx.subscribe_in(&search, window, |s, _, e: &InputEvent, window, cx| {
+        let subs = vec![recorder, activation, cx.observe(&lib, |_, _, cx| cx.notify()), cx.subscribe_in(&search, window, |s, _, e: &InputEvent, window, cx| {
             match e {
-                InputEvent::PressEnter { .. } => {
+                InputEvent::PressEnter { .. } if s.tab != Tab::Shortcuts => {
                     let found = s.matches(cx);
                     if let Some(hit) = found.get(s.hit.min(found.len().saturating_sub(1))).cloned() {
                         s.open_result(hit, window, cx);
@@ -701,10 +750,9 @@ impl Settings {
             module,
             expanded_rule: None,
             advanced: HashSet::new(),
-            filter,
             search,
             hit: 0,
-            page: ScrollHandle::new(),
+            pages: std::array::from_fn(|_| ScrollHandle::new()),
             recording: None,
             rejected: None,
             key_buttons: HashMap::new(),
@@ -772,8 +820,16 @@ impl Settings {
     }
 
     fn show_module(&mut self, id: String) {
-        self.tab = Tab::Modules;
+        self.go(Tab::Modules);
         self.module = Some(id);
+    }
+
+    fn page(&self) -> ScrollHandle {
+        self.pages[self.tab as usize].clone()
+    }
+
+    fn go(&mut self, tab: Tab) {
+        self.tab = tab;
     }
 
     fn open_result(&mut self, hit: Hit, window: &mut Window, cx: &mut Context<Self>) {
@@ -781,17 +837,18 @@ impl Settings {
         self.search.update(cx, |s, cx| s.set_value("", window, cx));
         match hit.to {
             HitTarget::Setting(tab, label) => {
-                self.tab = tab;
+                self.go(tab);
+                self.pages[tab as usize].set_offset(point(px(0.), px(0.)));
                 self.light_up(label, window, cx);
             }
             HitTarget::Module(id) => self.show_module(id),
             HitTarget::Semester(id) => {
-                self.tab = Tab::Semester;
+                self.go(Tab::Semester);
                 self.semester = Some(id);
             }
             HitTarget::Shortcut(label) => {
-                self.tab = Tab::Shortcuts;
-                self.filter.update(cx, |f, cx| f.set_value(label, window, cx));
+                self.go(Tab::Shortcuts);
+                self.search.update(cx, |s, cx| s.set_value(label, window, cx));
             }
         }
         cx.notify();
@@ -799,7 +856,7 @@ impl Settings {
 
     /// Scrolls to a setting and marks it until the eye has found it.
     fn light_up(&mut self, label: String, _: &mut Window, cx: &mut Context<Self>) {
-        JUMP.with(|j| *j.borrow_mut() = Some(Jump { label, handle: self.page.clone(), scrolled: false }));
+        JUMP.with(|j| *j.borrow_mut() = Some(Jump { label, handle: self.page(), scrolled: false }));
         cx.spawn(async |this, cx| {
             cx.background_executor().timer(std::time::Duration::from_millis(1800)).await;
             JUMP.with(|j| *j.borrow_mut() = None);
@@ -823,7 +880,7 @@ impl Settings {
                     .w_full()
                     .cursor_pointer()
                     .key_nav()
-                    .soft(t.ink.opacity(0.06), radius::INNER)
+                    .soft(t.ink.opacity(hover::ROW), radius::INNER)
                     .flex()
                     .items_center()
                     .px(px(space::M))
@@ -853,7 +910,6 @@ impl Settings {
             (Tab::Shortcuts, tr("Tastenkürzel"), "command"),
         ] {
             let active = tab == self.tab;
-            let hover = t.ink.opacity(0.06);
             bar = bar.child(
                 div()
                     .id(SharedString::from(format!("tab-{label}")))
@@ -867,19 +923,19 @@ impl Settings {
                     .py(px(space::S))
                     .rounded(px(radius::CONTROL))
                     .cursor_pointer().key_nav()
-                    .when(active, |d| d.bg(t.ink.opacity(0.09)))
-                    .when(!active, |d| d.soft(hover, radius::CONTROL))
+                    .when(active, |d| d.bg(t.accent.opacity(tint::SELECTED)))
+                    .when(!active, |d| d.soft(t.ink.opacity(hover::ROW), radius::CONTROL))
                     .child(icon(icon_name, iconsize::L, if active { t.accent } else { t.secondary }))
                     .child(div().max_w_full().truncate().text_size(px(font::CAPTION)).text_color(if active { t.accent_text } else { t.primary }).child(label))
                     .on_click(cx.listener(move |s, _, _, cx| {
-                        s.tab = tab;
+                        s.go(tab);
                         s.recording = None;
                         cx.notify();
                     })),
             );
         }
         let search = if folded {
-            div().flex_none().child(Button::new("settings-search-fold").ghost().small().icon(menu_icon("search")).tooltip(tr("Suchen")).on_click(cx.listener(|s, _, window, cx| s.search.update(cx, |i, cx| i.focus(window, cx)))))
+            div().flex_none().child(Button::new("settings-search-fold").ghost().small().icon(menu_icon("search")).tooltip(format!("{} ({})", tr("Suchen"), Shortcut { key: "f".into(), command: true, shift: false, option: false, control: false }.display())).on_click(cx.listener(|s, _, window, cx| s.search.update(cx, |i, cx| i.focus(window, cx)))))
         } else {
             div().flex_none().w(px(SEARCH)).child(Input::new(&self.search).small().cleanable(true).prefix(icon("search", iconsize::XS, t.secondary)))
         };
@@ -893,7 +949,7 @@ impl Settings {
         let author = text(&mut f, "g-author", &c.author, &tr("Nachname-V"), window, cx, |c, v| c.author = v);
         let inbox = text(&mut f, "g-inbox", &c.inbox, "", window, cx, |c, v| if is_inner_folder(&v) { c.inbox = v });
         let submissions = text(&mut f, "g-submissions", &c.submission_folder, &tr("Modulordner"), window, cx, |c, v| if v.trim().is_empty() || is_inner_folder(&v) { c.submission_folder = v });
-        let matrikel = text(&mut f, "g-matrikel", &c.matrikel, &tr("für {matrikel} in Dateinamen"), window, cx, |c, v| c.matrikel = v);
+        let matrikel = text(&mut f, "g-matrikel", &c.matrikel, &tr("Matrikelnummer"), window, cx, |c, v| c.matrikel = v);
         let credit = text(&mut f, "g-credit", &c.credit_label, &tr("ECTS, CP, Credits"), window, cx, |c, v| c.credit_label = v);
         let exclude = text(&mut f, "g-exclude", &c.search_exclude.join(", "), "", window, cx, |c, v| c.search_exclude = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
         self.fields = f;
@@ -1037,7 +1093,10 @@ impl Settings {
                         let me = me.clone();
                         theme::pick_and_load(window.window_handle(), cx, move |result, cx| {
                             let _ = me.update(cx, |s, cx| {
-                                s.theme_note = result.err().map(ThemeNote::Problem);
+                                s.theme_note = match result {
+                                    Ok(loaded) => loaded.replaced.map(|bytes| ThemeNote::Replaced { id: loaded.id, name: loaded.name, bytes, previous: loaded.previous, stamp: s.note_later(cx) }),
+                                    Err(m) => Some(ThemeNote::Problem(m)),
+                                };
                                 cx.notify();
                             });
                         });
@@ -1069,11 +1128,10 @@ impl Settings {
             Some(tr("Erinnerungen")),
             None,
             vec![
-                row(tr("Mitteilungen vor Deadlines"), Switch::new("g-rem").checked(enabled).on_click(|v, _, cx| {
-                    let v = *v;
+                switch_row("g-rem", tr("Mitteilungen vor Abgaben"), enabled, false, |v, _, cx| {
                     prefs::update(|p| p.reminders_enabled = v);
                     state::sync_reminders(cx);
-                }), t),
+                }, t),
                 row(
                     tr("Erinnern"),
                     picker("g-hours", if hours == 0 { tr("Nicht") } else { trf("%lld Std. vorher", &[&hours]) }, move |mut m| {
@@ -1088,11 +1146,10 @@ impl Settings {
                     .disabled(!enabled),
                     t,
                 ),
-                row(tr("Zusätzlich am Vortag (Pflichtabgaben)"), Switch::new("g-daybefore").checked(p.reminder_day_before).disabled(!enabled).on_click(|v, _, cx| {
-                    let v = *v;
+                switch_row("g-daybefore", tr("Zusätzlich am Vortag (Pflichtabgaben)"), p.reminder_day_before, !enabled, |v, _, cx| {
                     prefs::update(|p| p.reminder_day_before = v);
                     state::sync_reminders(cx);
-                }), t),
+                }, t),
             ],
             t,
         );
@@ -1128,8 +1185,7 @@ impl Settings {
         let mut outgoing_rows = Vec::new();
         if super::apple_calendar::AVAILABLE {
             let sync_on = p.apple_calendar;
-            outgoing_rows.push(row(tr("Mit Apple Kalender abgleichen"), Switch::new("g-apple-cal").checked(sync_on).on_click(|v, _, cx| {
-                let v = *v;
+            outgoing_rows.push(switch_row("g-apple-cal", tr("Mit Apple Kalender abgleichen"), sync_on, false, |v, _, cx| {
                 prefs::update(|p| p.apple_calendar = v);
                 if v {
                     super::apple_calendar::push(cx);
@@ -1137,17 +1193,16 @@ impl Settings {
                     super::apple_calendar::turn_off();
                 }
                 cx.refresh_windows();
-            }), t));
+            }, t));
             if sync_on {
                 outgoing_rows.push(apple_calendar_row(t));
             }
         }
-        outgoing_rows.push(row(tr("Kalenderdatei aktuell halten"), Switch::new("g-cal").checked(feed_on).on_click(|v, _, cx| {
-            let v = *v;
+        outgoing_rows.push(switch_row("g-cal", tr("Kalenderdatei aktuell halten"), feed_on, false, |v, _, cx| {
             prefs::update(|p| p.calendar_feed = v);
             state::sync_reminders(cx);
             cx.refresh_windows();
-        }), t));
+        }, t));
         if feed_on {
             let (open_file, reveal_file) = (feed_file.clone(), feed_file.clone());
             outgoing_rows.push(row(tr("Abonnieren oder importieren"), div().flex().gap(px(space::S))
@@ -1173,27 +1228,26 @@ impl Settings {
             t,
         );
         let login = self.launch_at_login;
+        let this = cx.weak_entity();
         let system = section(
             Some(tr("System")),
             None,
             vec![
-                row(tr("Bei Anmeldung starten"), Switch::new("g-login").checked(login).on_click(cx.listener(|s, v: &bool, _, cx| {
-                    if super::platform::set_launch_at_login(*v) {
-                        s.launch_at_login = *v;
-                    } else {
-                        act(cx, |l| l.last_error = Some(tr("Autostart konnte nicht geändert werden.")));
-                    }
-                    cx.notify();
-                })), t),
-                row(tr("Automatisch nach Updates suchen"), Switch::new("g-update").checked(p.update_check).on_click(|v, _, _| {
-                    let v = *v;
-                    prefs::update(|p| p.update_check = v);
-                }), t),
-                row(tr("Symbol in der Menüleiste"), Switch::new("g-tray").checked(p.tray).disabled(!super::tray::AVAILABLE).on_click(|v, _, cx| {
-                    let v = *v;
+                switch_row("g-login", tr("Bei Anmeldung starten"), login, false, move |v, _, cx| {
+                    let _ = this.update(cx, |s, cx| {
+                        if super::platform::set_launch_at_login(v) {
+                            s.launch_at_login = v;
+                        } else {
+                            act(cx, |l| l.last_error = Some(tr("Autostart konnte nicht geändert werden.")));
+                        }
+                        cx.notify();
+                    });
+                }, t),
+                switch_row("g-update", tr("Automatisch nach Updates suchen"), p.update_check, false, |v, _, _| prefs::update(|p| p.update_check = v), t),
+                switch_row("g-tray", tr("Symbol in der Menüleiste"), p.tray, !super::tray::AVAILABLE, |v, _, cx| {
                     prefs::update(|p| p.tray = v);
                     super::tray::sync(cx);
-                }), t),
+                }, t),
                 div().flex().items_center().gap(px(space::S)).px(px(space::L)).py(px(space::S)).text_color(t.secondary).child(icon("shield-check", iconsize::S, t.secondary)).child(tr("Sendet keine Daten · nur der gewählte Ordner wird gelesen")).into_any_element(),
             ],
             t,
@@ -1206,7 +1260,7 @@ impl Settings {
                 .into_iter()
                 .map(|(key, label)| {
                     let shown = !hidden.iter().any(|k| k == key);
-                    row(label, Switch::new(SharedString::from(format!("g-tab-{key}"))).checked(shown).on_click(move |v, _, cx| super::sidebar::set_hidden(key, !*v, cx)), t)
+                    switch_row(format!("g-tab-{key}"), label, shown, false, move |v, _, cx| super::sidebar::set_hidden(key, !v, cx), t)
                 })
                 .collect(),
             t,
@@ -1216,8 +1270,7 @@ impl Settings {
             Some(tr("Hinweise")),
             Some(tr("Der Tipp des Tages erscheint einmal am Tag unten rechts und nennt nur, was du noch nicht benutzt hast. Die Liste zum Einrichten hakt sich von selbst ab.")),
             vec![
-                row(tr("Tipp des Tages"), Switch::new("g-tips").checked(p.tips_enabled).on_click(|v, _, cx| {
-                    let v = *v;
+                switch_row("g-tips", tr("Tipp des Tages"), p.tips_enabled, false, |v, _, cx| {
                     prefs::update(|p| {
                         p.tips_enabled = v;
                         if v {
@@ -1225,50 +1278,49 @@ impl Settings {
                         }
                     });
                     cx.refresh_windows();
-                }), t),
-                row(tr("Einrichten in der Übersicht"), Switch::new("g-setup").checked(setup_shown).on_click(|v, _, cx| {
-                    if *v {
+                }, t),
+                switch_row("g-setup", tr("Einrichten in der Übersicht"), setup_shown, false, |v, _, cx| {
+                    if v {
                         super::setup_card::restore(cx);
                     } else {
                         let root = state::read(cx, |l| l.root.clone()).unwrap_or_default();
                         prefs::update_setup(&root, |s| s.dismissed = true);
                         cx.refresh_windows();
                     }
-                }), t),
+                }, t),
             ],
             t,
         );
-        div().flex().flex_col().gap(px(space::XL)).child(language).children(own_designs).child(studium).child(naming).child(filing).child(grades).child(sidebar).child(hints).child(reminders).child(incoming).child(calendar).child(system).child(search).child(storage)
+        div().flex().flex_col().gap(px(space::XL)).child(language).children(own_designs).child(studium).child(reminders).child(naming).child(filing).child(grades).child(sidebar).child(hints).child(incoming).child(calendar).child(system).child(search).child(storage)
     }
 }
 
 /// Starts a new instance and quits this one, so a language change applies.
 impl Settings {
     fn master(&self, items: Vec<(String, String, String, Option<Hsla>)>, selected: Option<&str>, on_select: impl Fn(&mut Settings, String) + 'static + Clone, bar: Div, t: &Theme, cx: &mut Context<Self>) -> Div {
-        let mut list = div().flex().flex_col().p(px(space::S));
+        let mut list = div().flex().flex_col().py(px(space::S));
         for (id, title, sub, dot) in items {
             if title.is_empty() {
-                list = list.child(div().px(px(space::S)).pt(px(space::S)).pb(px(space::XXS)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(sub));
+                list = list.child(div().px(px(space::M)).pt(px(space::S)).pb(px(space::XXS)).text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(sub));
                 continue;
             }
             let active = selected == Some(id.as_str());
-            let hover = t.ink.opacity(0.05);
             let f = on_select.clone();
             let id2 = id.clone();
             list = list.child(
                 div()
                     .id(SharedString::from(format!("m-{id}")))
+                    .relative()
                     .flex()
                     .items_center()
                     .gap(px(space::S))
-                    .px(px(space::S))
+                    .px(px(space::M))
                     .py(px(space::XS))
-                    .rounded(px(radius::INNER))
                     .cursor_pointer().key_nav()
-                    .when(active, |d| d.bg(t.selection).text_color(white()))
-                    .when(!active, |d| d.soft(hover, radius::INNER))
-                    .when_some(dot, |d, c| d.child(div().size(px(space::S)).rounded_full().bg(if active { white() } else { c })))
-                    .child(div().flex().flex_col().min_w_0().child(div().truncate().child(title)).child(div().truncate().text_size(px(font::CAPTION)).text_color(if active { white().opacity(0.8) } else { t.secondary }).child(sub)))
+                    .when(active, |d| d.child(motion::row_fill(t.ink.opacity(0.08))).child(div().absolute().left(px(hover::INSET)).top(px(space::S)).bottom(px(space::S)).w(px(space::XXS)).rounded_r(px(space::XXS)).bg(t.accent)))
+                    .when(!active, |d| d.soft_row(t.ink.opacity(hover::ROW)))
+                    .when_some(dot, |d, c| d.child(div().size(px(space::S)).flex_none().rounded_full().bg(c)))
+                    .child(div().flex().flex_col().min_w_0().child(div().truncate().child(title)).child(div().truncate().text_size(px(font::CAPTION)).text_color(t.secondary).child(sub)))
                     .on_click(cx.listener(move |s, _, _, cx| {
                         f(s, id2.clone());
                         cx.notify();
@@ -1289,8 +1341,8 @@ impl Settings {
         let bar = div()
             .flex()
             .gap(px(space::XXS))
-            .child(Button::new("s-add").ghost().small().icon(menu_icon("plus")).tooltip(tr("Neues Semester")).on_click(move |_, _, cx| e1.update(cx, |s, cx| s.add_semester(false, cx))))
-            .child(Button::new("s-del").ghost().small().icon(menu_icon("minus")).tooltip(tr("Semester löschen")).disabled(!can_delete).on_click(move |_, window, cx| {
+            .child(icon_button("s-add", "plus", tr("Neues Semester"), false, t, move |_, cx| e1.update(cx, |s, cx| s.add_semester(false, cx))))
+            .child(icon_button("s-del", "minus", tr("Semester löschen"), !can_delete, t, move |window, cx| {
                 let e = e2.clone();
                 confirm(window, cx, tr("Semester löschen?"), tr("Module dieses Semesters bleiben erhalten und erscheinen unter „Ohne Semester“."), move |cx| {
                     e.update(cx, |s, cx| {
@@ -1301,7 +1353,7 @@ impl Settings {
                     })
                 })
             }))
-            .child(Button::new("s-dup").ghost().small().icon(menu_icon("copy-plus")).tooltip(tr("Folgesemester mit denselben Modulen und Regeln anlegen")).disabled(sel.is_none()).on_click(move |_, _, cx| e3.update(cx, |s, cx| s.add_semester(true, cx))));
+            .child(icon_button("s-dup", "copy-plus", tr("Folgesemester mit denselben Modulen und Regeln anlegen"), sel.is_none(), t, move |_, cx| e3.update(cx, |s, cx| s.add_semester(true, cx))));
         let master = self.master(items, sel.as_deref(), |s, id| s.semester = Some(id), bar, t, cx);
         let detail = match c.semesters.iter().find(|s| Some(&s.id) == sel.as_ref()).cloned() {
             Some(s) => self.semester_editor(c, s, window, cx, t).into_any_element(),
@@ -1367,7 +1419,7 @@ impl Settings {
                             .child(div().w(px(120.)).flex_none().child(gpui_kit::component::date_picker::DatePicker::new(&from).small()))
                             .child(div().text_color(t.secondary).child(tr("bis")))
                             .child(div().w(px(120.)).flex_none().child(gpui_kit::component::date_picker::DatePicker::new(&to).small()))
-                            .child(minus(SharedString::from(format!("brk-rm-{i}")), tr("Pause entfernen"), move |cx| e(Box::new(move |s| if i < s.breaks.len() { s.breaks.remove(i); }))(cx))),
+                            .child(minus(SharedString::from(format!("brk-rm-{i}")), tr("Pause entfernen"), t, move |cx| e(Box::new(move |s| if i < s.breaks.len() { s.breaks.remove(i); }))(cx))),
                     )
                     .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).child(break_summary(b)))
                     .into_any_element(),
@@ -1375,10 +1427,10 @@ impl Settings {
         }
         let e = edit.clone();
         let start_date = s.start.clone();
-        breaks.push(div().px(px(space::L)).py(px(space::S)).child(Button::new("brk-add").ghost().small().icon(menu_icon("plus")).label(tr("Pause hinzufügen")).on_click(move |_, _, cx| {
+        breaks.push(add_row("brk-add", tr("Pause hinzufügen"), None, t, move |cx| {
             let st = day::parse(&start_date).unwrap_or_else(|| Local::now().date_naive());
             e(Box::new(move |s| s.breaks.push(Break { name: tr("Pause"), start: day::format(st), end: day::format(st + Days::new(6)) })))(cx)
-        })).into_any_element());
+        }));
         let mut holidays: Vec<AnyElement> = Vec::new();
         for (i, h) in s.holidays.iter().enumerate() {
             let e = edit.clone();
@@ -1396,7 +1448,7 @@ impl Settings {
                     .child(div().w(px(220.)).child(Input::new(&n).small()))
                     .child(div().flex_1())
                     .child(div().w(px(130.)).child(gpui_kit::component::date_picker::DatePicker::new(&d).small()))
-                    .child(minus(SharedString::from(format!("hol-rm-{i}")), tr("Feiertag entfernen"), move |cx| e(Box::new(move |s| if i < s.holidays.len() { s.holidays.remove(i); }))(cx)))
+                    .child(minus(SharedString::from(format!("hol-rm-{i}")), tr("Feiertag entfernen"), t, move |cx| e(Box::new(move |s| if i < s.holidays.len() { s.holidays.remove(i); }))(cx)))
                     .into_any_element(),
             );
         }
@@ -1404,17 +1456,11 @@ impl Settings {
         let (e1, e2) = (edit.clone(), edit.clone());
         let first = s.start.clone();
         let (sid, s2) = (s.id.clone(), s.clone());
-        holidays.push(
-            div()
-                .flex()
-                .px(px(space::L))
-                .py(px(space::S))
-                .child(Button::new("hol-add").ghost().small().icon(menu_icon("plus")).label(tr("Feiertag hinzufügen")).on_click(move |_, _, cx| {
-                    let f = first.clone();
-                    e1(Box::new(move |s| s.holidays.push(Holiday { name: tr("Feiertag"), date: f.clone() })))(cx)
-                }))
-                .child(div().flex_1())
-                .child(Button::new("hol-ics").ghost().small().icon(menu_icon("calendar-plus")).label(tr("Aus Kalenderdatei (.ics)…")).on_click(move |_, _, cx| {
+        holidays.push(add_row(
+            "hol-add",
+            tr("Feiertag hinzufügen"),
+            Some(
+                Button::new("hol-ics").ghost().small().icon(menu_icon("calendar-plus")).label(tr("Aus Kalenderdatei (.ics)…")).on_click(move |_, _, cx| {
                     let (e, s, _) = (e2.clone(), s2.clone(), sid.clone());
                     super::platform::pick(PathPromptOptions { files: true, directories: false, multiple: false, prompt: None }, cx, move |paths, cx| {
                         let Some(text) = paths.first().and_then(|p| std::fs::read_to_string(p).ok()) else { return };
@@ -1435,9 +1481,15 @@ impl Settings {
                             s.holidays.sort_by(|a, b| a.date.cmp(&b.date));
                         }))(cx)
                     });
-                }))
+                })
                 .into_any_element(),
-        );
+            ),
+            t,
+            move |cx| {
+                let f = first.clone();
+                e1(Box::new(move |s| s.holidays.push(Holiday { name: tr("Feiertag"), date: f.clone() })))(cx)
+            },
+        ));
         div()
             .flex()
             .flex_col()
@@ -1488,7 +1540,7 @@ impl Settings {
         let bar = div()
             .flex()
             .gap(px(space::XXS))
-            .child(Button::new("m-add").ghost().small().icon(menu_icon("plus")).tooltip(tr("Neues Modul")).on_click(move |_, _, cx| {
+            .child(icon_button("m-add", "plus", tr("Neues Modul"), false, t, move |_, cx| {
                 let (current, count) = state::read(cx, |l| (l.semester().map(|s| s.id.clone()).unwrap_or_default(), l.config.as_ref().map_or(0, |c| c.modules.len())));
                 let current = e1.read(cx).semester.clone().unwrap_or(current);
                 let id = format!("m{}", chrono::Utc::now().timestamp());
@@ -1499,7 +1551,7 @@ impl Settings {
                     cx.notify();
                 });
             }))
-            .child(Button::new("m-del").ghost().small().icon(menu_icon("minus")).tooltip(tr("Modul löschen")).disabled(sel.is_none()).on_click(move |_, window, cx| {
+            .child(icon_button("m-del", "minus", tr("Modul löschen"), sel.is_none(), t, move |window, cx| {
                 let e = e2.clone();
                 confirm(window, cx, tr("Modul löschen?"), tr("Regeln, Stundenplan und Noten des Moduls werden entfernt. Dateien im Ordner bleiben erhalten."), move |cx| {
                     e.update(cx, |s, cx| {
@@ -1537,6 +1589,7 @@ impl Settings {
         let root = state::read(cx, |l| l.root.clone());
         let exists = root.as_ref().is_some_and(|r| r.join(&m.folder).is_dir());
         let compact = f32::from(window.viewport_size().width) < COMPACT_MODULE;
+        let narrow = f32::from(window.viewport_size().width) < COMPACT_LINKS;
         let mut dots = div().flex().gap(px(space::XS));
         for name in PALETTE {
             let selected = m.color == name;
@@ -1544,16 +1597,16 @@ impl Settings {
             dots = dots.child(
                 div()
                     .id(SharedString::from(format!("color-{name}")))
-                    .size(px(20.))
+                    .size(px(control::S))
                     .rounded_full()
                     .flex()
                     .items_center()
                     .justify_center()
                     .cursor_pointer().key_nav()
-                    .hover(|s| s.opacity(0.75))
+                    .soft(t.ink.opacity(hover::CONTROL), radius::FULL)
                     .when(selected, |d| d.border_2().border_color(t.primary))
-                    .child(div().size(px(14.)).rounded_full().bg(t.palette(name)))
-                    .tooltip(tip(name))
+                    .child(div().size(px(iconsize::S)).rounded_full().bg(t.palette(name)))
+                    .tip(name)
                     .on_click(move |_, _, cx| e(Box::new(move |m| m.color = name.into()))(cx)),
             );
         }
@@ -1582,7 +1635,7 @@ impl Settings {
                     .items_center()
                     .gap(px(space::S))
                     .child(div().w(px(if compact { 150. } else { 220. })).child(Input::new(&folder)))
-                    .child(div().id("folder-state").child(icon(if exists { "circle-check" } else { "circle-alert" }, iconsize::S, if exists { t.green } else { t.orange })).tooltip(tip(if exists { tr("Ordner existiert") } else { tr("Ordner existiert nicht") })))
+                    .child(div().id("folder-state").child(icon(if exists { "circle-check" } else { "circle-alert" }, iconsize::S, if exists { t.green } else { t.orange })).tip(if exists { tr("Ordner existiert") } else { tr("Ordner existiert nicht") }))
                     .child(Button::new("m-pick-folder").small().label(tr("Wählen…")).on_click(move |_, _, cx| {
                         let (e, base) = (e.clone(), base.clone());
                         super::platform::choose_folder(cx, move |p, cx| {
@@ -1602,45 +1655,107 @@ impl Settings {
             let url = link.url().map(|u| u.to_string());
             let valid = url.is_some();
             let (e1, e2) = (edit.clone(), edit.clone());
-            links.push(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(space::S))
-                    .px(px(space::L))
-                    .py(px(space::S))
-                    .child(div().w(px(110.)).child(Input::new(&title).small()))
-                    .child(div().flex_1().child(Input::new(&addr).small()))
-                    .child(div().id(("lv", i)).child(icon(if valid { "circle-check" } else { "circle-alert" }, iconsize::S, if valid { t.green } else if link.address.is_empty() { t.secondary } else { t.orange })).tooltip(tip(if valid { tr("Gültige Adresse") } else { tr("Nur http(s)-Adressen") })))
-                    .child(Checkbox::new(("lu", i)).label(tr("Upload")).checked(link.upload).tooltip(tr("Wird beim Hochladen einer Abgabe geöffnet")).on_click(move |v, _, cx| {
-                        let v = *v;
-                        e1(Box::new(move |m| {
-                            for (j, l) in m.links.iter_mut().enumerate() {
-                                l.upload = j == i && v;
-                            }
-                        }))(cx)
-                    }))
-                    .child(Button::new(("lo", i)).ghost().small().icon(menu_icon("square-arrow-out-up-right")).tooltip(tr("Öffnen")).disabled(!valid).on_click(move |_, _, _| {
-                        if let Some(u) = &url {
-                            crate::core::library::open_path(u);
-                        }
-                    }))
-                    .child(minus(("lr", i), tr("Link entfernen"), move |cx| e2(Box::new(move |m| if i < m.links.len() { m.links.remove(i); }))(cx)))
-                    .into_any_element(),
-            );
+            let upload = link.upload;
+            let valid_glyph = div()
+                .id(("lv", i))
+                .size(px(control::S))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(icon(if valid { "circle-check" } else { "circle-alert" }, iconsize::S, if valid { t.green } else if link.address.is_empty() { t.secondary } else { t.orange }))
+                .tip(if valid { tr("Gültige Adresse") } else { tr("Nur http(s)-Adressen") });
+            let upload_toggle = toggle_row(("lu", i), tr("Upload"), Checkbox::new(("lu-box", i)).checked(upload).tab_stop(false), t, move |_, _, cx| {
+                let on = !upload;
+                e1(Box::new(move |m| {
+                    for (j, l) in m.links.iter_mut().enumerate() {
+                        l.upload = j == i && on;
+                    }
+                }))(cx)
+            })
+            .flex_row_reverse()
+            .gap(px(space::S))
+            .px(px(space::XS))
+            .tip(tr("Wird beim Hochladen einer Abgabe geöffnet"));
+            let open_button = icon_button(("lo", i), "square-arrow-out-up-right", tr("Öffnen"), !valid, t, move |_, _| {
+                if let Some(u) = &url {
+                    crate::core::library::open_path(u);
+                }
+            });
+            let remove = minus(("lr", i), tr("Link entfernen"), t, move |cx| e2(Box::new(move |m| if i < m.links.len() { m.links.remove(i); }))(cx));
+            let actions = div().flex().flex_none().items_center().gap(px(space::XS)).child(valid_glyph).child(upload_toggle).child(open_button).child(remove);
+            let fields_line = div().flex().items_center().gap(px(space::S)).child(div().w(px(110.)).flex_none().child(Input::new(&title).small())).child(div().flex_1().min_w(px(URL_MIN)).child(Input::new(&addr).small()));
+            let line = div().flex().gap(px(space::S)).px(px(space::L)).py(px(space::S));
+            links.push(if narrow {
+                line.flex_col().child(fields_line).child(div().flex().justify_end().child(actions)).into_any_element()
+            } else {
+                line.items_center().child(div().flex_1().min_w_0().child(fields_line)).child(actions).into_any_element()
+            });
         }
         let e = edit.clone();
-        links.push(div().px(px(space::L)).py(px(space::S)).child(Button::new("link-add").ghost().small().icon(menu_icon("plus")).label(tr("Link hinzufügen")).on_click(move |_, _, cx| {
+        links.push(add_row("link-add", tr("Link hinzufügen"), None, t, move |cx| {
             e(Box::new(|m| {
                 let first = m.links.is_empty();
                 m.links.push(ModuleLink { title: if first { "Moodle".into() } else { String::new() }, upload: first, ..Default::default() })
             }))(cx)
-        })).into_any_element());
+        }));
         let example = Naming::new(&m, semester.as_ref(), c).render(&tr("Titel"), Local::now().date_naive(), "pdf", &[], None, None, None);
+        let naming_key = format!("naming-{}", m.id);
+        let naming_open = self.advanced.contains(&naming_key);
         let naming_rows = if c.naming_convention() {
-            vec![row(tr("Muster"), div().w(px(if compact { 240. } else { 320. })).child(Input::new(&naming)), t), row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(example), t)]
+            let mut chips = div().flex().flex_wrap().justify_end().gap(px(space::XS));
+            for (label, token) in [(tr("Kürzel"), "{code}"), (tr("Jahr"), "{yy}"), (tr("Titel"), "{title}"), (tr("Name"), "{author}"), (tr("Datum"), "{date}")] {
+                let (e, input) = (edit.clone(), naming.clone());
+                chips = chips.child(
+                    div()
+                        .id(SharedString::from(format!("chip-{token}")))
+                        .h(px(control::S))
+                        .px(px(space::S))
+                        .flex()
+                        .items_center()
+                        .rounded(px(radius::CONTROL))
+                        .border_1()
+                        .border_color(t.separator)
+                        .text_size(px(font::CALLOUT))
+                        .cursor_pointer()
+                        .key_nav()
+                        .soft(t.ink.opacity(hover::CONTROL), radius::CONTROL)
+                        .child(label)
+                        .on_click(move |_, window, cx| {
+                            let v = format!("{}{}", input.read(cx).value(), token);
+                            input.update(cx, |i, cx| i.set_value(v.clone(), window, cx));
+                            e(Box::new(move |m| m.naming = v.clone()))(cx)
+                        }),
+                );
+            }
+            let more = div()
+                .px(px(space::L))
+                .py(px(space::S))
+                .child(
+                    link_button(SharedString::from(format!("adv-{naming_key}")), tr("Erweitert"), t)
+                        .flex()
+                        .items_center()
+                        .gap(px(space::XS))
+                        .child(motion::chevron("naming-chevron", naming_open, t.accent))
+                        .on_click(cx.listener({
+                            let key = naming_key.clone();
+                            move |s, _, _, cx| {
+                                if !s.advanced.remove(&key) {
+                                    s.advanced.insert(key.clone());
+                                }
+                                cx.notify();
+                            }
+                        })),
+                )
+                .child(motion::reveal("naming-help", naming_open, div().pt(px(space::S)).child(caption(tr("Platzhalter: {code} {yy} {yyyy} {title} {author} {matrikel} {date} {date:yyyy-MM-dd} {w} {kw}"), t))))
+                .into_any_element();
+            vec![
+                row(tr("Muster"), div().w(px(if compact { 240. } else { 320. })).flex().flex_col().items_end().gap(px(space::S)).child(div().w_full().child(Input::new(&naming))).child(chips), t),
+                row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(example), t),
+                more,
+            ]
         } else {
-            vec![detail_row(tr("Nach einem Muster benennen"), naming_detail(false), naming_switch("m-naming", c), t)]
+            vec![naming_row("m-naming", c, t)]
         };
         let mut rules: Vec<AnyElement> = Vec::new();
         for (i, r) in m.rules.iter().enumerate() {
@@ -1691,7 +1806,7 @@ impl Settings {
             }).small();
             let title = div().flex_1().min_w_0().child(Input::new(&title).small());
             let room = div().w(px(80.)).child(Input::new(&room).small());
-            let remove = minus(("srm", i), tr("Termin entfernen"), move |cx| e4(Box::new(move |m| if i < m.sessions.len() { m.sessions.remove(i); }))(cx));
+            let remove = minus(("srm", i), tr("Termin entfernen"), t, move |cx| e4(Box::new(move |m| if i < m.sessions.len() { m.sessions.remove(i); }))(cx));
             let dash = div().text_color(t.secondary).child("–");
             let session = div().px(px(space::L)).py(px(space::S));
             sessions.push(if compact {
@@ -1712,7 +1827,7 @@ impl Settings {
             .gap(px(space::XL))
             .child(section(Some(tr("Modul")), None, module_rows, t))
             .child(section(Some(tr("Links")), Some(tr("Der Upload-Link öffnet sich beim Hochladen einer Abgabe, daneben erscheinen die Dateien zum Hineinziehen.")), links, t))
-            .child(section(Some(tr("Namensmuster")), Some(if c.naming_convention() { tr("Platzhalter: {code} {yy} {yyyy} {title} {author} {matrikel} {date} {date:yyyy-MM-dd} {w} {kw}") } else { tr("Gilt für alle Module. Eingeschaltet erscheint hier das Muster dieses Moduls.") }), naming_rows, t))
+            .child(section(Some(tr("Namensmuster")), (!c.naming_convention()).then(|| tr("Gilt für alle Module. Eingeschaltet erscheint hier das Muster dieses Moduls.")), naming_rows, t))
             .child(section(Some(tr("Wiederkehrende Deadlines")), Some(tr("Wird für jede Vorlesungswoche erzeugt. Eine Datei gehört dazu, wenn du sie dort ablegst, dafür eine Notiz anlegst oder sie zuordnest.")), rules, t))
             .child(section(Some(tr("Stundenplan")), Some(tr("Erscheint im 7-Tage-Ausblick der Übersicht, nicht in Pausen.")), sessions, t))
     }
@@ -1736,7 +1851,7 @@ impl Settings {
             .gap(px(space::S))
             .rounded(px(radius::INNER))
             .cursor_pointer().key_nav()
-            .soft(t.ink.opacity(0.045), radius::INNER)
+            .soft(t.ink.opacity(hover::ROW), radius::INNER)
             .child(motion::chevron("chevron", expanded, t.secondary))
             .child(div().flex_1().flex().flex_col().child(div().font_weight(FontWeight::MEDIUM).child(r.title.clone())).child(caption(summary, t)))
             .when(r.optional, |d| d.child(div().text_size(px(font::CAPTION2)).text_color(t.secondary).child(tr("optional"))))
@@ -1979,14 +2094,8 @@ impl Settings {
                     }
                     m
                 }).disabled(!automatic), t),
-                row(tr("Beim Öffnen synchronisieren"), Switch::new("s-open").checked(g.sync_on_open).disabled(!automatic).on_click(|v, _, cx| {
-                    let v = *v;
-                    sync::update_settings(cx, |g| g.sync_on_open = v);
-                }), t),
-                row(tr("Beim Beenden synchronisieren"), Switch::new("s-quit").checked(g.sync_on_quit).disabled(!automatic).on_click(|v, _, cx| {
-                    let v = *v;
-                    sync::update_settings(cx, |g| g.sync_on_quit = v);
-                }), t),
+                switch_row("s-open", tr("Beim Öffnen synchronisieren"), g.sync_on_open, !automatic, |v, _, cx| sync::update_settings(cx, |g| g.sync_on_open = v), t),
+                switch_row("s-quit", tr("Beim Beenden synchronisieren"), g.sync_on_quit, !automatic, |v, _, cx| sync::update_settings(cx, |g| g.sync_on_quit = v), t),
             ],
             t,
         ));
@@ -2057,7 +2166,7 @@ impl Settings {
             state::reindex(cx);
         };
         let known = config::known_vaults();
-        let picker = Button::new("vault-pick").small().label(tr("Vault verbinden…")).dropdown_menu(move |mut menu, _, _| {
+        let picker = Button::new("vault-pick").small().label(tr("Obsidian-Ordner verbinden…")).dropdown_menu(move |mut menu, _, _| {
             for vault in &known {
                 let path = vault.path.clone();
                 menu = menu.item(PopupMenuItem::new(vault.name.clone()).on_click(move |_, _, cx| connect(path.clone(), cx)));
@@ -2133,11 +2242,10 @@ impl Settings {
         let editor = section(
             Some(tr("Editor")),
             Some(tr("Doppelklick auf .md-Dateien in Schrumbi öffnet immer den eigenen Editor.")),
-            [editor_row, markdown_row].into_iter().chain(super::spelling::SUPPORTED.then(|| row(tr("Rechtschreibung prüfen"), Switch::new("n-spell").checked(p.spell_check).on_click(|v, _, cx| {
-                let on = *v;
+            [editor_row, markdown_row].into_iter().chain(super::spelling::SUPPORTED.then(|| switch_row("n-spell", tr("Rechtschreibung prüfen"), p.spell_check, false, |on, _, cx| {
                 prefs::update(|p| p.spell_check = on);
                 cx.refresh_windows();
-            }), t))).chain([row(
+            }, t))).chain([row(
                 tr("Schriftgröße"),
                 stepper(
                     "n-size",
@@ -2146,7 +2254,7 @@ impl Settings {
                     Box::new(move |cx| super::documents::set_font_size((size + 1.).min(24.), cx)),
                 ),
                 t,
-            ), row(tr("Text in voller Breite"), Switch::new("n-full-width").checked(p.reader_full_width).on_click(|v, _, cx| super::documents::set_reader_full_width(*v, cx)), t)]).collect(),
+            ), switch_row("n-full-width", tr("Text in voller Breite"), p.reader_full_width, false, |v, _, cx| super::documents::set_reader_full_width(v, cx), t)]).collect(),
             t,
         );
         let mut save_rows = vec![row(
@@ -2185,10 +2293,10 @@ impl Settings {
                     .items_center()
                     .justify_center()
                     .cursor_pointer().key_nav()
-                    .hover(|s| s.opacity(0.75))
+                    .soft(t.ink.opacity(hover::CONTROL), radius::FULL)
                     .when(selected, |d| d.border_2().border_color(t.primary))
                     .child(div().size(px(iconsize::M)).rounded_full().bg(color))
-                    .tooltip(tip(tr(name)))
+                    .tip(tr(name))
                     .on_click(move |_, _, _| prefs::update(|p| p.note_accent = hex.into())),
             );
         }
@@ -2198,27 +2306,16 @@ impl Settings {
             Some(trf("Notizen werden als A4-PDF neben der Markdown-Datei gesichert (%@ im Notizfenster).", &[&ShortcutAction::ExportPdf.active_shortcut().map_or_else(String::new, |s| s.display())])),
             vec![
                 row(tr("Akzentfarbe"), swatches, t),
-                row(tr("Kopfzeile mit Modul, Woche, Name und Datum"), Switch::new("n-header").checked(p.pdf_header).on_click(|v, _, _| {
-                    let v = *v;
-                    prefs::update(|p| p.pdf_header = v);
-                }), t),
-                row(tr("Eigenschaften über dem Text"), Switch::new("n-properties").checked(p.pdf_properties).on_click(|v, _, _| {
-                    let v = *v;
-                    prefs::update(|p| p.pdf_properties = v);
-                }), t),
-                row(tr("Seitenzahlen"), Switch::new("n-pages").checked(p.pdf_page_numbers).on_click(|v, _, _| {
-                    let v = *v;
-                    prefs::update(|p| p.pdf_page_numbers = v);
-                }), t),
-                row(tr("Vor dem Ersetzen eines früheren Exports fragen"), Switch::new("n-replace-ask").checked(p.pdf_replace_ask).on_click(|v, _, _| {
-                    let v = *v;
-                    prefs::update(|p| p.pdf_replace_ask = v);
-                }), t),
+                switch_row("n-header", tr("Kopfzeile mit Modul, Woche, Name und Datum"), p.pdf_header, false, |v, _, _| prefs::update(|p| p.pdf_header = v), t),
+                switch_row("n-properties", tr("Eigenschaften über dem Text"), p.pdf_properties, false, |v, _, _| prefs::update(|p| p.pdf_properties = v), t),
+                switch_row("n-pages", tr("Seitenzahlen"), p.pdf_page_numbers, false, |v, _, _| prefs::update(|p| p.pdf_page_numbers = v), t),
+                switch_row("n-replace-ask", tr("Vor dem Ersetzen eines früheren Exports fragen"), p.pdf_replace_ask, false, |v, _, _| prefs::update(|p| p.pdf_replace_ask = v), t),
                 div()
                     .flex()
+                    .items_center()
                     .px(px(space::L))
                     .py(px(space::S))
-                    .child(Button::new("n-reset").ghost().label(tr("Standard wiederherstellen")).on_click(|_, _, _| {
+                    .child(link_button("n-reset", tr("Standard wiederherstellen"), t).text_size(px(font::CALLOUT)).on_click(|_, _, _| {
                         prefs::update(|p| {
                             p.note_accent = prefs::DEFAULT_ACCENT.into();
                             p.pdf_header = true;
@@ -2248,7 +2345,7 @@ impl Settings {
                     let gone = word.clone();
                     row(
                         word.clone(),
-                        Button::new(("dict-remove", i)).ghost().small().icon(menu_icon("x")).tooltip(tr("Aus dem Wörterbuch entfernen")).on_click(move |_, _, cx| super::spell_card::remove_word(&gone, cx)),
+                        icon_button(("dict-remove", i), "x", tr("Aus dem Wörterbuch entfernen"), false, t, move |_, cx| super::spell_card::remove_word(&gone, cx)),
                         t,
                     )
                 })
@@ -2306,7 +2403,14 @@ impl Settings {
             } else {
                 tr("Das Programm nutzt dein eigenes Konto dort; was du ihm zeigst, geht an diesen Anbieter. Lesen darf es in deinem Studienordner, ändern nur mit deinem Ja, und jede Änderung ist rückgängig.")
             }),
-            vec![row(tr("KI-Assistent verwenden"), Switch::new("ai-on").checked(prefs.enabled && !nothing).disabled(nothing).when(nothing, |s| s.tooltip(tr("Erst ein KI-Programm installieren"))).on_click(|v, _, cx| ai::set_enabled(*v, cx)), t), row(tr("Programme"), programs, t)],
+            vec![
+                if nothing {
+                    row(tr("KI-Assistent verwenden"), Switch::new("ai-on").checked(false).disabled(true).tooltip(tr("Erst ein KI-Programm installieren")), t)
+                } else {
+                    switch_row("ai-on", tr("KI-Assistent verwenden"), prefs.enabled, false, |v, _, cx| ai::set_enabled(v, cx), t)
+                },
+                row(tr("Programme"), programs, t),
+            ],
             t,
         ));
         if !ai::active() {
@@ -2315,11 +2419,10 @@ impl Settings {
         sections = sections.child(section(
             None,
             Some(tr("Riskant: Ein Befehl kann Dateien ändern, ohne dass Schrumbi es rückgängig machen kann. Die KI fragt vor jedem Befehl.")),
-            vec![row(tr("Befehle ausführen erlauben"), Switch::new("ai-execute").checked(prefs.allow_execute).on_click(|v, _, cx| {
-                let v = *v;
+            vec![switch_row("ai-execute", tr("Befehle ausführen erlauben"), prefs.allow_execute, false, |v, _, cx| {
                 prefs::update(|p| p.ai.allow_execute = v);
                 cx.refresh_windows();
-            }), t)],
+            }, t)],
             t,
         ));
         let open = self.advanced.contains(AI_ADVANCED) || jumping_to(ADVANCED_LABELS);
@@ -2342,11 +2445,10 @@ impl Settings {
         sections = sections.child(section(
             None,
             None,
-            vec![row(tr("Knopf in der Werkzeugleiste"), Switch::new("ai-toolbar").checked(prefs.toolbar_button).on_click(|v, _, cx| {
-                let v = *v;
+            vec![switch_row("ai-toolbar", tr("Knopf in der Werkzeugleiste"), prefs.toolbar_button, false, |v, _, cx| {
                 prefs::update(|p| p.ai.toolbar_button = v);
                 cx.refresh_windows();
-            }), t)],
+            }, t)],
             t,
         ));
         let mut column = Vec::new();
@@ -2379,11 +2481,10 @@ impl Settings {
             ai::open_column(cx);
             super::main_window::show(cx);
         }), t));
-        column.push(row(tr("Bei Änderungen zur Datei springen"), Switch::new("ai-follow").checked(prefs.follow_edits).on_click(|v, _, cx| {
-            let v = *v;
+        column.push(switch_row("ai-follow", tr("Bei Änderungen zur Datei springen"), prefs.follow_edits, false, |v, _, cx| {
             prefs::update(|p| p.ai.follow_edits = v);
             cx.refresh_windows();
-        }), t));
+        }, t));
         let idle = prefs.idle_minutes;
         column.push(row(tr("Sitzung beenden nach"), Button::new("ai-idle").label(trf("%lld Minuten", &[&idle])).dropdown_menu(move |mut menu, _, _| {
             for m in [10u32, 30, 60, 120] {
@@ -2468,7 +2569,7 @@ impl Settings {
         };
         let learning = section(
             Some(tr("Lernen")),
-            Some(tr("Geplant wird mit FSRS-6, dem aus Millionen echter Wiederholungen ermittelten Verfahren, das auch Anki nutzt. Ein höheres Ziel heißt mehr Wiederholungen: Über 95 % kostet viel Zeit und bringt wenig.")),
+            Some(tr("Ein höheres Ziel heißt mehr Wiederholungen: Über 95 % kostet viel Zeit und bringt wenig.")),
             vec![
                 row(tr("Erinnerungsziel"), step("c-retention", format!("{:.0} %", retention * 100.), Box::new(move |_| prefs::update(|p| p.card_retention = (retention - 0.01).max(0.7))), Box::new(move |_| prefs::update(|p| p.card_retention = (retention + 0.01).min(0.97)))), t),
                 row(tr("Neue Karten pro Tag"), step("c-new", new.to_string(), Box::new(move |_| prefs::update(|p| p.card_new_per_day = new.saturating_sub(5))), Box::new(move |_| prefs::update(|p| p.card_new_per_day = new + 5))), t),
@@ -2479,7 +2580,7 @@ impl Settings {
         let example = |text: &str, meaning: String| div().flex().items_center().gap(px(space::M)).px(px(space::L)).py(px(space::S)).child(div().flex_1().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(text.to_string())).child(div().flex_none().text_color(t.secondary).child(meaning)).into_any_element();
         let syntax = section(
             Some(tr("Karten schreiben")),
-            Some(tr("In Notizen mit #flashcards oder #karten zählen auch {{Lücke}} und ==Markiertes== als Lücken. cards: false in den Eigenschaften nimmt eine Notiz aus. Code und Formeln ergeben nie eine Karte.")),
+            Some(tr("In Notizen mit #flashcards oder #karten werden auch markierte Stellen zu Lücken. Eine einzelne Notiz lässt sich in ihren Eigenschaften davon ausnehmen. Code und Formeln ergeben nie eine Karte.")),
             vec![example("Frage :: Antwort", tr("Eine Karte")), example("Begriff ::: Erklärung", tr("In beide Richtungen")), example("Lange Frage\n?\nAntwort", tr("Über mehrere Zeilen")), example("Der {{c1::Satz}} gilt", tr("Lückentext"))],
             t,
         );
@@ -2513,24 +2614,13 @@ impl Settings {
             .px(px(space::L))
             .min_h(px(control::ROW))
             .py(px(space::S))
-            .child(div().id(("g-theme-name", i)).flex_1().min_w_0().truncate().text_color(t.primary).tooltip(tip(d.name.clone())).child(d.name.clone()))
-            .child(div().id(("g-theme-state", i)).flex_none().text_size(px(font::CAPTION)).text_color(color).when_some(d.problem.clone(), |e, p| e.tooltip(tip(p))).child(state))
+            .child(div().id(("g-theme-name", i)).flex_1().min_w_0().truncate().text_color(t.primary).tip(d.name.clone()).child(d.name.clone()))
+            .child(div().id(("g-theme-state", i)).flex_none().text_size(px(font::CAPTION)).text_color(color).when_some(d.problem.clone(), |e, p| e.tip(p)).child(state))
             .child(Button::new(("g-theme-rm", i)).small().label(tr("Entfernen")).on_click(cx.listener(move |s, _, window, cx| {
                 let was_active = prefs::with(|p| p.theme_file == id);
                 s.theme_note = match theme::remove_file(&id, window, cx) {
                     Ok(bytes) => {
-                        s.notices += 1;
-                        let stamp = s.notices;
-                        cx.spawn(async move |this, cx| {
-                            cx.background_executor().timer(motion::NOTICE).await;
-                            let _ = this.update(cx, |s, cx| {
-                                if matches!(&s.theme_note, Some(ThemeNote::Removed { stamp: n, .. }) if *n == stamp) {
-                                    s.theme_note = None;
-                                    cx.notify();
-                                }
-                            });
-                        })
-                        .detach();
+                        let stamp = s.note_later(cx);
                         Some(ThemeNote::Removed { id: id.clone(), name: name.clone(), bytes, was_active, stamp })
                     }
                     Err(m) => Some(ThemeNote::Problem(m)),
@@ -2540,23 +2630,61 @@ impl Settings {
             .into_any_element()
     }
 
+    fn note_later(&mut self, cx: &mut Context<Self>) -> u64 {
+        self.notices += 1;
+        let stamp = self.notices;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(motion::NOTICE).await;
+            let _ = this.update(cx, |s, cx| {
+                if matches!(&s.theme_note, Some(ThemeNote::Removed { stamp: n, .. } | ThemeNote::Replaced { stamp: n, .. }) if *n == stamp) {
+                    s.theme_note = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        stamp
+    }
+
     fn theme_note_row(&self, t: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let line = div().id("theme-note").w_full().min_w_0().flex().items_center().gap(px(space::S)).px(px(space::L)).min_h(px(control::ROW)).py(px(space::S)).text_size(px(font::CAPTION)).text_color(t.secondary);
         Some(match self.theme_note.as_ref()? {
             ThemeNote::Problem(m) => line
                 .aria_label(m.clone())
                 .child(div().flex_none().child(icon("circle-alert", iconsize::XS, t.orange_text)))
-                .child(div().id("theme-note-text").flex_1().min_w_0().truncate().tooltip(tip(m.clone())).child(m.clone()))
-                .child(Button::new("theme-note-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Schließen")).on_click(cx.listener(|s, _, _, cx| {
-                    s.theme_note = None;
-                    cx.notify();
-                })))
+                .child(div().id("theme-note-text").flex_1().min_w_0().truncate().tip(m.clone()).child(m.clone()))
+                .child({
+                    let this = cx.entity();
+                    icon_button("theme-note-close", "x", tr("Schließen"), false, t, move |_, cx| {
+                        this.update(cx, |s, cx| {
+                            s.theme_note = None;
+                            cx.notify();
+                        })
+                    })
+                })
                 .into_any_element(),
+            ThemeNote::Replaced { name, .. } => {
+                let text = trf("Design „%@“ ersetzt", &[name]);
+                line.aria_label(text.clone())
+                    .child(div().flex_none().child(icon("check", iconsize::XS, t.green_text)))
+                    .child(div().id("theme-note-text").min_w_0().truncate().tip(text.clone()).child(text))
+                    .child(div().flex_none().text_color(t.tertiary).child("·"))
+                    .child(div().flex_none().child(link_button("theme-undo", tr("Rückgängig"), t).on_click(cx.listener(|s, _, window, cx| {
+                        if let Some(ThemeNote::Replaced { id, bytes, previous, .. }) = s.theme_note.take() {
+                            match theme::undo_load(&id, &bytes, &previous) {
+                                Ok(()) => theme::follow_undo(window, cx),
+                                Err(m) => s.theme_note = Some(ThemeNote::Problem(m)),
+                            }
+                        }
+                        cx.notify();
+                    }))))
+                    .into_any_element()
+            }
             ThemeNote::Removed { name, .. } => {
                 let text = trf("Design „%@“ entfernt", &[name]);
                 line.aria_label(text.clone())
                     .child(div().flex_none().child(icon("check", iconsize::XS, t.green_text)))
-                    .child(div().id("theme-note-text").min_w_0().truncate().tooltip(tip(text.clone())).child(text))
+                    .child(div().id("theme-note-text").min_w_0().truncate().tip(text.clone()).child(text))
                     .child(div().flex_none().text_color(t.tertiary).child("·"))
                     .child(div().flex_none().child(link_button("theme-undo", tr("Rückgängig"), t).on_click(cx.listener(|s, _, window, cx| {
                         if let Some(ThemeNote::Removed { id, bytes, was_active, .. }) = s.theme_note.take() {
@@ -2609,15 +2737,13 @@ impl Settings {
         cx.notify();
     }
 
-    fn shortcuts(&mut self, t: &Theme, window: &Window, cx: &mut Context<Self>) -> Div {
-        let query = self.filter.read(cx).value().trim().to_string();
+    fn shortcuts(&mut self, t: &Theme, cx: &mut Context<Self>) -> Div {
+        let query = self.search.read(cx).value().trim().to_string();
         let filter = query.to_lowercase();
         let any_custom = ShortcutAction::any_customized();
-        let head = div()
+        let reset_all = div()
             .flex()
-            .items_center()
-            .gap(px(space::S))
-            .child(div().flex_1().child(Input::new(&self.filter).prefix(icon("search", iconsize::S, t.secondary)).cleanable(true)))
+            .justify_end()
             .child(Button::new("sc-reset-all").label(tr("Alle zurücksetzen")).disabled(!any_custom).on_click(cx.listener(|s, _, _, cx| {
                 let before = ShortcutAction::reset_all();
                 s.last_changed = None;
@@ -2640,7 +2766,7 @@ impl Settings {
                 .text_size(px(font::CAPTION))
                 .text_color(t.secondary)
                 .child(div().flex_none().child(icon("check", iconsize::XS, t.green_text)))
-                .child(div().id("sc-notice-text").min_w_0().truncate().tooltip(tip(n.text.clone())).child(n.text.clone()))
+                .child(div().id("sc-notice-text").min_w_0().truncate().tip(n.text.clone()).child(n.text.clone()))
                 .child(div().flex_none().text_color(t.tertiary).child("·"))
                 .child(div().flex_none().child(link_button("sc-undo", tr("Rückgängig"), t).on_click(cx.listener(|s, _, _, cx| {
                     if let Some(n) = s.notice.take() {
@@ -2651,11 +2777,11 @@ impl Settings {
                     }
                     cx.notify();
                 }))))
-                .child(Button::new("sc-notice-close").ghost().small().icon(menu_icon("x")).tooltip(format!("{} ({})", tr("Schließen"), escape)).on_click(cx.listener(|s, _, window, cx| s.close_notice(window, cx))))
+                .child(icon_button("sc-notice-close", "x", format!("{} ({})", tr("Schließen"), escape), false, t, { let this = cx.entity(); move |window, cx| this.update(cx, |s, cx| s.close_notice(window, cx)) }))
                 .into_any_element(),
             None => {
                 let idle = trf("Klick auf ein Kürzel und drück die neuen Tasten. %@ bricht ab, %@ entfernt das Kürzel.", &[&escape, &delete]);
-                caption(idle.clone(), t).id("sc-idle").w_full().min_w_0().truncate().tooltip(tip(idle)).into_any_element()
+                caption(idle.clone(), t).id("sc-idle").w_full().min_w_0().truncate().tip(idle).into_any_element()
             }
         };
         let header = div()
@@ -2664,12 +2790,11 @@ impl Settings {
             .flex_col()
             .gap(px(space::S))
             .px(px(space::XL))
-            .pt(px(space::XL))
+            .pt(px(space::M))
             .pb(px(space::M))
             .border_b_1()
             .border_color(t.separator)
-            .child(head)
-            .child(div().h(px(control::S)).w_full().min_w_0().flex().items_center().child(line));
+            .child(div().h(px(control::S)).w_full().min_w_0().flex().items_center().gap(px(space::S)).child(div().flex_1().min_w_0().child(line)).child(reset_all));
         let mut col = div().flex().flex_col().gap(px(space::XL));
         let modules = module_names(cx);
         let all_clashes = ShortcutAction::all_conflicts();
@@ -2720,7 +2845,7 @@ impl Settings {
                 } else {
                     div().text_size(px(font::CALLOUT)).text_color(t.tertiary).child(tr("Kein Kürzel")).into_any_element()
                 };
-                let hover = t.ink.opacity(0.06);
+                let hover = t.ink.opacity(hover::ROW);
                 let help = reason.or(blocked).unwrap_or_else(|| if recording { trf("%@ bricht ab, %@ entfernt das Kürzel", &[&escape, &delete]) } else { tr("Klicken zum Ändern") });
                 let help = if clashes.is_empty() { help } else { format!("{help}\n{}", trf("Auch belegt: %@", &[&clashes.join(", ")])) };
                 let recorder = div()
@@ -2743,7 +2868,7 @@ impl Settings {
                     .aria_label(trf("%@: %@", &[&name, &state]))
                     .when(!clashes.is_empty(), |d| d.aria_description(format!("{} · {}", tr("Doppelt"), trf("Auch belegt: %@", &[&clashes.join(", ")]))))
                     .child(caps)
-                    .tooltip(tip(help))
+                    .tip(help)
                     .on_click(cx.listener(move |s, _, window, cx| s.start_recording(a, true, window, cx)));
                 let default = a.default_shortcut().map_or_else(|| tr("Kein Kürzel"), |d| d.display());
                 let clash = (!clashes.is_empty()).then(|| {
@@ -2762,7 +2887,7 @@ impl Settings {
                         .child(icon("triangle-alert", iconsize::XS, t.orange_text))
                         .child(div().flex_none().child(tr("Doppelt")))
                         .child(div().min_w_0().truncate().child(format!("· {}", clashes.join(", "))))
-                        .tooltip(tip(full))
+                        .tip(full)
                 });
                 rows.push(
                     div()
@@ -2787,29 +2912,34 @@ impl Settings {
                                 .children(clash),
                         )
                         .child(recorder)
-                        .child(div().flex_none().w(px(control::ICON_BUTTON + space::S + space::L)).pl(px(space::S)).pr(px(space::L)).when(customized, |d| {
-                            d.child(Button::new(SharedString::from(format!("rst-{}", a.id()))).ghost().small().icon(menu_icon("rotate-ccw")).tooltip(trf("Zurücksetzen auf %@", &[&default])).on_click(cx.listener(move |s, _, _, cx| {
-                                let before = ShortcutAction::snapshot();
-                                s.last_changed = Some(a);
-                                a.reset();
-                                super::app::bind_keys(cx);
-                                let text = changed(a, cx);
-                                s.offer_undo(before, text, cx);
-                                cx.notify();
-                            })))
+                        .child(div().flex_none().w(px(if any_custom { control::S + space::S + space::L } else { space::L })).pl(px(if any_custom { space::S } else { 0. })).pr(px(space::L)).when(customized, |d| {
+                            d.child(icon_button(SharedString::from(format!("rst-{}", a.id())), "rotate-ccw", trf("Zurücksetzen auf %@", &[&default]), false, t, {
+                                let this = cx.entity();
+                                move |_, cx| {
+                                    this.update(cx, |s, cx| {
+                                        let before = ShortcutAction::snapshot();
+                                        s.last_changed = Some(a);
+                                        a.reset();
+                                        super::app::bind_keys(cx);
+                                        let text = changed(a, cx);
+                                        s.offer_undo(before, text, cx);
+                                        cx.notify();
+                                    });
+                                }
+                            }))
                         }))
                         .into_any_element(),
                 );
             }
             col = col.child(section(Some(g.label()), None, rows, t));
         }
-        let scroller = div().id("sc-scroll").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.page).p(px(space::XL));
+        let scroller = div().id("sc-scroll").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.page()).p(px(space::XL));
         if !shown {
-            let filter_field = self.filter.clone();
+            let search = self.search.clone();
             col = col.child(
                 unavailable("search", trf("Keine Treffer für „%@“", &[&query]), "", t)
                     .h(px(240.))
-                    .child(Button::new("sc-clear-filter").label(tr("Filter zurücksetzen")).on_click(cx.listener(move |_, _, window, cx| filter_field.update(cx, |f, cx| f.set_value("", window, cx))))),
+                    .child(Button::new("sc-clear-filter").label(tr("Suche zurücksetzen")).on_click(cx.listener(move |_, _, window, cx| search.update(cx, |f, cx| f.set_value("", window, cx))))),
             );
         }
         div().size_full().flex().flex_col().child(header).child(scroller.child(col))
@@ -2878,32 +3008,32 @@ impl Render for Settings {
         }
         if cx.try_global::<OpenOnSync>().is_some_and(|o| o.0) {
             cx.set_global(OpenOnSync(false));
-            self.tab = Tab::Sync;
+            self.go(Tab::Sync);
         }
         if let Some(label) = cx.try_global::<OpenLit>().and_then(|o| o.0.clone()) {
             cx.set_global(OpenLit(None));
             if let Some((_, tab)) = SEARCHABLE.iter().find(|(k, _)| *k == label) {
-                self.tab = *tab;
+                self.go(*tab);
                 self.search.update(cx, |s, cx| s.set_value("", window, cx));
                 self.light_up(tr(&label), window, cx);
             }
         }
         if cx.try_global::<OpenOnAi>().is_some_and(|o| o.0) {
             cx.set_global(OpenOnAi(false));
-            self.tab = Tab::Ai;
+            self.go(Tab::Ai);
         }
         let t = Theme::get(cx);
         let config = state::read(cx, |l| l.config.clone());
         let tabs = self.tab_bar(window, &t, cx);
         let searching = !self.search.read(cx).value().trim().is_empty();
-        let page = self.page.clone();
+        let page = self.page();
         let body: AnyElement = match (config, self.tab) {
-            _ if searching => self.search_results(&t, cx),
+            _ if searching && self.tab != Tab::Shortcuts => self.search_results(&t, cx),
             (_, Tab::Notes) => div().id("notes-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.notes(window, cx, &t)).into_any_element(),
             (_, Tab::Cards) => div().id("cards-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.cards_tab(&t)).into_any_element(),
             (_, Tab::Sync) => div().id("sync-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.sync_tab(cx, &t)).into_any_element(),
             (_, Tab::Ai) => div().id("ai-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.ai_tab(window, cx, &t)).into_any_element(),
-            (_, Tab::Shortcuts) => self.shortcuts(&t, window, cx).into_any_element(),
+            (_, Tab::Shortcuts) => self.shortcuts(&t, cx).into_any_element(),
             (None, _) => unavailable("folder", tr("Kein Ordner gewählt"), tr("Wähle zuerst im Hauptfenster deinen Studienordner."), &t).into_any_element(),
             (Some(c), Tab::General) => div().id("general-scroll").size_full().overflow_y_scroll().track_scroll(&page).p(px(space::XL)).child(self.general(&c, window, cx, &t)).into_any_element(),
             (Some(c), Tab::Semester) => self.semesters(&c, window, cx, &t).into_any_element(),
@@ -2919,10 +3049,7 @@ impl Render for Settings {
             .on_action(|_: &super::app::CloseTab, window, _| window.remove_window())
             .on_key_down(cx.listener(|s, e: &KeyDownEvent, window, cx| {
                 if s.recording.is_none() && e.keystroke.key == "escape" {
-                    let filter_focused = s.filter.read(cx).focus_handle(cx).is_focused(window);
-                    if filter_focused && !s.filter.read(cx).value().is_empty() {
-                        s.filter.update(cx, |f, cx| f.set_value("", window, cx));
-                    } else if window.context_stack().iter().any(|c| c.contains("Input")) {
+                    if window.context_stack().iter().any(|c| c.contains("Input")) {
                         window.focus(&s.focus, cx);
                     } else if s.tab == Tab::Shortcuts && s.notice.is_some() {
                         s.close_notice(window, cx);
@@ -2943,17 +3070,17 @@ impl Render for Settings {
             .text_color(t.primary)
             .capture_key_down(cx.listener(|s, e: &KeyDownEvent, window, cx| {
                 if !s.search.read(cx).value().trim().is_empty() {
+                    let listing = s.tab != Tab::Shortcuts;
                     match e.keystroke.key.as_str() {
-                        "down" => s.hit = (s.hit + 1).min(s.matches(cx).len().saturating_sub(1)),
-                        "up" => s.hit = s.hit.saturating_sub(1),
+                        "down" if listing => s.hit = (s.hit + 1).min(s.matches(cx).len().saturating_sub(1)),
+                        "up" if listing => s.hit = s.hit.saturating_sub(1),
                         "escape" => s.search.update(cx, |f, cx| f.set_value("", window, cx)),
                         _ => return,
                     }
                     cx.stop_propagation();
                     cx.notify();
                 } else if e.keystroke.key == "f" && e.keystroke.modifiers.secondary(cx) {
-                    let field = if s.tab == Tab::Shortcuts { s.filter.clone() } else { s.search.clone() };
-                    field.update(cx, |f, cx| f.focus(window, cx));
+                    s.search.update(cx, |f, cx| f.focus(window, cx));
                     cx.stop_propagation();
                 }
             }))

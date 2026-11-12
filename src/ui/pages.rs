@@ -11,7 +11,7 @@ use super::preview::FilePreview;
 use super::record::{self, RecordState};
 use super::state::{self, act};
 use super::motion::Soft;
-use super::theme::{Theme, control, font, space, iconsize, radius, tab};
+use super::theme::{Theme, control, font, hover, space, iconsize, radius, tab};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::tr;
@@ -194,7 +194,6 @@ impl Pages {
                 .children(entries.into_iter().map(|a| {
                     let id = a.id.clone();
                     let color = t.palette(lib.module(a).map_or("blue", |m| m.color.as_str()));
-                    let hover = t.ink.opacity(0.06);
                     div()
                         .id(SharedString::from(format!("entry-{}", a.id)))
                         .flex()
@@ -204,9 +203,9 @@ impl Pages {
                         .py(px(space::XS))
                         .rounded(px(radius::INNER))
                         .cursor_pointer().key_nav()
-                        .soft(hover, radius::INNER)
+                        .soft(t.ink.opacity(hover::ROW), radius::INNER)
                         .text_size(px(font::CAPTION))
-                        .tooltip(tip(tr("Details öffnen")))
+                        .tip(tr("Details öffnen"))
                         .child(div().size(px(space::S)).rounded_full().bg(color))
                         .child(div().truncate().max_w(px(220.)).child(a.title.clone()))
                         .child(div().text_color(t.secondary).child(day::day_label(a.due, lib.now)))
@@ -405,7 +404,7 @@ impl Pages {
     /// Makes a note in the folder chosen in the explorer, like its own new-note button, when the explorer is shown and was used after the open note.
     /// False where there is nothing to ask: the caller then names the note in a sheet or beside the open note.
     pub fn new_note_in_explorer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(page) = self.notes_page.clone().filter(|_| Self::explorer_shown(self.width)) else { return false };
+        let Some(page) = self.notes_page.clone().filter(|_| Self::explorer_shown(self.width, window)) else { return false };
         let newer = match state::read(cx, |l| l.route().clone()) {
             Route::Notes => true,
             Route::Doc(_) => page.read(cx).has_focus(window, cx),
@@ -419,8 +418,8 @@ impl Pages {
     }
 
     /// The notes room: the workspace's files beside whatever note is shown.
-    fn explorer_shown(width: f32) -> bool {
-        !crate::core::prefs::get().notes_explorer_hidden && width >= super::theme::explorer::MIN + super::theme::explorer::NOTE_MIN
+    fn explorer_shown(width: f32, window: &Window) -> bool {
+        super::notes_page::explorer_wanted(f32::from(window.viewport_size().width)) && width >= super::theme::explorer::MIN + super::theme::explorer::NOTE_MIN
     }
 
     fn with_explorer(&mut self, body: AnyElement, width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -429,7 +428,7 @@ impl Pages {
             return body;
         }
         let page = self.notes_page.get_or_insert_with(|| cx.new(|cx| super::notes_page::NotesPage::new(window, cx))).clone();
-        let shown = Self::explorer_shown(width);
+        let shown = Self::explorer_shown(width, window);
         let fading = self.shown_route.as_ref().is_none_or(|(_, at)| at.elapsed() <= super::motion::timed(super::motion::FAST, cx) + super::motion::FAST);
         page.update(cx, |p, _| p.fit(width));
         let mut slot = div().w(px(page.read(cx).outer_width())).h_full().flex_none();
@@ -494,7 +493,7 @@ impl Pages {
                     .child(div().flex_none().min_w_0().h_full().overflow_hidden().w(relative(self.split_share)).capture_any_mouse_down(|_, _, cx| set_beside_active(false, cx)).child(view))
                     .child(div().h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator))
                     .child(div().flex_1().min_w_0().h_full().overflow_hidden().capture_any_mouse_down(|_, _, cx| set_beside_active(true, cx)).on_action(move |_: &super::app::CloseTab, _, cx| super::documents::close_tab(&closing, cx)).child(right))
-                    .child(div().id("doc-split").absolute().top_0().bottom_0().left(relative(self.split_share)).w(px(tab::SPLIT_GRIP)).cursor_col_resize().soft_edge(accent.opacity(0.06), 0., accent.opacity(0.3), space::XS).on_click(cx.listener(|p, e: &ClickEvent, _, cx| {
+                    .child(div().id("doc-split").absolute().top_0().bottom_0().left(relative(self.split_share)).w(px(tab::SPLIT_GRIP)).cursor_col_resize().soft_edge(accent.opacity(hover::ROW), 0., accent.opacity(0.3), space::XS).on_click(cx.listener(|p, e: &ClickEvent, _, cx| {
                         if e.click_count() >= 2 {
                             p.split_share = 0.5;
                             crate::core::prefs::update(|prefs| prefs.split_share = 0.5);
@@ -674,7 +673,7 @@ impl Render for Pages {
         let view = cx.entity();
         let width = self.width;
         let route = lib.read(cx).route().clone();
-        if !Self::explorer_shown(width) && lib.read(cx).rename_request.is_some() {
+        if !Self::explorer_shown(width, window) && lib.read(cx).rename_request.is_some() {
             if let Some(path) = lib.update(cx, |l, _| l.rename_request.take()) {
                 window.defer(cx, move |window, cx| super::rename_sheet::open(path, window, cx));
             }

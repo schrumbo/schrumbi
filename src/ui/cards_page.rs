@@ -12,9 +12,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::markdown_view::{self, ParsedNote};
-use super::motion::{Soft, chevron};
+use super::motion::{self, Soft, chevron, row_fill};
 use super::state::{self, act};
-use super::theme::{Theme, control, font, iconsize, radius, space};
+use super::theme::{Theme, control, font, hover, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::cards::fsrs::{self, Rating};
 use crate::core::cards::{self, Card, CardKind, Counts, Phase};
@@ -147,6 +147,7 @@ pub struct CardsPage {
     cached: Option<((usize, u64, u64, i64, String, Filter, Order, String), Rc<Vec<usize>>, [usize; 6])>,
     decks: Option<((u64, Vec<String>, String), Rc<Vec<DeckRow>>)>,
     all: Arc<Vec<Card>>,
+    more_syntax: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -326,7 +327,7 @@ impl CardsPage {
             cx.observe(&state::lib(cx), |_, _, cx| cx.notify()),
         ];
         let saved = prefs::get();
-        Self { deck: saved.card_deck, open: saved.card_open.into_iter().collect(), session: None, query, filter: Filter::All, order: Order::Note, selected: None, selected_place: None, marked: BTreeSet::new(), zone: Zone::Cards, preview: None, focus: cx.focus_handle(), list_scroll: UniformListScrollHandle::new(), deck_scroll: UniformListScrollHandle::new(), review_scroll: ScrollHandle::new(), cached: None, decks: None, all: Arc::new(Vec::new()), _subs: subs }
+        Self { deck: saved.card_deck, open: saved.card_open.into_iter().collect(), session: None, query, filter: Filter::All, order: Order::Note, selected: None, selected_place: None, marked: BTreeSet::new(), zone: Zone::Cards, preview: None, focus: cx.focus_handle(), list_scroll: UniformListScrollHandle::new(), deck_scroll: UniformListScrollHandle::new(), review_scroll: ScrollHandle::new(), cached: None, decks: None, all: Arc::new(Vec::new()), more_syntax: false, _subs: subs }
     }
 
     /// Takes the keyboard, so the keys of the page work right away.
@@ -918,7 +919,6 @@ impl CardsPage {
         let deck_zone = self.zone == Zone::Decks;
         let ring = t.accent;
         let all_counts = cards::counts("", now);
-        let hover = t.ink.opacity(0.05);
         let total = self.all.len();
         let head = div()
             .id("deck-all")
@@ -931,13 +931,13 @@ impl CardsPage {
             .cursor_pointer()
             .text_size(px(font::CALLOUT))
             .font_weight(FontWeight::MEDIUM)
-            .when(current.is_empty(), |d| d.bg(t.ink.opacity(0.08)))
+            .when(current.is_empty(), |d| d.relative().child(row_fill(t.ink.opacity(0.08))))
             .when(current.is_empty() && deck_zone, |d| d.border_l_2().border_color(ring))
-            .when(!current.is_empty(), |d| d.soft(hover, 0.))
+            .when(!current.is_empty(), |d| d.soft_row(t.ink.opacity(hover::ROW)))
             .child(icon("layers", iconsize::S, t.secondary))
             .child(div().flex_1().min_w_0().truncate().child(tr("Alle Karten")))
             .child(counts_pills(all_counts, t))
-            .tooltip(tip(deck_help(total, all_counts)))
+            .tip(deck_help(total, all_counts))
             .on_click(cx.listener(|p, _, _, cx| {
                 p.zone = Zone::Decks;
                 p.select_deck(String::new(), cx)
@@ -946,7 +946,6 @@ impl CardsPage {
         let lines = list.clone();
         let tree = uniform_list("deck-tree", count, move |range, _, cx| {
             let t = Theme::get(cx);
-            let hover = t.ink.opacity(0.05);
             let now = cards::now();
             range
                 .map(|i| {
@@ -974,9 +973,9 @@ impl CardsPage {
                         .gap(px(space::XS))
                         .cursor_pointer()
                         .text_size(px(font::CALLOUT))
-                        .when(active, |d| d.bg(t.ink.opacity(0.08)))
+                        .when(active, |d| d.relative().child(row_fill(t.ink.opacity(0.08))))
                         .when(in_zone, |d| d.border_l_2().border_color(t.accent))
-                        .when(!active, |d| d.soft(hover, 0.))
+                        .when(!active, |d| d.soft_row(t.ink.opacity(hover::ROW)))
                         .on_mouse_down(MouseButton::Right, move |_, _, cx| right_me.update(cx, |p, cx| p.select_deck(right_deck.clone(), cx)))
                         .child(if row.has_children {
                             div()
@@ -988,7 +987,7 @@ impl CardsPage {
                                 .justify_center()
                                 .cursor_pointer()
                                 .rounded(px(radius::SMALL))
-                                .soft(t.ink.opacity(0.08), radius::SMALL)
+                                .soft(t.ink.opacity(hover::CONTROL), radius::SMALL)
                                 .child(chevron(("deck-chevron", i), row.open, t.secondary))
                                 .on_click(move |_, _, cx| {
                                     cx.stop_propagation();
@@ -1001,7 +1000,7 @@ impl CardsPage {
                         .child(chip)
                         .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
                         .child(counts_pills(waiting, &t))
-                        .tooltip(tip(deck_help(row.total, waiting)))
+                        .tip(deck_help(row.total, waiting))
                         .on_click(move |_, _, cx| {
                             b.update(cx, |p, cx| {
                                 p.zone = Zone::Decks;
@@ -1081,7 +1080,7 @@ impl CardsPage {
                 .justify_end()
                 .items_center()
                 .gap(px(space::XXS))
-                .tooltip(tip(if *n == 1 { trf("%@: 1 Karte", &[&day.format("%d.%m.").to_string()]) } else { trf("%@: %@ Karten", &[&day.format("%d.%m.").to_string(), &n.to_string()]) }))
+                .tip(if *n == 1 { trf("%@: 1 Karte", &[&day.format("%d.%m.").to_string()]) } else { trf("%@: %@ Karten", &[&day.format("%d.%m.").to_string(), &n.to_string()]) })
                 .child(div().text_size(px(font::CAPTION2)).text_color(t.secondary).font_features(tabular()).when(*n > 0, |d| d.child(n.to_string())))
                 .child(div().w_full().max_w(px(28.)).rounded_t(px(radius::SMALL)).h(px((share * 56.).max(if *n > 0 { 3. } else { 1. }))).bg(if i == 0 { t.accent } else if *n > 0 { t.accent.opacity(0.45) } else { t.separator }))
                 .child(div().text_size(px(font::CAPTION2)).text_color(if i == 0 { t.primary } else { t.tertiary }).child(label))
@@ -1094,6 +1093,7 @@ impl CardsPage {
         let example = |syntax: &str, meaning: String| {
             div().flex().items_center().gap(px(space::M)).px(px(space::M)).py(px(space::S)).child(div().flex_1().min_w_0().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).child(syntax.to_string())).child(div().w(px(180.)).flex_none().text_size(px(font::CALLOUT)).text_color(t.secondary).child(meaning))
         };
+        let more = self.more_syntax;
         div()
             .id("cards-empty")
             .size_full()
@@ -1113,11 +1113,33 @@ impl CardsPage {
                     .max_w(px(560.))
                     .child(example("Frage :: Antwort", tr("Eine Karte")))
                     .child(divider(t))
-                    .child(example("Begriff ::: Erklärung", tr("In beide Richtungen")))
-                    .child(divider(t))
-                    .child(example("Lange Frage\n?\nAntwort", tr("Über mehrere Zeilen")))
-                    .child(divider(t))
-                    .child(example("Der {{c1::Satz}} gilt", tr("Lückentext"))),
+                    .child(example("Der {{c1::Satz}} gilt", tr("Lückentext")))
+                    .child(motion::reveal(
+                        "cards-more-syntax",
+                        more,
+                        div().child(divider(t)).child(example("Begriff ::: Erklärung", tr("In beide Richtungen"))).child(divider(t)).child(example("Lange Frage\n?\nAntwort", tr("Über mehrere Zeilen"))),
+                    )),
+            )
+            .child(
+                div()
+                    .id("cards-more-syntax-toggle")
+                    .h(px(control::S))
+                    .px(px(space::S))
+                    .flex()
+                    .items_center()
+                    .gap(px(space::XS))
+                    .rounded(px(radius::INNER))
+                    .cursor_pointer()
+                    .key_nav()
+                    .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
+                    .text_size(px(font::CALLOUT))
+                    .text_color(t.secondary)
+                    .child(chevron("cards-more-syntax-chevron", more, t.secondary))
+                    .child(tr("Mehr Schreibweisen"))
+                    .on_click(cx.listener(|p, _, _, cx| {
+                        p.more_syntax = !p.more_syntax;
+                        cx.notify();
+                    })),
             )
             .child(
                 div()
@@ -1131,7 +1153,6 @@ impl CardsPage {
 
     #[allow(clippy::too_many_arguments)]
     fn card_row(card: &Card, i: usize, selected: bool, marked: bool, now: i64, me: Entity<Self>, t: &Theme) -> AnyElement {
-        let hover = t.ink.opacity(0.05);
         let id = card.id().to_string();
         let status: (String, Hsla) = if card.suspended() {
             (tr("Pausiert"), t.tertiary)
@@ -1161,9 +1182,9 @@ impl CardsPage {
             .gap(px(space::S))
             .cursor_pointer()
             .text_size(px(font::CALLOUT))
-            .when(marked, |d| d.bg(t.accent.opacity(0.18)))
-            .when(selected && !marked, |d| d.bg(t.ink.opacity(0.08)))
-            .when(!selected && !marked, |d| d.soft(hover, 0.))
+            .when(marked, |d| d.relative().child(row_fill(t.accent.opacity(0.18))))
+            .when(selected && !marked, |d| d.relative().child(row_fill(t.ink.opacity(0.08))))
+            .when(!selected && !marked, |d| d.soft_row(t.ink.opacity(hover::ROW)))
             .child(icon(cards::kind_icon(card.raw.kind), iconsize::S, t.tertiary))
             .child(div().flex_1().min_w_0().truncate().when(quiet, |d| d.text_color(t.tertiary)).child(cards::plain_text(&card.raw.front)))
             .child(caption(name, t).flex_none().max_w(px(140.)).truncate())
@@ -1432,7 +1453,7 @@ impl CardsPage {
         let current_order = self.order;
         let filters = div().flex().flex_wrap().gap(px(space::XXS)).children(Filter::ALL.iter().enumerate().filter(|(slot, f)| **f == Filter::All || **f == current_filter || amounts[*slot] > 0).map(|(slot, f)| {
             let (f, on) = (*f, *f == current_filter);
-            div().id(SharedString::from(format!("filter-{f:?}"))).px(px(space::S)).h(px(control::S)).flex().items_center().rounded(px(radius::INNER)).cursor_pointer().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.1))).when(!on, |d| d.text_color(t.secondary).soft(t.ink.opacity(0.05), radius::INNER)).child(f.label()).when(f != Filter::All, |d| d.child(div().ml(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.tertiary).font_features(tabular()).child(amounts[slot].to_string()))).on_click(cx.listener(move |p, _, window, cx| {
+            div().id(SharedString::from(format!("filter-{f:?}"))).px(px(space::S)).h(px(control::S)).flex().items_center().rounded(px(radius::INNER)).cursor_pointer().key_nav().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.1))).when(!on, |d| d.text_color(t.secondary).soft(t.ink.opacity(hover::CONTROL), radius::INNER)).child(f.label()).when(f != Filter::All, |d| d.child(div().ml(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.tertiary).font_features(tabular()).child(amounts[slot].to_string()))).on_click(cx.listener(move |p, _, window, cx| {
                 p.filter = f;
                 p.clear_selection();
                 window.focus(&p.focus, cx);
@@ -1601,7 +1622,6 @@ impl CardsPage {
                 .child(div().w(px(STUDY_WIDTH)).max_w_full().flex().gap(px(space::XS)).children(Rating::ALL.iter().enumerate().filter(|(_, r)| !cramming || matches!(r, Rating::Again | Rating::Good)).map(|(i, rating)| {
                     let rating = *rating;
                     let color = colors[i];
-                    let hover = color.opacity(0.16);
                     div()
                         .id(("rate", i))
                         .flex_1()
@@ -1618,9 +1638,9 @@ impl CardsPage {
                         .bg(color.opacity(if rating == Rating::Good { 0.16 } else { 0.07 }))
                         .cursor_pointer()
                         .key_nav()
-                        .soft(hover, radius::CONTROL)
-                        .when(rating == Rating::Good, |d| d.tooltip(tip(tr("Gut (3 oder Leertaste)"))))
-                        .when(!cramming, |d| d.child(div().text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child({ cards::wait_label(now, choices[i].due) })))
+                        .soft(color.opacity(hover::RAISED), radius::CONTROL)
+                        .when(rating == Rating::Good, |d| d.tip(tr("Gut (3 oder Leertaste)")))
+                        .when(!cramming, |d| d.child(div().text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child(cards::wait_label(now, choices[i].due))))
                         .child(div().flex().items_start().gap(px(space::XS)).child(div().text_size(px(font::BODY)).line_height(px(line)).font_weight(FontWeight::SEMIBOLD).text_color(t.readable(color)).child(if cramming && rating == Rating::Good { tr("Gewusst") } else { rating_name(rating) })).child(div().relative().top(px(drop)).text_size(px(font::CAPTION2)).line_height(px(line)).text_color(t.tertiary).child((i + 1).to_string())))
                         .on_click(cx.listener(move |p, e: &ClickEvent, _, cx| {
                             if e.click_count() <= 1 {
@@ -1654,7 +1674,7 @@ impl CardsPage {
                         .font_weight(FontWeight::SEMIBOLD)
                         .cursor_pointer()
                         .key_nav()
-                        .soft(t.on_accent.opacity(0.14), radius::CONTROL)
+                        .soft(t.on_accent.opacity(hover::RAISED), radius::CONTROL)
                         .child(tr("Antwort zeigen"))
                         .child(div().text_size(px(font::CAPTION)).opacity(0.75).child(tr("Leertaste")))
                         .on_click(cx.listener(|p, _, _, cx| p.reveal(cx))),
@@ -2175,7 +2195,7 @@ impl Render for CardComposer {
         let kinds = [(ComposeKind::Basic, tr("Eine Richtung"), "file-question"), (ComposeKind::Both, tr("Beide Richtungen"), "repeat-2"), (ComposeKind::Cloze, tr("Lückentext"), "scan")];
         let switch = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS)).children(kinds.into_iter().map(|(k, label, name)| {
             let on = k == kind;
-            div().id(SharedString::from(format!("kind-{name}"))).h(px(control::S)).px(px(space::S)).flex().items_center().gap(px(space::XS)).rounded(px(radius::SMALL)).when(!on, |d| d.soft(t.ink.opacity(0.06), radius::SMALL)).cursor_pointer().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.12))).child(icon(name, iconsize::S, if on { t.primary } else { t.secondary })).child(label).on_click(cx.listener(move |c, _, _, cx| {
+            div().id(SharedString::from(format!("kind-{name}"))).h(px(control::S)).px(px(space::S)).flex().items_center().gap(px(space::XS)).rounded(px(radius::SMALL)).when(!on, |d| d.soft(t.ink.opacity(hover::CONTROL), radius::SMALL)).cursor_pointer().key_nav().text_size(px(font::CALLOUT)).when(on, |d| d.bg(t.ink.opacity(0.12))).child(icon(name, iconsize::S, if on { t.primary } else { t.secondary })).child(label).on_click(cx.listener(move |c, _, _, cx| {
                 c.kind = k;
                 c.refresh_preview(cx);
             }))
@@ -2419,7 +2439,7 @@ impl Render for CardImport {
         let t = Theme::get(cx);
         let name = self.path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let body: AnyElement = if let Some(error) = &self.error {
-            div().flex().items_center().gap(px(space::S)).text_color(t.red).child(icon("triangle-alert", iconsize::S, t.red)).child(div().flex_1().child(error.clone())).into_any_element()
+            div().flex().items_center().gap(px(space::S)).text_color(t.red_text).child(icon("triangle-alert", iconsize::S, t.red)).child(div().flex_1().child(error.clone())).into_any_element()
         } else if let Some(package) = &self.package {
             let decks = package.decks.len();
             let summary = [
@@ -2441,7 +2461,7 @@ impl Render for CardImport {
                 .child(div().font_weight(FontWeight::MEDIUM).child(summary))
                 .child(div().id("import-decks").max_h(px(180.)).overflow_y_scrollbar().rounded(px(radius::CONTROL)).border_1().border_color(t.separator).child(list))
                 .child(div().flex().items_center().gap(px(space::M)).child(div().flex_1().child(tr("Zielordner"))).child(div().w(px(200.)).child(Input::new(&self.folder).small())))
-                .when(self.folder_outside(cx), |d| d.child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red).child(icon("triangle-alert", iconsize::XS, t.red)).child(tr("Der Zielordner muss im Studienordner liegen."))))
+                .when(self.folder_outside(cx), |d| d.child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red_text).child(icon("triangle-alert", iconsize::XS, t.red)).child(tr("Der Zielordner muss im Studienordner liegen."))))
                 .when(with_progress > 0, |d| {
                     d.child(
                         div()

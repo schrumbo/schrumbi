@@ -13,7 +13,7 @@ use super::drive::Mark;
 use super::history::VersionList;
 use super::motion::{Soft, chevron, reveal};
 use super::state::{self, act};
-use super::theme::{Theme, control, font, iconsize, radius, space};
+use super::theme::{Theme, annot, control, font, hover, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::markdown;
@@ -53,7 +53,7 @@ impl DocSide {
     }
 
     fn tab(&self, id: &'static str, label: String, side: Side, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let hover = t.ink.opacity(0.05);
+        let hover = t.ink.opacity(hover::ROW);
         let selected = self.side == side;
         div()
             .id(id)
@@ -67,7 +67,7 @@ impl DocSide {
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
             .key_nav()
-            .when(selected, |d| d.bg(t.ink.opacity(0.08)).soft(t.ink.opacity(0.04), radius::INNER))
+            .when(selected, |d| d.bg(t.ink.opacity(annot::ROW_ACTIVE)).soft(hover, radius::INNER))
             .when(!selected, |d| d.soft(hover, radius::INNER).text_color(t.secondary))
             .child(label)
             .on_click(cx.listener(move |s, _, _, cx| s.show(side, cx)))
@@ -88,7 +88,7 @@ impl DocSide {
                     .gap(px(space::XS))
                     .cursor_pointer()
                     .key_nav()
-                    .soft(t.ink.opacity(0.045), 0.)
+                    .soft_row(t.ink.opacity(hover::ROW))
                     .text_size(px(font::CAPTION))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(t.secondary)
@@ -106,7 +106,7 @@ impl DocSide {
     }
 
     fn mention_rows(&mut self, key: &'static str, list: &[Mention], name: &str, linkable: bool, t: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let hover = t.ink.opacity(0.05);
+        let hover = t.ink.opacity(hover::ROW);
         let limit = self.mentions_shown;
         let more = list.len().saturating_sub(limit);
         let rows = list.iter().take(limit).enumerate().map(|(i, m)| {
@@ -127,13 +127,14 @@ impl DocSide {
             });
             div()
                 .id((key, i))
+                .w_full()
                 .px(px(space::L))
                 .py(px(space::XS))
                 .flex()
                 .flex_col()
                 .cursor_pointer()
                 .key_nav()
-                .soft(hover, 0.)
+                .soft_row(hover)
                 .child(div().flex().items_center().gap(px(space::S)).child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::MEDIUM).text_size(px(font::CALLOUT)).child(file)).children(turn_into_link))
                 .child(div().text_size(px(font::CAPTION)).text_color(t.secondary).max_h(px(60.)).overflow_hidden().child(super::markdown_view::render(&note, m.source.parent(), None, t)))
                 .on_click(move |_, _, cx| open_at(&open, line, cx))
@@ -152,7 +153,7 @@ impl DocSide {
         let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
         let backlinks = vault.backlinks.get(path).cloned().unwrap_or_default();
         let facts = vault.notes.get(path).cloned().unwrap_or_default();
-        let hover = t.ink.opacity(0.05);
+        let hover = t.ink.opacity(hover::ROW);
         let from = path.to_path_buf();
         let mut existing = Vec::new();
         let mut missing = Vec::new();
@@ -190,7 +191,7 @@ impl DocSide {
                 Vec::new()
             }
         };
-        let mut list = div().flex().flex_col().py(px(space::S));
+        let mut list = div().w_full().flex().flex_col().py(px(space::S));
         let around = path.to_path_buf();
         if let Some(mini) = mini_graph(path, &vault, t) {
             list = list.child(mini);
@@ -214,13 +215,14 @@ impl DocSide {
         if !existing.is_empty() {
             let count = existing.len();
             let body = div()
+                .w_full()
                 .flex()
                 .flex_col()
                 .children(existing.into_iter().enumerate().map(|(i, (shown, target, sub))| {
                     let destination = format!("{}{sub}", vault.link_path(Some(&from), &target));
                     let source = from.clone();
                     let icon_target = target.clone();
-                    file_row(("outgoing", i), &icon_target, shown, t).px(px(space::L)).on_click(move |_, _, cx| {
+                    file_row(("outgoing", i), &icon_target, shown, t).w_full().px(px(space::L)).on_click(move |_, _, cx| {
                         let (d, s) = (destination.clone(), source.clone());
                         act(cx, |l| {
                             l.open_link(&d, Some(&s));
@@ -233,11 +235,12 @@ impl DocSide {
         if !missing.is_empty() {
             let count = missing.len();
             let body = div()
+                .w_full()
                 .flex()
                 .flex_col()
                 .children(missing.into_iter().enumerate().map(|(i, (shown, _))| {
                     let (destination, source) = (shown.clone(), from.clone());
-                    div().px(px(space::L)).h(px(control::M)).flex().items_center().gap(px(space::S)).child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.tertiary).child(shown)).child(Button::new(("create-missing", i)).ghost().small().label(tr("Anlegen")).on_click(move |_, _, cx| {
+                    div().w_full().px(px(space::L)).h(px(control::M)).flex().items_center().gap(px(space::S)).child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.tertiary).child(shown)).child(Button::new(("create-missing", i)).ghost().small().label(tr("Anlegen")).on_click(move |_, _, cx| {
                         let (d, s) = (destination.clone(), source.clone());
                         act(cx, |l| l.create_link_target(&d, Some(&s)));
                     }))
@@ -270,11 +273,12 @@ impl DocSide {
             let count = facts.headings.len();
             let source = from.clone();
             let body = div()
+                .w_full()
                 .flex()
                 .flex_col()
                 .children(facts.headings.iter().enumerate().map(|(i, (level, h, line))| {
                     let (open, line) = (source.clone(), *line);
-                    div().id(("outline", i)).h(px(control::S)).pl(px(space::L + (*level as f32 - 1.) * space::M)).pr(px(space::M)).flex().items_center().cursor_pointer().key_nav().soft(hover, 0.).child(div().truncate().text_size(px(font::CALLOUT)).child(h.clone())).on_click(move |_, _, cx| open_at(&open, line, cx))
+                    div().id(("outline", i)).w_full().h(px(control::S)).pl(px(space::L + (*level as f32 - 1.) * space::M)).pr(px(space::M)).flex().items_center().cursor_pointer().key_nav().soft_row(hover).child(div().truncate().text_size(px(font::CALLOUT)).child(h.clone())).on_click(move |_, _, cx| open_at(&open, line, cx))
                 }))
                 .into_any_element();
             list = list.child(self.section("side-outline", tr("Gliederung"), count, body, t, cx));
@@ -284,11 +288,12 @@ impl DocSide {
             let count = footnotes.len();
             let source = from.clone();
             let body = div()
+                .w_full()
                 .flex()
                 .flex_col()
                 .children(footnotes.into_iter().enumerate().map(|(i, (label, text, line))| {
                     let open = source.clone();
-                    div().id(("footnote", i)).px(px(space::L)).py(px(space::XS)).flex().gap(px(space::S)).cursor_pointer().key_nav().soft(hover, 0.).child(caption(label, t).flex_none()).child(div().flex_1().min_w_0().text_size(px(font::CALLOUT)).line_clamp(2).child(text)).on_click(move |_, _, cx| open_at(&open, line, cx))
+                    div().id(("footnote", i)).w_full().px(px(space::L)).py(px(space::XS)).flex().gap(px(space::S)).cursor_pointer().key_nav().soft_row(hover).child(caption(label, t).flex_none()).child(div().flex_1().min_w_0().text_size(px(font::CALLOUT)).line_clamp(2).child(text)).on_click(move |_, _, cx| open_at(&open, line, cx))
                 }))
                 .into_any_element();
             list = list.child(self.section("side-footnotes", tr("Fußnoten"), count, body, t, cx));
@@ -462,14 +467,14 @@ impl PropertyEditor {
                     .px(px(space::S))
                     .py(px(space::XXS))
                     .rounded_full()
-                    .bg(t.ink.opacity(0.08))
+                    .bg(t.ink.opacity(annot::ROW_ACTIVE))
                     .text_size(px(font::CAPTION))
                     .cursor_pointer()
                     .key_nav()
-                    .soft(t.ink.opacity(0.08), radius::FULL)
+                    .soft(t.ink.opacity(hover::RAISED), radius::FULL)
                     .child(value.clone())
                     .child(icon("x", iconsize::XS, t.secondary))
-                    .tooltip(tip(tr("Entfernen")))
+                    .tip(tr("Entfernen"))
                     .on_click(move |_, _, cx| {
                         let mut rest = list.clone();
                         rest.remove(i);
@@ -633,28 +638,29 @@ fn module_view(module: &str, t: &Theme, cx: &App) -> AnyElement {
     if deadlines.is_empty() {
         return unavailable("circle-check", tr("Alles erledigt"), tr("In diesem Modul ist nichts mehr offen."), t).into_any_element();
     }
-    let hover = t.ink.opacity(0.05);
+    let hover = t.ink.opacity(hover::ROW);
     let rows = deadlines.into_iter().enumerate().map(|(i, a)| {
         let (done, open, module) = (a.id.clone(), a.id.clone(), a.module_id.clone());
         div()
             .id(("module-deadline", i))
+            .w_full()
             .flex()
             .items_center()
             .gap(px(space::S))
             .px(px(space::M))
             .py(px(space::XS))
             .cursor_pointer()
-            .soft(hover, 0.)
+            .soft_row(hover)
             .on_click(move |_, _, cx| {
                 act(cx, |l| {
                     l.set_route(crate::core::library::Route::Module(module.clone()));
                     l.select(Some(open.clone()));
                 });
             })
-            .child(div().id(("deadline-done", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).soft(t.ink.opacity(0.08), radius::SMALL).border_1().border_color(t.secondary).cursor_pointer().key_nav().aria_label(tr("Erledigt")).tooltip(tip(tr("Erledigt"))).on_click(move |_, _, cx| {
+            .child(div().id(("deadline-done", i)).flex_none().size(px(control::S)).mx(px(-(control::S - iconsize::S) / 2.)).flex().items_center().justify_center().rounded(px(radius::INNER)).soft(t.ink.opacity(hover::CONTROL), radius::INNER).cursor_pointer().key_nav().aria_label(tr("Erledigt")).tip(tr("Erledigt")).on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 act(cx, |l| l.toggle_done(&done));
-            }))
+            }).child(div().size(px(iconsize::S)).rounded(px(radius::SMALL)).border_1().border_color(t.secondary)))
             .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).child(a.title.clone()))
             .child(due_label(l, &a, t).flex_none())
     });
@@ -704,16 +710,16 @@ fn mini_graph(path: &Path, vault: &index::VaultIndex, t: &Theme) -> Option<AnyEl
     })
     .absolute()
     .size_full();
-    let hover = t.ink.opacity(0.12);
+    let hover = t.ink.opacity(hover::RAISED);
     let nodes = around.iter().zip(&spots).enumerate().map(|(i, ((target, _), s))| {
         let open = target.clone();
         div()
             .id(("mini-graph", i))
             .absolute()
             .left(px(s.0 - 52.))
-            .top(px(s.1 - 11.))
+            .top(px(s.1 - control::S / 2.))
             .w(px(104.))
-            .h(px(22.))
+            .h(px(control::S))
             .px(px(space::XS))
             .flex()
             .items_center()
@@ -724,7 +730,7 @@ fn mini_graph(path: &Path, vault: &index::VaultIndex, t: &Theme) -> Option<AnyEl
             .key_nav()
             .soft(hover, radius::SMALL)
             .text_size(px(font::CAPTION))
-            .tooltip(tip(target.file_stem().unwrap_or_default().to_string_lossy().to_string()))
+            .tip(target.file_stem().unwrap_or_default().to_string_lossy().to_string())
             .on_click(move |_, _, cx| act(cx, |l| l.follow_path(&open, None)))
             .child(div().truncate().child(target.file_stem().unwrap_or_default().to_string_lossy().to_string()))
     });

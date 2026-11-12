@@ -31,6 +31,8 @@ pub struct Report {
     pub pushed: bool,
     /// The remote could not be reached; everything is saved locally.
     pub offline: bool,
+    /// There is no remote; states are only saved here.
+    pub local_only: bool,
     pub too_large: Vec<String>,
     pub nested: Vec<String>,
 }
@@ -101,6 +103,8 @@ impl Git {
             return Ok(());
         }
         let before = self.head();
+        let kept = self.untracked_app_data();
+        let message = crate::core::i18n::tr("Stand vom anderen Gerät übernommen");
         if status.ahead == 0 {
             self.run_bulk(&["merge", "-q", "--ff-only", "@{u}"], None)?;
         } else {
@@ -109,16 +113,20 @@ impl Git {
                 return Err(GitError::Conflicts(conflicts.into_iter().map(|c| c.path).collect()));
             }
             if !automatic.is_empty() {
-                let resolved = self.merge_resolved(&HashMap::new(), &automatic, &crate::core::i18n::tr("Stand vom anderen Gerät übernommen"))?;
+                let resolved = self.merge_resolved(&HashMap::new(), &automatic, &message)?;
                 report.pulled.extend(resolved.pulled);
                 return Ok(());
             }
-            let message = crate::core::i18n::tr("Stand vom anderen Gerät übernommen");
-            self.run_bulk(&["merge", "-q", "-m", &message, "@{u}"], None)?;
+            if let Err(e) = self.run_bulk(&["merge", "-q", "-m", &message, "@{u}"], None) {
+                let _ = self.restore_app_data(&kept, &message);
+                return Err(e);
+            }
         }
         if let Some(before) = before {
             report.pulled.extend(self.settle_times(&before)?);
+            self.keep_app_data(&before);
         }
+        self.restore_app_data(&kept, &message)?;
         Ok(())
     }
 
@@ -167,7 +175,10 @@ impl Git {
         progress(Step::Saving);
         let status = self.preflight()?;
         self.commit_all(&status, message, deletions_allowed, &mut report)?;
-        let Some(remote) = self.remote() else { return Err(GitError::NoRemote) };
+        let Some(remote) = self.remote() else {
+            report.local_only = true;
+            return Ok(report);
+        };
         for attempt in 0..PUSH_ATTEMPTS {
             progress(Step::Fetching);
             match self.fetch() {

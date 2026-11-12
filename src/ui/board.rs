@@ -5,14 +5,14 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{Disableable, Selectable, Sizable};
+use gpui_kit::component::{Selectable, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
 use super::motion::{self, Soft};
-use super::theme::{Theme, calendar as cal, control, font, radius, space, iconsize};
-use super::widgets::{KeyNav, file_target, icon, menu_icon, section_title, status_menu, status_toggle, tabular, tip};
+use super::theme::{Theme, calendar as cal, control, font, hover, radius, space, iconsize};
+use super::widgets::{KeyNav, file_target, icon, menu_icon, section_title, status_menu, status_toggle, tabular, ButtonTip, Tip};
 use crate::core::calendar::{self, CalendarView};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Library;
@@ -113,7 +113,7 @@ fn header(l: &Library, view: CalendarView, segment: f32, t: &Theme) -> Div {
                 .gap(px(space::XXS))
                 .child(Button::new("board-prev").ghost().small().icon(menu_icon("chevron-left")).tooltip(format!("{back} (←)")).on_click(|_, _, cx| act(cx, |l| l.turn_calendar(-1))))
                 .child(Button::new("board-next").ghost().small().icon(menu_icon("chevron-right")).tooltip(format!("{forward} (→)")).on_click(|_, _, cx| act(cx, |l| l.turn_calendar(1))))
-                .child(Button::new("board-today").small().label(tr("Heute")).disabled(at_today).tooltip(format!("{} (T)", tr("Zu heute springen"))).on_click(|_, _, cx| act(cx, Library::calendar_today))),
+                .child(Button::new("board-today").small().label(tr("Heute")).when(at_today, |b| b.ghost()).tip(format!("{} (T)", tr("Zu heute springen"))).on_click(|_, _, cx| act(cx, Library::calendar_today))),
         )
         .child(
             div()
@@ -122,7 +122,7 @@ fn header(l: &Library, view: CalendarView, segment: f32, t: &Theme) -> Div {
                 .flex()
                 .items_baseline()
                 .gap(px(space::S))
-                .child(div().id("board-title").flex_none().tooltip(tip(hint)).child(section_title(title)))
+                .child(div().id("board-title").flex_none().tip(hint).child(section_title(title)))
                 .children(caption.map(|c| div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.tertiary).child(c))),
         )
         .child(segmented(view, segment, t))
@@ -153,10 +153,10 @@ fn segment_button(id: &'static str, label: String, key: &str, on: bool, view: Ca
         .items_center()
         .justify_center()
         .rounded(px(radius::INNER))
-        .soft(t.ink.opacity(0.05), radius::INNER)
+        .soft(t.ink.opacity(hover::RAISED), radius::INNER)
         .cursor_pointer()
         .key_nav()
-        .tooltip(tip(help))
+        .tip(help)
         .on_click(move |_, _, cx| act(cx, |l| l.set_calendar_view(view)))
         .child(div().text_size(px(font::CAPTION)).font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }).text_color(if on { t.primary } else { t.secondary }).child(label))
 }
@@ -242,10 +242,10 @@ fn cell(lib: &Library, d: NaiveDate, month: u32, items: &[&Assignment], first: N
         .justify_center()
         .rounded_full()
         .when(is_today, |n| n.bg(accent))
-        .soft(if is_today { t.on_accent.opacity(0.2) } else { t.ink.opacity(0.08) }, radius::FULL)
+        .soft(if is_today { t.on_accent.opacity(hover::RAISED) } else { t.ink.opacity(hover::CONTROL) }, radius::FULL)
         .cursor_pointer()
         .key_nav()
-        .tooltip(tip(tr("Woche öffnen")))
+        .tip(tr("Woche öffnen"))
         .on_click(move |_, _, cx| act(cx, |l| l.show_week_of(d)))
         .child(div().text_size(px(font::CAPTION)).font_weight(if is_today { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }).text_color(if is_today { t.on_accent } else if in_month { t.primary } else { t.tertiary }).font_features(tabular()).child(d.day().to_string()));
     div()
@@ -288,11 +288,11 @@ fn empty_area(d: NaiveDate, height: f32, t: &Theme) -> Stateful<Div> {
         .w_full()
         .h(px(height))
         .rounded(px(radius::INNER))
-        .soft(t.ink.opacity(0.04), radius::INNER)
+        .soft(t.ink.opacity(hover::ROW), radius::INNER)
         .cursor_pointer()
         .key_nav()
         .on_click(move |e, _, cx| {
-            if e.click_count() == 2 {
+            if e.click_count() == 2 || e.is_keyboard() {
                 act(cx, |l| l.show_week_of(d));
             }
         })
@@ -417,7 +417,7 @@ fn chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .cursor_pointer()
         .key_nav()
         .when(selected, |c| c.border(px(1.5)).border_color(t.accent))
-        .tooltip(tip(help))
+        .tip(help)
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(select_id.clone()))))
         .when(!closed, |c| c.on_drag(DraggedCard { id: a.id.clone(), title: a.title.clone(), tint }, |d, _, _, cx| cx.new(|_| d.clone())))
         .child(div().absolute().top(px(space::XS)).bottom(px(space::XS)).left(px(space::XS)).w(px(cal::EDGE)).rounded_full().bg(edge))
@@ -610,7 +610,7 @@ fn session_chip(m: &Module, s: &Session, t: &Theme) -> Stateful<Div> {
         .flex()
         .gap(px(space::S))
         .py(px(space::XXS))
-        .tooltip(tip(format!("{} · {} {}–{}", m.code, s.title, s.start, s.end)))
+        .tip(format!("{} · {} {}–{}", m.code, s.title, s.start, s.end))
         .child(div().w(px(cal::EDGE)).flex_none().rounded_full().bg(t.palette(&m.color).opacity(0.6)))
         .child(
             div()
@@ -664,7 +664,7 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .bg(if selected { hover_fill } else { fill })
         .soft(hover_fill, radius::CONTROL)
         .cursor_pointer().key_nav()
-        .tooltip(tip(help))
+        .tip(help)
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(select_id.clone()))))
         .when(!closed, |c| c.on_drag(DraggedCard { id: a.id.clone(), title: a.title.clone(), tint }, |d, _, _, cx| cx.new(|_| d.clone())))
         .child(edge_bar(tint.opacity(if closed { 0.35 } else { 1. })))

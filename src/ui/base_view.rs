@@ -12,7 +12,7 @@ use gpui_kit::*;
 
 use super::motion::{Soft, chevron};
 use super::state::{self, act};
-use super::theme::{Theme, control, font, iconsize, radius, space};
+use super::theme::{Theme, control, font, hover, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Change;
@@ -406,7 +406,7 @@ impl BaseView {
         range
             .filter_map(|i| {
                 let row = table.rows.get(i)?;
-                let hover = t.ink.opacity(0.05);
+                let hover = t.ink.opacity(hover::ROW);
                 let cells: Vec<AnyElement> = row.cells.iter().enumerate().map(|(c, (_, v))| self.cell(i, c, v, &row.path, &me, t)).collect();
                 Some(
                     div()
@@ -415,7 +415,7 @@ impl BaseView {
                         .flex()
                         .border_b_1()
                         .border_color(t.separator)
-                        .soft(hover, 0.)
+                        .soft_row(hover)
                         .children(cells)
                         .into_any_element(),
                 )
@@ -578,7 +578,7 @@ impl Render for BaseView {
 
 impl BaseView {
     fn head(&self, table: &Rendered, t: &Theme, cx: &mut Context<Self>) -> Div {
-        let hover = t.ink.opacity(0.05);
+        let hover = t.ink.opacity(hover::RAISED);
         div().flex().flex_none().h(px(ROW)).bg(t.secondary_bg).border_b_1().border_color(t.separator).children(table.columns.iter().enumerate().map(|(i, (label, column))| {
             let sorted = self.sort.as_ref().filter(|(c, _)| c == column).map(|(_, up)| *up);
             let (a, b, label2) = (column.clone(), column.clone(), label.clone());
@@ -592,7 +592,7 @@ impl BaseView {
                 .gap(px(space::XS))
                 .cursor_pointer()
                 .key_nav()
-                .soft(hover, 0.)
+                .soft_row(hover)
                 .text_size(px(font::CALLOUT))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(div().truncate().child(label.clone()))
@@ -609,7 +609,7 @@ impl BaseView {
         let me = cx.entity();
         match table.kind.as_str() {
             "cards" => {
-                let hover = t.ink.opacity(0.05);
+                let hover = t.ink.opacity(hover::ROW);
                 div()
                     .id("base-cards")
                     .size_full()
@@ -637,7 +637,7 @@ impl BaseView {
                     .into_any_element()
             }
             "list" => {
-                let hover = t.ink.opacity(0.05);
+                let hover = t.ink.opacity(hover::ROW);
                 div()
                     .id("base-list")
                     .size_full()
@@ -646,7 +646,7 @@ impl BaseView {
                         let open = row.path.clone();
                         let title = row.path.file_stem().unwrap_or_default().to_string_lossy().to_string();
                         let rest: Vec<String> = row.cells.iter().filter(|(_, v)| !matches!(v, Value::Null)).skip(1).map(|(_, v)| v.display()).collect();
-                        div().id(("base-line", i)).h(px(control::M)).px(px(space::L)).flex().items_center().gap(px(space::M)).cursor_pointer().key_nav().soft(hover, 0.).child(file_icon(&row.path, iconsize::S)).child(div().truncate().child(title)).child(caption(rest.join(" · "), &t).truncate()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
+                        div().id(("base-line", i)).h(px(control::M)).px(px(space::L)).flex().items_center().gap(px(space::M)).cursor_pointer().key_nav().soft_row(hover).child(file_icon(&row.path, iconsize::S)).child(div().truncate().child(title)).child(caption(rest.join(" · "), &t).truncate()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
                     })))
                     .into_any_element()
             }
@@ -669,7 +669,7 @@ impl BaseView {
                                 .gap(px(space::XS))
                                 .cursor_pointer()
                                 .key_nav()
-                                .soft(t.ink.opacity(0.045), 0.)
+                                .soft_row(t.ink.opacity(hover::RAISED))
                                 .bg(t.secondary_bg)
                                 .text_size(px(font::CALLOUT))
                                 .font_weight(FontWeight::SEMIBOLD)

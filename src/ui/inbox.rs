@@ -10,7 +10,7 @@ use gpui_kit::*;
 use super::filing_form::{FilingEvent, FilingForm};
 use super::state::{self, act};
 use super::motion::{self, Soft};
-use super::theme::{Theme, font, space, iconsize, radius};
+use super::theme::{Theme, font, hover, space, iconsize, radius};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::{tr, trf};
@@ -85,6 +85,9 @@ impl InboxPage {
             return;
         }
         if k.modifiers.platform || k.modifiers.control || k.modifiers.alt {
+            return;
+        }
+        if matches!(k.key.as_str(), "enter" | "space") && !self.focus.is_focused(window) {
             return;
         }
         match k.key.as_str() {
@@ -287,7 +290,6 @@ impl Render for InboxPage {
                 let selected = self.selection.contains(p) || (self.selection.is_empty() && i == 0);
                 let created = std::fs::metadata(p).ok().and_then(|m| m.created().or_else(|_| m.modified()).ok()).map(chrono::DateTime::<chrono::Local>::from);
                 let (e, path, menu_path) = (me.clone(), p.clone(), p.clone());
-                let hover = t.ink.opacity(0.05);
                 list = list.child(
                     div()
                         .id(SharedString::from(format!("inbox-{}", p.display())))
@@ -300,7 +302,7 @@ impl Render for InboxPage {
                         .rounded(px(radius::INNER))
                         .cursor_pointer().key_nav()
                         .when(selected, |d| d.bg(if list_focused { t.accent.opacity(0.32) } else { t.ink.opacity(0.09) }).anchor_scroll(Some(self.anchor.clone())))
-                        .when(!selected, |d| d.soft(hover, radius::INNER))
+                        .when(!selected, |d| d.soft(t.ink.opacity(hover::ROW), radius::INNER))
                         .child(file_icon(p, iconsize::L))
                         .child(
                             div()
@@ -314,7 +316,7 @@ impl Render for InboxPage {
                         )
                         .on_click(move |ev: &ClickEvent, window, cx| {
                             e.update(cx, |this, cx| window.focus(&this.focus, cx));
-                            if ev.click_count() >= 2 {
+                            if ev.click_count() >= 2 || ev.is_keyboard() {
                                 super::preview::show(&path, cx);
                                 return;
                             }

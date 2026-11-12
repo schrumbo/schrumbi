@@ -15,7 +15,7 @@ use super::browser::DraggedFile;
 use super::drive::Mark;
 use super::motion::{self, Soft, chevron};
 use super::state::{self, act};
-use super::theme::{Theme, control, explorer, font, iconsize, radius, space};
+use super::theme::{Theme, control, explorer, font, hover, iconsize, radius, space, tint};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Route;
@@ -215,6 +215,10 @@ const RENAME_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
 
 fn unlisted_rename(path: &Path, folder: &str, listed: Option<&Vec<PathBuf>>, root: &Path) -> bool {
     path.exists() && !listed.is_some_and(|f| f.iter().any(|p| p == path)) && path.parent().and_then(|d| d.strip_prefix(root).ok()).is_some_and(|d| d.to_string_lossy().replace('\\', "/") == folder)
+}
+
+fn rename_row(input: &Entity<InputState>, label_x: f32, me: &Entity<NotesPage>) -> AnyElement {
+    div().w_full().h(px(control::M)).pl(px(label_x - space::S - 1.)).pr(px(space::S)).flex().items_center().capture_action(cancel_on_escape(me)).child(Input::new(input).small()).into_any_element()
 }
 
 fn cancel_on_escape(me: &Entity<NotesPage>) -> impl Fn(&gpui_kit::component::input::Escape, &mut Window, &mut App) + 'static {
@@ -922,12 +926,12 @@ impl NotesPage {
 
     fn view_button(&self, view: View, icon_name: &'static str, label: String, badge: usize, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let on = self.view == view;
-        let hover = t.ink.opacity(0.06);
+        let hover = t.ink.opacity(hover::CONTROL);
         let accent = t.accent;
         div()
             .id(icon_name)
             .relative()
-            .size(px(control::M))
+            .size(px(control::S))
             .flex()
             .items_center()
             .justify_center()
@@ -939,7 +943,7 @@ impl NotesPage {
             .when(!on, |d| d.soft(hover, radius::INNER))
             .child(icon(icon_name, iconsize::M, if on { t.primary } else { t.secondary }))
             .when(badge > 0, |d| d.child(div().absolute().top(px(space::XXS)).right(px(space::XXS)).size(px(space::XS + space::XXS)).rounded_full().bg(accent)))
-            .tooltip(tip(if badge > 0 { format!("{label} ({badge})") } else { label }))
+            .tip(if badge > 0 { format!("{label} ({badge})") } else { label })
             .on_click(cx.listener(move |s, _, _, cx| {
                 s.view = view;
                 s.selected = None;
@@ -948,7 +952,7 @@ impl NotesPage {
     }
 
     fn line(&self, row: &Row, i: usize, active: Option<&PathBuf>, me: &Entity<Self>, t: &Theme) -> AnyElement {
-        let hover = t.ink.opacity(0.05);
+        let hover = t.ink.opacity(hover::ROW);
         let selected = self.selected.as_ref().is_some_and(|s| same_row(s, row));
         let pick = (row.clone(), me.clone());
         let base = |id: (&'static str, usize)| {
@@ -971,8 +975,8 @@ impl NotesPage {
                 .gap(px(space::XS))
                 .cursor_pointer()
                 .text_size(px(font::CALLOUT))
-                .when(selected, |d| d.bg(t.ink.opacity(0.08)).soft(t.ink.opacity(0.04), 0.))
-                .when(!selected, |d| d.soft(hover, 0.))
+                .when(selected, |d| d.child(motion::row_fill(t.ink.opacity(0.08))).soft_row(hover))
+                .when(!selected, |d| d.soft_row(hover))
         };
         let click = |row: &Row, me: &Entity<Self>| {
             let (row, me) = (row.clone(), me.clone());
@@ -985,7 +989,7 @@ impl NotesPage {
                 if let Some((renamed, input, _)) = &self.renaming
                     && *renamed == Self::folder_path(rel)
                 {
-                    return div().w_full().h(px(control::M)).pl(px(space::S + *depth as f32 * space::M + iconsize::M + space::XS)).pr(px(space::S)).flex().items_center().capture_action(cancel_on_escape(me)).child(Input::new(input).small()).into_any_element();
+                    return rename_row(input, space::S + *depth as f32 * space::M + iconsize::XS + space::XS, me);
                 }
                 let (drop_rel, menu_rel, menu_me, drop_me) = (rel.clone(), rel.clone(), me.clone(), me.clone());
                 let accent = t.accent;
@@ -1030,7 +1034,7 @@ impl NotesPage {
                         }))
                         .item(PopupMenuItem::new(super::platform::reveal_label()).icon(menu_icon("folder")).on_click(move |_, _, _| crate::core::library::reveal(&r)))
                         .separator()
-                        .item(PopupMenuItem::new(format!("{}{}", tr("Umbenennen…"), crate::core::shortcuts::ShortcutAction::RenameNote.hint())).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
+                        .item(keyed_item(tr("Umbenennen…"), Some(crate::core::shortcuts::ShortcutAction::RenameNote)).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
                             let p = rename_path.clone();
                             rename_me.update(cx, |s, cx| s.start_rename(p, window, cx));
                         }))
@@ -1045,7 +1049,7 @@ impl NotesPage {
                 if let Some((renamed, input, _)) = &self.renaming
                     && renamed == path
                 {
-                    return div().w_full().h(px(control::M)).pl(px(space::S + *depth as f32 * space::M + iconsize::M + space::XS)).pr(px(space::S)).flex().items_center().capture_action(cancel_on_escape(me)).child(Input::new(input).small()).into_any_element();
+                    return rename_row(input, space::S + *depth as f32 * space::M + iconsize::XS + space::XS + iconsize::S + space::XS, me);
                 }
                 let (menu, rename, trash, drag) = (path.clone(), path.clone(), path.clone(), path.clone());
                 let rename_me = me.clone();
@@ -1063,7 +1067,7 @@ impl NotesPage {
                         let (r, m2, x) = (rename.clone(), rename_me.clone(), trash.clone());
                         let m = deadline_submenu(file_menu(m, menu.clone()).separator(), &menu, window, cx)
                             .separator()
-                            .item(PopupMenuItem::new(format!("{}{}", tr("Umbenennen…"), crate::core::shortcuts::ShortcutAction::RenameNote.hint())).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
+                            .item(keyed_item(tr("Umbenennen…"), Some(crate::core::shortcuts::ShortcutAction::RenameNote)).icon(menu_icon("pencil")).on_click(move |_, window, cx| {
                                 let p = r.clone();
                                 m2.update(cx, |s, cx| s.start_rename(p, window, cx));
                             }))
@@ -1088,7 +1092,7 @@ impl NotesPage {
                 .pl(px(space::M))
                 .child(icon(if query.is_some() { "search" } else { "bookmark" }, iconsize::S, t.secondary))
                 .child(div().flex_1().min_w_0().truncate().child(title.clone()))
-                .tooltip(tip(tr("Lesezeichen setzt du über die Befehlspalette, sie stehen auch in Obsidian.")))
+                .tip(tr("Lesezeichen setzt du über die Befehlspalette, sie stehen auch in Obsidian."))
                 .on_click(click(row, me))
                 .into_any_element(),
             Row::Task { path, note, line, text } => {
@@ -1097,10 +1101,10 @@ impl NotesPage {
                     .mark("task", text.clone())
                     .pl(px(space::M))
                     .gap(px(space::S))
-                    .child(div().id(("task-box", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).soft(t.ink.opacity(0.08), radius::SMALL).border_1().border_color(t.secondary).cursor_pointer().aria_label(tr("Abhaken")).tooltip(tip(tr("Abhaken"))).on_click(move |_, _, cx| {
+                    .child(div().id(("task-box", i)).flex_none().size(px(control::S)).mx(px(-(control::S - iconsize::S) / 2.)).flex().items_center().justify_center().rounded(px(radius::INNER)).soft(t.ink.opacity(hover::CONTROL), radius::INNER).cursor_pointer().aria_label(tr("Abhaken")).tip(tr("Abhaken")).on_click(move |_, _, cx| {
                         cx.stop_propagation();
                         finish(&tick, line, &label, cx);
-                    }))
+                    }).child(div().size(px(iconsize::S)).rounded(px(radius::SMALL)).border_1().border_color(t.secondary)))
                     .child(div().flex_1().min_w_0().truncate().child(text.clone()))
                     .child(caption(note.clone(), t).flex_none().max_w(px(90.)).truncate())
                     .on_click(click(row, me))
@@ -1114,8 +1118,19 @@ impl NotesPage {
     }
 }
 
+static EXPLORER_OPENED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Below this window width the explorer starts collapsed; opening it by hand keeps it open for the session.
+const NARROW_WINDOW: f32 = 800.;
+
+/// Whether the explorer may show in a window this wide: not hidden by the user, and in a narrow window only after it was opened by hand.
+pub fn explorer_wanted(window_width: f32) -> bool {
+    !crate::core::prefs::get().notes_explorer_hidden && (window_width >= NARROW_WINDOW || EXPLORER_OPENED.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 /// Shows or hides the explorer beside the document.
 pub fn set_hidden(hidden: bool, cx: &mut App) {
+    EXPLORER_OPENED.store(!hidden, std::sync::atomic::Ordering::Relaxed);
     crate::core::prefs::update(|p| p.notes_explorer_hidden = hidden);
     state::lib(cx).update(cx, |_, cx| cx.notify());
 }
@@ -1232,18 +1247,18 @@ impl Render for NotesPage {
             .children(marks)
             .child(self.view_button(View::Tasks, "circle-check", tr("Aufgaben"), open_tasks, &t, cx))
             .child(div().flex_1())
-            .child(Button::new("explorer-hide").ghost().small().size(px(control::M)).icon(menu_icon("panel-left-close")).tooltip(tr("Dateien ausblenden")).on_click(|_, _, cx| set_hidden(true, cx)))
-            .child(Button::new("explorer-new").ghost().small().size(px(control::M)).icon(menu_icon("square-pen")).tooltip(format!("{}{}", tr("Neue Notiz"), crate::core::shortcuts::ShortcutAction::NewFile.hint())).on_click(cx.listener(|s, _, window, cx| s.new_note(window, cx))))
-            .child(Button::new("explorer-more").ghost().small().size(px(control::M)).icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu({
+            .child(Button::new("explorer-hide").ghost().small().size(px(control::S)).icon(menu_icon("panel-left-close")).tip(tr("Dateien ausblenden")).on_click(|_, _, cx| set_hidden(true, cx)))
+            .child(Button::new("explorer-new").ghost().small().size(px(control::S)).icon(menu_icon("square-pen")).tip(format!("{}{}", tr("Neue Notiz"), crate::core::shortcuts::ShortcutAction::NewFile.hint())).on_click(cx.listener(|s, _, window, cx| s.new_note(window, cx))))
+            .child(Button::new("explorer-more").ghost().small().size(px(control::S)).icon(menu_icon("ellipsis")).tip(tr("Mehr")).dropdown_menu({
                 let me = me.clone();
                 move |menu, _, _| {
                     let (a, b, c, d) = (me.clone(), me.clone(), me.clone(), me.clone());
                     menu.item(PopupMenuItem::new(tr("Neuer Ordner")).icon(menu_icon("folder-plus")).on_click(move |_, window, cx| a.update(cx, |s, cx| s.new_folder(None, window, cx))))
-                        .item(PopupMenuItem::new(format!("{}{}", tr("Tagesnotiz öffnen"), crate::core::shortcuts::ShortcutAction::DailyNote.hint())).icon(menu_icon("calendar")).on_click(|_, _, cx| {
+                        .item(keyed_item(tr("Tagesnotiz öffnen"), Some(crate::core::shortcuts::ShortcutAction::DailyNote)).icon(menu_icon("calendar")).on_click(|_, _, cx| {
                             act(cx, |l| l.open_daily_note());
                             state::reindex(cx);
                         }))
-                        .item(PopupMenuItem::new(format!("{}{}", tr("Graph zeigen"), crate::core::shortcuts::ShortcutAction::ShowGraph.hint())).icon(menu_icon("waypoints")).on_click(|_, _, cx| act(cx, |l| l.show_graph(None))))
+                        .item(keyed_item(tr("Graph zeigen"), Some(crate::core::shortcuts::ShortcutAction::ShowGraph)).icon(menu_icon("waypoints")).on_click(|_, _, cx| act(cx, |l| l.show_graph(None))))
                         .separator()
                         .item(PopupMenuItem::new(tr("Nach Name sortieren")).checked(order == Order::Name).on_click(move |_, _, cx| {
                             b.update(cx, |s, cx| {
@@ -1296,7 +1311,7 @@ impl Render for NotesPage {
         };
         let _ = active;
         let accent = t.accent;
-        let handle = div().id("explorer-split").occlude().absolute().top_0().bottom_0().right_0().w(px(space::XS)).flex_none().cursor_col_resize().border_r_1().border_color(t.separator).soft(accent.opacity(0.3), 0.).on_drag(ExplorerSplit, |d, _, _, cx| cx.new(|_| d.clone()));
+        let handle = div().id("explorer-split").block_mouse_except_scroll().absolute().top_0().bottom_0().right_0().w(px(control::S)).flex_none().cursor_col_resize().soft_strip(accent.opacity(tint::SELECTED_EDGE), space::XS).child(div().absolute().top_0().bottom_0().right_0().w(px(space::XS)).border_r_1().border_color(t.separator)).on_drag(ExplorerSplit, |d, _, _, cx| cx.new(|_| d.clone()));
         if self.resizing && !cx.has_active_drag() {
             self.resizing = false;
             let width = self.width;

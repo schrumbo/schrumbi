@@ -57,7 +57,7 @@ Aus `W{w}_KW{kw}` wird `W03_KW44`. Fristen in einer Pause fallen weg, Fristen an
 
 ## Leistungen
 
-{key:goRecord} zeigt Punkte und Noten.
+{key:goRecord} zeigt Punkte und Noten. {ui:Leistungen} erscheint in der Seitenleiste, sobald ein Modul Punkte oder eine Note hat; die Tastenkürzel und die Befehlspalette öffnen die Seite auch vorher.
 
 - Eine {ui:Note} setzt {ui:Bestanden} passend zum Notensystem.
 - Klick auf einen Modulnamen öffnet die Teilleistungen, etwa Klausur 60 % und Projekt 40 %.

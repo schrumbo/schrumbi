@@ -642,6 +642,9 @@ pub struct ManualAssignment {
     /// Calendar UID when imported, used to update instead of duplicate on re-import.
     #[serde(rename = "externalID", skip_serializing_if = "Option::is_none")]
     pub external_id: Option<String>,
+    /// Hours before the due date to remind; `Some(0)` for no reminder, `None` to follow the settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remind_hours: Option<i64>,
 }
 
 impl Default for ManualAssignment {
@@ -656,6 +659,7 @@ impl Default for ManualAssignment {
             upload: true,
             folder: String::new(),
             external_id: None,
+            remind_hours: None,
         }
     }
 }
@@ -846,5 +850,30 @@ mod abbreviation_tests {
         let other = unique_abbreviation("Computer Architecture 1", &taken);
         assert_ne!(other, "CA1");
         assert!(other.chars().count() <= 3);
+    }
+}
+
+#[cfg(test)]
+mod manual_tests {
+    use super::ManualAssignment;
+
+    #[test]
+    fn an_entry_without_a_reminder_choice_is_saved_as_it_was_read() {
+        let old = serde_json::to_string_pretty(&ManualAssignment::default()).unwrap();
+        assert!(!old.contains("remindHours"));
+        let read: ManualAssignment = serde_json::from_str(&old).unwrap();
+        assert_eq!(read.remind_hours, None);
+        assert_eq!(serde_json::to_string_pretty(&read).unwrap(), old);
+    }
+
+    #[test]
+    fn a_reminder_choice_is_kept_and_none_is_not_written() {
+        for hours in [0, 1, 24] {
+            let m = ManualAssignment { remind_hours: Some(hours), ..Default::default() };
+            let text = serde_json::to_string(&m).unwrap();
+            assert!(text.contains(&format!("\"remindHours\":{hours}")), "{text}");
+            let back: ManualAssignment = serde_json::from_str(&text).unwrap();
+            assert_eq!(back.remind_hours, Some(hours));
+        }
     }
 }

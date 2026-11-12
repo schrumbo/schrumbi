@@ -11,7 +11,7 @@ use gpui_kit::*;
 
 use super::state::{self, act};
 use super::motion::Soft;
-use super::theme::{Theme, font, radius, space, iconsize};
+use super::theme::{Theme, font, hover, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::filing::FileRole;
@@ -179,9 +179,9 @@ fn file_line(path: &std::path::Path, extra: Vec<(String, Box<dyn Fn(&mut App)>)>
         .items_center()
         .gap(px(space::S))
         .py(px(space::XXS))
-        .rounded(px(radius::SMALL))
-        .soft(t.ink.opacity(0.05), radius::SMALL)
-        .tooltip(tip(tr("Doppelklick zum Öffnen")))
+        .rounded(px(radius::INNER))
+        .soft(t.ink.opacity(hover::ROW), radius::INNER)
+        .tip(tr("Doppelklick zum Öffnen"))
         .on_click(move |e, _, cx| {
             if e.click_count() >= 2 {
                 act(cx, |l| l.open_file(&open));
@@ -249,12 +249,12 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
     }
     let mut links = div().flex().flex_wrap().items_center().gap(px(space::S));
     if let Some(m) = module.filter(|m| m.name != m.code && !m.name.is_empty()) {
-        links = links.child(div().id("module-name").max_w_full().truncate().text_color(t.secondary).tooltip(tip(m.name.clone())).child(m.name.clone()));
+        links = links.child(div().id("module-name").max_w_full().truncate().text_color(t.secondary).tip(m.name.clone()).child(m.name.clone()));
     }
     for (i, link) in module.map(|m| m.links.clone()).unwrap_or_default().into_iter().filter(|k| k.url().is_some()).enumerate() {
         let url = link.url().map(|u| u.to_string()).unwrap_or_default();
         let label = if link.title.is_empty() { tr("Link") } else { link.title.clone() };
-        links = links.child(link_button(("link", i), label, t).flex().items_center().gap(px(space::XS)).child(icon("link", iconsize::XS, t.accent)).tooltip(tip(link.address.clone())).on_click(move |_, _, _| {
+        links = links.child(link_button(("link", i), label, t).flex().items_center().gap(px(space::XS)).child(icon("link", iconsize::XS, t.accent)).tip(link.address.clone()).on_click(move |_, _, _| {
             crate::core::library::open_path(&url);
         }));
     }
@@ -263,7 +263,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         info_row("calendar", day::due(a.due, l.now), None, t).into_any_element()
     } else {
         let move_id = id.clone();
-        div().id("due-row").w_full().rounded(px(radius::INNER)).soft(t.ink.opacity(0.06), radius::INNER).cursor_pointer().key_nav().tooltip(tip(tr("Termin verschieben"))).on_click(move |_, _, cx| act(cx, |l| l.reschedule_id = Some(move_id.clone()))).child(info_row("calendar", day::due(a.due, l.now), None, t)).into_any_element()
+        div().id("due-row").w_full().rounded(px(radius::INNER)).soft(t.ink.opacity(hover::ROW), radius::INNER).cursor_pointer().key_nav().tip(tr("Termin verschieben")).on_click(move |_, _, cx| act(cx, |l| l.reschedule_id = Some(move_id.clone()))).child(info_row("calendar", day::due(a.due, l.now), None, t)).into_any_element()
     };
     let mut info = div().flex().flex_col().gap(px(space::S)).child(due_row).child(info_row(
         "clock",
@@ -394,7 +394,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
                         .gap(px(space::XS))
                         .text_size(px(font::CALLOUT))
                         .child(icon("square-pen", iconsize::XS, t.accent))
-                        .tooltip(tip(trf("Neue Notiz in %@, die zu dieser Abgabe gehört. Als PDF exportiert, gehört auch das PDF dazu.", &[&place])))
+                        .tip(trf("Neue Notiz in %@, die zu dieser Abgabe gehört. Als PDF exportiert, gehört auch das PDF dazu.", &[&place]))
                         .on_click(move |_, _, cx| new_assignment_note(&note_id, cx)),
                 )
                 .child(
@@ -404,7 +404,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
                         .gap(px(space::XS))
                         .text_size(px(font::CALLOUT))
                         .child(icon("link", iconsize::XS, t.accent))
-                        .tooltip(tip(tr("Eine Datei aus dem Studienordner suchen; sie bleibt, wo sie ist.")))
+                        .tip(tr("Eine Datei aus dem Studienordner suchen; sie bleibt, wo sie ist."))
                         .on_click(move |_, _, cx| act(cx, |l| l.link_pick = Some(pick_id.clone()))),
                 ),
         );

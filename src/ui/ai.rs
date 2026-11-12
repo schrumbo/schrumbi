@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use super::motion::Soft;
 use super::state::{self, act};
-use super::theme::{Theme, control, font, iconsize, radius, space};
+use super::theme::{Theme, control, font, hover, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::ai::detect::{self, Agent};
 use crate::core::ai::instance::{self, Instance};
@@ -356,9 +356,9 @@ pub fn panel_tabs(ki: bool, t: &Theme, cx: &App) -> AnyElement {
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
             .key_nav()
-            .tooltip(tip(hint))
+            .tip(hint)
             .when(selected, |d| d.bg(t.content).shadow_xs().text_color(t.primary))
-            .when(!selected, |d| d.soft(t.ink.opacity(0.06), radius::INNER).text_color(t.secondary))
+            .when(!selected, |d| d.soft(t.ink.opacity(hover::ROW), radius::INNER).text_color(t.secondary))
             .child(label)
     };
     div()
@@ -1120,24 +1120,42 @@ pub fn ask_card(cx: &App, t: &Theme) -> Option<Stateful<Div>> {
     let group = groups.first()?;
     let more: usize = groups.iter().skip(1).map(Vec::len).sum();
     let body = ask_body(group, cx, t)?;
+    let ids: Vec<u64> = group.iter().map(|w| w.id).collect();
     Some(
-        super::drive::marked(div().id("ai-ask"), "dialog")
-            .occlude()
+        div()
+            .id("ai-ask-slot")
             .absolute()
+            .top(px(control::BAR + space::L))
             .right(px(space::L))
             .bottom(px(space::L))
             .w(px(380.))
-            .p(px(space::L))
-            .rounded(px(radius::CARD))
-            .bg(t.material)
-            .border_1()
-            .border_color(t.separator)
-            .shadow_lg()
+            .max_w_full()
             .flex()
             .flex_col()
-            .gap(px(space::S))
-            .child(body)
-            .when(more > 0, |d| d.child(caption(if more == 1 { tr("Danach wartet noch 1 Anfrage") } else { trf("Danach warten noch %lld Anfragen", &[&more]) }, t))),
+            .justify_end()
+            .child(
+                super::drive::marked(div().id("ai-ask"), "dialog")
+                    .occlude()
+                    .max_h_full()
+                    .overflow_y_scroll()
+                    .p(px(space::L))
+                    .rounded(px(radius::CARD))
+                    .bg(t.material)
+                    .border_1()
+                    .border_color(t.separator)
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                    .gap(px(space::S))
+                    .on_key_down(move |e: &KeyDownEvent, _, cx| {
+                        if e.keystroke.key == "escape" {
+                            answer_all(&ids, Answer::Decline, cx);
+                            cx.stop_propagation();
+                        }
+                    })
+                    .child(body)
+                    .when(more > 0, |d| d.child(caption(if more == 1 { tr("Danach wartet noch 1 Anfrage") } else { trf("Danach warten noch %lld Anfragen", &[&more]) }, t))),
+            ),
     )
 }
 

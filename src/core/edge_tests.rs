@@ -1085,7 +1085,7 @@ fn cards_taken_as_known_undo_and_redo_in_order_with_the_rest() {
     let message = |lib: &Library| lib.toast.as_ref().map(|t| t.message.clone()).unwrap_or_default();
     index(&mut lib);
     assert_eq!(phase("Alt?"), super::cards::Phase::Review);
-    assert!(message(&lib).starts_with("1 Karte als bekannt übernommen"));
+    assert!(lib.toast.is_none(), "the first open's baseline happens quietly");
     lib.undo();
     assert_eq!(phase("Alt?"), super::cards::Phase::New, "the first open's baseline can be taken back");
     assert_eq!(message(&lib), "Rückgängig: 1 Karte als bekannt übernommen");
@@ -2748,4 +2748,25 @@ fn repeating_dates_imported_before_the_naming_change_are_not_added_twice() {
     lib.refresh_events(ics);
     let ids: Vec<_> = lib.state.manual.iter().map(|m| m.external_id.clone()).collect();
     assert_eq!(ids, vec![Some("v#20261102".to_string())]);
+}
+
+#[test]
+fn moving_all_open_items_is_one_undo_step() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (root, mut lib) = workspace("move-all", &config(1, 2));
+    let open: Vec<String> = lib.action_items().iter().map(|a| a.id.clone()).collect();
+    assert!(open.len() >= 2, "the semester has open deadlines");
+    let before: Vec<_> = open.iter().map(|id| lib.assignment(id).unwrap().due).collect();
+    let target = super::day::local_date(lib.now) + chrono::Days::new(1);
+    lib.move_all(&open, target);
+    for (id, was) in open.iter().zip(&before) {
+        let a = lib.assignment(id).unwrap();
+        assert_eq!(a.due.date_naive(), target);
+        assert_eq!(a.due.time(), was.time(), "the time of day stays");
+    }
+    lib.undo();
+    for (id, was) in open.iter().zip(&before) {
+        assert_eq!(lib.assignment(id).unwrap().due, *was, "one undo takes all of them back");
+    }
+    let _ = std::fs::remove_dir_all(root);
 }

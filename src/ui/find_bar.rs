@@ -96,7 +96,7 @@ impl FindBar {
 
     /// Moves the keyboard through the bar's own field and buttons, so Tab never lands in the note behind it.
     fn step_focus(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let has = self.count > 0;
+        let has = steppable(self.count, self.searching && self.searching_shown);
         let [exact, prev, next, toggle, close, one, all] = self.stops.clone();
         let query = self.query.read(cx).focus_handle(cx);
         let replacement = self.replacement.read(cx).focus_handle(cx);
@@ -208,7 +208,7 @@ impl Render for FindBar {
         } else {
             trf("%lld von %lld", &[&(self.current + 1), &self.count])
         };
-        let has = self.count > 0 && !waiting;
+        let has = steppable(self.count, waiting);
         let (prev, next, close, exact, toggle) = (cx.entity(), cx.entity(), cx.entity(), cx.entity(), cx.entity());
         let (replace_one, replace_all) = (cx.entity(), cx.entity());
         let [exact_stop, prev_stop, next_stop, toggle_stop, close_stop, one_stop, all_stop] = self.stops.clone();
@@ -276,4 +276,20 @@ impl Render for FindBar {
 /// The shortcut for opening the bar as a tooltip suffix.
 pub fn hint() -> String {
     ShortcutAction::FindInNote.hint()
+}
+
+fn steppable(count: usize, waiting: bool) -> bool {
+    count > 0 && !waiting
+}
+
+#[cfg(test)]
+mod tests {
+    use super::steppable;
+
+    #[test]
+    fn buttons_are_skipped_without_matches_and_while_waiting() {
+        assert!(!steppable(0, false));
+        assert!(!steppable(3, true));
+        assert!(steppable(3, false));
+    }
 }

@@ -17,10 +17,13 @@ Tippen, mit {key:up} {key:down} wählen, {key:return} führt aus. Ohne Eingabe s
 | `synchro` | {ui:Jetzt synchronisieren} |
 | `tages` | {ui:Tagesnotiz öffnen} |
 | `pdf` | {ui:Als PDF exportieren}, wenn eine Notiz offen ist |
+| `löschen` | {ui:Notiz löschen}, wenn eine Notiz offen ist |
+
+Gibt es keinen Treffer, steht oben {ui:In allen Dateien suchen} mit deiner Eingabe, {key:return} startet die Suche.
 
 ## Datei schnell öffnen
 
-Ohne Eingabe stehen offene Tabs und zuletzt geöffnete Dateien oben.
+Ohne Eingabe stehen offene Tabs und zuletzt geöffnete Dateien oben. Mit Eingabe steht der Name, der genau passt, ganz oben, dann Namen, die so beginnen.
 
 | Du tippst | Ergebnis |
 |---|---|

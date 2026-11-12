@@ -17,7 +17,7 @@ use gpui_kit::*;
 
 use super::motion::{self, Soft};
 use super::pdf_worker::{self, Hit, Message, PageKey, RenderQueue, TextJob};
-use super::theme::{Theme, annot, control, font, iconsize, pages, radius, space, tint};
+use super::theme::{Theme, annot, control, font, hover, iconsize, pages, radius, space, tint};
 use super::widgets::*;
 use crate::core::highlights::{self, Highlight, HighlightPart, InkLine, Pin};
 use crate::core::library::{Library, PdfWriteError, WrittenPdf};
@@ -121,11 +121,11 @@ fn tool_button(id: &'static str, icon_name: &'static str, help: String, selected
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(radius::SMALL))
+        .rounded(px(radius::INNER))
         .when(selected, |d| d.bg(t.accent.opacity(tint::SELECTED)))
         .when(disabled, |d| d.opacity(tint::DISABLED).cursor(CursorStyle::OperationNotAllowed))
-        .when(!disabled, |d| d.cursor_pointer().key_nav().soft(t.ink.opacity(tint::HOVER), radius::SMALL))
-        .tooltip(tip(help))
+        .when(!disabled, |d| d.cursor_pointer().key_nav().soft(t.ink.opacity(hover::RAISED), radius::INNER))
+        .tip(help)
         .child(icon(icon_name, iconsize::S, ink))
 }
 
@@ -177,7 +177,7 @@ fn edge_crossing(from: [f32; 2], to: [f32; 2], size: (f32, f32)) -> [f32; 2] {
 }
 
 fn bar_action(id: &'static str, icon_name: &'static str, help: String, tint: Hsla, t: &Theme) -> Stateful<Div> {
-    div().id(id).size(px(control::S)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().key_nav().soft(t.ink.opacity(tint::HOVER), radius::SMALL).tooltip(tip(help)).child(icon(icon_name, iconsize::S, tint))
+    div().id(id).size(px(control::S)).flex().items_center().justify_center().rounded(px(radius::INNER)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::RAISED), radius::INNER).tip(help).child(icon(icon_name, iconsize::S, tint))
 }
 
 fn arrow_keys(first: bool, last: bool) -> impl Fn(&KeyDownEvent, &mut Window, &mut App) + 'static {
@@ -564,6 +564,7 @@ pub struct PdfView {
     selection: Option<(Caret, Caret)>,
     selecting: bool,
     hover_cursor: CursorStyle,
+    hover_link: Option<(usize, usize)>,
     history: Vec<Anchor>,
     focus: FocusHandle,
     focused_once: bool,
@@ -749,6 +750,7 @@ impl PdfView {
             selection: None,
             selecting: false,
             hover_cursor: CursorStyle::Arrow,
+            hover_link: None,
             history: Vec::new(),
             focus: cx.focus_handle(),
             focused_once: true,
@@ -1405,6 +1407,9 @@ impl PdfView {
     fn on_mouse_move(&mut self, e: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.last_mouse = Some(self.to_view(e.position));
         if self.tool != Tool::Select || self.stroke.is_some() || self.erasing {
+            if self.hover_link.take().is_some() {
+                cx.notify();
+            }
             self.tool_move(e, cx);
             return;
         }
@@ -1422,7 +1427,12 @@ impl PdfView {
             }
             return;
         }
-        let cursor = if self.link_at(page, x, y).is_some() {
+        let link = self.meta.links.get(&page).and_then(|links| links.iter().position(|l| l.rect.contains(x, y))).map(|i| (page, i));
+        if link != self.hover_link {
+            self.hover_link = link;
+            cx.notify();
+        }
+        let cursor = if link.is_some() {
             CursorStyle::PointingHand
         } else if self.texts.get(&page).is_some_and(|(t, _)| t.on_text(x, y)) {
             CursorStyle::IBeam
@@ -2011,9 +2021,9 @@ impl PdfView {
                         .rounded_full()
                         .cursor_pointer()
                         .key_nav()
-                        .soft(t.ink.opacity(tint::HOVER), control::S / 2.)
+                        .soft(t.ink.opacity(hover::CONTROL), control::S / 2.)
                         .when(selected, |d| d.border_2().border_color(t.primary))
-                        .tooltip(tip(label))
+                        .tip(label)
                         .on_key_down(move |ev, window, cx| match ev.keystroke.key.as_str() {
                             "left" => {
                                 if i > 0 {
@@ -2160,7 +2170,7 @@ impl PdfView {
                             .rounded(px(radius::INNER))
                             .cursor_pointer()
                             .when(active, |d| d.bg(t.ink.opacity(annot::ROW_ACTIVE)))
-                            .soft(t.ink.opacity(tint::HOVER_ROW), radius::INNER)
+                            .soft(t.ink.opacity(hover::ROW), radius::INNER)
                             .focus_visible(move |s| s.bg(ring))
                             .on_key_down(cx.listener(move |v, e: &KeyDownEvent, window, cx| match e.keystroke.key.as_str() {
                                 "up" | "down" => {
@@ -2197,12 +2207,12 @@ impl PdfView {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .rounded(px(radius::SMALL))
+                                    .rounded(px(radius::INNER))
                                     .cursor_pointer()
                                     .key_nav()
-                                    .soft(t.ink.opacity(tint::HOVER), radius::SMALL)
+                                    .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
                                     .when(!focused, |d| d.invisible().group_hover("pdf-mark-row", |s| s.visible()))
-                                    .tooltip(tip(remove_label))
+                                    .tip(remove_label)
                                     .on_click(move |_, _, cx| {
                                         cx.stop_propagation();
                                         remove.update(cx, |v, cx| v.remove_mark(id, cx));
@@ -2571,6 +2581,14 @@ impl PdfView {
         if shown.is_none() && self.failed_pages.keys().any(|k| k.0 == page) {
             el = el.child(div().size_full().flex().items_center().justify_center().text_size(px(font::CAPTION)).text_color(gpui_kit::black().opacity(0.55)).child(tr("Diese Seite konnte nicht angezeigt werden.")));
         }
+        if let Some((_, link)) = self.hover_link.filter(|(p, _)| *p == page).and_then(|(p, i)| self.meta.links.get(&p)?.get(i).map(|l| (p, l))) {
+            let r = link.rect;
+            let help = match &link.target {
+                LinkTarget::Page(n) => page_word(self.slides, n + 1),
+                LinkTarget::Uri(url) => url.clone(),
+            };
+            el = el.child(div().id(("pdf-link", page)).absolute().left(px(r.x * scale)).top(px(r.y * scale)).w(px(r.w * scale)).h(px(r.h * scale)).rounded(px(radius::SMALL)).bg(t.accent.opacity(hover::RAISED)).tip(help));
+        }
         let (yellow, orange) = (t.palette("yellow").opacity(annot::MATCH), t.orange.opacity(annot::MATCH_CURRENT));
         for m in self.page_marks.get(&page).into_iter().flatten().filter(|m| !shown.is_some_and(|c| c.baked_sigs.contains(&m.sig))) {
             let color = Theme::document(u32::from_be_bytes([0, m.color[0], m.color[1], m.color[2]])).opacity(MARK_OPACITY);
@@ -2686,7 +2704,7 @@ impl PdfView {
             .map(|d| if lean < 0. { d.justify_end() } else if lean > 0. { d.justify_start() } else { d.justify_center() })
             .rounded(px(radius::SMALL))
             .when(select, |d| {
-                d.cursor_pointer().soft(ink.opacity(tint::HOVER), radius::SMALL).when(describe, |d| d.tooltip(tip(help))).on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                d.cursor_pointer().soft(ink.opacity(hover::CONTROL), radius::SMALL).when(describe, |d| d.tip(help)).on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     cx.stop_propagation();
                     view.update(cx, |v, cx| v.open_note(target, window, cx));
                 })
@@ -2735,10 +2753,10 @@ impl PdfView {
                 .rounded(px(radius::INNER))
                 .cursor_pointer()
                 .key_nav()
-                .soft(t.ink.opacity(tint::HOVER_FIELD), radius::INNER)
+                .soft(t.ink.opacity(hover::ROW), radius::INNER)
                 .font_features(tabular())
                 .text_size(px(font::CALLOUT))
-                .tooltip(tip(if self.slides { tr("Zu Folie springen") } else { tr("Zu Seite springen") }))
+                .tip(if self.slides { tr("Zu Folie springen") } else { tr("Zu Seite springen") })
                 .child(page_label)
                 .on_click(move |_, window, cx| m1.update(cx, |v, cx| v.start_editing(false, window, cx)))
                 .into_any_element(),
@@ -2755,10 +2773,10 @@ impl PdfView {
                 .rounded(px(radius::INNER))
                 .cursor_pointer()
                 .key_nav()
-                .soft(t.ink.opacity(tint::HOVER_FIELD), radius::INNER)
+                .soft(t.ink.opacity(hover::ROW), radius::INNER)
                 .font_features(tabular())
                 .text_size(px(font::CALLOUT))
-                .tooltip(tip(tr("Zoom eingeben")))
+                .tip(tr("Zoom eingeben"))
                 .child(self.zoom_label())
                 .on_click(move |_, window, cx| m2.update(cx, |v, cx| v.start_editing(true, window, cx)))
                 .into_any_element(),
@@ -2804,7 +2822,7 @@ impl PdfView {
                 for (kind, action, name) in [(Tool::Pen, ShortcutAction::PenTool, tr("Stift")), (Tool::Eraser, ShortcutAction::EraserTool, tr("Radierer")), (Tool::Note, ShortcutAction::NoteTool, tr("Notiz setzen"))] {
                     let v = view.clone();
                     let blocked = off_why.is_some() && tool != kind;
-                    menu = menu.item(PopupMenuItem::new(format!("{name}{}", action.hint())).checked(tool == kind).disabled(blocked).on_click(move |_, window, cx| v.update(cx, |v, cx| v.press_tool(kind, window, cx))));
+                    menu = menu.item(keyed_item(name, Some(action)).checked(tool == kind).disabled(blocked).on_click(move |_, window, cx| v.update(cx, |v, cx| v.press_tool(kind, window, cx))));
                 }
                 menu = menu.separator();
             }
@@ -2869,10 +2887,10 @@ impl PdfView {
                     .rounded_full()
                     .cursor_pointer()
                     .key_nav()
-                    .soft(t.ink.opacity(tint::HOVER), control::S / 2.),
+                    .soft(t.ink.opacity(hover::CONTROL), control::S / 2.),
                 self.ink_color == i,
             )
-            .tooltip(tip(format!("{}{}", ink_name(name), PEN_KEYS[i].0.hint())))
+            .tip(format!("{}{}", ink_name(name), PEN_KEYS[i].0.hint()))
             .on_key_down(arrow_keys(i == 0, false))
             .on_click(move |_, _, cx| {
                 pause_tooltips(cx);
@@ -2897,10 +2915,10 @@ impl PdfView {
                     .rounded_full()
                     .cursor_pointer()
                     .key_nav()
-                    .soft(t.ink.opacity(tint::HOVER), control::S / 2.),
+                    .soft(t.ink.opacity(hover::CONTROL), control::S / 2.),
                 self.ink_width == i,
             )
-            .tooltip(tip(format!("{}{}", trf("Strichstärke: %@", &[&label]), PEN_KEYS[INK_COLORS.len() + i].0.hint())))
+            .tip(format!("{}{}", trf("Strichstärke: %@", &[&label]), PEN_KEYS[INK_COLORS.len() + i].0.hint()))
             .on_key_down(arrow_keys(false, slot == last))
             .on_click(move |_, _, cx| {
                 pause_tooltips(cx);
@@ -2983,7 +3001,7 @@ impl PdfView {
     }
 
     fn navigator(&self, view: Entity<PdfView>, t: &Theme) -> Stateful<Div> {
-        let mut row = div().id("pdf-navigator").flex().flex_none().rounded(px(radius::INNER)).bg(t.ink.opacity(tint::HOVER_FIELD)).p(px(space::XXS));
+        let mut row = div().id("pdf-navigator").flex().flex_none().rounded(px(radius::INNER)).bg(t.ink.opacity(hover::ROW)).p(px(space::XXS));
         for (value, label, icon_name) in self.navigator_picks() {
             let shown = self.panel_open && self.panel_tab == value;
             let v = view.clone();
@@ -2998,10 +3016,10 @@ impl PdfView {
                     .rounded(px(radius::SMALL))
                     .cursor_pointer()
                     .key_nav()
-                    .when(!shown, |d| d.soft(t.ink.opacity(tint::HOVER_FIELD), radius::SMALL))
+                    .when(!shown, |d| d.soft(t.ink.opacity(hover::RAISED), radius::SMALL))
                     .when(shown, |d| d.bg(if t.dark { t.ink.opacity(tint::NAV_DARK) } else { t.content }).shadow_sm())
                     .child(icon(icon_name, iconsize::XS, if shown { t.primary } else { t.secondary }))
-                    .tooltip(tip(format!("{}{}", if shown { trf("%@ ausblenden", &[&label]) } else { label }, if value == PanelTab::Thumbnails { ShortcutAction::PageList.hint() } else { String::new() })))
+                    .tip(format!("{}{}", if shown { trf("%@ ausblenden", &[&label]) } else { label }, if value == PanelTab::Thumbnails { ShortcutAction::PageList.hint() } else { String::new() }))
                     .on_click(move |_, window, cx| v.update(cx, |v, cx| v.navigate(value, window, cx))),
             );
         }
@@ -3171,7 +3189,7 @@ impl PdfView {
                             .cursor_pointer()
                             .when(selected, |d| d.bg(t.accent.opacity(tint::SELECTED)))
                             .when(this.dragging.contains(&page), |d| d.opacity(tint::DRAGGED))
-                            .soft(if selected { t.accent.opacity(tint::SELECTED_HOVER) } else { t.ink.opacity(tint::HOVER_ROW) }, radius::INNER)
+                            .soft(if selected { t.accent.opacity(tint::SELECTED_HOVER) } else { t.ink.opacity(hover::ROW) }, radius::INNER)
                             .child(div().w(px(w * fit)).h(px(h * fit)).bg(white()).shadow_sm().when(page == current, |d| d.border_2().border_color(t.accent)).children(image.map(|i| img(i).size_full())))
                             .child(
                                 div()
@@ -3310,7 +3328,7 @@ impl PdfView {
                             .pr(px(space::M))
                             .cursor_pointer()
                             .key_nav()
-                            .soft(t.ink.opacity(tint::HOVER_ROW), 0.)
+                            .soft_row(t.ink.opacity(hover::ROW))
                             .when(active == Some(i), |d| d.text_color(t.accent_text).font_weight(FontWeight::MEDIUM))
                             .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).child(entry.title.clone()))
                             .child(div().text_size(px(font::CAPTION)).font_features(tabular()).text_color(t.secondary).child((page + 1).to_string()))
@@ -3382,8 +3400,8 @@ impl PdfView {
                                         .px(px(space::M))
                                         .cursor_pointer()
                                         .key_nav()
-                                        .when(selected, |d| d.bg(t.accent.opacity(annot::HIT_ROW)))
-                                        .soft(t.ink.opacity(tint::HOVER_ROW), 0.)
+                                        .when(selected, |d| d.child(motion::row_fill(t.accent.opacity(annot::HIT_ROW))))
+                                        .soft_row(t.ink.opacity(hover::ROW))
                                         .child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.secondary).child(page_word(slides, hit.page + 1)))
                                         .child(div().text_size(px(font::CALLOUT)).line_clamp(2).child(hit.excerpt.clone()))
                                         .on_click(move |_, _, cx| view.update(cx, |v, cx| v.select_hit(i, cx)))
@@ -3998,7 +4016,7 @@ impl PdfView {
     }
 
     fn page_button(&self, id: &'static str, icon_name: &'static str, help: String, t: &Theme) -> Stateful<Div> {
-        div().id(id).size(px(control::S)).flex().items_center().justify_center().rounded(px(radius::SMALL)).tooltip(tip(help)).cursor_pointer().key_nav().soft(t.ink.opacity(tint::HOVER), radius::SMALL).child(icon(icon_name, iconsize::S, t.secondary))
+        div().id(id).size(px(control::S)).flex().items_center().justify_center().rounded(px(radius::INNER)).tip(help).cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::INNER).child(icon(icon_name, iconsize::S, t.secondary))
     }
 
     fn page_bar(&self, cx: &mut Context<Self>, t: &Theme) -> Div {
@@ -4075,11 +4093,11 @@ impl PdfView {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(radius::SMALL))
+                            .rounded(px(radius::INNER))
                             .cursor_pointer()
                             .key_nav()
-                            .soft(t.ink.opacity(tint::HOVER), radius::SMALL)
-                            .tooltip(tip(tr("Schließen")))
+                            .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
+                            .tip(tr("Schließen"))
                             .on_click(move |_, _, cx| {
                                 me.update(cx, |v, cx| {
                                     v.page_notice = None;
@@ -4211,7 +4229,7 @@ impl PdfView {
                                 .font_weight(FontWeight::MEDIUM)
                                 .cursor_pointer()
                                 .key_nav()
-                                .soft(t.on_accent.opacity(tint::HOVER), radius::CONTROL)
+                                .soft(t.on_accent.opacity(hover::CONTROL), radius::CONTROL)
                                 .on_key_down(arrow_keys(!stored, true))
                                 .on_click(move |_, window, cx| {
                                     save.update(cx, |v, cx| v.save_note(window, cx));

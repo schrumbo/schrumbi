@@ -14,7 +14,7 @@ use super::browser::week_title;
 use super::pages::Pages;
 use super::state::act;
 use super::motion::{self, Soft};
-use super::theme::{Theme, control, font, radius, space, iconsize};
+use super::theme::{Theme, control, font, hover, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::filing::FileRole;
@@ -104,7 +104,6 @@ impl Render for SplitDrag {
 }
 
 fn disclosure(id: &'static str, title: String, open: bool, view: Entity<Pages>, toggle: fn(&mut ModuleState), t: &Theme) -> Stateful<Div> {
-    let hover = t.ink.opacity(0.05);
     div()
         .id(id)
         .flex()
@@ -115,7 +114,7 @@ fn disclosure(id: &'static str, title: String, open: bool, view: Entity<Pages>, 
         .mt(px(space::S))
         .rounded(px(radius::INNER))
         .cursor_pointer().key_nav()
-        .soft(hover, radius::INNER)
+        .soft(t.ink.opacity(hover::ROW), radius::INNER)
         .child(motion::chevron("chevron", open, t.tertiary))
         .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
         .on_click(move |_, _, cx| view.update(cx, |p, cx| {
@@ -132,7 +131,7 @@ fn file_pills(lib: &Library, a: &Assignment, st: &ModuleState, view: Entity<Page
     let all: Vec<(std::path::PathBuf, bool)> = e.briefs.iter().map(|p| (p.clone(), true)).chain(e.files.iter().map(|p| (p.clone(), false))).collect();
     let expanded = st.expanded_files.contains(&a.id);
     let limit = if expanded { all.len() } else { 3 };
-    let (fill, hover) = (t.ink.opacity(0.05), t.ink.opacity(0.1));
+    let (fill, over) = (t.ink.opacity(0.05), t.ink.opacity(hover::CONTROL));
     let mut row = div().pl(px(space::XXL)).flex().flex_wrap().gap(px(space::XS));
     for (path, brief) in all.iter().take(limit) {
         let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -145,14 +144,15 @@ fn file_pills(lib: &Library, a: &Assignment, st: &ModuleState, view: Entity<Page
                 .items_center()
                 .gap(px(space::XS))
                 .max_w(px(180.))
+                .min_h(px(control::S))
                 .px(px(space::S))
                 .py(px(space::XS))
                 .rounded(px(radius::CONTROL))
                 .bg(fill)
-                .soft(hover, radius::CONTROL)
+                .soft(over, radius::CONTROL)
                 .cursor_pointer().key_nav()
                 .text_size(px(font::CAPTION))
-                .tooltip(tip(if brief { trf("Aufgabenstellung: %@", &[&name]) } else { name.clone() }))
+                .tip(if brief { trf("Aufgabenstellung: %@", &[&name]) } else { name.clone() })
                 .on_click(move |_, _, cx| super::preview::show(&preview, cx))
                 .when(brief, |d| d.child(icon("clipboard-list", iconsize::XS, t.accent)).child(div().font_weight(FontWeight::MEDIUM).child(tr("Aufgabe"))))
                 .when(!brief, |d| d.child(file_icon(path, iconsize::S)).child(div().truncate().child(crate::core::text::middle_ellipsis(&name, 26))))
@@ -174,16 +174,19 @@ fn file_pills(lib: &Library, a: &Assignment, st: &ModuleState, view: Entity<Page
         row = row.child(
             div()
                 .id(SharedString::from(format!("more-files-{}", a.id)))
+                .min_h(px(control::S))
+                .flex()
+                .items_center()
                 .px(px(space::S))
                 .py(px(space::XS))
                 .rounded(px(radius::CONTROL))
                 .bg(fill)
-                .soft(hover, radius::CONTROL)
+                .soft(over, radius::CONTROL)
                 .cursor_pointer().key_nav()
                 .text_size(px(font::CAPTION))
                 .font_weight(FontWeight::MEDIUM)
                 .child(if expanded { tr("Weniger") } else { format!("+{more}") })
-                .tooltip(tip(if expanded { tr("Weniger zeigen") } else { trf("Alle %lld Dateien zeigen", &[&all.len()]) }))
+                .tip(if expanded { tr("Weniger zeigen") } else { trf("Alle %lld Dateien zeigen", &[&all.len()]) })
                 .on_click(move |_, _, cx| view.update(cx, |p, cx| {
                     if !p.module.expanded_files.remove(&id) {
                         p.module.expanded_files.insert(id.clone());
@@ -238,7 +241,7 @@ fn show_all(id: &'static str, total: usize, all: bool, view: Entity<Pages>, togg
         .rounded(px(radius::INNER))
         .cursor_pointer()
         .key_nav()
-        .soft(t.ink.opacity(0.05), radius::INNER)
+        .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
         .text_size(px(font::CALLOUT))
         .text_color(t.accent_text)
         .child(if all { tr("Weniger zeigen") } else { trf("Alle %lld zeigen", &[&total]) })
@@ -391,7 +394,7 @@ pub fn header(lib: &Library, m: &Module, width: f32, t: &Theme) -> Div {
         .child(Button::new("module-file").small().primary().icon(menu_icon("inbox")).when(!compact, |b| b.label(tr("Ablegen"))).tooltip(trf("Dateien in %@ ablegen (F)", &[&file_code])).on_click(move |_, _, cx| super::platform::pick_files_for_filing(next_entry.clone(), cx)))
         .child(Button::new("module-more").small().ghost().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu(move |menu, _, _| {
             let (reveal, edit_id) = (reveal.clone(), edit_id.clone());
-            menu.item(PopupMenuItem::new(format!("{}{}", tr("Neuer Eintrag…"), crate::core::shortcuts::ShortcutAction::NewEntry.hint())).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| {
+            menu.item(keyed_item(tr("Neuer Eintrag…"), Some(crate::core::shortcuts::ShortcutAction::NewEntry)).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| {
                 l.quick_add_kind = Some(Kind::Submission);
                 l.show_quick_add = true;
             })))
@@ -431,7 +434,7 @@ pub fn header(lib: &Library, m: &Module, width: f32, t: &Theme) -> Div {
 }
 
 fn more_link(id: &'static str, label: String, t: &Theme) -> Stateful<Div> {
-    div().id(id).flex_none().flex().items_center().h(px(control::S)).px(px(space::S)).mr(px(-space::S)).cursor_pointer().key_nav().soft(t.ink.opacity(0.05), radius::INNER).text_size(px(font::CALLOUT)).text_color(t.accent_text).child(label)
+    div().id(id).flex_none().flex().items_center().h(px(control::S)).px(px(space::S)).mr(px(-space::S)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::INNER).text_size(px(font::CALLOUT)).text_color(t.accent_text).child(label)
 }
 
 fn section(title: impl IntoElement, link: Option<Stateful<Div>>) -> Div {
@@ -463,9 +466,9 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
         grouped(t).child(deadlines(lib, m, st, view, t)).into_any_element()
     };
     let title = div().flex().items_center().gap(px(space::S)).child(section_title(tr("Abgaben"))).when(waiting > 0, |d| {
-        d.child(div().id("module-attention").flex_none().min_w(px(iconsize::M)).px(px(space::XS)).rounded_full().bg(t.badge_fill(t.gray)).flex().items_center().justify_center().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).font_features(tabular()).text_color(white()).child(waiting.to_string()).tooltip(tip(tr("Noch offen"))))
+        d.child(div().id("module-attention").flex_none().min_w(px(iconsize::M)).px(px(space::XS)).rounded_full().bg(t.badge_fill(t.gray)).flex().items_center().justify_center().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).font_features(tabular()).text_color(white()).child(waiting.to_string()).tip(tr("Noch offen")))
     });
-    let add = (all > 0).then(|| more_link("add-entry", tr("Neuer Eintrag…"), t).tooltip(tip(format!("{}{}", tr("Abgabe, Aufgabe oder Prüfung eintragen"), crate::core::shortcuts::ShortcutAction::NewEntry.hint()))).on_click(move |_, _, cx| add_submission(cx)));
+    let add = (all > 0).then(|| more_link("add-entry", tr("Neuer Eintrag…"), t).tip(format!("{}{}", tr("Abgabe, Aufgabe oder Prüfung eintragen"), crate::core::shortcuts::ShortcutAction::NewEntry.hint())).on_click(move |_, _, cx| add_submission(cx)));
     let folder = lib.root.as_ref().map(|r| r.join(&m.folder)).unwrap_or_default();
     let recent = super::today::recent_notes_in(Some(&folder), 6);
     let count = recent.len();
@@ -488,9 +491,9 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     let other_rows: Vec<_> = other_rows.collect();
     let new_id = m.id.clone();
     let module_folder = m.folder.clone();
-    let all_files = more_link("to-files", tr("Alle Dateien"), t).tooltip(tip(tr("Im Dateibaum zeigen"))).on_click(move |_, _, cx| {
+    let all_files = more_link("to-files", tr("Alle Dateien"), t).tip(tr("Im Dateibaum zeigen")).on_click(move |_, _, cx| {
         let folder = module_folder.clone();
-        crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
+        super::notes_page::set_hidden(false, cx);
         act(cx, |l| {
             l.reveal_folder = Some(folder);
             l.show_notes();
@@ -596,7 +599,6 @@ fn overview_rail(lib: &Library, m: &Module, t: &Theme) -> Option<Div> {
     let links: Vec<_> = m.links.iter().filter(|k| k.url().is_some()).cloned().collect();
     if !links.is_empty() {
         any = true;
-        let hover = t.ink.opacity(0.05);
         let rows = links.into_iter().enumerate().map(|(i, link)| {
             let url = link.url().map(|u| u.to_string()).unwrap_or_default();
             div()
@@ -608,8 +610,8 @@ fn overview_rail(lib: &Library, m: &Module, t: &Theme) -> Option<Div> {
                 .h(px(super::theme::control::M))
                 .cursor_pointer()
                 .key_nav()
-                .soft(hover, 0.)
-                .tooltip(tip(link.address.clone()))
+                .soft_row(t.ink.opacity(hover::ROW))
+                .tip(link.address.clone())
                 .child(icon("external-link", iconsize::S, t.secondary))
                 .child(div().flex_1().min_w_0().truncate().child(if link.title.is_empty() { link.address.clone() } else { link.title.clone() }))
                 .on_click(move |_, _, _| {
@@ -628,7 +630,7 @@ pub fn overview(lib: &Library, m: &Module, width: f32, st: &ModuleState, view: E
     let wide = width >= TWO_COLUMNS;
     let edit_id = m.id.clone();
     let hint = rail.is_none().then(|| {
-        div().id("module-add-details").cursor_pointer().key_nav().text_size(px(font::CALLOUT)).text_color(t.secondary).hover({ let c = t.primary; move |s| s.text_color(c) }).child(tr("Termine, Links und Noten in den Moduleinstellungen ergänzen")).on_click(move |_, _, cx| super::settings::open_module(&edit_id, cx))
+        div().id("module-add-details").min_h(px(control::S)).flex().items_center().px(px(space::S)).mx(px(-space::S)).rounded(px(radius::INNER)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::INNER).text_size(px(font::CALLOUT)).text_color(t.secondary).child(tr("Termine, Links und Noten in den Moduleinstellungen ergänzen")).on_click(move |_, _, cx| super::settings::open_module(&edit_id, cx))
     });
     let body = if wide {
         let (rail_width, gap) = if width >= WIDE_RAIL { (RAIL, space::XXL) } else { (NARROW_RAIL, space::XL) };

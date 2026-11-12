@@ -84,6 +84,10 @@ impl Git {
         let mut files = Vec::new();
         let mut automatic = Vec::new();
         for (path, [base, ours, theirs]) in parse_stages(&out.stdout) {
+            if (ours.is_some() && theirs.is_none() && self.left_out_upstream(&path)) || (ours.is_none() && theirs.is_some() && self.left_out_here(&path)) {
+                automatic.push((path, String::new()));
+                continue;
+            }
             if let (Some(o), Some(t)) = (&ours, &theirs) {
                 let base_text = base.as_deref().and_then(|b| self.blob_text(b).ok());
                 if let (Ok(o), Ok(t)) = (self.blob_text(o), self.blob_text(t))
@@ -112,14 +116,20 @@ impl Git {
     /// Merges the upstream with these decisions; if anything fails the working tree goes back to how it was.
     pub fn merge_resolved(&self, choices: &HashMap<String, Choice>, automatic: &[(String, String)], message: &str) -> Result<Resolved, GitError> {
         let before = self.run(&["rev-parse", "HEAD"])?.trim().to_string();
+        let kept = self.untracked_app_data();
         let started = self.output(&["merge", "-q", "--no-commit", "--no-ff", "--no-edit", "@{u}"], None, BULK)?;
         if started.code != 0 && !self.git_dir().join("MERGE_HEAD").exists() {
+            let _ = self.restore_app_data(&kept, message);
             return Err(super::cmd::classify(&started.stderr));
         }
         match self.finish_merge(choices, automatic, message, &before) {
-            Ok(resolved) => Ok(resolved),
+            Ok(resolved) => {
+                self.restore_app_data(&kept, message)?;
+                Ok(resolved)
+            }
             Err(e) => {
                 let _ = self.run_bulk(&["merge", "--abort"], None);
+                let _ = self.restore_app_data(&kept, message);
                 Err(e)
             }
         }
@@ -128,6 +138,10 @@ impl Git {
     fn finish_merge(&self, choices: &HashMap<String, Choice>, automatic: &[(String, String)], message: &str, before: &str) -> Result<Resolved, GitError> {
         let mut resolved = Resolved { before: before.to_string(), ..Default::default() };
         for (path, text) in automatic {
+            if self.left_out_upstream(path) || self.left_out_here(path) {
+                self.run(&["rm", "-q", "--cached", "--ignore-unmatch", "--", path])?;
+                continue;
+            }
             std::fs::write(self.root.join(path), text).map_err(|e| GitError::Other(e.to_string()))?;
             self.run(&["add", "--", path])?;
         }
@@ -162,6 +176,7 @@ impl Git {
         }
         self.checked(&["commit", "-q", "--cleanup=whitespace", "-F", "-"], Some(message.as_bytes().to_vec()), BULK)?;
         resolved.pulled = self.settle_times(before)?;
+        self.keep_app_data(before);
         Ok(resolved)
     }
 

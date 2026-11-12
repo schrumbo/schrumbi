@@ -7,13 +7,16 @@ use gpui_kit::*;
 
 use super::state::act;
 use super::motion::{self, Soft};
-use super::theme::{Theme, control, font, radius, space, iconsize};
+use super::theme::{Theme, control, font, hover, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{Library, Route};
 use crate::core::model::{Assignment, LectureWeek, Status};
 use crate::core::schedule;
+
+/// The space above and below a strip segment that makes its hit area as tall as a control.
+const STRIP_PAD: f32 = 5.;
 
 /// View state of the semester page.
 #[derive(Default)]
@@ -185,7 +188,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                 .flex()
                 .flex_col()
                 .gap(px(space::S))
-                .child(div().flex().items_end().gap(px(space::XS)).h(px(14.)).children(strip.iter().map(|(s, p)| {
+                .child(div().flex().items_end().gap(px(space::XS)).h(px(control::S)).my(px(-STRIP_PAD)).children(strip.iter().map(|(s, p)| {
                     let is_current = s.monday == current;
                     let is_past = s.monday < current;
                     let color = if s.lecture.is_none() {
@@ -203,16 +206,18 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                     div()
                         .id(SharedString::from(format!("strip-{}", s.monday)))
                         .flex_1()
-                        .h(px(if is_current { 14. } else { 8. }))
-                        .rounded(px(radius::SMALL))
-                        .bg(color)
-                        .tooltip(tip(help))
+                        .h_full()
+                        .flex()
+                        .items_end()
+                        .pb(px(STRIP_PAD))
+                        .tip(help)
                         .when(s.lecture.is_some(), |d| {
-                            d.cursor_pointer().hover(|s| s.opacity(0.7)).on_click(move |_, window, cx| view.update(cx, |p, cx| {
+                            d.cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::SMALL).on_click(move |_, window, cx| view.update(cx, |p, cx| {
                                 p.grid.jump_to(monday, current, window);
                                 cx.notify();
                             }))
                         })
+                        .child(div().w_full().h(px(if is_current { 14. } else { 8. })).rounded(px(radius::SMALL)).bg(color))
                 })))
                 .child(
                     div()
@@ -305,8 +310,7 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
         .px(px(space::L))
         .py(px(space::M))
         .when(!force_open, |d| {
-            let hover = t.ink.opacity(0.06);
-            d.cursor_pointer().key_nav().soft(hover, 0.).on_click(move |_, _, cx| v1.update(cx, |p, cx| {
+            d.cursor_pointer().key_nav().soft_row(t.ink.opacity(hover::ROW)).on_click(move |_, _, cx| v1.update(cx, |p, cx| {
                 if !p.grid.expanded.remove(&monday) {
                     p.grid.expanded.insert(monday);
                 }
@@ -324,7 +328,7 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
             })))
         })
         .when(attention > 0, |d| {
-            d.child(div().id(SharedString::from(format!("att-{}", slot.monday))).flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(trf("%lld offen", &[&attention])).tooltip(tip(trf("%lld sind noch offen", &[&attention]))))
+            d.child(div().id(SharedString::from(format!("att-{}", slot.monday))).flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(trf("%lld offen", &[&attention])).tip(trf("%lld sind noch offen", &[&attention])))
         })
         .child(if mandatory.is_empty() {
             div().text_size(px(font::CALLOUT)).text_color(t.tertiary).child(if entries.is_empty() { tr("frei") } else { tr("nur optional") })
@@ -382,7 +386,7 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         format!("{code} · {when}")
     };
     let (sel, menu_id, drop_id) = (a.id.clone(), a.id.clone(), a.id.clone());
-    let (fill, hover, accent) = (t.ink.opacity(0.05), t.ink.opacity(0.1), t.accent);
+    let (fill, selected_fill, accent) = (t.ink.opacity(0.05), t.ink.opacity(0.1), t.accent);
     let tracks = a.tracks_files();
     let title = div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).truncate().text_color(if e.status.is_closed() { t.secondary } else { t.primary }).child(a.title.clone());
     let chip = div()
@@ -395,11 +399,11 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .pr(px(space::M))
         .py(px(space::S))
         .rounded(px(radius::CONTROL))
-        .bg(if selected { hover } else { fill })
-        .soft(hover, radius::CONTROL)
+        .bg(if selected { selected_fill } else { fill })
+        .soft(t.ink.opacity(hover::CONTROL), radius::CONTROL)
         .when(selected, |d| d.border(px(2.)).border_color(accent))
         .cursor_pointer().key_nav()
-        .tooltip(tip(format!("{} · {} · {}", a.title, when, e.status.label())))
+        .tip(format!("{} · {} · {}", a.title, when, e.status.label()))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(sel.clone()))))
         .child(super::board::edge_bar(tint.opacity(if e.status.is_closed() { 0.35 } else { 1. })))
         .child(status_toggle(a, lib, iconsize::M, t))

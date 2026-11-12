@@ -22,7 +22,7 @@ The first start can take a minute; {ui:Abbrechen} stops it, {ui:Noch einmal} tri
 2. {key:toggleAi}
 3. Click {ui:Karten aus dieser Seite} or write your own and press {key:return}.
 
-Chips at the bottom show what the AI gets to see: open note, PDF page, selection, module. The × takes one out, {ui:Kontext} adds it back or another tab.
+Chips at the bottom show what the AI gets to see: open note, PDF page, selection, module. The × takes one out, {ui:Kontext} adds it back or another tab. The empty column offers up to three tasks; if sending does not work, your text stays in the input.
 
 | Button | What happens |
 |---|---|
@@ -71,7 +71,7 @@ The column's tasks are there as commands:
 
 ## Changes
 
-Before every change Schrumbi asks in the column, or at the bottom right of the window when the column is closed.
+Before every change Schrumbi asks in the column, or at the bottom right of the window when the column is closed. {key:tab} moves between the buttons, {key:return} presses the chosen one, {key:escape} declines.
 
 | Button | What happens |
 |---|---|

@@ -22,7 +22,7 @@ use super::ai::{self, Answer, Request};
 use super::markdown_view::{self, ParsedNote};
 use super::motion::{self, Soft};
 use super::state::{self, act};
-use super::theme::{Theme, font, iconsize, radius, space};
+use super::theme::{Theme, control, font, hover, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::ai::acp::{self, Command, Event, Kind, Status, Stop, ToolPatch, Update};
 use crate::core::ai::agents::{self, Missing};
@@ -176,6 +176,7 @@ pub struct AiPanel {
     removed: HashSet<Chip>,
     extra: Vec<Chip>,
     last_prompt: Option<String>,
+    restore: Option<String>,
     list: ListState,
     listed: usize,
     dirty: BTreeSet<usize>,
@@ -468,14 +469,16 @@ impl AiPanel {
                     if text.trim().is_empty() {
                         return;
                     }
-                    this.send(text, cx);
+                    if !this.send(text, cx) {
+                        return;
+                    }
                     let input = input.clone();
                     window.defer(cx, move |window, cx| input.update(cx, |s, cx| s.set_value("", window, cx)));
                 }
             }),
         ];
         ai::set_panel(cx.entity().downgrade(), cx);
-        Self { input, items: Vec::new(), tools: HashMap::new(), expanded: HashSet::new(), session: None, turn: false, queued: 0, removed: HashSet::new(), extra: Vec::new(), last_prompt: None, list: Self::new_list(), listed: 0, dirty: BTreeSet::new(), counts: Vec::new(), rows: Vec::new(), keep: HashMap::new(), tail: (Vec::new(), None), idle: None, reparse: None, focus_input: true, cancelling: false, asks: Vec::new(), pending: VecDeque::new(), recap: None, hint: None, logged: 0, log_task: None, row_edit: None, _subs: subs }
+        Self { input, items: Vec::new(), tools: HashMap::new(), expanded: HashSet::new(), session: None, turn: false, queued: 0, removed: HashSet::new(), extra: Vec::new(), last_prompt: None, restore: None, list: Self::new_list(), listed: 0, dirty: BTreeSet::new(), counts: Vec::new(), rows: Vec::new(), keep: HashMap::new(), tail: (Vec::new(), None), idle: None, reparse: None, focus_input: true, cancelling: false, asks: Vec::new(), pending: VecDeque::new(), recap: None, hint: None, logged: 0, log_task: None, row_edit: None, _subs: subs }
     }
 
     fn new_list() -> ListState {
@@ -561,12 +564,20 @@ impl AiPanel {
                     }
                     self.focus_input = true;
                 }
-                Request::Send(text) => self.send(text, cx),
+                Request::Send(text) => {
+                    self.send(text, cx);
+                }
                 Request::Flow(flow, chips, text) => self.start_flow_with(flow, chips, text, cx),
             }
         }
         if self.session.is_none() && self.items.is_empty() {
             self.start(cx);
+        }
+        if let Some(text) = self.restore.take()
+            && self.input.read(cx).value().trim().is_empty()
+        {
+            let input = self.input.clone();
+            window.defer(cx, move |window, cx| input.update(cx, |s, cx| s.set_value(text, window, cx)));
         }
         if std::mem::take(&mut self.focus_input) {
             let input = self.input.clone();
@@ -579,6 +590,16 @@ impl AiPanel {
     }
 
     fn notice_fix(&mut self, text: String, fix: Option<Fix>) {
+        if let Some(Item::Notice { text: last, fix: last_fix }) = self.items.last_mut()
+            && *last == text
+        {
+            let changed = *last_fix != fix;
+            *last_fix = fix;
+            if changed {
+                self.touch(self.items.len() - 1);
+            }
+            return;
+        }
         self.items.push(Item::Notice { text, fix });
     }
 
@@ -822,8 +843,8 @@ impl AiPanel {
         }));
     }
 
-    fn send(&mut self, text: String, cx: &mut Context<Self>) {
-        self.dispatch(text, None, true, cx);
+    fn send(&mut self, text: String, cx: &mut Context<Self>) -> bool {
+        self.dispatch(text, None, true, cx)
     }
 
     fn start_flow(&mut self, flow: Flow, chips: Vec<Chip>, cx: &mut Context<Self>) {
@@ -844,10 +865,10 @@ impl AiPanel {
     }
 
     /// Sends a message; `shown` puts it in the stream with its chips, otherwise it goes to the agent alone, e.g. what the user took from a setup card.
-    fn dispatch(&mut self, text: String, flow: Option<Flow>, shown: bool, cx: &mut Context<Self>) {
+    fn dispatch(&mut self, text: String, flow: Option<Flow>, shown: bool, cx: &mut Context<Self>) -> bool {
         let text = text.trim().to_string();
         if text.is_empty() {
-            return;
+            return false;
         }
         if self.session.is_none() {
             self.start(cx);
@@ -877,9 +898,12 @@ impl AiPanel {
             prompt.push_str(&format!("\n{hint}"));
         }
         let labels: Vec<String> = chips.iter().map(|c| chip_label(c, cx)).collect();
-        let Some(session) = self.session.as_ref() else { return };
+        let Some(session) = self.session.as_ref() else {
+            cx.notify();
+            return false;
+        };
         if session.commands.try_send(Command::Prompt(prompt)).is_err() {
-            return;
+            return false;
         }
         if shown {
             self.log(vec![transcript::Entry { role: transcript::Role::User, text: text.clone(), at: chrono::Utc::now().timestamp() }], cx);
@@ -897,6 +921,7 @@ impl AiPanel {
         self.idle = None;
         self.list.scroll_to_end();
         cx.notify();
+        true
     }
 
     fn begin(&mut self, cx: &mut Context<Self>) {
@@ -1189,6 +1214,7 @@ impl AiPanel {
             Ok(Stop::Limit) => self.notice(tr("Die Antwort wurde unterwegs gekürzt."), false),
             Err(e) if e.contains("transport_closed") || e.contains("transport closed") => {}
             Err(e) => {
+                self.restore = self.last_prompt.clone();
                 if !self.trouble_notice(&e, Fix::Retry) {
                     self.notice_fix(trf("Das hat nicht geklappt: %@", &[&first_line(&e)]), Some(Fix::Retry));
                 }
@@ -1855,7 +1881,7 @@ impl AiPanel {
         }
         let root = state::read(cx, |l| l.root.clone());
         let me4 = me.clone();
-        let history = Button::new("ai-history").ghost().size(px(super::theme::control::S)).rounded_full().icon(menu_icon("history")).tooltip(tr("Frühere Unterhaltungen")).dropdown_menu(move |mut menu, _, _| {
+        let history = Button::new("ai-history").ghost().size(px(control::S)).rounded(px(radius::INNER)).icon(menu_icon("history")).dropdown_menu(move |mut menu, _, _| {
             let past = root.as_deref().map(|r| transcript::list(r, HISTORY_SHOWN)).unwrap_or_default();
             if past.is_empty() {
                 return menu.item(PopupMenuItem::new(tr("Noch keine früheren Unterhaltungen")).disabled(true));
@@ -1872,11 +1898,33 @@ impl AiPanel {
             }
             menu
         });
+        let bar_button = |id: &'static str, name: &'static str, help: String, on: bool| {
+            div()
+                .id(id)
+                .flex_none()
+                .size(px(control::S))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(radius::INNER))
+                .when(on, |d| d.cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::INNER))
+                .tip(help)
+                .child(icon(name, iconsize::M, if on { t.secondary } else { t.tertiary }))
+        };
+        let history = div().id("ai-history-tip").flex_none().tip(tr("Frühere Unterhaltungen")).child(history);
         head.child(div().flex_1())
             .child(history)
-            .child(Button::new("ai-save").ghost().size(px(super::theme::control::S)).rounded_full().icon(menu_icon("file-down")).disabled(!has_items).tooltip(tr("Als Notiz speichern")).on_click(move |_, _, cx| me2.update(cx, |p, cx| p.save_as_note(cx))))
-            .child(Button::new("ai-new").ghost().size(px(super::theme::control::S)).rounded_full().icon(menu_icon("message-square-plus")).disabled(!has_items).tooltip(tr("Neue Unterhaltung")).on_click(move |_, _, cx| me3.update(cx, |p, cx| p.new_conversation(cx))))
-            .child(Button::new("ai-close").ghost().size(px(super::theme::control::S)).rounded_full().icon(menu_icon("x")).tooltip(format!("{}{}", tr("KI ausblenden"), crate::core::shortcuts::ShortcutAction::ToggleAi.hint())).on_click(|_, _, cx| ai::close_panel(cx)))
+            .child(bar_button("ai-save", "file-down", tr("Als Notiz speichern"), has_items).on_click(move |_, _, cx| {
+                if has_items {
+                    me2.update(cx, |p, cx| p.save_as_note(cx));
+                }
+            }))
+            .child(bar_button("ai-new", "message-square-plus", tr("Neue Unterhaltung"), has_items).on_click(move |_, _, cx| {
+                if has_items {
+                    me3.update(cx, |p, cx| p.new_conversation(cx));
+                }
+            }))
+            .child(bar_button("ai-close", "x", format!("{}{}", tr("KI ausblenden"), crate::core::shortcuts::ShortcutAction::ToggleAi.hint()), true).on_click(|_, _, cx| ai::close_panel(cx)))
     }
 
     fn empty(&self, cx: &mut Context<Self>, t: &Theme) -> Div {
@@ -1885,6 +1933,18 @@ impl AiPanel {
         let mut offered = suggestions(cx);
         if setup_wanted(cx) {
             offered.push(Suggestion { label: Flow::Setup.label(), icon: Flow::Setup.icon(), flow: Flow::Setup, chips: Vec::new() });
+        }
+        let inbox = state::read(cx, |l| !l.inbox.is_empty());
+        let monday = state::read(cx, |l| crate::core::day::monday(l.today()));
+        for flow in [Flow::Week, Flow::Quiz, Flow::Inbox] {
+            if offered.len() >= 3 {
+                break;
+            }
+            if offered.iter().any(|o| o.flow == flow) || (flow == Flow::Inbox && !inbox) {
+                continue;
+            }
+            let chips = if flow == Flow::Week { vec![Chip::Week(monday)] } else { Vec::new() };
+            offered.push(Suggestion { label: flow.label(), icon: flow.icon(), flow, chips });
         }
         for (i, Suggestion { label, icon: icon_name, flow, chips }) in offered.into_iter().take(4).enumerate() {
             let me = me.clone();
@@ -1901,7 +1961,7 @@ impl AiPanel {
                     .border_color(t.separator)
                     .cursor_pointer()
                     .key_nav()
-                    .soft(t.ink.opacity(0.05), radius::CONTROL)
+                    .soft(t.ink.opacity(hover::ROW), radius::CONTROL)
                     .child(icon(icon_name, iconsize::S, t.secondary))
                     .child(div().flex_1().truncate().child(label))
                     .on_click(move |_, _, cx| {
@@ -1943,7 +2003,7 @@ impl AiPanel {
                 .rounded(px(radius::INNER))
                 .text_size(px(font::CALLOUT))
                 .text_color(t.secondary)
-                .when(has_detail, |d| d.cursor_pointer().key_nav().soft(t.ink.opacity(0.05), radius::INNER))
+                .when(has_detail, |d| d.cursor_pointer().key_nav().soft(t.ink.opacity(hover::ROW), radius::INNER))
                 .child(icon(tool_icon(tool.name.as_deref(), tool.kind), iconsize::XS, t.tertiary))
                 .child(div().flex_1().min_w_0().truncate().child(title))
                 .child(status)
@@ -2074,7 +2134,7 @@ impl AiPanel {
                             .text_color(t.secondary)
                             .cursor_pointer()
                             .key_nav()
-                            .soft(t.ink.opacity(0.05), radius::INNER)
+                            .soft(t.ink.opacity(hover::ROW), radius::INNER)
                             .child(motion::chevron(("ai-setup-renames-chevron", at), shown, t.tertiary))
                             .child(div().flex_1().min_w_0().child(if count == 1 { tr("1 Datei würde die KI umbenennen. Schrumbi tut das nicht von selbst.") } else { trf("%lld Dateien würde die KI umbenennen. Schrumbi tut das nicht von selbst.", &[&count]) }))
                             .on_click(move |_, _, cx| {
@@ -2121,7 +2181,14 @@ impl AiPanel {
 
     fn ask_card(&self, group: &[ai::Waiting], cx: &App, t: &Theme) -> AnyElement {
         let id = group.first().map_or(0, |w| w.id);
+        let ids: Vec<u64> = group.iter().map(|w| w.id).collect();
         super::drive::marked(div().id(("ai-ask-inline", id)), "dialog")
+            .on_key_down(move |e: &KeyDownEvent, _, cx| {
+                if e.keystroke.key == "escape" {
+                    ai::answer_all(&ids, Answer::Decline, cx);
+                    cx.stop_propagation();
+                }
+            })
             .p(px(space::M))
             .rounded(px(radius::CARD))
             .border_1()
@@ -2286,10 +2353,17 @@ impl AiPanel {
                     .child(
                         div()
                             .id(("ai-chip-x", i))
+                            .flex_none()
+                            .size(px(control::S))
+                            .m(px(-(control::S - iconsize::XS) / 2.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .rounded_full()
                             .cursor_pointer()
-                            .soft(t.ink.opacity(0.08), radius::FULL)
-                            .tooltip(tip(tr("Nicht mitschicken")))
+                            .key_nav()
+                            .soft(t.ink.opacity(hover::RAISED), radius::FULL)
+                            .tip(tr("Nicht mitschicken"))
                             .child(icon("x", iconsize::XS, t.tertiary))
                             .on_click(move |_, _, cx| {
                                 let c = c.clone();
@@ -2359,8 +2433,9 @@ impl AiPanel {
         } else {
             Button::new("ai-send").primary().small().icon(menu_icon("arrow-up")).disabled(empty).tooltip(tr("Senden (⏎)")).on_click(move |_, window, cx| {
                 let text = input.read(cx).value().to_string();
-                me_send.update(cx, |p, cx| p.send(text, cx));
-                input.update(cx, |s, cx| s.set_value("", window, cx));
+                if me_send.update(cx, |p, cx| p.send(text, cx)) {
+                    input.update(cx, |s, cx| s.set_value("", window, cx));
+                }
             })
         };
         div()
@@ -2401,7 +2476,7 @@ pub fn show_diff(path: &Path, before: &str, after: &str, apply: Option<Rc<dyn Fn
         let total = marks.len();
         let per_hunk = apply.is_some() && total > 1;
         let dropped = keep.borrow().iter().filter(|k| !**k).count();
-        let mut diff = gpui_kit::component::diff::Diff::new(&state).header_visible(false).hunk_separator(gpui_kit::component::diff::DiffHunkSeparator::Simple);
+        let mut diff = gpui_kit::component::diff::Diff::new(&state).soft_wrap(true).header_visible(false).hunk_separator(gpui_kit::component::diff::DiffHunkSeparator::Simple);
         if per_hunk {
             let (keep, places) = (keep.clone(), marks.clone());
             diff = diff.annotations(marks.iter().enumerate().map(|(i, m)| DiffAnnotation::line(("ai-hunk", i), m.clone()))).render_annotation(move |a, _, cx| {

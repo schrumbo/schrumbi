@@ -10,7 +10,7 @@ use gpui_kit::*;
 
 use super::state::{self, act};
 use super::motion::{self, Soft};
-use super::theme::{Theme, font, radius, space, iconsize};
+use super::theme::{Theme, font, hover, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::filing::FileRole;
@@ -181,7 +181,7 @@ impl UploadPanel {
             .border_1()
             .border_dashed()
             .border_color(t.separator)
-            .soft(t.ink.opacity(0.1), radius::CONTROL)
+            .soft(t.ink.opacity(hover::CONTROL), radius::CONTROL)
             .cursor_grab()
             .text_size(px(font::CALLOUT))
             .on_mouse_down(MouseButton::Left, cx.listener(move |p, e: &MouseDownEvent, _, _| p.pressed = Some((e.position, files.clone()))))
@@ -214,7 +214,6 @@ impl UploadPanel {
     }
 
     fn row(&self, path: &Path, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let hover = t.ink.opacity(0.1);
         let (press, open_path, menu) = (path.to_path_buf(), path.to_path_buf(), path.to_path_buf());
         div()
             .id(SharedString::from(format!("upload-{}", path.display())))
@@ -224,9 +223,9 @@ impl UploadPanel {
             .p(px(space::S))
             .rounded(px(radius::CONTROL))
             .bg(t.ink.opacity(0.05))
-            .soft(hover, radius::CONTROL)
+            .soft(t.ink.opacity(hover::CONTROL), radius::CONTROL)
             .when(CAN_DRAG_OUT, |d| d.cursor_grab())
-            .tooltip(tip(if CAN_DRAG_OUT { tr("Ziehen zum Hochladen, Doppelklick öffnet") } else { tr("Doppelklick öffnet") }))
+            .tip(if CAN_DRAG_OUT { tr("Ziehen zum Hochladen, Doppelklick öffnet") } else { tr("Doppelklick öffnet") })
             .on_mouse_down(MouseButton::Left, cx.listener(move |p, e: &MouseDownEvent, _, _| p.pressed = Some((e.position, vec![press.clone()]))))
             .on_mouse_move(cx.listener(|p, e: &MouseMoveEvent, window, _| p.follow_drag(e, window)))
             .on_click(move |e, _, _| {
@@ -260,7 +259,7 @@ impl Render for UploadPanel {
             .text_size(px(font::BODY))
             .text_color(t.primary)
             .on_key_down(cx.listener(|p, e: &KeyDownEvent, window, cx| {
-                if e.keystroke.key == "enter" {
+                if e.keystroke.key == "enter" && p.focus.is_focused(window) {
                     p.mark_uploaded(window, cx);
                 } else if e.keystroke.key == "escape" {
                     window.remove_window();
@@ -342,7 +341,7 @@ impl Render for UploadPanel {
                         .items_center()
                         .gap(px(space::XS))
                         .rounded(px(radius::INNER))
-                        .soft(t.ink.opacity(0.05), radius::INNER)
+                        .soft(t.ink.opacity(hover::ROW), radius::INNER)
                         .cursor_pointer().key_nav()
                         .on_click(move |_, _, cx| me.update(cx, |p, cx| {
                             p.notes_open = !p.notes_open;

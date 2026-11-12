@@ -2,15 +2,14 @@ use std::collections::HashMap;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
-use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::act;
 use super::drive::Mark;
 use super::motion::Soft;
-use super::theme::{Theme, font, space, iconsize, radius, control};
-use super::widgets::{KeyNav, icon, tip};
+use super::theme::{Theme, font, hover, space, iconsize, radius, control};
+use super::widgets::{KeyNav, icon, keyed_item, menu_opened, Tip};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library, Route};
 use crate::core::prefs::{self, Shortcut};
@@ -61,8 +60,13 @@ fn row() -> f32 {
     if names() { ROW_WIDE } else { ROW }
 }
 
-/// Switches between icons only and icons with names.
+/// Switches between icons only and icons with names; in a window too narrow for names it says so instead.
 pub fn toggle_compact(cx: &mut App) {
+    let width = cx.active_window().and_then(|w| w.update(cx, |_, window, _| f32::from(window.viewport_size().width)).ok());
+    if width.is_some_and(|w| w < NAMES_MIN_WINDOW) {
+        act(cx, |l| l.notify(tr("Die Seitenleiste zeigt Namen erst in breiteren Fenstern."), "panel-left-open", None, None));
+        return;
+    }
     prefs::update(|p| p.sidebar_compact = !p.sidebar_compact);
     super::state::lib(cx).update(cx, |_, cx| cx.notify());
 }
@@ -101,6 +105,11 @@ fn entries(lib: &Library) -> Vec<Entry> {
     ]
 }
 
+/// Whether a module has a grade or a credit value, which is when the grades page earns its place in the sidebar.
+fn record_started(lib: &Library) -> bool {
+    lib.config.as_ref().is_some_and(|c| c.modules.iter().any(|m| m.ects.is_some() || m.grade.is_some() || m.passed || m.components.iter().any(|x| x.grade.is_some())))
+}
+
 /// Shows or hides a sidebar entry.
 pub fn set_hidden(key: &str, hidden: bool, cx: &mut App) {
     prefs::update(|p| {
@@ -114,10 +123,7 @@ pub fn set_hidden(key: &str, hidden: bool, cx: &mut App) {
 
 /// The first three modules answer to their own shortcuts, in sidebar order.
 fn module_help(name: String, index: usize) -> String {
-    match ShortcutAction::for_module(index).and_then(|a| a.active_shortcut()) {
-        Some(s) => format!("{name} ({})", s.display()),
-        None => name,
-    }
+    format!("{name}{}", ShortcutAction::for_module(index).map_or_else(String::new, ShortcutAction::hint))
 }
 
 fn shortcut_label(key: &str) -> String {
@@ -147,14 +153,13 @@ fn pill(n: usize, tint: Hsla) -> Div {
 /// One row: the glyph with its count on it and, unless the sidebar is compact, the name beside it; the shortcut lives in the tooltip.
 #[allow(clippy::too_many_arguments)]
 fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: String, count: Option<(usize, Hsla)>, help: String, t: &Theme) -> Stateful<Div> {
-    let (accent, selected, hover) = (t.accent, t.ink.opacity(0.08), t.ink.opacity(0.05));
+    let (accent, selected) = (t.accent, t.ink.opacity(0.08));
     let wide = names();
     let faded = dim && !active;
     let shown = label.clone();
     div()
         .id(id)
         .mark("tab", label)
-        .group("sidebar-tab")
         .relative()
         .w(px(if wide { WIDE } else { RAIL } - 2. * space::XS))
         .mx(px(space::XS))
@@ -166,7 +171,7 @@ fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: Stri
         .cursor_pointer().key_nav()
         .overflow_hidden()
         .when(active, |d| d.bg(selected).child(div().absolute().left_0().top(px(space::S)).bottom(px(space::S)).w(px(space::XXS)).rounded_r(px(space::XXS)).bg(accent)))
-        .when(!active, |d| d.soft(hover, radius::CONTROL))
+        .when(!active, |d| d.soft(t.ink.opacity(hover::ROW), radius::CONTROL))
         .child(
             div()
                 .relative()
@@ -176,14 +181,14 @@ fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: Stri
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(div().when(faded, |d| d.opacity(0.7).group_hover("sidebar-tab", |s| s.opacity(1.))).child(glyph))
+                .child(div().when(faded, |d| d.opacity(0.7)).child(glyph))
                 .when_some(count.filter(|_| !wide), |d, (n, tint)| d.child(badge(n, tint))),
         )
         .when(wide, |d| {
-            d.child(div().flex_1().min_w_0().truncate().when(faded, |d| d.opacity(0.7).group_hover("sidebar-tab", |s| s.opacity(1.))).when(active, |d| d.font_weight(FontWeight::MEDIUM)).child(shown))
+            d.child(div().flex_1().min_w_0().truncate().when(faded, |d| d.opacity(0.7)).when(active, |d| d.font_weight(FontWeight::MEDIUM)).child(shown))
                 .when_some(count, |d, (n, tint)| d.child(pill(n, tint).flex_none().mr(px(space::S))))
         })
-        .tooltip(tip(help))
+        .tip(help)
 }
 
 /// An invisible button over a tab, so the row can open a menu and still look like every other tab.
@@ -202,11 +207,11 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
         if !active && e.key.is_some_and(|k| hidden.iter().any(|h| h == k)) {
             continue;
         }
+        if !active && e.route == Route::Record && !record_started(lib) {
+            continue;
+        }
         let (hide_key, hide_label) = (e.key, e.label.clone());
-        let help = match e.shortcut.and_then(|a| a.active_shortcut()) {
-            Some(k) => format!("{} ({})", e.label, k.display()),
-            None => e.label.clone(),
-        };
+        let help = format!("{}{}", e.label, e.shortcut.map_or_else(String::new, ShortcutAction::hint));
         let route = e.route.clone();
         let is_inbox = e.route == Route::Inbox;
         let count = (e.badge > 0).then_some((e.badge, t.badge_fill(if e.urgent { t.gray } else { t.accent })));
@@ -216,7 +221,8 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
             continue;
         };
         let dir = lib.root.as_ref().zip(lib.config.as_ref()).map(|(r, c)| r.join(&c.inbox)).filter(|_| is_inbox);
-        top = top.child(row.context_menu(move |mut menu, _, _| {
+        top = top.child(row.context_menu(move |mut menu, window, cx| {
+            menu_opened(window, cx);
             if let Some(dir) = dir.clone() {
                 menu = menu.item(PopupMenuItem::new(super::platform::reveal_label()).on_click(move |_, _, _| library::open_folder(&dir))).separator();
             }
@@ -271,7 +277,8 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
                     act(cx, |l| l.request_filing(vec![path], l.next_in_module(&inside)));
                 })
                 .on_click(move |_, _, cx| navigate(route.clone(), cx))
-                .context_menu(move |mut menu, _, _| {
+                .context_menu(move |mut menu, window, cx| {
+                    menu_opened(window, cx);
                     for (title, url) in &links {
                         let url = url.clone();
                         menu = menu.item(PopupMenuItem::new(trf("%@ öffnen", &[title])).on_click(move |_, _, _| {
@@ -290,6 +297,7 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
     let recents = prefs::get().recent_workspaces;
     let current = lib.root.clone();
     let name = lib.config.as_ref().map(|c| c.name.clone()).filter(|n| !n.is_empty());
+    let current_name = name.clone();
     let workspace_help = name.as_ref().map_or_else(|| tr("Arbeitsordner"), |n| format!("{}: {n}", tr("Arbeitsordner")));
     let workspace = name.unwrap_or_else(|| tr("Arbeitsordner"));
     let semesters = lib.config.as_ref().map(|c| c.semesters.clone()).unwrap_or_default();
@@ -308,7 +316,8 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
         })
         .when_some(sync_row(t, cx), |d, row| d.child(row))
         .when(semesters.len() > 1, |d| {
-            d.child(tab("tab-semester-row".into(), false, true, icon("calendar-range", iconsize::L, fg).into_any_element(), semester.clone(), None, format!("{}: {semester}", tr("Semester")), t).child(div().absolute().inset_0().child(menu_overlay("tab-semester").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+            d.child(tab("tab-semester-row".into(), false, true, icon("calendar-range", iconsize::L, fg).into_any_element(), semester.clone(), None, format!("{}: {semester}", tr("Semester")), t).child(div().absolute().inset_0().child(menu_overlay("tab-semester").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, window, cx| {
+                menu_opened(window, cx);
                 for s in &semesters {
                     let id = s.id.clone();
                     menu = menu.item(PopupMenuItem::new(s.name.clone()).checked(selected_id.as_deref() == Some(s.id.as_str())).on_click(move |_, _, cx| {
@@ -321,12 +330,13 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
                 menu
             }))))
         })
-        .child(tab("tab-workspace-row".into(), false, true, icon("folder-open", iconsize::L, fg).into_any_element(), workspace, None, workspace_help, t).child(div().absolute().inset_0().child(menu_overlay("tab-workspace").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, _, _| {
+        .child(tab("tab-workspace-row".into(), false, true, icon("folder-open", iconsize::L, fg).into_any_element(), workspace, None, workspace_help, t).child(div().absolute().inset_0().child(menu_overlay("tab-workspace").dropdown_menu_with_anchor(Anchor::BottomLeft, move |mut menu, window, cx| {
+            menu_opened(window, cx);
             for (i, p) in recents.iter().enumerate() {
-                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let name = current_name.clone().filter(|_| current.as_ref() == Some(p)).unwrap_or_else(|| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
                 menu = menu.item(PopupMenuItem::new(name).checked(current.as_ref() == Some(p)).on_click(move |_, window, cx| window.dispatch_action(Box::new(super::app::OpenRecent(i)), cx)));
             }
-            menu.separator().item(PopupMenuItem::new(format!("{}{}", tr("Anderen Ordner öffnen…"), ShortcutAction::OpenOtherWorkspace.hint())).on_click(|_, window, cx| window.dispatch_action(Box::new(super::app::OpenOtherWorkspace), cx)))
+            menu.separator().item(keyed_item(tr("Anderen Ordner öffnen…"), Some(ShortcutAction::OpenOtherWorkspace)).on_click(|_, window, cx| window.dispatch_action(Box::new(super::app::OpenOtherWorkspace), cx)))
         }))))
         .child(tab("tab-settings".into(), false, true, icon("settings", iconsize::L, fg).into_any_element(), tr("Einstellungen"), None, format!("{} ({})", tr("Einstellungen"), shortcut_label(",")), t).on_click(|_, _, cx| super::settings::open(cx)))
         .when(can_toggle, |d| d.child(tab("tab-sidebar-toggle".into(), false, true, icon(if wide { "panel-left-close" } else { "panel-left-open" }, iconsize::L, fg).into_any_element(), toggle_label.clone(), None, toggle_label, t).on_click(|_, _, cx| toggle_compact(cx))));
@@ -342,7 +352,7 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
         .overflow_hidden()
         .child(top)
         .when(!modules.is_empty(), |d| d.child(div().mx(px(space::M)).my(px(space::S)).h(px(1.)).bg(t.separator)))
-        .child(div().flex_1().min_h_0().relative().child(div().id("tab-modules").size_full().overflow_y_scroll().track_scroll(&scroll).child(mods)).vertical_scrollbar(&scroll).children(fade(true, more_above, t)).children(fade(false, more_below, t)))
+        .child(div().flex_1().min_h_0().relative().child(div().id("tab-modules").size_full().overflow_y_scroll().track_scroll(&scroll).child(mods)).children(fade(true, more_above, t)).children(fade(false, more_below, t)))
         .child(bottom)
 }
 
