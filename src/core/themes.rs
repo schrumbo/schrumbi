@@ -501,7 +501,7 @@ fn write_file(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
         })
 }
 
-/// Keeps a copy of a checked design in the folder; a design of the same name is replaced. Returns its id.
+/// Keeps a copy of a checked design in the folder; an existing file is never replaced, the same bytes keep their id. Returns its id.
 pub fn install(bytes: &[u8], design: &Design) -> io::Result<String> {
     let base = slug(&design.name);
     let mut n = 1;
@@ -511,7 +511,8 @@ pub fn install(bytes: &[u8], design: &Design) -> io::Result<String> {
         let same = match std::fs::read(&path) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => true,
             Err(e) => return Err(e),
-            Ok(old) => parse(&old).is_ok_and(|d| d.name == design.name),
+            Ok(old) if old == bytes => return Ok(id),
+            Ok(_) => false,
         };
         if same {
             break (id, path);
@@ -638,11 +639,11 @@ mod tests {
         assert_eq!(id, "install-probe");
         assert_eq!(read(&id).unwrap().1, a.as_bytes());
         let changed = a.replace("#1E66F5", "#2266F5");
-        assert_eq!(install(changed.as_bytes(), &parse(changed.as_bytes()).unwrap()).unwrap(), id);
-        assert_eq!(read(&id).unwrap().1, changed.as_bytes());
-        let other = a.replace("Install Probe", "Install  Probe!");
-        let id2 = install(other.as_bytes(), &parse(other.as_bytes()).unwrap()).unwrap();
+        assert_eq!(install(a.as_bytes(), &da).unwrap(), id);
+        let id2 = install(changed.as_bytes(), &parse(changed.as_bytes()).unwrap()).unwrap();
         assert_eq!(id2, "install-probe-2");
+        assert_eq!(read(&id).unwrap().1, a.as_bytes());
+        assert_eq!(read(&id2).unwrap().1, changed.as_bytes());
         assert!(installed().iter().any(|i| i.id == id2 && i.problem.is_none()));
         let bytes = remove(&id2).unwrap();
         assert!(read(&id2).is_none());
