@@ -278,7 +278,7 @@ impl MainWindow {
                 .text_size(px(font::CALLOUT))
                 .text_color(t.secondary)
                 .soft(hover, radius::SMALL)
-                .tooltip(tip(rel.clone()))
+                .tip(rel.clone())
                 .on_click(move |_, _, cx| {
                     crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
                     act(cx, |l| l.reveal_folder = Some(rel.clone()));
@@ -322,7 +322,7 @@ impl MainWindow {
                 .text_size(px(font::TITLE3))
                 .font_weight(FontWeight::BOLD)
                 .soft(hover, radius::SMALL)
-                .tooltip(tip(format!("{name}\n{}{}", tr("Klicken zum Umbenennen"), ShortcutAction::RenameNote.hint())))
+                .tip(format!("{name}\n{}{}", tr("Klicken zum Umbenennen"), ShortcutAction::RenameNote.hint()))
                 .on_click(move |_, _, cx| super::app::rename_file(rename.clone(), cx))
                 .child(name),
         );
@@ -486,6 +486,8 @@ impl Render for MainWindow {
                 this.press_stamp = None;
                 if e.button == MouseButton::Right {
                     pause_tooltips(cx);
+                } else {
+                    super::widgets::clicked(cx);
                 }
             }))
             .track_focus(&self.focus)

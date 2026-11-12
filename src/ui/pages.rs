@@ -206,7 +206,7 @@ impl Pages {
                         .cursor_pointer().key_nav()
                         .soft(hover, radius::INNER)
                         .text_size(px(font::CAPTION))
-                        .tooltip(tip(tr("Details öffnen")))
+                        .tip(tr("Details öffnen"))
                         .child(div().size(px(space::S)).rounded_full().bg(color))
                         .child(div().truncate().max_w(px(220.)).child(a.title.clone()))
                         .child(div().text_color(t.secondary).child(day::day_label(a.due, lib.now)))

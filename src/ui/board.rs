@@ -12,7 +12,7 @@ use gpui_kit::*;
 use super::state::{self, act};
 use super::motion::{self, Soft};
 use super::theme::{Theme, calendar as cal, control, font, radius, space, iconsize};
-use super::widgets::{KeyNav, file_target, icon, menu_icon, section_title, status_menu, status_toggle, tabular, tip};
+use super::widgets::{KeyNav, file_target, icon, menu_icon, section_title, status_menu, status_toggle, tabular, Tip};
 use crate::core::calendar::{self, CalendarView};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Library;
@@ -122,7 +122,7 @@ fn header(l: &Library, view: CalendarView, segment: f32, t: &Theme) -> Div {
                 .flex()
                 .items_baseline()
                 .gap(px(space::S))
-                .child(div().id("board-title").flex_none().tooltip(tip(hint)).child(section_title(title)))
+                .child(div().id("board-title").flex_none().tip(hint).child(section_title(title)))
                 .children(caption.map(|c| div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.tertiary).child(c))),
         )
         .child(segmented(view, segment, t))
@@ -156,7 +156,7 @@ fn segment_button(id: &'static str, label: String, key: &str, on: bool, view: Ca
         .soft(t.ink.opacity(0.05), radius::INNER)
         .cursor_pointer()
         .key_nav()
-        .tooltip(tip(help))
+        .tip(help)
         .on_click(move |_, _, cx| act(cx, |l| l.set_calendar_view(view)))
         .child(div().text_size(px(font::CAPTION)).font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }).text_color(if on { t.primary } else { t.secondary }).child(label))
 }
@@ -245,7 +245,7 @@ fn cell(lib: &Library, d: NaiveDate, month: u32, items: &[&Assignment], first: N
         .soft(if is_today { t.on_accent.opacity(0.2) } else { t.ink.opacity(0.08) }, radius::FULL)
         .cursor_pointer()
         .key_nav()
-        .tooltip(tip(tr("Woche öffnen")))
+        .tip(tr("Woche öffnen"))
         .on_click(move |_, _, cx| act(cx, |l| l.show_week_of(d)))
         .child(div().text_size(px(font::CAPTION)).font_weight(if is_today { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }).text_color(if is_today { t.on_accent } else if in_month { t.primary } else { t.tertiary }).font_features(tabular()).child(d.day().to_string()));
     div()
@@ -417,7 +417,7 @@ fn chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .cursor_pointer()
         .key_nav()
         .when(selected, |c| c.border(px(1.5)).border_color(t.accent))
-        .tooltip(tip(help))
+        .tip(help)
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(select_id.clone()))))
         .when(!closed, |c| c.on_drag(DraggedCard { id: a.id.clone(), title: a.title.clone(), tint }, |d, _, _, cx| cx.new(|_| d.clone())))
         .child(div().absolute().top(px(space::XS)).bottom(px(space::XS)).left(px(space::XS)).w(px(cal::EDGE)).rounded_full().bg(edge))
@@ -610,7 +610,7 @@ fn session_chip(m: &Module, s: &Session, t: &Theme) -> Stateful<Div> {
         .flex()
         .gap(px(space::S))
         .py(px(space::XXS))
-        .tooltip(tip(format!("{} · {} {}–{}", m.code, s.title, s.start, s.end)))
+        .tip(format!("{} · {} {}–{}", m.code, s.title, s.start, s.end))
         .child(div().w(px(cal::EDGE)).flex_none().rounded_full().bg(t.palette(&m.color).opacity(0.6)))
         .child(
             div()
@@ -664,7 +664,7 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .bg(if selected { hover_fill } else { fill })
         .soft(hover_fill, radius::CONTROL)
         .cursor_pointer().key_nav()
-        .tooltip(tip(help))
+        .tip(help)
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(select_id.clone()))))
         .when(!closed, |c| c.on_drag(DraggedCard { id: a.id.clone(), title: a.title.clone(), tint }, |d, _, _, cx| cx.new(|_| d.clone())))
         .child(edge_bar(tint.opacity(if closed { 0.35 } else { 1. })))

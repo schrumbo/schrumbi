@@ -206,7 +206,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                         .h(px(if is_current { 14. } else { 8. }))
                         .rounded(px(radius::SMALL))
                         .bg(color)
-                        .tooltip(tip(help))
+                        .tip(help)
                         .when(s.lecture.is_some(), |d| {
                             d.cursor_pointer().hover(|s| s.opacity(0.7)).on_click(move |_, window, cx| view.update(cx, |p, cx| {
                                 p.grid.jump_to(monday, current, window);
@@ -324,7 +324,7 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
             })))
         })
         .when(attention > 0, |d| {
-            d.child(div().id(SharedString::from(format!("att-{}", slot.monday))).flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(trf("%lld offen", &[&attention])).tooltip(tip(trf("%lld sind noch offen", &[&attention]))))
+            d.child(div().id(SharedString::from(format!("att-{}", slot.monday))).flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(trf("%lld offen", &[&attention])).tip(trf("%lld sind noch offen", &[&attention])))
         })
         .child(if mandatory.is_empty() {
             div().text_size(px(font::CALLOUT)).text_color(t.tertiary).child(if entries.is_empty() { tr("frei") } else { tr("nur optional") })
@@ -399,7 +399,7 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .soft(hover, radius::CONTROL)
         .when(selected, |d| d.border(px(2.)).border_color(accent))
         .cursor_pointer().key_nav()
-        .tooltip(tip(format!("{} · {} · {}", a.title, when, e.status.label())))
+        .tip(format!("{} · {} · {}", a.title, when, e.status.label()))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(sel.clone()))))
         .child(super::board::edge_bar(tint.opacity(if e.status.is_closed() { 0.35 } else { 1. })))
         .child(status_toggle(a, lib, iconsize::M, t))

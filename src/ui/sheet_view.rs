@@ -862,7 +862,7 @@ impl SheetView {
                     .key_nav()
                     .max_w(px(TAB_WIDTH))
                     .when(!on, |d| d.soft(t.ink.opacity(0.06), radius::INNER))
-                    .tooltip(tip(name.clone()))
+                    .tip(name.clone())
                     .when(on, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm())
                     .text_size(px(font::CALLOUT))
                     .text_color(if on { t.primary } else { t.secondary })

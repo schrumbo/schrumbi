@@ -469,7 +469,7 @@ impl PropertyEditor {
                     .soft(t.ink.opacity(0.08), radius::FULL)
                     .child(value.clone())
                     .child(icon("x", iconsize::XS, t.secondary))
-                    .tooltip(tip(tr("Entfernen")))
+                    .tip(tr("Entfernen"))
                     .on_click(move |_, _, cx| {
                         let mut rest = list.clone();
                         rest.remove(i);
@@ -651,7 +651,7 @@ fn module_view(module: &str, t: &Theme, cx: &App) -> AnyElement {
                     l.select(Some(open.clone()));
                 });
             })
-            .child(div().id(("deadline-done", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).soft(t.ink.opacity(0.08), radius::SMALL).border_1().border_color(t.secondary).cursor_pointer().key_nav().aria_label(tr("Erledigt")).tooltip(tip(tr("Erledigt"))).on_click(move |_, _, cx| {
+            .child(div().id(("deadline-done", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).soft(t.ink.opacity(0.08), radius::SMALL).border_1().border_color(t.secondary).cursor_pointer().key_nav().aria_label(tr("Erledigt")).tip(tr("Erledigt")).on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 act(cx, |l| l.toggle_done(&done));
             }))
@@ -724,7 +724,7 @@ fn mini_graph(path: &Path, vault: &index::VaultIndex, t: &Theme) -> Option<AnyEl
             .key_nav()
             .soft(hover, radius::SMALL)
             .text_size(px(font::CAPTION))
-            .tooltip(tip(target.file_stem().unwrap_or_default().to_string_lossy().to_string()))
+            .tip(target.file_stem().unwrap_or_default().to_string_lossy().to_string())
             .on_click(move |_, _, cx| act(cx, |l| l.follow_path(&open, None)))
             .child(div().truncate().child(target.file_stem().unwrap_or_default().to_string_lossy().to_string()))
     });

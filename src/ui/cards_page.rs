@@ -937,7 +937,7 @@ impl CardsPage {
             .child(icon("layers", iconsize::S, t.secondary))
             .child(div().flex_1().min_w_0().truncate().child(tr("Alle Karten")))
             .child(counts_pills(all_counts, t))
-            .tooltip(tip(deck_help(total, all_counts)))
+            .tip(deck_help(total, all_counts))
             .on_click(cx.listener(|p, _, _, cx| {
                 p.zone = Zone::Decks;
                 p.select_deck(String::new(), cx)
@@ -1001,7 +1001,7 @@ impl CardsPage {
                         .child(chip)
                         .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
                         .child(counts_pills(waiting, &t))
-                        .tooltip(tip(deck_help(row.total, waiting)))
+                        .tip(deck_help(row.total, waiting))
                         .on_click(move |_, _, cx| {
                             b.update(cx, |p, cx| {
                                 p.zone = Zone::Decks;
@@ -1081,7 +1081,7 @@ impl CardsPage {
                 .justify_end()
                 .items_center()
                 .gap(px(space::XXS))
-                .tooltip(tip(if *n == 1 { trf("%@: 1 Karte", &[&day.format("%d.%m.").to_string()]) } else { trf("%@: %@ Karten", &[&day.format("%d.%m.").to_string(), &n.to_string()]) }))
+                .tip(if *n == 1 { trf("%@: 1 Karte", &[&day.format("%d.%m.").to_string()]) } else { trf("%@: %@ Karten", &[&day.format("%d.%m.").to_string(), &n.to_string()]) })
                 .child(div().text_size(px(font::CAPTION2)).text_color(t.secondary).font_features(tabular()).when(*n > 0, |d| d.child(n.to_string())))
                 .child(div().w_full().max_w(px(28.)).rounded_t(px(radius::SMALL)).h(px((share * 56.).max(if *n > 0 { 3. } else { 1. }))).bg(if i == 0 { t.accent } else if *n > 0 { t.accent.opacity(0.45) } else { t.separator }))
                 .child(div().text_size(px(font::CAPTION2)).text_color(if i == 0 { t.primary } else { t.tertiary }).child(label))
@@ -1619,7 +1619,7 @@ impl CardsPage {
                         .cursor_pointer()
                         .key_nav()
                         .soft(hover, radius::CONTROL)
-                        .when(rating == Rating::Good, |d| d.tooltip(tip(tr("Gut (3 oder Leertaste)"))))
+                        .when(rating == Rating::Good, |d| d.tip(tr("Gut (3 oder Leertaste)")))
                         .when(!cramming, |d| d.child(div().text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child({ cards::wait_label(now, choices[i].due) })))
                         .child(div().flex().items_start().gap(px(space::XS)).child(div().text_size(px(font::BODY)).line_height(px(line)).font_weight(FontWeight::SEMIBOLD).text_color(t.readable(color)).child(if cramming && rating == Rating::Good { tr("Gewusst") } else { rating_name(rating) })).child(div().relative().top(px(drop)).text_size(px(font::CAPTION2)).line_height(px(line)).text_color(t.tertiary).child((i + 1).to_string())))
                         .on_click(cx.listener(move |p, e: &ClickEvent, _, cx| {

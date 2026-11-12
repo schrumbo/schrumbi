@@ -296,7 +296,7 @@ impl Render for VersionList {
                     .when(!selected, |d| d.soft(hover, 0.))
                     .child(div().mt(px(space::XS)).size(px(space::S)).rounded_full().border_1().border_color(t.tertiary))
                     .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(v.subject.clone())).child(caption(time, &t).font_features(tabular())))
-                    .tooltip(tip(v.subject.clone()))
+                    .tip(v.subject.clone())
                     .on_click(cx.listener(move |s, _, _, cx| s.select(Some(i), cx))),
             );
         }

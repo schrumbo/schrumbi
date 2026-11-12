@@ -578,7 +578,7 @@ impl RenderOnce for AudioLine {
                     .soft(t.ink.opacity(0.06), radius::FULL)
                     .key_nav()
                     .child(icon(if playing { "pause" } else { "play" }, iconsize::S, t.primary))
-                    .tooltip(tip(if playing { tr("Pause") } else { tr("Abspielen") }))
+                    .tip(if playing { tr("Pause") } else { tr("Abspielen") })
                     .on_click(move |_, _, cx| {
                         let error = super::audio::toggle(&toggle).err();
                         if let Some(e) = error {

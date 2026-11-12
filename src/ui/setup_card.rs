@@ -479,7 +479,7 @@ impl SetupCard {
         } else {
             head = head
                 .child(Button::new(SharedString::from(format!("setup-do-{}", item.key()))).small().when(first, |b| b.primary()).label(action_label(item)).on_click(move |_, window, cx| me.update(cx, |s, cx| s.primary(item, window, cx))))
-                .child(link_button(SharedString::from(format!("setup-skip-{}", item.key())), tr("Überspringen"), t).text_size(px(font::CAPTION)).text_color(t.secondary).tooltip(tip(tr("Geht jederzeit später, auch aus den Einstellungen"))).on_click(move |_, _, cx| skip(item, cx)));
+                .child(link_button(SharedString::from(format!("setup-skip-{}", item.key())), tr("Überspringen"), t).text_size(px(font::CAPTION)).text_color(t.secondary).tip(tr("Geht jederzeit später, auch aus den Einstellungen")).on_click(move |_, _, cx| skip(item, cx)));
         }
         let form = match (open, item) {
             (true, Item::Semester) => Some(self.semester_form(snap, window, cx, t)),
@@ -578,7 +578,7 @@ impl Render for SetupCard {
                     .cursor_pointer()
                     .key_nav()
                     .soft(t.ink.opacity(0.05), radius::CONTROL)
-                    .tooltip(tip(if collapsed { tr("Aufklappen") } else { tr("Zuklappen") }))
+                    .tip(if collapsed { tr("Aufklappen") } else { tr("Zuklappen") })
                     .on_click(move |_, _, cx| {
                         prefs::update_setup(&fold_root, |s| s.collapsed = !s.collapsed);
                         cx.refresh_windows();
@@ -601,7 +601,7 @@ impl Render for SetupCard {
                     .cursor_pointer()
                     .key_nav()
                     .soft(t.ink.opacity(0.1), radius::FULL)
-                    .tooltip(tip(tr("Ausblenden; die Einstellungen zeigen die Liste wieder")))
+                    .tip(tr("Ausblenden; die Einstellungen zeigen die Liste wieder"))
                     .on_click(move |_, _, cx| {
                         settle(cx, false, true);
                         let undo_root = close_root.clone();
@@ -662,7 +662,7 @@ impl Render for SetupCard {
                         )),
                 )
                 .child(div().flex_1())
-                .child(link_button("setup-skip-all", tr("Alle überspringen"), &t).text_size(px(font::CAPTION)).text_color(t.secondary).tooltip(tip(tr("Geht jederzeit später, auch aus den Einstellungen"))).on_click({
+                .child(link_button("setup-skip-all", tr("Alle überspringen"), &t).text_size(px(font::CAPTION)).text_color(t.secondary).tip(tr("Geht jederzeit später, auch aus den Einstellungen")).on_click({
                     let me = cx.entity();
                     move |_, _, cx| {
                         let keys: Vec<String> = all.iter().map(|i| i.key().to_string()).collect();
@@ -709,7 +709,7 @@ impl Render for SetupCard {
             .child(icon("list-checks", iconsize::S, t.tertiary))
             .child(caption(tr("Alles ist freiwillig. Die Liste hakt sich von selbst ab."), &t))
             .child(div().flex_1())
-            .child(link_button("setup-guided", tr("Geführt einrichten…"), &t).text_size(px(font::CAPTION)).tooltip(tip(tr("Alle Schritte nacheinander in einem Fenster"))).on_click(|_, _, cx| act(cx, |l| l.needs_setup = true)));
+            .child(link_button("setup-guided", tr("Geführt einrichten…"), &t).text_size(px(font::CAPTION)).tip(tr("Alle Schritte nacheinander in einem Fenster")).on_click(|_, _, cx| act(cx, |l| l.needs_setup = true)));
         grouped(&t).child(header).child(div().w_full().child(motion::reveal("setup-body", !collapsed, div().w_full().flex().flex_col().child(divider(&t)).child(body).child(footer))))
     }
 }

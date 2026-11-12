@@ -226,7 +226,7 @@ impl UploadPanel {
             .bg(t.ink.opacity(0.05))
             .soft(hover, radius::CONTROL)
             .when(CAN_DRAG_OUT, |d| d.cursor_grab())
-            .tooltip(tip(if CAN_DRAG_OUT { tr("Ziehen zum Hochladen, Doppelklick öffnet") } else { tr("Doppelklick öffnet") }))
+            .tip(if CAN_DRAG_OUT { tr("Ziehen zum Hochladen, Doppelklick öffnet") } else { tr("Doppelklick öffnet") })
             .on_mouse_down(MouseButton::Left, cx.listener(move |p, e: &MouseDownEvent, _, _| p.pressed = Some((e.position, vec![press.clone()]))))
             .on_mouse_move(cx.listener(|p, e: &MouseMoveEvent, window, _| p.follow_drag(e, window)))
             .on_click(move |e, _, _| {

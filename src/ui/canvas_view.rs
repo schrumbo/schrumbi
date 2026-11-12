@@ -1146,7 +1146,7 @@ impl Render for CanvasView {
                         .justify_center()
                         .cursor_pointer()
                         .key_nav()
-                        .tooltip(tip(tr("Standardfarbe")))
+                        .tip(tr("Standardfarbe"))
                         .soft(hover, radius::FULL)
                         .on_click(cx.listener(|v, _, _, cx| v.set_color(None, cx)))
                         .child(div().size(px(DOT_SHOWN)).rounded_full().border_1().border_color(secondary).when(current == Some(None), |s| s.border_2().border_color(ring)).group_hover("canvas-color-none", move |s| s.border_color(ring))),
@@ -1165,7 +1165,7 @@ impl Render for CanvasView {
                         .justify_center()
                         .cursor_pointer()
                         .key_nav()
-                        .tooltip(tip(tr(COLOR_NAMES[i])))
+                        .tip(tr(COLOR_NAMES[i]))
                         .soft(hover, radius::FULL)
                         .on_click(cx.listener(move |v, _, _, cx| v.set_color(Some(key.clone()), cx)))
                         .child(div().size(px(DOT_SHOWN)).rounded_full().bg(shown).when(on, |s| s.border_2().border_color(ring)).group_hover(group, move |s| s.border_2().border_color(ring)))

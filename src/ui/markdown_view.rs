@@ -11,7 +11,7 @@ use gpui_kit::*;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
 use super::motion::Soft;
-use super::widgets::{KeyNav, tip};
+use super::widgets::{KeyNav, Tip};
 use super::selectable::{InlineKind, InlineSlot, LinkAction, selectable};
 use super::theme::{Theme, control, font, note_size, radius, space, iconsize};
 use crate::core::i18n::{tr, trf};
@@ -2289,7 +2289,7 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
                 .soft(t.ink.opacity(0.06), radius::SMALL)
                 .invisible()
                 .group_hover(group, |s| s.visible())
-                .tooltip(super::widgets::tip(tr("Code kopieren")))
+                .tip(tr("Code kopieren"))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     super::drive::copy(copied.to_string(), cx);
@@ -2353,7 +2353,7 @@ fn list_items(start: &Option<u64>, items: &[Item], first: usize, cx: &Ctx) -> Di
                         .items_center()
                         .justify_center()
                         .child(shown)
-                        .when(toggle.is_some(), |d| d.cursor_pointer().tooltip(super::widgets::tip(if done { tr("Als offen markieren") } else { tr("Als erledigt markieren") })))
+                        .when(toggle.is_some(), |d| d.cursor_pointer().tip(if done { tr("Als offen markieren") } else { tr("Als erledigt markieren") }))
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();
                             if let Some(f) = &toggle {
@@ -2401,7 +2401,7 @@ fn list_items(start: &Option<u64>, items: &[Item], first: usize, cx: &Ctx) -> Di
                     .justify_center()
                     .cursor_pointer()
                     .soft(t.ink.opacity(0.06), radius::SMALL)
-                    .tooltip(super::widgets::tip(tr(if folded { "Ausklappen" } else { "Einklappen" })))
+                    .tip(tr(if folded { "Ausklappen" } else { "Einklappen" }))
                     .on_click(move |_, _, cx| {
                         cx.stop_propagation();
                         if let Some(f) = &folds {
@@ -2890,7 +2890,7 @@ impl RenderOnce for Properties {
                 .when(!sample, |d| {
                     d.cursor_pointer()
                         .soft(secondary.opacity(0.1), radius::INNER)
-                        .tooltip(super::widgets::tip(tr("In den Details bearbeiten")))
+                        .tip(tr("In den Details bearbeiten"))
                         .on_click(|_, _, cx| super::state::act(cx, |l| {
                             l.show_properties = true;
                             l.peek_inspector();
@@ -2924,7 +2924,7 @@ impl RenderOnce for Properties {
                                 .bg(accent.opacity(0.14))
                                 .text_color(accent)
                                 .when(!sample, |d| {
-                                    d.cursor_pointer().key_nav().soft(accent.opacity(0.12), radius::SMALL).tooltip(tip(trf("Notizen mit %@ zeigen", &[&shown]))).on_click(move |_, _, cx| {
+                                    d.cursor_pointer().key_nav().soft(accent.opacity(0.12), radius::SMALL).tip(trf("Notizen mit %@ zeigen", &[&shown])).on_click(move |_, _, cx| {
                                         cx.stop_propagation();
                                         super::state::act(cx, |l| l.show_tag(&tag));
                                     })
@@ -3276,7 +3276,7 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<(ListState, Rc<dyn Fn(us
                     .flex_none()
                     .cursor_pointer()
                     .text_color(t.accent_text)
-                    .tooltip(super::widgets::tip(tr("Zurück zum Text")))
+                    .tip(tr("Zurück zum Text"))
                     .on_click(move |_, _, _| {
                         if let Some((l, item_of_line)) = &list {
                             reveal_item(l, item_of_line(home));

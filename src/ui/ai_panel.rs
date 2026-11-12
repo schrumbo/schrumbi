@@ -2289,7 +2289,7 @@ impl AiPanel {
                             .rounded_full()
                             .cursor_pointer()
                             .soft(t.ink.opacity(0.08), radius::FULL)
-                            .tooltip(tip(tr("Nicht mitschicken")))
+                            .tip(tr("Nicht mitschicken"))
                             .child(icon("x", iconsize::XS, t.tertiary))
                             .on_click(move |_, _, cx| {
                                 let c = c.clone();

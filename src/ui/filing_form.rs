@@ -632,7 +632,7 @@ impl FilingForm {
                 .items_center()
                 .justify_center()
                 .cursor_pointer().key_nav()
-                .tooltip(tip(tr("Vorschau (Klick)")))
+                .tip(tr("Vorschau (Klick)"))
                 .on_click(move |_, _, cx| super::preview::show(&preview, cx))
                 .child(thumb),
         )
@@ -917,7 +917,7 @@ impl Render for FilingForm {
                     .items_center()
                     .justify_center()
                     .cursor_pointer().key_nav()
-                    .tooltip(tip(tr("Vorschau (Klick)")))
+                    .tip(tr("Vorschau (Klick)"))
                     .on_click(move |_, _, cx| super::preview::show(&preview_path, cx))
                     .child(thumb),
             )
@@ -979,7 +979,7 @@ impl Render for FilingForm {
                     .gap(px(space::S))
                     .child(self.ai_label(tr("Was ist das?"), 0, cx, &t))
                     .children(self.ai_row(me.clone(), cx, &t))
-                    .when(self.guessed == Some(self.role), |d| d.child(div().id("guessed").flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("sparkles", iconsize::XS, t.secondary)).child(tr("erkannt")).tooltip(tip(tr("Aus Dateiname und Inhalt geschätzt"))))),
+                    .when(self.guessed == Some(self.role), |d| d.child(div().id("guessed").flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("sparkles", iconsize::XS, t.secondary)).child(tr("erkannt")).tip(tr("Aus Dateiname und Inhalt geschätzt")))),
             )
             .child(div().flex().min_w_0().child(roles))
             .child(caption(role_hint, &t));
@@ -995,7 +995,7 @@ impl Render for FilingForm {
                 let ctx = p.context.clone();
                 chips = chips.child(
                     chip(SharedString::from(format!("place-{}", p.path.display())), selected, &t)
-                        .tooltip(tip(l.relative_path(&p.path)))
+                        .tip(l.relative_path(&p.path))
                         .child(div().size(px(space::S)).rounded_full().bg(t.palette(&p.module.color)))
                         .child(
                             div()
@@ -1114,14 +1114,14 @@ impl Render for FilingForm {
                                 cx.notify();
                             })
                         }))
-                        .tooltip(tip(if module_id.is_none() { tr("Ordner gehört zu keinem Modul") } else { tr("Muster aus den Moduleinstellungen") })),
+                        .tip(if module_id.is_none() { tr("Ordner gehört zu keinem Modul") } else { tr("Muster aus den Moduleinstellungen") }),
                 )),
             );
             if self.rename && module_id.is_some() {
                 let mut sugg = div().flex().flex_wrap().gap(px(space::S));
                 for (i, s) in self.titles.iter().enumerate() {
                     let (e, value) = (me.clone(), s.title.clone());
-                    sugg = sugg.child(suggestion(SharedString::from(format!("title-{i}")), s.title.clone(), title_value == s.title, &t).tooltip(tip(tr(s.source))).on_click(move |_, window, cx| {
+                    sugg = sugg.child(suggestion(SharedString::from(format!("title-{i}")), s.title.clone(), title_value == s.title, &t).tip(tr(s.source)).on_click(move |_, window, cx| {
                         let v = value.clone();
                         e.update(cx, |f, cx| f.title.update(cx, |s, cx| s.set_value(v, window, cx)))
                     }));
@@ -1155,7 +1155,7 @@ impl Render for FilingForm {
                                     .bg(t.accent.opacity(0.15))
                                     .text_size(px(font::CAPTION))
                                     .child(n.clone())
-                                    .child(div().id(("rm-co", i)).rounded_full().soft(t.ink.opacity(0.1), radius::FULL).cursor_pointer().key_nav().child(icon("circle-x", iconsize::XS, t.secondary)).tooltip(tip(trf("%@ entfernen", &[&n]))).on_click(move |_, _, cx| e.update(cx, |f, cx| {
+                                    .child(div().id(("rm-co", i)).rounded_full().soft(t.ink.opacity(0.1), radius::FULL).cursor_pointer().key_nav().child(icon("circle-x", iconsize::XS, t.secondary)).tip(trf("%@ entfernen", &[&n])).on_click(move |_, _, cx| e.update(cx, |f, cx| {
                                         f.coauthors.retain(|c| *c != n2);
                                         cx.notify();
                                     }))),
@@ -1179,7 +1179,7 @@ impl Render for FilingForm {
                         for (i, b) in known.into_iter().take(4).enumerate() {
                             let selected = current == b || Naming::clean_author(&current, CoauthorStyle::Initial) == b;
                             let (e, v) = (me.clone(), b.clone());
-                            sugg = sugg.child(suggestion(SharedString::from(format!("byline-{i}")), b, selected, &t).tooltip(tip(tr("So heißen andere Dateien in diesem Ordner"))).on_click(move |_, window, cx| {
+                            sugg = sugg.child(suggestion(SharedString::from(format!("byline-{i}")), b, selected, &t).tip(tr("So heißen andere Dateien in diesem Ordner")).on_click(move |_, window, cx| {
                                 let v = v.clone();
                                 e.update(cx, |f, cx| f.byline.update(cx, |s, cx| s.set_value(v, window, cx)))
                             }));

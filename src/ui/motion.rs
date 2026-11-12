@@ -5,7 +5,7 @@ use gpui_kit::base::{MotionReveal, Transition, transition};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::theme::{Theme, iconsize, radius, space};
+use super::theme::{Theme, hover, iconsize, radius, space};
 use super::widgets::icon;
 
 /// Hover, press, small confirmations.
@@ -74,6 +74,8 @@ pub trait Soft {
     fn soft(self, color: Hsla, radius: f32) -> Self;
     /// Like `soft`, with a line of `width` at the left edge in `line` that fades with it.
     fn soft_edge(self, color: Hsla, radius: f32, line: Hsla, width: f32) -> Self;
+    /// The hover of a row in a list: rounded and `hover::INSET` away from the list's sides, like `row_fill`.
+    fn soft_row(self, color: Hsla) -> Self;
 }
 
 impl Soft for Stateful<Div> {
@@ -81,12 +83,25 @@ impl Soft for Stateful<Div> {
         self.soft_edge(color, radius, color, 0.)
     }
 
-    fn soft_edge(mut self, color: Hsla, radius: f32, line: Hsla, width: f32) -> Self {
-        if self.style().position.is_none() {
-            self = self.relative();
-        }
-        super::drive::marked(self, "clickable").child(HoverLayer { color, radius, line, width })
+    fn soft_edge(self, color: Hsla, radius: f32, line: Hsla, width: f32) -> Self {
+        layer(self, HoverLayer { color, radius, line, width, inset: 0. })
     }
+
+    fn soft_row(self, color: Hsla) -> Self {
+        layer(self, HoverLayer { color, radius: radius::INNER, line: color, width: 0., inset: hover::INSET })
+    }
+}
+
+fn layer(mut row: Stateful<Div>, layer: HoverLayer) -> Stateful<Div> {
+    if row.style().position.is_none() {
+        row = row.relative();
+    }
+    super::drive::marked(row, "clickable").child(layer)
+}
+
+/// The fill of a selected row, with the same corners and insets as `soft_row`; add it as the row's first child.
+pub fn row_fill(color: Hsla) -> Div {
+    div().absolute().top_0().bottom_0().left(px(hover::INSET)).right(px(hover::INSET)).rounded(px(radius::INNER)).bg(color)
 }
 
 #[derive(IntoElement)]
@@ -95,6 +110,7 @@ struct HoverLayer {
     radius: f32,
     line: Hsla,
     width: f32,
+    inset: f32,
 }
 
 impl RenderOnce for HoverLayer {
@@ -107,7 +123,10 @@ impl RenderOnce for HoverLayer {
         div()
             .id("soft")
             .absolute()
-            .inset_0()
+            .top_0()
+            .bottom_0()
+            .left(px(self.inset))
+            .right(px(self.inset))
             .rounded(px(self.radius))
             .when(level > 0., |d| d.bg(Hsla { a: (self.color.a * level).min(1.), ..self.color }))
             .when(level > 0. && self.width > 0., |d| d.child(div().absolute().top_0().bottom_0().left_0().w(px(self.width)).bg(Hsla { a: (self.line.a * level).min(1.), ..self.line })))

@@ -1092,7 +1092,7 @@ impl NoteView {
                 return Some(div().id("wrap-notice").min_w_0().min_h(px(control::S)).flex().items_center().truncate().px(px(space::XS)).child(notice).into_any_element());
             }
             let me = cx.entity();
-            let caption = div().id("long-line").min_w_0().min_h(px(control::S)).flex().items_center().truncate().rounded(px(radius::SMALL)).px(px(space::XS)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::FLOAT), radius::SMALL).tooltip(tip(tr("Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück zur Live-Ansicht.")));
+            let caption = div().id("long-line").min_w_0().min_h(px(control::S)).flex().items_center().truncate().rounded(px(radius::SMALL)).px(px(space::XS)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::SMALL).tip(tr("Eine so lange Zeile bleibt im Quelltext schnell. Klicken geht zurück zur Live-Ansicht."));
             return Some(
                 caption
                     .on_click(move |_, window, cx| {
@@ -1111,14 +1111,14 @@ impl NoteView {
             if let Some(notice) = notice {
                 return Some(div().id("wrap-notice").min_w_0().min_h(px(control::S)).flex().items_center().truncate().px(px(space::XS)).child(notice).into_any_element());
             }
-            return spelling.then(|| caption.tooltip(tip(tr("Die Rechtschreibung prüft in langen Notizen nur den Text um die Schreibmarke."))).child(tr("Rechtschreibung nur um die Schreibmarke")).into_any_element());
+            return spelling.then(|| caption.tip(tr("Die Rechtschreibung prüft in langen Notizen nur den Text um die Schreibmarke.")).child(tr("Rechtschreibung nur um die Schreibmarke")).into_any_element());
         }
         let help = if spelling {
             tr("Lange Notiz: ohne Zeilenumbruch und Hervorhebung, Rechtschreibung nur um die Schreibmarke. Lesen zeigt alles umgebrochen.")
         } else {
             tr("Lange Notiz: ohne Zeilenumbruch und Hervorhebung. Lesen zeigt alles umgebrochen.")
         };
-        Some(caption.tooltip(tip(help)).child(notice.unwrap_or_else(|| tr("Lange Notiz: ohne Zeilenumbruch und Hervorhebung"))).into_any_element())
+        Some(caption.tip(help).child(notice.unwrap_or_else(|| tr("Lange Notiz: ohne Zeilenumbruch und Hervorhebung"))).into_any_element())
     }
 
     /// The source line at the top of the reader.
@@ -1982,7 +1982,7 @@ impl NoteView {
 
     /// Floats over a selection with the formats it can get.
     fn format_bar(&self, t: &Theme, height: Pixels, below: bool, cell: bool, cx: &mut Context<Self>) -> AnyElement {
-        let lit = t.ink.opacity(hover::FLOAT);
+        let lit = t.ink.opacity(hover::CONTROL);
         let button = |id: &'static str, name: &'static str, help: String, token: &'static str, cx: &mut Context<Self>| {
             div()
                 .id(id)
@@ -1994,7 +1994,7 @@ impl NoteView {
                 .cursor_pointer()
                 .key_nav()
                 .soft(lit, radius::SMALL)
-                .tooltip(tip(help))
+                .tip(help)
                 .on_mouse_down(MouseButton::Left, |_, window, cx| {
                     window.prevent_default();
                     cx.stop_propagation();
@@ -2128,7 +2128,7 @@ impl NoteView {
     #[allow(clippy::too_many_arguments)]
     fn gutter(me: &Entity<Self>, i: usize, line: usize, count: usize, is_table: bool, label: String, group: SharedString, extra: Option<AnyElement>, t: &Theme) -> Div {
         let (add_me, menu_me) = (me.clone(), me.clone());
-        let lit = t.ink.opacity(hover::FLOAT);
+        let lit = t.ink.opacity(hover::CONTROL);
         let handle = |id: (&'static str, usize), name: &'static str| div().id(id).size(px(control::S)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().key_nav().soft(lit, radius::SMALL).child(icon(name, iconsize::S, t.tertiary));
         div()
             .flex()
@@ -2140,7 +2140,7 @@ impl NoteView {
             .group_hover(group, |s| s.visible())
             .capture_any_mouse_down(|_, _, _| markdown_view::press_control())
             .children(extra)
-            .child(handle(("live-add", i), "plus").tooltip(tip(tr("Darunter einfügen"))).on_click(move |_, window, cx| {
+            .child(handle(("live-add", i), "plus").tip(tr("Darunter einfügen")).on_click(move |_, window, cx| {
                 add_me.update(cx, |n, cx| n.edit_lines(line + count, 0, vec![String::new(), String::new()], None, window, cx));
                 let open_me = add_me.clone();
                 window.on_next_frame(move |window, cx| {
@@ -2776,7 +2776,7 @@ impl NoteView {
                 .size(px(control::S))
                 .when(!off, |d| d.cursor_pointer().key_nav())
                 .child(pill)
-                .tooltip(tip(hint));
+                .tip(hint);
             modes = modes.child(if off { slot } else { slot.on_click(move |_, window, cx| e.update(cx, |n, cx| n.set_mode(m, window, cx))) });
         }
         let (e1, e2, path, p2, p3) = (me.clone(), me.clone(), self.path.clone(), self.path.clone(), self.path.clone());
@@ -3110,9 +3110,9 @@ impl NoteView {
                         .px(px(space::XS))
                         .cursor_pointer()
                         .key_nav()
-                        .soft(t.ink.opacity(hover::FLOAT), radius::SMALL)
+                        .soft(t.ink.opacity(hover::CONTROL), radius::SMALL)
                         .capture_any_mouse_down(|_, _, _| markdown_view::press_control())
-                        .tooltip(tip(tr("Klicken öffnet die Zeile im Quelltext.")))
+                        .tip(tr("Klicken öffnet die Zeile im Quelltext."))
                         .on_click(move |_, window, cx| open_me.update(cx, |n, cx| n.open_line(line, None, window, cx)))
                         .child(trf("Hier steht nur der Anfang dieser langen Zeile, %@ KB mehr. Lesen zeigt alles.", &[&crate::core::i18n::grouped(left.div_ceil(1024))]))
                 })
@@ -3167,7 +3167,7 @@ impl NoteView {
                                 .rounded(px(radius::SMALL))
                                 .cursor_pointer()
                                 .soft(t.ink.opacity(0.1), radius::SMALL)
-                                .tooltip(tip(tr("Quelltext bearbeiten")))
+                                .tip(tr("Quelltext bearbeiten"))
                                 .on_click(move |_, window, cx| edit_me.update(cx, |n, cx| n.open_line(line, Some(0), window, cx)))
                                 .child(icon("code-xml", iconsize::S, t.tertiary))
                                 .into_any_element();
@@ -4613,7 +4613,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                     .whitespace_nowrap()
                     .text_ellipsis_middle()
                     .text_size(px(font::CALLOUT))
-                    .tooltip(tip(title.clone()))
+                    .tip(title.clone())
                     .context_menu(move |m, _, _| {
                         let shut = close.clone();
                         m.item(PopupMenuItem::new(format!("{}{}", tr("Tab schließen"), ShortcutAction::CloseTab.hint())).on_click(move |_, _, cx| close_tab(&shut, cx)))
@@ -4685,7 +4685,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                 .cursor_pointer()
                 .soft(t.ink.opacity(0.1), radius::FULL)
                 .child(if is_dirty && !pointed { div().size(px(space::S)).rounded_full().bg(t.secondary).into_any_element() } else { icon("x", iconsize::XS, t.secondary).into_any_element() })
-                .tooltip(tip(format!("{}{}", if is_dirty { tr("Ungesicherte Änderungen – Tab schließen") } else { tr("Tab schließen") }, ShortcutAction::CloseTab.hint())))
+                .tip(format!("{}{}", if is_dirty { tr("Ungesicherte Änderungen – Tab schließen") } else { tr("Tab schließen") }, ShortcutAction::CloseTab.hint()))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     close_tab(&close, cx);

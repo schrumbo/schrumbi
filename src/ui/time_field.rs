@@ -10,7 +10,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::theme::{Theme, control, font, iconsize, radius, space};
-use super::widgets::{icon, menu_icon, tip};
+use super::widgets::{icon, menu_icon, Tip};
 use crate::core::clock;
 use crate::core::i18n::{tr, trf};
 
@@ -204,7 +204,7 @@ impl Render for TimeField {
                     }))
                     .w(px(control::TIME))
                     .child(Input::new(&self.input).small().when(invalid, |i| i.border_color(t.red).text_color(t.readable(t.red))).when_some(suffix, Input::suffix))
-                    .tooltip(tip(tr("Tippe z. B. 18, 1830 oder 18:30. ↑↓ in Viertelstunden, mit ⇧ in vollen Stunden."))),
+                    .tip(tr("Tippe z. B. 18, 1830 oder 18:30. ↑↓ in Viertelstunden, mit ⇧ in vollen Stunden.")),
             )
             .child({
                 let none = presets.is_empty();

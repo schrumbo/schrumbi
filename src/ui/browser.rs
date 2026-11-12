@@ -14,7 +14,7 @@ use gpui_kit::*;
 use crate::core::vault::query as vault_query;
 use super::state::{self, act};
 use super::motion::{self, Soft};
-use super::theme::{Theme, control, font, radius, space, iconsize};
+use super::theme::{Theme, calendar, control, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::catalog::{self, CatalogFile, FileKind, Query};
 use crate::core::day;
@@ -717,7 +717,7 @@ impl FileBrowser {
             .rounded(px(radius::INNER))
             .when(selected, |d| d.bg(if self.list_focused { t.accent.opacity(0.32) } else { t.ink.opacity(0.09) }))
             .when(!selected, |d| d.soft(hover, radius::INNER))
-            .tooltip(tip(lib.relative_path(&path)))
+            .tip(lib.relative_path(&path))
             .on_click(move |e: &ClickEvent, window, cx| {
                 let (toggle, extend) = (e.modifiers().platform || e.modifiers().control, e.modifiers().shift);
                 let current = state::read(cx, current_week);
@@ -758,7 +758,7 @@ impl FileBrowser {
                                 .items_center()
                                 .gap(px(space::XS))
                                 .child(div().min_w_0().truncate().child(highlighted(&f.display_name(), &terms, t)))
-                                .when(dot, |d| d.child(div().id("unsaved-dot").flex_none().size(px(6.)).rounded_full().bg(t.accent).tooltip(tip(tr("Noch nicht gesichert")))))
+                                .when(dot, |d| d.child(div().id("unsaved-dot").flex_none().size(px(calendar::DOT)).rounded_full().bg(t.accent).tip(tr("Noch nicht gesichert"))))
                                 .when(is_copy, |d| d.child(div().flex_none().px(px(space::S)).rounded_full().bg(t.orange.opacity(0.18)).text_size(px(font::CAPTION)).text_color(t.orange).child(tr("Konflikt"))))
                                 .into_any_element()
                         }
@@ -775,7 +775,7 @@ impl FileBrowser {
                             .truncate()
                             .text_size(px(font::CAPTION))
                             .text_color(t.secondary)
-                            .tooltip(tip(tr("Zur Fundstelle springen")))
+                            .tip(tr("Zur Fundstelle springen"))
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
                                 open_at(&file, Some(spot_at.clone()), cx);
@@ -968,7 +968,7 @@ impl FileBrowser {
                     .cursor_pointer()
                     .key_nav()
                     .soft(t.accent.opacity(0.12), radius::FULL)
-                    .tooltip(tip(tr("Überall suchen")))
+                    .tip(tr("Überall suchen"))
                     .child(trf("In %@", &[&m.code]))
                     .child(icon("x", iconsize::XS, t.accent_text))
                     .on_click(|_, _, cx| act(cx, Library::widen_module_search)),
@@ -1055,7 +1055,7 @@ impl FileBrowser {
                 }
                 menu
             }))
-            .when(lib.is_indexing, |d| d.child(div().id("indexing").child(motion::spinner(iconsize::S, t.secondary)).tooltip(tip(tr("Index wird aktualisiert")))))
+            .when(lib.is_indexing, |d| d.child(div().id("indexing").child(motion::spinner(iconsize::S, t.secondary)).tip(tr("Index wird aktualisiert"))))
     }
 }
 
@@ -1107,7 +1107,7 @@ fn filter_menu(
             .font_weight(FontWeight::MEDIUM)
             .child(icon("search", iconsize::XS, t.accent))
             .child(title)
-            .tooltip(tip(tr("Aus der Suche übernommen")))
+            .tip(tr("Aus der Suche übernommen"))
             .into_any_element();
     }
     let e = entity.clone();

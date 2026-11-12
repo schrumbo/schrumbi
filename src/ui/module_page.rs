@@ -152,7 +152,7 @@ fn file_pills(lib: &Library, a: &Assignment, st: &ModuleState, view: Entity<Page
                 .soft(hover, radius::CONTROL)
                 .cursor_pointer().key_nav()
                 .text_size(px(font::CAPTION))
-                .tooltip(tip(if brief { trf("Aufgabenstellung: %@", &[&name]) } else { name.clone() }))
+                .tip(if brief { trf("Aufgabenstellung: %@", &[&name]) } else { name.clone() })
                 .on_click(move |_, _, cx| super::preview::show(&preview, cx))
                 .when(brief, |d| d.child(icon("clipboard-list", iconsize::XS, t.accent)).child(div().font_weight(FontWeight::MEDIUM).child(tr("Aufgabe"))))
                 .when(!brief, |d| d.child(file_icon(path, iconsize::S)).child(div().truncate().child(crate::core::text::middle_ellipsis(&name, 26))))
@@ -183,7 +183,7 @@ fn file_pills(lib: &Library, a: &Assignment, st: &ModuleState, view: Entity<Page
                 .text_size(px(font::CAPTION))
                 .font_weight(FontWeight::MEDIUM)
                 .child(if expanded { tr("Weniger") } else { format!("+{more}") })
-                .tooltip(tip(if expanded { tr("Weniger zeigen") } else { trf("Alle %lld Dateien zeigen", &[&all.len()]) }))
+                .tip(if expanded { tr("Weniger zeigen") } else { trf("Alle %lld Dateien zeigen", &[&all.len()]) })
                 .on_click(move |_, _, cx| view.update(cx, |p, cx| {
                     if !p.module.expanded_files.remove(&id) {
                         p.module.expanded_files.insert(id.clone());
@@ -463,9 +463,9 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
         grouped(t).child(deadlines(lib, m, st, view, t)).into_any_element()
     };
     let title = div().flex().items_center().gap(px(space::S)).child(section_title(tr("Abgaben"))).when(waiting > 0, |d| {
-        d.child(div().id("module-attention").flex_none().min_w(px(iconsize::M)).px(px(space::XS)).rounded_full().bg(t.badge_fill(t.gray)).flex().items_center().justify_center().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).font_features(tabular()).text_color(white()).child(waiting.to_string()).tooltip(tip(tr("Noch offen"))))
+        d.child(div().id("module-attention").flex_none().min_w(px(iconsize::M)).px(px(space::XS)).rounded_full().bg(t.badge_fill(t.gray)).flex().items_center().justify_center().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).font_features(tabular()).text_color(white()).child(waiting.to_string()).tip(tr("Noch offen")))
     });
-    let add = (all > 0).then(|| more_link("add-entry", tr("Neuer Eintrag…"), t).tooltip(tip(format!("{}{}", tr("Abgabe, Aufgabe oder Prüfung eintragen"), crate::core::shortcuts::ShortcutAction::NewEntry.hint()))).on_click(move |_, _, cx| add_submission(cx)));
+    let add = (all > 0).then(|| more_link("add-entry", tr("Neuer Eintrag…"), t).tip(format!("{}{}", tr("Abgabe, Aufgabe oder Prüfung eintragen"), crate::core::shortcuts::ShortcutAction::NewEntry.hint())).on_click(move |_, _, cx| add_submission(cx)));
     let folder = lib.root.as_ref().map(|r| r.join(&m.folder)).unwrap_or_default();
     let recent = super::today::recent_notes_in(Some(&folder), 6);
     let count = recent.len();
@@ -488,7 +488,7 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     let other_rows: Vec<_> = other_rows.collect();
     let new_id = m.id.clone();
     let module_folder = m.folder.clone();
-    let all_files = more_link("to-files", tr("Alle Dateien"), t).tooltip(tip(tr("Im Dateibaum zeigen"))).on_click(move |_, _, cx| {
+    let all_files = more_link("to-files", tr("Alle Dateien"), t).tip(tr("Im Dateibaum zeigen")).on_click(move |_, _, cx| {
         let folder = module_folder.clone();
         crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
         act(cx, |l| {
@@ -609,7 +609,7 @@ fn overview_rail(lib: &Library, m: &Module, t: &Theme) -> Option<Div> {
                 .cursor_pointer()
                 .key_nav()
                 .soft(hover, 0.)
-                .tooltip(tip(link.address.clone()))
+                .tip(link.address.clone())
                 .child(icon("external-link", iconsize::S, t.secondary))
                 .child(div().flex_1().min_w_0().truncate().child(if link.title.is_empty() { link.address.clone() } else { link.title.clone() }))
                 .on_click(move |_, _, _| {

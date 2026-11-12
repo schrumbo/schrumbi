@@ -180,7 +180,7 @@ fn file_row(file: &ChangedFile, root: Option<&PathBuf>, code: Option<String>, i:
         .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).child(name))
         .when_some(code, |d, code| d.child(caption(code, t).flex_none()))
         .child(caption(kind_label(&file.kind), t).flex_none())
-        .tooltip(tip(file.path.clone()))
+        .tip(file.path.clone())
 }
 
 impl Render for SyncPanel {
@@ -1048,7 +1048,7 @@ impl Render for ConflictSheet {
                     .when(!selected, |d| d.soft(hover, 0.))
                     .child(div().truncate().child(name))
                     .child(caption(choice_label(choice), &t))
-                    .tooltip(tip(f.path.clone()))
+                    .tip(f.path.clone())
                     .on_click(cx.listener(move |s, _, _, cx| s.select(i, cx))),
             );
         }

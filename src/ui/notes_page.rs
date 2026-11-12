@@ -939,7 +939,7 @@ impl NotesPage {
             .when(!on, |d| d.soft(hover, radius::INNER))
             .child(icon(icon_name, iconsize::M, if on { t.primary } else { t.secondary }))
             .when(badge > 0, |d| d.child(div().absolute().top(px(space::XXS)).right(px(space::XXS)).size(px(space::XS + space::XXS)).rounded_full().bg(accent)))
-            .tooltip(tip(if badge > 0 { format!("{label} ({badge})") } else { label }))
+            .tip(if badge > 0 { format!("{label} ({badge})") } else { label })
             .on_click(cx.listener(move |s, _, _, cx| {
                 s.view = view;
                 s.selected = None;
@@ -1088,7 +1088,7 @@ impl NotesPage {
                 .pl(px(space::M))
                 .child(icon(if query.is_some() { "search" } else { "bookmark" }, iconsize::S, t.secondary))
                 .child(div().flex_1().min_w_0().truncate().child(title.clone()))
-                .tooltip(tip(tr("Lesezeichen setzt du über die Befehlspalette, sie stehen auch in Obsidian.")))
+                .tip(tr("Lesezeichen setzt du über die Befehlspalette, sie stehen auch in Obsidian."))
                 .on_click(click(row, me))
                 .into_any_element(),
             Row::Task { path, note, line, text } => {
@@ -1097,7 +1097,7 @@ impl NotesPage {
                     .mark("task", text.clone())
                     .pl(px(space::M))
                     .gap(px(space::S))
-                    .child(div().id(("task-box", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).soft(t.ink.opacity(0.08), radius::SMALL).border_1().border_color(t.secondary).cursor_pointer().aria_label(tr("Abhaken")).tooltip(tip(tr("Abhaken"))).on_click(move |_, _, cx| {
+                    .child(div().id(("task-box", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).soft(t.ink.opacity(0.08), radius::SMALL).border_1().border_color(t.secondary).cursor_pointer().aria_label(tr("Abhaken")).tip(tr("Abhaken")).on_click(move |_, _, cx| {
                         cx.stop_propagation();
                         finish(&tick, line, &label, cx);
                     }))

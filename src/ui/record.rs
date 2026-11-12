@@ -151,7 +151,7 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
                 .rounded(px(radius::INNER))
                 .cursor_pointer().key_nav()
                 .soft(t.ink.opacity(0.06), radius::INNER)
-                .tooltip(tip(if expanded { tr("Teilleistungen ausblenden") } else { tr("Teilleistungen anzeigen") }))
+                .tip(if expanded { tr("Teilleistungen ausblenden") } else { tr("Teilleistungen anzeigen") })
                 .on_click({
                     let id = id.clone();
                     move |_, _, cx| view.update(cx, |p, cx| {
@@ -171,7 +171,7 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
         .when(system.uses_grades(), |d| {
             d.child(match grade {
                 Some(g) => div().w(px(90.)).child(Input::new(&g).small().text_right()).when(failing, |d| d.text_color(t.secondary)).into_any_element(),
-                None => div().id(SharedString::from(format!("computed-{id}"))).w(px(90.)).text_right().child(m.effective_grade().map_or("–".into(), |g| format_grade(g, system))).tooltip(tip(tr("Aus Teilleistungen berechnet"))).into_any_element(),
+                None => div().id(SharedString::from(format!("computed-{id}"))).w(px(90.)).text_right().child(m.effective_grade().map_or("–".into(), |g| format_grade(g, system))).tip(tr("Aus Teilleistungen berechnet")).into_any_element(),
             })
         })
         .child(div().w(px(90.)).flex().justify_center().child(Checkbox::new(SharedString::from(format!("passed-{id}"))).checked(m.passed).on_click(move |v, _, cx| {
@@ -234,7 +234,7 @@ fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fiel
                 .items_center()
                 .gap(px(space::S))
                 .child(div().flex_1().child(Input::new(&name).small()))
-                .child(div().id(SharedString::from(format!("w-{id}-{j}"))).w(px(70.)).tooltip(tip(tr("Gewicht, z. B. 60 für 60 %"))).child(Input::new(&weight).small().text_right()))
+                .child(div().id(SharedString::from(format!("w-{id}-{j}"))).w(px(70.)).tip(tr("Gewicht, z. B. 60 für 60 %")).child(Input::new(&weight).small().text_right()))
                 .when(system.uses_grades(), |r| r.child(div().w(px(80.)).child(Input::new(&grade).small().text_right())))
                 .child(Button::new(SharedString::from(format!("rm-{id}-{j}"))).ghost().small().icon(menu_icon("circle-minus")).tooltip(tr("Teilleistung entfernen")).on_click(move |_, _, cx| {
                     edit_components(&d, cx, |cs| {
@@ -265,7 +265,7 @@ fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fiel
                 }
             })
         });
-        footer = footer.child(div().flex_1()).child(div().id("target-wrap").w(px(80.)).tooltip(tip(tr("Wunschnote für das Modul"))).child(Input::new(&target).small()));
+        footer = footer.child(div().flex_1()).child(div().id("target-wrap").w(px(80.)).tip(tr("Wunschnote für das Modul")).child(Input::new(&target).small()));
         if let Some(need) = m.required_for_target() {
             let (lo, hi) = system.range();
             let (too_good, too_easy) = if system.higher_is_better() { (need > hi, need < lo) } else { (need < lo, need > hi) };

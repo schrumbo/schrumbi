@@ -10,7 +10,7 @@ use super::state::act;
 use super::drive::Mark;
 use super::motion::Soft;
 use super::theme::{Theme, font, space, iconsize, radius, control};
-use super::widgets::{KeyNav, icon, tip};
+use super::widgets::{KeyNav, icon, Tip};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library, Route};
 use crate::core::prefs::{self, Shortcut};
@@ -183,7 +183,7 @@ fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: Stri
             d.child(div().flex_1().min_w_0().truncate().when(faded, |d| d.opacity(0.7).group_hover("sidebar-tab", |s| s.opacity(1.))).when(active, |d| d.font_weight(FontWeight::MEDIUM)).child(shown))
                 .when_some(count, |d, (n, tint)| d.child(pill(n, tint).flex_none().mr(px(space::S))))
         })
-        .tooltip(tip(help))
+        .tip(help)
 }
 
 /// An invisible button over a tab, so the row can open a menu and still look like every other tab.

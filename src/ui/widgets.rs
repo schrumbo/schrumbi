@@ -10,7 +10,7 @@ use super::browser::DraggedFile;
 use super::drive::Mark;
 use super::motion::{self, Soft};
 use super::state::{self, act};
-use super::theme::{Theme, control, font, radius, space, iconsize};
+use super::theme::{Theme, control, font, hover, radius, space, iconsize};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library};
 use crate::core::model::{Assignment, Kind, Status};
@@ -85,9 +85,25 @@ pub const SELECTED_ROW: f32 = 0.2;
 /// How long after a right click tooltips stay away, so none covers the context menu that just opened.
 const TOOLTIP_PAUSE: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// How long after a click on it a control keeps its tooltip away.
+const TOOLTIP_AFTER_CLICK: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// How long the pointer rests on a control before its tooltip shows.
+const TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How long after a tooltip closed the next one shows at once.
+const TOOLTIP_WARM: std::time::Duration = std::time::Duration::from_millis(400);
+
 struct LastRightClick(std::time::Instant);
 
 impl Global for LastRightClick {}
+
+struct LastClick(std::time::Instant);
+
+impl Global for LastClick {}
+
+static TIPS_OPEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static TIP_CLOSED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 struct NoTooltip;
 
@@ -97,21 +113,59 @@ impl Render for NoTooltip {
     }
 }
 
+struct OpenTooltip(AnyView);
+
+impl Render for OpenTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.0.clone()
+    }
+}
+
+impl Drop for OpenTooltip {
+    fn drop(&mut self) {
+        TIPS_OPEN.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        *TIP_CLOSED.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+    }
+}
+
 /// Notes a right click for `tip`; call it from the window's root.
 pub fn pause_tooltips(cx: &mut App) {
     cx.set_global(LastRightClick(std::time::Instant::now()));
 }
 
-/// Tooltip builder for `.tooltip(...)`.
+/// Notes a left click for `tip`, so the control just clicked does not raise its tooltip again; call it from the window's root.
+pub fn clicked(cx: &mut App) {
+    cx.set_global(LastClick(std::time::Instant::now()));
+}
+
+/// The wait before a tooltip: none while another one is open or just closed, so moving along a row of controls reads their names at once.
+pub fn tooltip_delay() -> std::time::Duration {
+    let warm = TIPS_OPEN.load(std::sync::atomic::Ordering::Relaxed) > 0 || TIP_CLOSED.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed() < TOOLTIP_WARM);
+    if warm { std::time::Duration::ZERO } else { TOOLTIP_DELAY }
+}
+
+/// Tooltip builder for `.tooltip(...)`; prefer `.tip(...)`, which also shows neighbouring tooltips at once.
 pub fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let text: SharedString = text.into();
     move |window, cx| {
-        if cx.try_global::<LastRightClick>().is_some_and(|c| c.0.elapsed() < TOOLTIP_PAUSE) {
+        if cx.try_global::<LastRightClick>().is_some_and(|c| c.0.elapsed() < TOOLTIP_PAUSE) || cx.try_global::<LastClick>().is_some_and(|c| c.0.elapsed() < TOOLTIP_AFTER_CLICK) {
             return cx.new(|_| NoTooltip).into();
         }
-        gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(window, cx)
+        let inner = gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(window, cx);
+        TIPS_OPEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        cx.new(|_| OpenTooltip(inner)).into()
     }
 }
+
+/// A tooltip on any element with an id.
+pub trait Tip: StatefulInteractiveElement + Sized {
+    /// Shows `text` under the pointer after the usual wait, at once when the pointer comes from another tooltip, and not right after a click.
+    fn tip(self, text: impl Into<SharedString>) -> Self {
+        self.tooltip(tip(text)).tooltip_show_delay(tooltip_delay())
+    }
+}
+
+impl<E: StatefulInteractiveElement> Tip for E {}
 
 pub fn text(s: impl Into<SharedString>, size: f32, color: Hsla) -> Div {
     div().text_size(px(size)).text_color(color).child(s.into())
@@ -493,15 +547,13 @@ fn file_row_shaped(id: impl Into<ElementId>, path: &Path, name: impl Into<Shared
 }
 
 pub fn row_button(id: impl Into<ElementId>, t: &Theme) -> Stateful<Div> {
-    let hover = t.ink.opacity(0.06);
-    div().id(id).w_full().cursor_pointer().key_nav().soft(hover, 0.)
+    div().id(id).w_full().cursor_pointer().key_nav().soft_row(t.ink.opacity(hover::ROW))
 }
 
 /// Compact text button styled like `.borderless` / `.link` buttons.
 pub fn link_button(id: impl Into<ElementId>, label: impl Into<SharedString>, t: &Theme) -> Stateful<Div> {
-    let accent = t.accent_text;
     let label = label.into();
-    div().id(id).mark("link", label.clone()).min_h(px(control::S)).flex().items_center().text_color(accent).cursor_pointer().key_nav().hover(move |s| s.text_color(accent.opacity(0.8))).child(label)
+    div().id(id).mark("link", label.clone()).min_h(px(control::S)).flex().items_center().px(px(space::XS)).mx(px(-space::XS)).text_color(t.accent_text).cursor_pointer().key_nav().soft(t.accent.opacity(hover::CONTROL), radius::SMALL).child(label)
 }
 
 /// Keyboard-shortcut chip.

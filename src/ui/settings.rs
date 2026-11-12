@@ -512,7 +512,7 @@ fn apple_calendar_row(t: &Theme) -> AnyElement {
         .px(px(space::L))
         .min_h(px(control::ROW))
         .py(px(space::S))
-        .child(div().flex_1().min_w_0().flex().items_center().gap(px(space::S)).text_color(t.primary).child(div().flex_none().child(indicator)).child(div().id("apple-cal-state").min_w_0().truncate().child(label.clone()).tooltip(tip(label))))
+        .child(div().flex_1().min_w_0().flex().items_center().gap(px(space::S)).text_color(t.primary).child(div().flex_none().child(indicator)).child(div().id("apple-cal-state").min_w_0().truncate().child(label.clone()).tip(label)))
         .children(button.map(|b| div().flex_none().max_w(px(control::ROW_CONTROL)).child(b)))
         .into_any_element()
 }
@@ -1549,7 +1549,7 @@ impl Settings {
                     .hover(|s| s.opacity(0.75))
                     .when(selected, |d| d.border_2().border_color(t.primary))
                     .child(div().size(px(14.)).rounded_full().bg(t.palette(name)))
-                    .tooltip(tip(name))
+                    .tip(name)
                     .on_click(move |_, _, cx| e(Box::new(move |m| m.color = name.into()))(cx)),
             );
         }
@@ -1578,7 +1578,7 @@ impl Settings {
                     .items_center()
                     .gap(px(space::S))
                     .child(div().w(px(if compact { 150. } else { 220. })).child(Input::new(&folder)))
-                    .child(div().id("folder-state").child(icon(if exists { "circle-check" } else { "circle-alert" }, iconsize::S, if exists { t.green } else { t.orange })).tooltip(tip(if exists { tr("Ordner existiert") } else { tr("Ordner existiert nicht") })))
+                    .child(div().id("folder-state").child(icon(if exists { "circle-check" } else { "circle-alert" }, iconsize::S, if exists { t.green } else { t.orange })).tip(if exists { tr("Ordner existiert") } else { tr("Ordner existiert nicht") }))
                     .child(Button::new("m-pick-folder").small().label(tr("Wählen…")).on_click(move |_, _, cx| {
                         let (e, base) = (e.clone(), base.clone());
                         super::platform::choose_folder(cx, move |p, cx| {
@@ -1607,7 +1607,7 @@ impl Settings {
                     .py(px(space::S))
                     .child(div().w(px(110.)).child(Input::new(&title).small()))
                     .child(div().flex_1().child(Input::new(&addr).small()))
-                    .child(div().id(("lv", i)).child(icon(if valid { "circle-check" } else { "circle-alert" }, iconsize::S, if valid { t.green } else if link.address.is_empty() { t.secondary } else { t.orange })).tooltip(tip(if valid { tr("Gültige Adresse") } else { tr("Nur http(s)-Adressen") })))
+                    .child(div().id(("lv", i)).child(icon(if valid { "circle-check" } else { "circle-alert" }, iconsize::S, if valid { t.green } else if link.address.is_empty() { t.secondary } else { t.orange })).tip(if valid { tr("Gültige Adresse") } else { tr("Nur http(s)-Adressen") }))
                     .child(Checkbox::new(("lu", i)).label(tr("Upload")).checked(link.upload).tooltip(tr("Wird beim Hochladen einer Abgabe geöffnet")).on_click(move |v, _, cx| {
                         let v = *v;
                         e1(Box::new(move |m| {
@@ -2184,7 +2184,7 @@ impl Settings {
                     .hover(|s| s.opacity(0.75))
                     .when(selected, |d| d.border_2().border_color(t.primary))
                     .child(div().size(px(iconsize::M)).rounded_full().bg(color))
-                    .tooltip(tip(tr(name)))
+                    .tip(tr(name))
                     .on_click(move |_, _, _| prefs::update(|p| p.note_accent = hex.into())),
             );
         }
@@ -2509,8 +2509,8 @@ impl Settings {
             .px(px(space::L))
             .min_h(px(control::ROW))
             .py(px(space::S))
-            .child(div().id(("g-theme-name", i)).flex_1().min_w_0().truncate().text_color(t.primary).tooltip(tip(d.name.clone())).child(d.name.clone()))
-            .child(div().id(("g-theme-state", i)).flex_none().text_size(px(font::CAPTION)).text_color(color).when_some(d.problem.clone(), |e, p| e.tooltip(tip(p))).child(state))
+            .child(div().id(("g-theme-name", i)).flex_1().min_w_0().truncate().text_color(t.primary).tip(d.name.clone()).child(d.name.clone()))
+            .child(div().id(("g-theme-state", i)).flex_none().text_size(px(font::CAPTION)).text_color(color).when_some(d.problem.clone(), |e, p| e.tip(p)).child(state))
             .child(Button::new(("g-theme-rm", i)).small().label(tr("Entfernen")).on_click(cx.listener(move |s, _, window, cx| {
                 let was_active = prefs::with(|p| p.theme_file == id);
                 s.theme_note = match theme::remove_file(&id, window, cx) {
@@ -2542,7 +2542,7 @@ impl Settings {
             ThemeNote::Problem(m) => line
                 .aria_label(m.clone())
                 .child(div().flex_none().child(icon("circle-alert", iconsize::XS, t.orange_text)))
-                .child(div().id("theme-note-text").flex_1().min_w_0().truncate().tooltip(tip(m.clone())).child(m.clone()))
+                .child(div().id("theme-note-text").flex_1().min_w_0().truncate().tip(m.clone()).child(m.clone()))
                 .child(Button::new("theme-note-close").ghost().small().icon(menu_icon("x")).tooltip(tr("Schließen")).on_click(cx.listener(|s, _, _, cx| {
                     s.theme_note = None;
                     cx.notify();
@@ -2552,7 +2552,7 @@ impl Settings {
                 let text = trf("Design „%@“ entfernt", &[name]);
                 line.aria_label(text.clone())
                     .child(div().flex_none().child(icon("check", iconsize::XS, t.green_text)))
-                    .child(div().id("theme-note-text").min_w_0().truncate().tooltip(tip(text.clone())).child(text))
+                    .child(div().id("theme-note-text").min_w_0().truncate().tip(text.clone()).child(text))
                     .child(div().flex_none().text_color(t.tertiary).child("·"))
                     .child(div().flex_none().child(link_button("theme-undo", tr("Rückgängig"), t).on_click(cx.listener(|s, _, window, cx| {
                         if let Some(ThemeNote::Removed { id, bytes, was_active, .. }) = s.theme_note.take() {
@@ -2636,7 +2636,7 @@ impl Settings {
                 .text_size(px(font::CAPTION))
                 .text_color(t.secondary)
                 .child(div().flex_none().child(icon("check", iconsize::XS, t.green_text)))
-                .child(div().id("sc-notice-text").min_w_0().truncate().tooltip(tip(n.text.clone())).child(n.text.clone()))
+                .child(div().id("sc-notice-text").min_w_0().truncate().tip(n.text.clone()).child(n.text.clone()))
                 .child(div().flex_none().text_color(t.tertiary).child("·"))
                 .child(div().flex_none().child(link_button("sc-undo", tr("Rückgängig"), t).on_click(cx.listener(|s, _, _, cx| {
                     if let Some(n) = s.notice.take() {
@@ -2651,7 +2651,7 @@ impl Settings {
                 .into_any_element(),
             None => {
                 let idle = trf("Klick auf ein Kürzel und drück die neuen Tasten. %@ bricht ab, %@ entfernt das Kürzel.", &[&escape, &delete]);
-                caption(idle.clone(), t).id("sc-idle").w_full().min_w_0().truncate().tooltip(tip(idle)).into_any_element()
+                caption(idle.clone(), t).id("sc-idle").w_full().min_w_0().truncate().tip(idle).into_any_element()
             }
         };
         let header = div()
@@ -2739,7 +2739,7 @@ impl Settings {
                     .aria_label(trf("%@: %@", &[&name, &state]))
                     .when(!clashes.is_empty(), |d| d.aria_description(format!("{} · {}", tr("Doppelt"), trf("Auch belegt: %@", &[&clashes.join(", ")]))))
                     .child(caps)
-                    .tooltip(tip(help))
+                    .tip(help)
                     .on_click(cx.listener(move |s, _, window, cx| s.start_recording(a, true, window, cx)));
                 let default = a.default_shortcut().map_or_else(|| tr("Kein Kürzel"), |d| d.display());
                 let clash = (!clashes.is_empty()).then(|| {
@@ -2758,7 +2758,7 @@ impl Settings {
                         .child(icon("triangle-alert", iconsize::XS, t.orange_text))
                         .child(div().flex_none().child(tr("Doppelt")))
                         .child(div().min_w_0().truncate().child(format!("· {}", clashes.join(", "))))
-                        .tooltip(tip(full))
+                        .tip(full)
                 });
                 rows.push(
                     div()

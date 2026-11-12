@@ -309,7 +309,7 @@ impl Render for TrayPopup {
                         close_popup(window, cx);
                         cx.defer(super::main_window::show);
                     }))
-                    .when(inbox > 0, |d| d.child(div().id("tray-inbox").flex().items_center().gap(px(space::XS)).text_color(t.secondary).tooltip(tip(tr("Dateien in der Inbox"))).child(icon("inbox", iconsize::S, t.secondary)).child(trf("%lld", &[&inbox]))))
+                    .when(inbox > 0, |d| d.child(div().id("tray-inbox").flex().items_center().gap(px(space::XS)).text_color(t.secondary).tip(tr("Dateien in der Inbox")).child(icon("inbox", iconsize::S, t.secondary)).child(trf("%lld", &[&inbox]))))
                     .child(div().flex_1())
                     .child(Button::new("tray-quit").ghost().small().label(tr("Beenden")).on_click(|_, _, cx| super::app::quit(cx))),
             )

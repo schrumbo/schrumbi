@@ -356,7 +356,7 @@ pub fn panel_tabs(ki: bool, t: &Theme, cx: &App) -> AnyElement {
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
             .key_nav()
-            .tooltip(tip(hint))
+            .tip(hint)
             .when(selected, |d| d.bg(t.content).shadow_xs().text_color(t.primary))
             .when(!selected, |d| d.soft(t.ink.opacity(0.06), radius::INNER).text_color(t.secondary))
             .child(label)

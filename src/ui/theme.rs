@@ -159,9 +159,16 @@ pub mod explorer {
     pub const NOTE_MIN: f32 = 360.;
 }
 
-/// The ink opacity the small controls floating over a note light up with under the pointer.
+/// How strongly the pointer lights up what it rests on, as ink opacity; every hover takes one of these and fades in over `motion::FAST`.
 pub mod hover {
-    pub const FLOAT: f32 = 0.1;
+    /// Rows, list entries, tabs, menu entries and fields.
+    pub const ROW: f32 = 0.06;
+    /// Icon and text buttons in bars, chips, links and small controls floating over a note.
+    pub const CONTROL: f32 = 0.1;
+    /// Controls on a surface that is tinted itself, such as a code block or a grouped bar.
+    pub const RAISED: f32 = 0.14;
+    /// How far a row hover and a row selection stay from the edges of their list.
+    pub const INSET: f32 = super::space::XS;
 }
 
 /// The orange tints of the notice about a note that did not save.
@@ -178,12 +185,6 @@ pub mod tint {
     pub const DISABLED: f32 = 0.4;
     /// The opacity of a page while it is being dragged.
     pub const DRAGGED: f32 = 0.4;
-    /// What the pointer adds over a small control.
-    pub const HOVER: f32 = 0.08;
-    /// What the pointer adds over a row of a list.
-    pub const HOVER_ROW: f32 = 0.05;
-    /// What the pointer adds over a field that shows a value.
-    pub const HOVER_FIELD: f32 = 0.06;
     /// The selected button of a segmented control in the dark theme.
     pub const NAV_DARK: f32 = 0.16;
     /// The ground the pages of a document lie on.
