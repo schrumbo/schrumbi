@@ -444,6 +444,8 @@
   "%@ erledigt": "%@ done",
   "Alle erledigt": "All done",
   "Noch offen": "Still open",
+  "Ziel geraten, prüf es kurz": "Target is a guess, check it",
+  "Dateiname enthält %@": "File name contains %@",
   "Seitenleiste einklappen": "Collapse sidebar",
   "Teilleistungen ausblenden": "Hide components",
   "Seitenleiste ausklappen": "Expand sidebar",

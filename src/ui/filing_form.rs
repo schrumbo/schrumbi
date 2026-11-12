@@ -644,6 +644,12 @@ impl FilingForm {
             FileRole::Material => (tr("Unterlagen"), "library"),
         };
         let described = self.target.as_ref().map(|target| self.describe(target, l, t));
+        let reason = match (&self.target, self.path()) {
+            (Some(Target::Assignment(id)), Some(path)) if self.facts.is_some() && self.preset.is_none() && self.ranked.first().is_some_and(|a| &a.id == id) => l.assignment(id).or_else(|| self.ranked.iter().find(|a| &a.id == id)).map(|a| {
+                crate::core::filing::name_match(&name_of(path), a, l.module(a)).map_or_else(|| tr("Ziel geraten, prüf es kurz"), |word| trf("Dateiname enthält %@", &[&word]))
+            }),
+            _ => None,
+        };
         let folder = self.folder(l);
         let ready = self.facts.is_some();
         let multi = self.paths.len() > 1;
@@ -664,6 +670,7 @@ impl FilingForm {
                     .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).line_clamp(2).child(name))
                     .child(div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(div().size(px(space::S)).flex_none().rounded_full().bg(tint)).child(div().truncate().child(context)))
             }))
+            .children(reason.map(|r| caption(r, t)))
             .child(
                 div()
                     .flex()

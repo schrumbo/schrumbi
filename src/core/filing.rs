@@ -328,6 +328,19 @@ pub fn rank_targets<'a>(
     scored.into_iter().map(|(a, _)| a).collect()
 }
 
+/// The word of a file name that points at `assignment`: its module code, a keyword, its short name or a long word of its title.
+pub fn name_match(file_name: &str, assignment: &Assignment, module: Option<&Module>) -> Option<String> {
+    let name = fold(file_name);
+    let tokens: Vec<&str> = name.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()).collect();
+    if let Some(code) = module.map(|m| m.code.clone()).filter(|c| tokens.contains(&fold(c).as_str()) || name.contains(&format!("{}_", fold(c)))) {
+        return Some(code);
+    }
+    let keyword = assignment.keywords.iter().find(|k| k.chars().count() >= 2 && name.contains(&fold(k)));
+    let short = assignment.short.split(' ').find(|t| t.chars().count() >= 2 && tokens.contains(&fold(t).as_str())).map(str::to_string);
+    let title = assignment.title.split(' ').find(|w| w.chars().count() >= 5 && name.contains(&fold(w)));
+    keyword.cloned().or(short).or_else(|| title.map(str::to_string))
+}
+
 /// Dates like "14.10.2026" in a document.
 pub fn dates_in_text(text: &str) -> Vec<NaiveDate> {
     static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|\D)(\d{1,2})\.(\d{1,2})\.(20\d{2})(?:\D|$)").unwrap());
@@ -349,6 +362,34 @@ mod tests {
         assert_eq!(strip_office_suffix("Ikigai [Kompatibilitätsmodus]"), "Ikigai");
         assert_eq!(strip_office_suffix("Folien (compatibility-mode)"), "Folien");
         assert_eq!(strip_office_suffix("Mode und Kompatibilität"), "Mode und Kompatibilität");
+    }
+
+    #[test]
+    fn names_the_word_that_points_at_a_deadline() {
+        let a = Assignment {
+            id: "a".into(),
+            module_id: "m".into(),
+            semester_id: "s".into(),
+            rule_id: None,
+            title: "Übungsblatt Recht".into(),
+            short: "UE".into(),
+            kind: super::super::model::Kind::Submission,
+            due: Local::now(),
+            week: None,
+            iso_week: None,
+            optional: false,
+            upload: false,
+            folder: PathBuf::new(),
+            per_week_folder: false,
+            file_pattern: String::new(),
+            window_start: None,
+            recursive: false,
+            keywords: vec!["Skript".into()],
+            is_moved: false,
+            legacy: None,
+        };
+        assert_eq!(name_match("Skript_Recht_Kap1.pdf", &a, None).as_deref(), Some("Skript"));
+        assert_eq!(name_match("Blatt05.pdf", &a, None), None);
     }
 
     #[test]

@@ -614,6 +614,22 @@ impl Render for MainWindow {
             }
             _ => self.pages.clone().into_any_element(),
         };
+        let page = if matches!(l.route(), Route::Today | Route::Grid | Route::Record) {
+            let accent = t.accent;
+            div()
+                .id("drop-page")
+                .size_full()
+                .relative()
+                .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(accent.opacity(0.08)))
+                .on_drop(|paths: &ExternalPaths, _, cx| {
+                    let paths = paths.paths().to_vec();
+                    act(cx, |l| l.request_filing(paths, None));
+                })
+                .child(page)
+                .into_any_element()
+        } else {
+            page
+        };
         let page_key = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
