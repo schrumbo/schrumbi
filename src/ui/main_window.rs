@@ -36,6 +36,7 @@ pub struct MainWindow {
     search_placeholder: String,
     focus: FocusHandle,
     focused_once: bool,
+    page_refocused: Option<std::time::Instant>,
     shown_route: Option<Route>,
     slides: Option<(std::path::PathBuf, Entity<super::vault_tools::Slides>)>,
     error_shown: bool,
@@ -95,7 +96,17 @@ impl MainWindow {
         let pages = cx.new(|cx| Pages::new(window, cx));
         let today = cx.new(TodayView::new);
         let lib = state::lib(cx);
+        let focus = cx.focus_handle();
         let subs = vec![
+            cx.on_focus_lost(window, |this, window, cx| {
+                if !window.has_active_dialog(cx) {
+                    window.focus(&this.focus, cx);
+                    if this.page_refocused.is_none_or(|at| at.elapsed() > std::time::Duration::from_secs(1)) {
+                        this.page_refocused = Some(std::time::Instant::now());
+                        state::return_focus_to_page(cx);
+                    }
+                }
+            }),
             cx.observe_in(&lib, window, |this, lib, window, cx| {
                 this.sync_search(window, cx);
                 sheets::present(&lib, window, cx);
@@ -156,8 +167,9 @@ impl MainWindow {
             error_shown: false,
             syncing_search: false,
             search_placeholder: tr("Suchen"),
-            focus: cx.focus_handle(),
+            focus,
             focused_once: false,
+            page_refocused: None,
             shown_route: None,
             slides: None,
             ai_panel: None,

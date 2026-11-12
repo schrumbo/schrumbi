@@ -579,11 +579,14 @@ fn native(window: &Window) -> Value {
 }
 
 fn state(cx: &mut App) -> Value {
+    let main = cx.windows().into_iter().find(|h| super::main_window::is_main(h.window_id(), cx));
+    let focus = main.and_then(|h| h.update(cx, |_, window, _| window.context_stack().iter().map(|c| format!("{c:?}")).collect::<Vec<_>>().join(" > ")).ok());
     super::state::read(cx, |l| {
         json!({
             "route": format!("{:?}", l.route()),
             "workspace": l.root.as_ref().map(|p| p.display().to_string()),
             "error": l.last_error.clone(),
+            "focus": focus,
         })
     })
 }

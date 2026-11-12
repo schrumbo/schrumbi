@@ -354,6 +354,8 @@ pub struct NoteView {
     history: Vec<(String, usize)>,
     live_left: Option<Arc<str>>,
     future: Vec<(String, usize)>,
+    text_undone: Option<std::time::Instant>,
+    app_undone: Option<ropey::Rope>,
     last_snapshot: Option<std::time::Instant>,
     found: Option<markdown_view::Found>,
     change_marks: Option<TextDecorationCollection>,
@@ -512,7 +514,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), caret_seen: (0, 0), follow_caret: false, live: None, history: Vec::new(), live_left: None, future: Vec::new(), last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, split_lead: None, reparse: None, parse_hold: false, first_parse: true, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, change_marks: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), pdf_drop: None, pdf_drop_bar: None, fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: mode == Mode::Source && text.trim().chars().count() < 40, mode, block: block.clone(), caret_seen: (0, 0), follow_caret: false, live: None, history: Vec::new(), live_left: None, future: Vec::new(), text_undone: None, app_undone: None, last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, split_lead: None, reparse: None, parse_hold: false, first_parse: true, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, change_marks: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), pdf_drop: None, pdf_drop_bar: None, fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -1455,6 +1457,28 @@ impl NoteView {
             self.follow_caret = true;
         }
         cx.notify();
+    }
+
+    fn app_history_when_unchanged(&self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let (editor, me) = (self.editor.clone(), cx.entity().downgrade());
+        let before = editor.read(cx).text().clone();
+        window.defer(cx, move |_, cx| {
+            let unchanged = *editor.read(cx).text() == before;
+            let _ = me.update(cx, |n, cx| if unchanged { n.app_history(back, cx) } else if back { n.text_undone = Some(std::time::Instant::now()) });
+        });
+    }
+
+    fn app_history(&mut self, back: bool, cx: &mut Context<Self>) {
+        let text = self.editor.read(cx).text().clone();
+        if back {
+            if self.text_undone.is_some_and(|at| at.elapsed() < Duration::from_millis(600)) {
+                return;
+            }
+            act(cx, library::Library::undo);
+            self.app_undone = Some(text);
+        } else if self.app_undone.as_ref() == Some(&text) {
+            act(cx, library::Library::redo);
+        }
     }
 
     /// Takes the note back to what it was before the last burst of typing, wherever that was.
@@ -3744,13 +3768,32 @@ impl NoteView {
                 }
             }))
             .capture_action(cx.listener(|n, _: &gpui_kit::component::input::Undo, w, cx| {
-                if n.live.is_some() {
+                if !n.target().read(cx).focus_handle(cx).is_focused(w) {
+                    return;
+                }
+                if n.live.is_none() {
+                    if n.history.is_empty() {
+                        n.app_history_when_unchanged(true, w, cx);
+                    }
+                } else if n.history.is_empty() {
                     cx.stop_propagation();
+                    n.app_history(true, cx);
+                } else {
+                    cx.stop_propagation();
+                    n.text_undone = Some(std::time::Instant::now());
                     n.step_history(true, w, cx);
                 }
             }))
             .capture_action(cx.listener(|n, _: &gpui_kit::component::input::Redo, w, cx| {
-                if n.live.is_some() {
+                if !n.target().read(cx).focus_handle(cx).is_focused(w) {
+                    return;
+                }
+                if n.live.is_none() {
+                    n.app_history_when_unchanged(false, w, cx);
+                } else if n.future.is_empty() {
+                    cx.stop_propagation();
+                    n.app_history(false, cx);
+                } else {
                     cx.stop_propagation();
                     n.step_history(false, w, cx);
                 }

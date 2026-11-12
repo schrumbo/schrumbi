@@ -946,8 +946,10 @@ impl NotesPage {
         let hover = t.ink.opacity(0.05);
         let selected = self.selected.as_ref().is_some_and(|s| same_row(s, row));
         let base = |id: (&'static str, usize)| {
+            let focus = self.focus.clone();
             div()
                 .id(id)
+                .on_mouse_down(MouseButton::Right, move |_, window, cx| window.focus(&focus, cx))
                 .w_full()
                 .h(px(control::M))
                 .pr(px(space::S + space::XS))

@@ -32,6 +32,20 @@ pub fn run(cx: &mut App) {
             cx.update(|cx| act(cx, |l| l.set_route(route)));
             cx.background_executor().timer(pause).await;
         }
+        let cards_have_keys = |cx: &mut App| {
+            cx.windows().into_iter().find(|h| super::main_window::is_main(h.window_id(), cx)).and_then(|h| h.update(cx, |_, window, _| window.context_stack().iter().any(|c| c.contains("CardsPage"))).ok()).unwrap_or(false)
+        };
+        cx.update(|cx| act(cx, |l| l.set_route(Route::Cards)));
+        cx.background_executor().timer(pause).await;
+        let entered = cx.update(cards_have_keys);
+        cx.update(|cx| act(cx, |l| l.set_route(Route::Notes)));
+        cx.background_executor().timer(pause).await;
+        let left = cx.update(cards_have_keys);
+        if !entered || left {
+            println!("smoke failed: the cards page {}", if left { "kept the keyboard after another page opened" } else { "never took the keyboard" });
+            cx.update(|cx| cx.quit());
+            return;
+        }
         let steps: Vec<Box<dyn FnOnce(&mut App)>> = {
             let (a, b, c) = (note.clone(), note.clone(), note.clone());
             vec![

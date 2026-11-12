@@ -576,11 +576,29 @@ impl ShortcutAction {
         self.reserved_on(keys, Os::here())
     }
 
+    /// Why the recorder turns these keys down for `self`: reserved everywhere, or the editor's own keys.
+    pub fn refused_for(self, keys: &Shortcut) -> Option<String> {
+        self.reserved_for(keys).or_else(|| self.taken_in_editor(keys))
+    }
+
     fn reserved_on(self, keys: &Shortcut, os: Os) -> Option<String> {
         if Some(keys) == self.default_on(os).as_ref() {
             return None;
         }
         keys.reserved_on(os)
+    }
+
+    fn only_in_pdf(self) -> bool {
+        use ShortcutAction::*;
+        matches!(self, MarkText | RotatePagesLeft | RotatePagesRight | MovePagesUp | MovePagesDown | DeletePages | InsertPdf | PenTool | EraserTool | NoteTool | ExportMarkedPdf | PageList | NoteOnSelection | SelectTool | MarkList | InkBlack | InkRed | InkBlue | InkGreen | InkThin | InkThick)
+    }
+
+    fn taken_in_editor(self, keys: &Shortcut) -> Option<String> {
+        if self.group() == Group::Editor || self.only_in_pdf() || Some(keys) == self.default_shortcut().as_ref() {
+            return None;
+        }
+        let owner = prefs::with(|p| Self::ALL.into_iter().find(|a| a.group() == Group::Editor && a.shortcut_in(p).as_ref() == Some(keys)))?;
+        Some(trf("Im Editor schon für %@", &[&owner.label()]))
     }
 
     /// Other actions using the same keys in an overlapping scope.
@@ -659,8 +677,7 @@ const fn fixed_on(platform: Platform, key: &'static str, command: bool, shift: b
     Fixed { key, command, shift, option, label, notes_only, platform }
 }
 
-const FIXED: [Fixed; 24] = [
-    fixed("k", true, false, false, "Befehl suchen…", false),
+const FIXED: [Fixed; 23] = [
     fixed("p", true, false, false, "Befehl suchen…", false),
     fixed("p", true, true, false, "Befehl suchen…", false),
     fixed("/", true, false, false, "Tastenkürzel anzeigen", false),
@@ -1018,6 +1035,38 @@ mod tests {
             }
         }
         assert!(ShortcutAction::Indent.reserved_on(&indent, Os::Windows).is_none());
+    }
+
+    #[test]
+    fn no_key_that_works_everywhere_ships_as_an_editor_key() {
+        for os in [Os::Mac, Os::Windows, Os::Linux] {
+            let editor: Vec<Shortcut> = ShortcutAction::ALL.into_iter().filter(|a| a.group() == Group::Editor).filter_map(|a| a.default_on(os)).collect();
+            for action in ShortcutAction::ALL.into_iter().filter(|a| a.group().is_global()) {
+                let Some(keys) = action.default_on(os) else { continue };
+                assert!(!editor.contains(&keys), "{} {}", action.label(), keys.display());
+            }
+            for f in FIXED.iter().filter(|f| !f.notes_only && f.platform.here(os == Os::Mac)) {
+                let keys = s(f.key, f.command, f.shift, f.option, false);
+                assert!(!editor.contains(&keys), "{} {}", tr(f.label), keys.display());
+            }
+        }
+    }
+
+    #[test]
+    fn a_key_the_editor_uses_is_refused_for_other_actions() {
+        let bold = ShortcutAction::Bold.default_shortcut().unwrap();
+        assert_eq!(ShortcutAction::NewFile.refused_for(&bold), Some(trf("Im Editor schon für %@", &[&ShortcutAction::Bold.label()])));
+        assert!(ShortcutAction::Italic.refused_for(&bold).is_none(), "two editor keys are a plain conflict");
+        let copy_line_up = ShortcutAction::CopyLineUp.default_shortcut().unwrap();
+        assert!(ShortcutAction::MovePagesUp.refused_for(&copy_line_up).is_none(), "the PDF view never shares the keyboard with the editor");
+        ShortcutAction::NewFile.set(Some(bold.clone()));
+        let (active, blocked) = (ShortcutAction::NewFile.active_shortcut(), ShortcutAction::NewFile.blocked());
+        ShortcutAction::NewFile.reset();
+        assert!(active.is_some() && blocked.is_none(), "an old settings file keeps working outside notes");
+        ShortcutAction::Bold.set(Some(s("b", true, true, false, false)));
+        let free = ShortcutAction::NewFile.refused_for(&bold);
+        ShortcutAction::Bold.reset();
+        assert!(free.is_none(), "free again once the editor gave the key away");
     }
 
     #[test]

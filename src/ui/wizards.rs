@@ -455,7 +455,10 @@ impl Render for Setup {
         let me = cx.entity();
         let mut fields = std::mem::take(&mut self.fields);
         let (e1, e2) = (me.clone(), me.clone());
-        if self.step != 0 && self.focused_step != Some(self.step) {
+        if self.step == SETUP_MODULES && self.focused_step != Some(self.step) {
+            let folders = self.folders.clone();
+            window.on_next_frame(move |window, cx| folders.update(cx, |f, cx| f.focus_filter(window, cx)));
+        } else if self.step != 0 && self.focused_step != Some(self.step) {
             let focus = self.focus.clone();
             window.on_next_frame(move |window, cx| window.focus(&focus, cx));
         }
