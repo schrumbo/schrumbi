@@ -2912,13 +2912,26 @@ impl Library {
             return;
         }
         let label = status.or_else(|| self.assignment(id).map(|a| self.status(a))).map_or_else(|| tr("Automatisch"), Status::label);
-        self.commit(trf("%@: %@", &[&a.title, &label]), status.map_or("undo-2", Status::icon), vec![before]);
+        let message = if matches!(status, Some(Status::Done | Status::Uploaded)) { trf("%@ erledigt", &[&a.title]) } else { trf("%@: %@", &[&a.title, &label]) };
+        self.commit(message, status.map_or("undo-2", Status::icon), vec![before]);
     }
 
     pub fn toggle_done(&mut self, id: &str) {
         let Some(a) = self.assignment(id) else { return };
         let target = if self.is_done(a) { None } else { Some(if a.upload { Status::Uploaded } else { Status::Done }) };
         self.set_status(target, id, true);
+    }
+
+    /// Marks every entry done in one step; entries with an upload count as uploaded.
+    pub fn complete_all(&mut self, ids: &[String]) {
+        let before = self.state_snapshot();
+        for id in ids {
+            let Some(status) = self.assignment(id).map(|a| if a.upload { Status::Uploaded } else { Status::Done }) else { continue };
+            self.state.overrides.insert(id.clone(), Override { status, date: Utc::now() });
+        }
+        self.save_state();
+        self.refresh();
+        self.commit(trf("%lld erledigt", &[&ids.len()]), "circle-check", vec![before]);
     }
 
     pub fn confirm_all(&mut self, ids: &[String]) {
@@ -3983,7 +3996,7 @@ impl Library {
             }
         }
         self.refresh();
-        if count > 0 {
+        if count > 0 && *self.route() != Route::Inbox {
             let msg = if count == 1 { tr("1 Datei in der Inbox") } else { trf("%lld Dateien in der Inbox", &[&count]) };
             self.notify(msg, "inbox", None, None);
         }

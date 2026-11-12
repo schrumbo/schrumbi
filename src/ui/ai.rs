@@ -1027,7 +1027,7 @@ pub fn toolbar_button(t: &Theme) -> Option<Button> {
         let open = column_open();
         let tip = format!("{}{}", if open { tr("KI ausblenden") } else { tr("KI einblenden") }, crate::core::shortcuts::ShortcutAction::ToggleAi.hint());
         let named = !prefs::with(|p| p.used_features.contains(COLUMN_USED));
-        let button = Button::new("ai-button").ghost().rounded_full().bg(t.ink.opacity(if open { 0.14 } else { 0.06 })).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("bot")).tooltip(tip).on_click(|_, _, cx| toggle_column(cx));
+        let button = Button::new("ai-button").ghost().rounded_full().when(open, |b| b.bg(t.ink.opacity(0.14))).icon(menu_icon("bot")).tooltip(tip).on_click(|_, _, cx| toggle_column(cx));
         if named { button.h(px(control::M)).px(px(space::M)).label(tr("KI")) } else { button.size(px(control::M)) }
     })
 }

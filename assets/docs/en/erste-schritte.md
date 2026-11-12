@@ -68,7 +68,7 @@ In {ui:Module}, matching folders are already ticked: everything directly inside 
 | {ui:Notizen} | {key:goNotes} | Notes, search, tags, tasks |
 | {ui:Karten} | {key:goCards} | Flashcards to study |
 
-- The sidebar shows icons only. Hovering one names the area and its shortcut.
+- The sidebar shows icons with names. {ui:Seitenleiste einklappen} at the bottom left makes it narrow, then hovering names the area and its shortcut. Below 820 px window width it stays narrow.
 - Right-click an area except {ui:Übersicht}: {ui:Aus der Seitenleiste ausblenden}.
 
 ## What Is in the Folder

@@ -200,4 +200,37 @@ mod tests {
         assert!(matches("Abgabe.PDF", "*.pdf"));
         assert!(matches("x", ""));
     }
+
+    #[test]
+    fn closing_without_files_after_the_due_date_stays_on_time() {
+        use chrono::{Duration, TimeZone, Utc};
+        use super::super::model::Override;
+        let now = Local.with_ymd_and_hms(2026, 11, 12, 12, 0, 0).unwrap();
+        let a = Assignment {
+            id: "a".into(),
+            module_id: "m".into(),
+            semester_id: "s".into(),
+            rule_id: None,
+            title: "Blatt".into(),
+            short: "B".into(),
+            kind: Kind::Submission,
+            due: now - Duration::days(3),
+            week: None,
+            iso_week: None,
+            optional: false,
+            upload: false,
+            folder: PathBuf::new(),
+            per_week_folder: false,
+            file_pattern: String::new(),
+            window_start: None,
+            recursive: false,
+            keywords: Vec::new(),
+            is_moved: false,
+            legacy: None,
+        };
+        let mut state = StudyState::default();
+        state.overrides.insert("a".into(), Override { status: Status::Done, date: Utc::now() });
+        let found = evaluate(std::slice::from_ref(&a), &Listings::new(), &StudyConfig::default(), &state, now, None, &HashSet::new());
+        assert_eq!(found["a"].completed_on_time, Some(true));
+    }
 }

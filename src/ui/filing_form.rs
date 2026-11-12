@@ -14,7 +14,7 @@ use gpui_kit::*;
 
 use super::state::{self, act};
 use super::motion::Soft;
-use super::theme::{Theme, font, radius, space, iconsize};
+use super::theme::{Theme, control, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::filing::{self, BRIEF_TAG, FileFacts, FileRole, Suggestion};
@@ -644,6 +644,12 @@ impl FilingForm {
             FileRole::Material => (tr("Unterlagen"), "library"),
         };
         let described = self.target.as_ref().map(|target| self.describe(target, l, t));
+        let reason = match (&self.target, self.path()) {
+            (Some(Target::Assignment(id)), Some(path)) if self.facts.is_some() && self.preset.is_none() && self.ranked.first().is_some_and(|a| &a.id == id) => l.assignment(id).or_else(|| self.ranked.iter().find(|a| &a.id == id)).map(|a| {
+                crate::core::filing::name_match(&name_of(path), a, l.module(a)).map_or_else(|| tr("Ziel geraten, prüf es kurz"), |word| trf("Dateiname enthält %@", &[&word]))
+            }),
+            _ => None,
+        };
         let folder = self.folder(l);
         let ready = self.facts.is_some();
         let multi = self.paths.len() > 1;
@@ -664,6 +670,7 @@ impl FilingForm {
                     .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).line_clamp(2).child(name))
                     .child(div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(div().size(px(space::S)).flex_none().rounded_full().bg(tint)).child(div().truncate().child(context)))
             }))
+            .children(reason.map(|r| caption(r, t)))
             .child(
                 div()
                     .flex()
@@ -673,7 +680,7 @@ impl FilingForm {
                     .rounded(px(radius::CONTROL))
                     .bg(t.secondary_bg)
                     .child(icon(if valid { "badge-check" } else { "triangle-alert" }, iconsize::S, if valid { t.green } else { t.orange }))
-                    .child(div().flex_1().min_w_0().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).line_clamp(2).child(if ready { final_name.to_string() } else { "…".to_string() })),
+                    .child(div().flex_1().min_w_0().text_size(px(font::BODY)).line_clamp(2).child(if ready { final_name.to_string() } else { "…".to_string() })),
             )
             .children(folder.map(|f| div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", iconsize::XS, t.secondary)).child(div().truncate().child(l.relative_path(&f)))))
             .child(
@@ -681,7 +688,7 @@ impl FilingForm {
                     .flex()
                     .items_center()
                     .gap(px(space::S))
-                    .child(Button::new("file-commit").primary().label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| commit.update(cx, |f, cx| f.commit(window, cx))))
+                    .child(div().flex_1().child(Button::new("file-commit").primary().w_full().h(px(control::M)).label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| commit.update(cx, |f, cx| f.commit(window, cx)))))
                     .child(kbd("↩", t))
                     .child(Button::new("filing-change").ghost().label(tr("Ändern")).on_click(move |_, window, cx| change.update(cx, |f, cx| f.set_details(true, window, cx)))),
             );
@@ -846,7 +853,7 @@ fn chip(id: SharedString, selected: bool, t: &Theme) -> Stateful<Div> {
 
 fn suggestion(id: SharedString, label: String, selected: bool, t: &Theme) -> Stateful<Div> {
     let (fill, hover) = if selected { (t.accent.opacity(0.2), t.accent.opacity(0.28)) } else { (t.ink.opacity(0.06), t.ink.opacity(0.1)) };
-    div().id(id).px(px(space::S)).py(px(space::XS)).rounded_full().bg(fill).soft(hover, radius::FULL).cursor_pointer().key_nav().text_size(px(font::CAPTION)).text_color(if selected { t.accent } else { t.primary }).child(label)
+    div().id(id).min_h(px(control::S)).flex().items_center().px(px(space::M)).rounded_full().bg(fill).soft(hover, radius::FULL).cursor_pointer().key_nav().text_size(px(font::CAPTION)).text_color(if selected { t.accent_text } else { t.primary }).child(label)
 }
 
 fn renames_by_default(cx: &App) -> bool {
@@ -880,7 +887,7 @@ impl Render for FilingForm {
         let preview_path = path.clone();
         let thumb: AnyElement = match &self.thumbnail {
             Some(i) => img(i.clone()).size_full().object_fit(ObjectFit::Contain).into_any_element(),
-            None if ["png", "jpg", "jpeg", "gif", "webp"].contains(&extension(&name_of(&path)).to_lowercase().as_str()) => img(path.clone()).size_full().object_fit(ObjectFit::Cover).into_any_element(),
+            None if ["png", "jpg", "jpeg", "gif", "webp"].contains(&extension(&name_of(&path)).to_lowercase().as_str()) => img(path.clone()).size_full().object_fit(ObjectFit::Contain).into_any_element(),
             None => file_icon(&path, iconsize::HERO).into_any_element(),
         };
         if !self.details {
@@ -1205,7 +1212,7 @@ impl Render for FilingForm {
                     .rounded(px(radius::CONTROL))
                     .bg(t.secondary_bg)
                     .child(icon(if valid { "badge-check" } else { "triangle-alert" }, iconsize::S, if valid { t.green } else { t.orange }))
-                    .child(div().flex_1().min_w_0().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).line_clamp(2).child(final_name)),
+                    .child(div().flex_1().min_w_0().text_size(px(font::BODY)).line_clamp(2).child(final_name)),
             );
             body = body.child(name);
         }

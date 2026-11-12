@@ -7,7 +7,7 @@ use gpui_kit::*;
 
 use super::state::act;
 use super::motion::{self, Soft};
-use super::theme::{Theme, font, radius, space, iconsize};
+use super::theme::{Theme, control, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::{tr, trf};
@@ -120,9 +120,8 @@ pub fn render(lib: &Library, st: &GridState, width: f32, view: Entity<super::pag
     div().w_full().flex().justify_center().child(
         div()
             .w_full()
-            .max_w(px(980.))
-            .px(px(space::XXL))
-            .py(px(space::XL))
+            .max_w(px(control::CONTENT_MAX))
+            .p(px(space::XL))
             .flex()
             .flex_col()
             .gap(px(space::XXL))
@@ -194,7 +193,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                     } else if is_current {
                         t.accent
                     } else if let (true, Some(p)) = (is_past, p) {
-                        if *p >= 1. { t.green.opacity(0.7) } else { t.red.opacity(0.7) }
+                        if *p >= 1. { t.green.opacity(0.7) } else { t.ink.opacity(0.3) }
                     } else {
                         t.ink.opacity(0.12)
                     };
@@ -232,6 +231,9 @@ const BAR_MIN_PAGE: f32 = 720.;
 
 fn module_list(lib: &Library, bars: bool, t: &Theme) -> Div {
     let mut list = grouped(t);
+    if lib.semester_modules().is_empty() {
+        return list.child(div().flex().flex_col().gap(px(space::XS)).p(px(space::L)).child(div().font_weight(FontWeight::MEDIUM).child(tr("Noch keine Module in diesem Semester"))).child(caption(tr("Module legst du unter Einstellungen → Module an."), t)));
+    }
     for (i, m) in lib.semester_modules().into_iter().enumerate() {
         if i > 0 {
             list = list.child(divider(t));
@@ -260,7 +262,7 @@ fn module_list(lib: &Library, bars: bool, t: &Theme) -> Div {
                         .child(div().font_weight(FontWeight::MEDIUM).child(m.display_name()))
                         .child(caption(next.map_or_else(|| tr("Nichts offen"), |a| trf("Nächste: %@, %@", &[&a.title, &day::due(a.due, lib.now)])), t).truncate()),
                 )
-                .when(overdue > 0, |d| d.child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.red).child(icon("circle-alert", iconsize::XS, t.red)).child(trf("%lld offen", &[&overdue]))))
+                .when(overdue > 0, |d| d.child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.secondary).child(trf("%lld offen", &[&overdue]))))
                 .when(total > 0, |d| {
                     d.when(bars, |d| d.child(div().w(px(120.)).child(progress_bar(done as f32 / total as f32, color, t)))).child(div().font_features(tabular()).w(px(44.)).text_right().text_size(px(font::CALLOUT)).text_color(t.secondary).child(format!("{done}/{total}")))
                 })
@@ -322,7 +324,7 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
             })))
         })
         .when(attention > 0, |d| {
-            d.child(div().id(SharedString::from(format!("att-{}", slot.monday))).flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).text_color(t.red).child(icon("circle-alert", iconsize::XS, t.red)).child(attention.to_string()).tooltip(tip(trf("%lld brauchen Aufmerksamkeit", &[&attention]))))
+            d.child(div().id(SharedString::from(format!("att-{}", slot.monday))).flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(trf("%lld offen", &[&attention])).tooltip(tip(trf("%lld sind noch offen", &[&attention]))))
         })
         .child(if mandatory.is_empty() {
             div().text_size(px(font::CALLOUT)).text_color(t.tertiary).child(if entries.is_empty() { tr("frei") } else { tr("nur optional") })
@@ -371,7 +373,7 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
     let attention = lib.needs_action(a);
     let when = day::due(a.due, lib.now);
     let subtitle = if attention {
-        format!("{code} · {}", if e.status == Status::Ready { tr("Upload bestätigen") } else { tr("Überfällig") })
+        format!("{code} · {}", if e.status == Status::Ready { tr("Upload bestätigen") } else { tr("Noch offen") })
     } else if e.status.is_closed() {
         format!("{code} · {}", e.status.label())
     } else if a.optional {
@@ -408,7 +410,7 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
                 .gap(px(space::XXS))
                 .max_w(px(260.))
                 .child(if e.status == Status::Skipped { title.line_through() } else { title })
-                .child(div().text_size(px(font::CAPTION)).truncate().text_color(if attention { if e.status == Status::Ready { t.blue } else { t.red } } else { t.secondary }).child(subtitle)),
+                .child(div().text_size(px(font::CAPTION)).truncate().text_color(if attention && e.status == Status::Ready { t.blue } else { t.secondary }).child(subtitle)),
         )
         .when(tracks, |c| file_target(c, a, t))
         .context_menu(move |menu, window, cx| super::ai::deadline_submenu(status_menu(menu, &menu_id, cx), &menu_id, window, cx));

@@ -327,7 +327,7 @@ pub fn deadlines(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
         col = col.child(div().flex().items_center().gap(px(space::S)).py(px(space::S)).text_color(t.secondary).child(icon("circle-check", iconsize::S, t.green)).child(tr("Nichts offen in den nächsten zwei Wochen")));
     }
     if !attention.is_empty() {
-        col = col.child(div().flex().items_center().gap(px(space::S)).mt(px(space::S)).py(px(space::XS)).font_weight(FontWeight::SEMIBOLD).text_color(t.red).child(icon("circle-alert", iconsize::XS, t.red)).child(tr("Braucht Aufmerksamkeit")));
+        col = col.child(div().flex().items_center().gap(px(space::S)).mt(px(space::S)).py(px(space::XS)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(tr("Noch offen")));
         for (a, leaving) in attention {
             col = col.child(div().mx(px(-space::S)).child(motion::reveal(SharedString::from(format!("attention-{}", a.id)), !leaving, div().w_full().relative().px(px(space::S)).child(entry(lib, a, st, view.clone(), t)).when(leaving, |d| d.child(div().absolute().inset_0().occlude())))));
         }
@@ -403,17 +403,19 @@ pub fn header(lib: &Library, m: &Module, width: f32, t: &Theme) -> Div {
         .flex_none()
         .flex()
         .flex_col()
-        .gap(px(space::M))
-        .px(px(space::XL))
-        .py(px(space::L))
         .border_b_1()
         .border_color(t.separator)
         .child(
             div()
+                .w_full()
+                .max_w(px(control::CONTENT_MAX))
+                .mx_auto()
+                .px(px(space::XL))
+                .py(px(space::L))
                 .flex()
                 .items_center()
                 .gap(px(space::L))
-                .child(div().size(px(48.)).flex_none().rounded(px(radius::CARD)).bg(color).flex().items_center().justify_center().text_size(px(15.)).font_weight(FontWeight::BOLD).text_color(white()).child(code))
+                .child(div().size(px(48.)).flex_none().rounded(px(radius::CARD)).bg(color).flex().items_center().justify_center().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).text_color(white()).child(code))
                 .child(
                     div()
                         .flex_1()
@@ -461,7 +463,7 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
         grouped(t).child(deadlines(lib, m, st, view, t)).into_any_element()
     };
     let title = div().flex().items_center().gap(px(space::S)).child(section_title(tr("Abgaben"))).when(waiting > 0, |d| {
-        d.child(div().id("module-attention").flex_none().min_w(px(iconsize::M)).px(px(space::XS)).rounded_full().bg(t.badge_fill(t.red)).flex().items_center().justify_center().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).font_features(tabular()).text_color(white()).child(waiting.to_string()).tooltip(tip(tr("Braucht Aufmerksamkeit"))))
+        d.child(div().id("module-attention").flex_none().min_w(px(iconsize::M)).px(px(space::XS)).rounded_full().bg(t.badge_fill(t.gray)).flex().items_center().justify_center().text_size(px(font::CAPTION2)).font_weight(FontWeight::BOLD).font_features(tabular()).text_color(white()).child(waiting.to_string()).tooltip(tip(tr("Noch offen"))))
     });
     let add = (all > 0).then(|| more_link("add-entry", tr("Neuer Eintrag…"), t).tooltip(tip(format!("{}{}", tr("Abgabe, Aufgabe oder Prüfung eintragen"), crate::core::shortcuts::ShortcutAction::NewEntry.hint()))).on_click(move |_, _, cx| add_submission(cx)));
     let folder = lib.root.as_ref().map(|r| r.join(&m.folder)).unwrap_or_default();
@@ -475,6 +477,15 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
             super::ai::file_submenu(m, &menu, window, cx)
         })
     });
+    let other = super::today::recent_files_in(&folder, 6);
+    let other_rows = other.into_iter().enumerate().map(|(i, (path, at))| {
+        let (open, menu) = (path.clone(), path.clone());
+        inset_file_row(("module-file-row", i), &path, path.file_name().unwrap_or_default().to_string_lossy().to_string(), t).child(caption(super::notes_page::changed_ago(now - at), t).flex_none()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))).context_menu(move |menu_box, window, cx| {
+            let m = file_menu(menu_box, menu.clone());
+            super::ai::file_submenu(m, &menu, window, cx)
+        })
+    });
+    let other_rows: Vec<_> = other_rows.collect();
     let new_id = m.id.clone();
     let module_folder = m.folder.clone();
     let all_files = more_link("to-files", tr("Alle Dateien"), t).tooltip(tip(tr("Im Dateibaum zeigen"))).on_click(move |_, _, cx| {
@@ -505,6 +516,7 @@ fn overview_main(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
         .gap(px(space::XL))
         .child(div().flex().flex_col().gap(px(space::S)).child(section(title, add)).child(list))
         .child(div().flex().flex_col().gap(px(space::S)).child(section(section_title(tr("Zuletzt geschrieben")), Some(all_files))).child(files))
+        .when(!other_rows.is_empty(), |d| d.child(div().flex().flex_col().gap(px(space::S)).child(section(section_title(tr("Dateien")), None)).child(inset_list(t).children(other_rows))))
 }
 
 fn empty_card(icon_name: &str, title: String, detail: String, actions: impl IntoElement, t: &Theme) -> AnyElement {
@@ -624,7 +636,7 @@ pub fn overview(lib: &Library, m: &Module, width: f32, st: &ModuleState, view: E
     } else {
         div().flex().flex_col().gap(px(space::XL)).child(main).children(rail)
     };
-    div().w_full().max_w(px(1120.)).mx_auto().px(px(space::XL)).py(px(space::L)).flex().flex_col().gap(px(space::XL)).child(body).children(hint)
+    div().w_full().max_w(px(control::CONTENT_MAX)).mx_auto().px(px(space::XL)).py(px(space::L)).flex().flex_col().gap(px(space::XL)).child(body).children(hint)
 }
 
 #[cfg(test)]

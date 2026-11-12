@@ -211,6 +211,8 @@ def clickable_without_feedback(text, offset):
     root, parts = chain_of(text, offset)
     if root != "div":
         return False
+    if re.match(r"\.on_click\(\s*\|_, _, cx\|\s*cx\.stop_propagation\(\)\s*\)", text[offset:]):
+        return False
     body = " ".join(f".{n}{a}" for n, a in parts if n not in ("child", "children"))
     names = {n for n, _ in parts}
     return not (names & {"soft", "soft_edge", "hover", "active"} or re.search(r"\.(soft|soft_edge|hover|active)\(", body))

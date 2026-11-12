@@ -10,7 +10,7 @@ use super::browser::DraggedFile;
 use super::drive::Mark;
 use super::motion::{self, Soft};
 use super::state::{self, act};
-use super::theme::{Theme, font, radius, space, iconsize};
+use super::theme::{Theme, control, font, radius, space, iconsize};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library};
 use crate::core::model::{Assignment, Kind, Status};
@@ -28,8 +28,9 @@ pub trait KeyNav {
 
 impl KeyNav for Stateful<Div> {
     fn key_nav(self) -> Self {
-        let ring = super::theme::ring::fill();
-        super::drive::marked(self, "clickable").tab_index(0).focus_visible(move |s| s.bg(ring))
+        let (fill, line) = (super::theme::ring::fill(), super::theme::ring::line());
+        let shadow = vec![BoxShadow { color: line, offset: point(px(0.), px(0.)), blur_radius: px(0.), inset: false, spread_radius: px(super::theme::ring::WIDTH) }];
+        super::drive::marked(self, "clickable").tab_index(0).focus_visible(move |s| s.bg(fill).shadow(shadow.clone()))
     }
 }
 
@@ -162,7 +163,7 @@ pub fn status_glyph(status: Status, kind: Kind, optional: bool, tint: Hsla, size
         Status::Skipped => base.bg(t.gray.opacity(0.35)).child(mark("minus", white(), 0.62)).into_any_element(),
         Status::Ready => base.border(px(1.6)).border_color(t.blue).child(mark("check", t.blue, 0.58)).into_any_element(),
         Status::InProgress => base.border(px(1.6)).border_color(t.orange).relative().child(half_disc(t.orange)).into_any_element(),
-        Status::Overdue => base.border(px(1.8)).border_color(t.red).into_any_element(),
+        Status::Overdue => base.border(px(1.8)).border_color(t.secondary).into_any_element(),
         Status::Open if kind == Kind::Exam => div().size(px(size)).flex().items_center().justify_center().child(mark("graduation-cap", tint, 0.85)).into_any_element(),
         Status::Open => {
             let ring = base.border(px(1.5)).border_color(tint.opacity(0.8));
@@ -187,15 +188,21 @@ pub fn status_toggle(a: &Assignment, lib: &Library, size: f32, t: &Theme) -> Sta
     let tint = t.palette(lib.module(a).map_or("blue", |m| m.color.as_str()));
     let id = a.id.clone();
     let help = status_help(a, status);
+    let reach = (control::S - size).max(0.) / 2.;
     div()
         .id(SharedString::from(format!("toggle-{}", a.id)))
         .flex_none()
         .relative()
+        .size(px(size + 2. * reach))
+        .m(px(-reach))
+        .flex()
+        .items_center()
+        .justify_center()
         .rounded_full()
         .cursor_pointer().key_nav()
         .soft(t.ink.opacity(0.08), radius::FULL)
-        .child(status_glyph(status, a.kind, a.optional, tint, size, t))
-        .child(motion::done_pulse("done", status.is_closed() && status != Status::Skipped, size))
+        .block_mouse_except_scroll()
+        .child(div().relative().size(px(size)).flex_none().child(status_glyph(status, a.kind, a.optional, tint, size, t)).child(motion::done_pulse("done", status.is_closed() && status != Status::Skipped, size)))
         .tooltip(tip(help))
         .on_click(move |e, _, cx| {
             cx.stop_propagation();
@@ -494,7 +501,7 @@ pub fn row_button(id: impl Into<ElementId>, t: &Theme) -> Stateful<Div> {
 pub fn link_button(id: impl Into<ElementId>, label: impl Into<SharedString>, t: &Theme) -> Stateful<Div> {
     let accent = t.accent_text;
     let label = label.into();
-    div().id(id).mark("link", label.clone()).text_color(accent).cursor_pointer().key_nav().hover(move |s| s.text_color(accent.opacity(0.8))).child(label)
+    div().id(id).mark("link", label.clone()).min_h(px(control::S)).flex().items_center().text_color(accent).cursor_pointer().key_nav().hover(move |s| s.text_color(accent.opacity(0.8))).child(label)
 }
 
 /// Keyboard-shortcut chip.
@@ -511,7 +518,7 @@ pub fn due_label(lib: &Library, a: &Assignment, t: &Theme) -> Div {
     } else if e.status == Status::Ready && lib.needs_action(a) {
         (tr("Upload bestätigen"), t.blue)
     } else if lib.needs_action(a) {
-        (crate::core::day::countdown(a.due, lib.now), t.red)
+        (crate::core::day::countdown(a.due, lib.now), t.secondary)
     } else {
         (crate::core::day::compact(a.due, lib.now), if soon { t.orange } else { t.secondary })
     };

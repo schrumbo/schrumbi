@@ -68,7 +68,7 @@ Bei {ui:Module} sind passende Ordner schon angehakt: alles direkt in einem Semes
 | {ui:Notizen} | {key:goNotes} | Notizen, Suche, Tags, Aufgaben |
 | {ui:Karten} | {key:goCards} | Karteikarten zum Lernen |
 
-- Die Seitenleiste zeigt nur Symbole. Der Zeiger darauf nennt Bereich und Kürzel.
+- Die Seitenleiste zeigt Symbole mit Namen. {ui:Seitenleiste einklappen} unten links macht sie schmal, dann nennt der Zeiger Bereich und Kürzel. Unter 820 px Fensterbreite bleibt sie schmal.
 - Rechtsklick auf einen Bereich außer {ui:Übersicht}: {ui:Aus der Seitenleiste ausblenden}.
 
 ## Was im Ordner liegt

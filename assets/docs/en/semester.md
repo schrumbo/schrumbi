@@ -12,12 +12,13 @@ A semester has lecture weeks, a module has a folder. Schrumbi needs nothing more
 
 ## Module Page
 
-Clicking a module in the sidebar opens its page. On the left are all {ui:Abgaben} with their files and {ui:Zuletzt geschrieben}, on the right cards, sessions, grade and links.
+Clicking a module in the sidebar opens its page. On the left are all {ui:Abgaben} with their files, {ui:Zuletzt geschrieben} and {ui:Dateien}, on the right cards, sessions, grade and links.
 
-- What is overdue comes first, under {ui:Braucht Aufmerksamkeit}. The red number next to {ui:Abgaben} counts exactly these entries, like the sidebar.
+- What is still open comes first, under {ui:Noch offen}. The grey number next to {ui:Abgaben} counts exactly these entries, like the sidebar.
 - Then the next two weeks. Later and finished submissions are collapsed and show the first five.
 - Finished entries slide out of the list, {ui:Erledigt} lights up briefly.
 - {ui:Neuer Eintrag…} next to {ui:Abgaben} adds a submission.
+- {ui:Dateien} shows the most recently changed files of the module folder that are not notes, e.g. PDFs. A click opens them. Without such files the section is missing.
 - {ui:Alle Dateien} shows the module folder in the file tree.
 - On the module page the search field at the top searches only this module. A click on the code next to it searches everywhere.
 

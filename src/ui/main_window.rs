@@ -71,17 +71,17 @@ fn wanted_width(ki: bool) -> f32 {
 }
 
 fn docked_width(ki: bool, window_width: f32) -> f32 {
-    wanted_width(ki).clamp(PANEL_MIN, PANEL_MAX.min((window_width - sidebar::RAIL - PAGE_KEEPS).max(PANEL_MIN)))
+    wanted_width(ki).clamp(PANEL_MIN, PANEL_MAX.min((window_width - sidebar::rail_for(window_width) - PAGE_KEEPS).max(PANEL_MIN)))
 }
 
 /// Whether the right panel floats over the page because beside it the page would get too narrow.
 fn panel_floats(ki: bool, window_width: f32) -> bool {
-    window_width - sidebar::RAIL - docked_width(ki, window_width) < PAGE_KEEPS
+    window_width - sidebar::rail_for(window_width) - docked_width(ki, window_width) < PAGE_KEEPS
 }
 
 fn panel_max(ki: bool, window_width: f32) -> f32 {
     let keeps = if panel_floats(ki, window_width) { FLOAT_GAP } else { PAGE_KEEPS };
-    PANEL_MAX.min((window_width - sidebar::RAIL - keeps).max(PANEL_MIN))
+    PANEL_MAX.min((window_width - sidebar::rail_for(window_width) - keeps).max(PANEL_MIN))
 }
 
 /// How wide the right panel is on a tab: what the user dragged it to, within what the window leaves.
@@ -371,16 +371,16 @@ impl MainWindow {
             .pl(px(toolbar_padding - space::M))
             .pr(px(space::M))
             .child(Button::new("go-back").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-left")).disabled(!lib.can_go_back()).tooltip(format!("{}{}", tr("Zurück"), ShortcutAction::GoBack.hint())).on_click(|_, _, cx| act(cx, |l| l.go_back())))
-            .child(Button::new("go-forward").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-right")).disabled(!lib.can_go_forward()).tooltip(tr("Vorwärts")).on_click(|_, _, cx| act(cx, |l| l.go_forward())))
+            .child(Button::new("go-forward").ghost().size(px(control::M)).rounded_full().icon(menu_icon("arrow-right")).disabled(!lib.can_go_forward()).tooltip(format!("{}{}", tr("Vorwärts"), ShortcutAction::GoForward.hint())).on_click(|_, _, cx| act(cx, |l| l.go_forward())))
             
             .child(match lib.route() {
                 Route::Doc(shown) => Self::crumbs(lib, lib.focused_document().unwrap_or(shown), total - toolbar_padding - crumb::TOOLBAR_BUTTONS * control::M - search_width - crumb::TOOLBAR_GAPS * space::S - ai_room, window, t),
                 _ => div().flex_1().min_w(px(80.)).truncate().text_size(px(font::TITLE3)).font_weight(FontWeight::BOLD).child(Self::title(lib)),
             })
-            .child(super::coach::anchor(div().id("coach-new").rounded_full()).child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().bg(t.ink.opacity(0.06)).border_1().border_color(t.ink.opacity(0.1)).icon(menu_icon("plus")).tooltip(tr("Neu")).dropdown_menu(move |menu, _, _| {
+            .child(super::coach::anchor(div().id("coach-new").rounded_full()).child(Button::new("new-menu").ghost().size(px(control::M)).rounded_full().icon(menu_icon("plus")).tooltip(format!("{}{}", tr("Neu"), ShortcutAction::NewEntry.hint())).dropdown_menu(move |menu, _, _| {
                 let m = module2.clone();
-                menu.item(PopupMenuItem::new(format!("{}{}", tr("Neuer Eintrag…"), ShortcutAction::NewEntry.hint())).icon(menu_icon("calendar-plus")).on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)))
-                    .item(PopupMenuItem::new(format!("{}{}", tr("Neue Notiz, Datei oder Ordner…"), ShortcutAction::NewFile.hint())).icon(menu_icon("file-plus")).on_click(move |_, _, cx| {
+                menu.item(PopupMenuItem::new(tr("Neuer Eintrag…")).icon(menu_icon("calendar-plus")).action(Box::new(super::app::NewEntry)).on_click(|_, _, cx| act(cx, |l| l.show_quick_add = true)))
+                    .item(PopupMenuItem::new(tr("Neue Notiz, Datei oder Ordner…")).icon(menu_icon("file-plus")).action(Box::new(super::app::NewFile)).on_click(move |_, _, cx| {
                         let m = m.clone();
                         act(cx, |l| l.new_note = Some(NewNoteRequest { module_id: m, folder: None }))
                     }))
@@ -391,7 +391,7 @@ impl MainWindow {
                     .ghost()
                     .size(px(control::M))
                     .rounded_full()
-                    .when(offered, |b| b.bg(t.ink.opacity(if show { 0.14 } else { 0.06 })).border_1().border_color(t.ink.opacity(0.1)))
+                    .when(offered && show, |b| b.bg(t.ink.opacity(0.14)))
                     .icon(menu_icon("panel-right"))
                     .disabled(!offered)
                     .tooltip(if offered { format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()) } else { tr("Diese Seite hat keine Details") })
@@ -603,7 +603,7 @@ impl Render for MainWindow {
         }
 
         let update = super::updates::available(cx);
-        let left = sidebar::RAIL;
+        let left = motion::follow("sidebar-width", sidebar::rail_for(width), motion::MEDIUM, window, cx);
         if column && self.ai_panel.is_none() {
             self.ai_panel = Some(cx.new(|cx| super::ai_panel::AiPanel::new(window, cx)));
         }
@@ -628,6 +628,22 @@ impl Render for MainWindow {
                 AnyView::from(self.today.clone()).cached(StyleRefinement::default().size_full()).into_any_element()
             }
             _ => self.pages.clone().into_any_element(),
+        };
+        let page = if matches!(l.route(), Route::Today | Route::Grid | Route::Record) {
+            let accent = t.accent;
+            div()
+                .id("drop-page")
+                .size_full()
+                .relative()
+                .drag_over::<ExternalPaths>(move |s, _, _, _| s.bg(accent.opacity(0.08)))
+                .on_drop(|paths: &ExternalPaths, _, cx| {
+                    let paths = paths.paths().to_vec();
+                    act(cx, |l| l.request_filing(paths, None));
+                })
+                .child(page)
+                .into_any_element()
+        } else {
+            page
         };
         let page_key = {
             use std::hash::{Hash, Hasher};
@@ -663,7 +679,7 @@ impl Render for MainWindow {
                     .left_0()
                     .bottom_0()
                     .w(px(left))
-                    .child(sidebar::render(l, update, &t, cx)),
+                    .child(sidebar::render(l, update, width, &t, cx)),
             )
             .child(
                 div()
