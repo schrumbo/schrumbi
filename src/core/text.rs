@@ -142,3 +142,77 @@ pub fn safe_file_stem(title: &str) -> String {
     let joined = clean.split_whitespace().collect::<Vec<_>>().join(" ");
     joined.chars().take(120).collect::<String>().trim_matches(['.', ' ']).to_string()
 }
+
+const FORBIDDEN_IN_NAMES: &str = "\\/:*?\"<>|";
+
+fn reserved_device(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
+    let numbered = |prefix: &str| stem.strip_prefix(prefix).is_some_and(|n| n.len() == 1 && matches!(n.as_bytes()[0], b'1'..=b'9'));
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || numbered("COM") || numbered("LPT")
+}
+
+/// What keeps `name` from working as a file or folder name on every system a study folder travels to; `None` when it works.
+pub fn file_name_problem(name: &str) -> Option<String> {
+    use super::i18n::{tr, trf};
+    if name.chars().all(|c| c == '.' || c.is_whitespace()) {
+        Some(tr("Der Name ist leer."))
+    } else if let Some(bad) = name.chars().find(|c| FORBIDDEN_IN_NAMES.contains(*c)) {
+        Some(trf("Das Zeichen „%@“ geht in einem Namen nicht.", &[&bad.to_string()]))
+    } else if name.chars().any(char::is_control) {
+        Some(tr("Der Name enthält ein unsichtbares Steuerzeichen."))
+    } else if name.ends_with('.') {
+        Some(tr("Ein Name darf nicht mit einem Punkt enden."))
+    } else if name.ends_with(char::is_whitespace) {
+        Some(tr("Ein Name darf nicht mit einem Leerzeichen enden."))
+    } else if reserved_device(name) {
+        Some(trf("„%@“ ist unter Windows reserviert und geht als Name nicht.", &[&name.split('.').next().unwrap_or_default().trim_end().to_string()]))
+    } else if name.len() > 255 {
+        Some(tr("Der Name ist zu lang."))
+    } else {
+        None
+    }
+}
+
+/// `name` changed just enough to pass `file_name_problem` and stay visible: forbidden and invisible characters become spaces,
+/// leading dots go, a device name gets a leading `_`, and an empty name becomes `fallback`.
+pub fn safe_file_name(name: &str, fallback: &str) -> String {
+    let clean: String = name.chars().map(|c| if FORBIDDEN_IN_NAMES.contains(c) || c.is_control() { ' ' } else { c }).collect();
+    let joined = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = joined.trim_matches(['.', ' ']).to_string();
+    if out.is_empty() {
+        out = fallback.to_string();
+    }
+    if reserved_device(&out) {
+        out.insert(0, '_');
+    }
+    while out.len() > 255 {
+        out.pop();
+    }
+    out.trim_end_matches(['.', ' ']).to_string()
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::{file_name_problem, safe_file_name};
+
+    #[test]
+    fn names_that_break_on_some_system_are_refused() {
+        for bad in ["CON", "nul.md", "Aux.txt", "prn", "Com1.md", "LPT9", "NUL .md", "...", "  ", "", "a.", "a ", "x.md:ads", "..\\esc.md", "C:\\b.md", "a/b", "tab\there", &"x".repeat(256)] {
+            assert!(file_name_problem(bad).is_some(), "{bad:?}");
+        }
+        for good in ["Notiz.md", "Übung ö.1", "COM10.md", "Console.md", "nullte.md", ".hidden", "Blatt 4 - Lösungen.pdf"] {
+            assert_eq!(file_name_problem(good), None, "{good:?}");
+        }
+    }
+
+    #[test]
+    fn a_made_safe_name_always_passes() {
+        for name in ["NUL", "x.md:ads", "Blatt 4: Lösungen.pdf", "...", "  ", "a.", "con.md", "a\u{0}b", "..", &"ü".repeat(200)] {
+            let safe = safe_file_name(name, "Anki");
+            assert_eq!(file_name_problem(&safe), None, "{name:?} -> {safe:?}");
+        }
+        assert_eq!(safe_file_name("Blatt 4: Lösungen.pdf", "x"), "Blatt 4 Lösungen.pdf");
+        assert_eq!(safe_file_name("NUL", "x"), "_NUL");
+        assert_eq!(safe_file_name("..", "Anki"), "Anki");
+    }
+}

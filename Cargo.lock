@@ -8111,6 +8111,7 @@ dependencies = [
  "dirs 6.0.0",
  "drag",
  "dunce",
+ "encoding_rs",
  "futures",
  "glob",
  "gpui-kit",

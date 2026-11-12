@@ -407,6 +407,7 @@ impl Setup {
             }
             let c = self.draft.clone();
             act(cx, |l| l.save_config(c));
+            super::setup_card::wizard_done(cx);
         }
         act(cx, |l| l.needs_setup = false);
         cx.emit(Dismissed);

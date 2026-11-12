@@ -3175,7 +3175,7 @@ impl NoteView {
     fn drop_pdf(&mut self, pdf: &Path, pages: &[usize], window: &mut Window, cx: &mut Context<Self>) {
         let line = self.pdf_drop.take();
         self.pdf_drop_bar = None;
-        let (missing, undecodable) = state::read(cx, |l| l.buffers.get(&self.path).map_or((true, false), |b| (b.missing, b.undecodable)));
+        let (missing, undecodable) = state::read(cx, |l| l.buffers.get(&self.path).map_or((true, false), |b| (b.missing, b.unavailable())));
         if missing || undecodable {
             cx.notify();
             return;
@@ -3907,11 +3907,18 @@ impl Render for NoteView {
                 window.request_animation_frame();
             }
         }
-        let undecodable = state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.undecodable));
+        let (undecodable, unreadable) = state::read(cx, |l| l.buffers.get(&self.path).map_or((false, false), |b| (b.undecodable, b.unreadable)));
         let words = if matches!(self.mode, Mode::Source | Mode::Split) { self.words_of(&snapshot, cx) } else { None };
         let caption = if matches!(self.mode, Mode::Source | Mode::Split) { self.plain_caption(text.len(), &t, cx) } else { None };
-        let content: AnyElement = if undecodable {
-            unavailable("file-warning", tr("Kodierung wird nicht unterstützt"), tr("Die Datei ist nicht in UTF-8 gespeichert. Sie bleibt unverändert, öffne sie in einer anderen App."), &t).into_any_element()
+        let content: AnyElement = if unreadable {
+            unavailable("file-lock-2", tr("Datei gerade nicht lesbar"), tr("Eine andere App hält die Datei gerade fest. Schrumbi ändert nichts daran und zeigt sie, sobald sie wieder lesbar ist."), &t).into_any_element()
+        } else if undecodable {
+            let original = self.path.clone();
+            unavailable("file-warning", tr("Kodierung wird nicht unterstützt"), tr("Die Datei ist nicht in UTF-8 gespeichert. Sie bleibt unverändert. Eine UTF-8-Kopie daneben kannst du hier bearbeiten."), &t)
+                .child(div().pt(px(space::M)).child(Button::new("utf8-copy").small().label(tr("UTF-8-Kopie öffnen")).on_click(move |_, _, cx| act(cx, |l| {
+                    l.utf8_copy(&original);
+                }))))
+                .into_any_element()
         } else if missing {
             let closing = self.path.clone();
             unavailable("file-question", tr("Datei nicht gefunden"), trf("„%@“ wurde gelöscht oder außerhalb dieses Ordners verschoben.", &[&self.path.file_name().unwrap_or_default().to_string_lossy()]), &t).child(div().pt(px(space::M)).child(Button::new("missing-close").small().label(tr("Tab schließen")).on_click(move |_, _, cx| close_tab(&closing, cx)))).into_any_element()

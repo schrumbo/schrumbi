@@ -26,6 +26,8 @@ Die Zeile unten in der Seitenleiste zeigt den Stand, ein Klick öffnet Details.
 
 Offline wird lokal gesichert und später hochgeladen. Du musst nichts tun.
 
+Fehlen viele Dateien auf einmal, pausiert das automatische Sichern. War das gewollt, {ui:Trotzdem sichern}.
+
 ## Konflikte
 
 Wurde dieselbe Datei auf zwei Geräten geändert, zeigt die Sync-Zeile in der Seitenleiste die Konflikte, und der automatische Sync wartet. Ein Klick darauf oder {ui:Konflikte lösen…} in {key:CommandPalette} öffnet die Auswahl. Nichts geht verloren.

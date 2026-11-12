@@ -42,9 +42,7 @@ pub fn save<T: Serialize>(value: &T, path: &Path) -> Result<()> {
 pub fn save_bytes<T: Serialize>(value: &T, path: &Path) -> Result<Vec<u8>> {
     backup(path);
     let json = to_swift_json(value)?;
-    let tmp = path.with_file_name(format!(".{}.tmp", path.file_name().unwrap_or_default().to_string_lossy()));
-    std::fs::write(&tmp, &json)?;
-    std::fs::rename(&tmp, path)?;
+    super::note_buffer::write_atomic(path, json.as_bytes())?;
     Ok(json.into())
 }
 

@@ -10,19 +10,11 @@ use super::quick::Dismissed;
 use super::state::{self, act};
 use super::theme::{Theme, font, iconsize, space};
 use super::widgets::*;
-use crate::core::i18n::{tr, trf};
+use crate::core::i18n::tr;
 
-const FORBIDDEN: &str = "\\/:*?\"<>|";
-
-/// What is wrong with a name that has forbidden characters or ends in a period, in the words every rename sheet uses.
+/// What is wrong with a name that would not work on every system, in the words every rename sheet uses.
 pub fn forbidden_message(stem: &str) -> Option<String> {
-    if let Some(bad) = stem.chars().find(|c| FORBIDDEN.contains(*c)) {
-        Some(trf("Das Zeichen „%@“ geht in einem Namen nicht.", &[&bad.to_string()]))
-    } else if stem.ends_with('.') {
-        Some(tr("Ein Name darf nicht mit einem Punkt enden."))
-    } else {
-        None
-    }
+    crate::core::text::file_name_problem(stem)
 }
 
 /// Asks for a new name in a small sheet, for when the explorer has no room to rename in its row.

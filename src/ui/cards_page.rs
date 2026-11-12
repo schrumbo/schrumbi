@@ -2239,7 +2239,7 @@ impl EventEmitter<super::quick::Dismissed> for CardImport {}
 
 impl CardImport {
     fn folder_outside(&self, cx: &App) -> bool {
-        self.folder.read(cx).value().trim().split('/').any(|part| part == "..")
+        folder_outside(self.folder.read(cx).value().trim())
     }
 
     fn new(path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -2270,7 +2270,7 @@ impl CardImport {
         let Some(package) = self.package.take() else { return };
         let root = index::current().root.clone();
         let name = self.folder.read(cx).value().trim().to_string();
-        if root.as_os_str().is_empty() || name.split('/').any(|part| part == "..") {
+        if root.as_os_str().is_empty() || folder_outside(&name) {
             self.package = Some(package);
             cx.notify();
             return;
@@ -2281,14 +2281,17 @@ impl CardImport {
         self.working = true;
         cx.notify();
         let rel_root = root.clone();
-        let task = cx.background_spawn(async move { cards::anki::write(package, &target, keep, &known, |p| p.strip_prefix(&rel_root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default()) });
+        let task = cx.background_spawn(async move {
+            let mut done = cards::anki::write(package, &target, keep, &known, |p| p.strip_prefix(&rel_root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default())?;
+            let back = cards::adopt_import(std::mem::take(&mut done.states), std::mem::take(&mut done.log));
+            anyhow::Ok((done, back))
+        });
         self._load = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
             let failed = match result {
-                Ok(done) => {
-                    let spread = cards::adopt_import(done.states, done.log, done.fresh, cards::now());
+                Ok((done, back)) => {
                     cx.update(|cx| {
-                        act(cx, |l| l.cards_imported(done.created, done.added, done.duplicates, spread));
+                        act(cx, |l| l.cards_imported(done, back));
                         state::reindex(cx);
                     });
                     None
@@ -2305,6 +2308,11 @@ impl CardImport {
             });
         }));
     }
+}
+
+fn folder_outside(folder: &str) -> bool {
+    let path = std::path::Path::new(folder);
+    path.is_absolute() || folder.starts_with(['/', '\\']) || folder.contains(':') || folder.split(['/', '\\']).any(|part| part == "..") || path.components().any(|c| !matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir))
 }
 
 impl Render for CardImport {
@@ -2374,5 +2382,18 @@ impl Render for CardImport {
                     .child(Button::new("import-cancel").label(tr("Abbrechen")).on_click(cx.listener(|_, _, _, cx| cx.emit(super::quick::Dismissed))))
                     .child(Button::new("import-start").primary().label(if self.working { tr("Importiere …") } else { tr("Importieren") }).disabled(!ready || self.folder_outside(cx)).on_click(cx.listener(|s, _, _, cx| s.start(cx)))),
             )
+    }
+}
+
+#[cfg(test)]
+mod import_tests {
+    #[test]
+    fn an_import_folder_never_leaves_the_study_folder() {
+        for inside in ["Anki", "Anki/Bio", "Anki/", "./Anki"] {
+            assert!(!super::folder_outside(inside), "{inside}");
+        }
+        for outside in ["/etc", "C:/Users", "C:Anki", "../Anki", "Anki/../../x", "//server/share"] {
+            assert!(super::folder_outside(outside), "{outside}");
+        }
     }
 }

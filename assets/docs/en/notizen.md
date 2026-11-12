@@ -24,6 +24,10 @@ Notes are Markdown files in your folder. Obsidian reads them the same way.
 - Dragging a file onto a folder moves it.
 - Right-click → {ui:Abgabe zuordnen} makes the file count for a submission. The pill at the top of the note shows what it belongs to.
 - {ui:In den Papierkorb} does not ask. {key:Undo} brings the file back.
+- Very large files then live only in the system trash and come back from there. If the drive has no trash, they stay where they are.
+- A note whose last edits could not be saved stays where it is.
+- Renaming and moving update links in other notes, including links into a renamed folder.
+- A note not saved as UTF-8 stays unchanged. {ui:UTF-8-Kopie öffnen} puts an editable copy next to it.
 
 At the top you switch between {ui:Dateien}, {ui:Suche}, {ui:Tags} and {ui:Aufgaben}.
 

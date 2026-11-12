@@ -597,6 +597,12 @@ pub struct StudyState {
     pub linked_files: BTreeMap<String, Vec<String>>,
     /// Set once the files older versions found by date in shared folders were turned into links.
     pub links_adopted: bool,
+    /// The setup list was finished on one of the devices; it stays hidden on all of them.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub setup_completed: bool,
+    /// The setup list was closed on one of the devices.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub setup_dismissed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::sync::{LazyLock, RwLock};
+use std::sync::{LazyLock, Mutex, RwLock};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -376,22 +377,83 @@ pub fn data_dir() -> Option<PathBuf> {
     std::env::var_os("SCHRUMBI_HOME").map(|d| PathBuf::from(d).join("data")).or_else(|| dirs::data_dir().map(|d| d.join("Schrumbi")))
 }
 
-static PREFS: LazyLock<RwLock<Prefs>> = LazyLock::new(|| {
-    let file = config_dir().map(|d| d.join("settings.json"));
-    let bytes = file.as_ref().and_then(|f| std::fs::read(f).ok());
-    let loaded = bytes.as_ref().and_then(|b| serde_json::from_slice(b).ok());
-    if let (None, Some(_), Some(f)) = (&loaded, &bytes, &file) {
-        let _ = std::fs::copy(f, f.with_extension("defekt.json"));
+fn settings_file() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("settings.json"))
+}
+
+fn stamp_of(file: &std::path::Path) -> Option<(u64, SystemTime)> {
+    let meta = std::fs::metadata(file).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+/// Settings from the file's bytes, field by field: a value this version cannot read falls back to its default
+/// alone, instead of taking every other setting with it. The second value tells whether anything fell back.
+fn parse(bytes: &[u8]) -> (Prefs, bool) {
+    let Ok(serde_json::Value::Object(read)) = serde_json::from_slice::<serde_json::Value>(bytes) else { return (Prefs::default(), true) };
+    let mut prefs = Prefs::default();
+    if let Ok(whole) = serde_json::from_value::<Prefs>(serde_json::Value::Object(read.clone())) {
+        prefs = whole;
+    } else {
+        let Ok(serde_json::Value::Object(mut merged)) = serde_json::to_value(&prefs) else { return (prefs, true) };
+        for (key, value) in read {
+            let mut candidate = merged.clone();
+            candidate.insert(key, value);
+            if let Ok(next) = serde_json::from_value::<Prefs>(serde_json::Value::Object(candidate.clone())) {
+                merged = candidate;
+                prefs = next;
+            }
+        }
+        return (settled(prefs), true);
     }
-    let mut prefs: Prefs = loaded.unwrap_or_default();
+    (settled(prefs), false)
+}
+
+/// Settings brought up to date after reading: older formats migrated, workspaces keyed by their real path.
+fn settled(mut prefs: Prefs) -> Prefs {
     if !prefs.saves_while_typing {
         prefs.saves_while_typing = true;
         prefs.note_save_mode = NoteSaveMode::Delay;
         prefs.note_save_delay = 2.;
         prefs.file_grouping = FileGrouping::Folder;
     }
-    RwLock::new(prefs)
+    let mut setup: BTreeMap<String, SetupPrefs> = BTreeMap::new();
+    for (key, entry) in std::mem::take(&mut prefs.setup) {
+        let joined = setup.entry(workspace_key(std::path::Path::new(&key))).or_default();
+        joined.collapsed |= entry.collapsed;
+        joined.dismissed |= entry.dismissed;
+        joined.completed |= entry.completed;
+        joined.skipped.extend(entry.skipped);
+        joined.confirmed.extend(entry.confirmed);
+    }
+    prefs.setup = setup;
+    prefs
+}
+
+/// One spelling for every way of naming a workspace folder, so its remembered state is found again.
+pub fn workspace_key(root: &std::path::Path) -> String {
+    dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()).to_string_lossy().into_owned()
+}
+
+fn load(file: Option<&std::path::Path>) -> Prefs {
+    let Some(file) = file else { return Prefs::default() };
+    let Ok(bytes) = std::fs::read(file) else { return settled(Prefs::default()) };
+    let (prefs, damaged) = parse(&bytes);
+    let kept = file.with_extension("defekt.json");
+    if damaged && !kept.exists() {
+        let _ = std::fs::copy(file, kept);
+    }
+    prefs
+}
+
+static PREFS: LazyLock<RwLock<Prefs>> = LazyLock::new(|| {
+    let file = settings_file();
+    *LOADED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = file.as_deref().and_then(stamp_of);
+    RwLock::new(load(file.as_deref()))
 });
+
+/// Size and time of the settings file as this process last read or wrote it.
+static LOADED: Mutex<Option<(u64, SystemTime)>> = Mutex::new(None);
+static WRITE: Mutex<()> = Mutex::new(());
 
 /// A copy of the current settings.
 pub fn get() -> Prefs {
@@ -403,10 +465,20 @@ pub fn with<R>(f: impl FnOnce(&Prefs) -> R) -> R {
     f(&PREFS.read().unwrap())
 }
 
-/// Changes settings and writes them to disk.
+/// Changes settings and writes them to disk. When another running copy of the app wrote them meanwhile,
+/// its settings are read first, so the change lands on top of them instead of undoing them.
 pub fn update(f: impl FnOnce(&mut Prefs)) {
+    LazyLock::force(&PREFS);
+    let _guard = WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let file = settings_file();
+    let mut loaded = LOADED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let snapshot = {
         let mut p = PREFS.write().unwrap();
+        let on_disk = file.as_deref().and_then(stamp_of);
+        if on_disk.is_some() && on_disk != *loaded {
+            *p = load(file.as_deref());
+            *loaded = on_disk;
+        }
         let before = p.clone();
         f(&mut p);
         if *p == before {
@@ -414,13 +486,21 @@ pub fn update(f: impl FnOnce(&mut Prefs)) {
         }
         p.clone()
     };
-    if let Some(dir) = config_dir() {
-        let _ = std::fs::create_dir_all(&dir);
-        if let Ok(json) = serde_json::to_vec_pretty(&snapshot) {
-            let tmp = dir.join("settings.json.tmp");
-            if std::fs::write(&tmp, json).is_ok() {
-                let _ = std::fs::rename(tmp, dir.join("settings.json"));
-            }
+    let (Some(dir), Some(file)) = (config_dir(), file) else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let Ok(json) = serde_json::to_vec_pretty(&snapshot) else { return };
+    let tmp = dir.join(format!("settings.json.{}.tmp", std::process::id()));
+    let written = (|| {
+        let mut out = std::fs::File::create(&tmp)?;
+        std::io::Write::write_all(&mut out, &json)?;
+        out.sync_all()?;
+        drop(out);
+        std::fs::rename(&tmp, &file)
+    })();
+    match written {
+        Ok(()) => *loaded = stamp_of(&file),
+        Err(_) => {
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 }
@@ -437,12 +517,14 @@ pub fn mark_used(feature: &str) {
 
 /// The setup list state of the workspace at `root`.
 pub fn setup_of(root: &std::path::Path) -> SetupPrefs {
-    with(|p| p.setup.get(root.to_string_lossy().as_ref()).cloned().unwrap_or_default())
+    let key = workspace_key(root);
+    with(|p| p.setup.get(&key).cloned().unwrap_or_default())
 }
 
 /// Changes the setup list state of the workspace at `root`.
 pub fn update_setup(root: &std::path::Path, f: impl FnOnce(&mut SetupPrefs)) {
-    update(|p| f(p.setup.entry(root.to_string_lossy().to_string()).or_default()));
+    let key = workspace_key(root);
+    update(|p| f(p.setup.entry(key).or_default()));
 }
 
 /// Recently opened workspaces, most recent first, keeping eight.
@@ -490,6 +572,67 @@ pub fn remember_coauthors(names: &[String]) {
 mod tests {
     use super::remember_capped;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn one_setting_this_version_cannot_read_keeps_all_the_others() {
+        let mut written = serde_json::to_value(super::Prefs { tips_enabled: false, ..Default::default() }).unwrap();
+        written["setup"] = serde_json::json!({ "C:/nirgends/Beispiel": { "completed": true } });
+        written["theme"] = serde_json::json!("neonPink");
+        let (prefs, damaged) = super::parse(&serde_json::to_vec(&written).unwrap());
+        assert!(damaged);
+        assert!(!prefs.tips_enabled);
+        assert!(prefs.setup.values().any(|s| s.completed));
+        assert_eq!(prefs.theme, super::ThemeChoice::default());
+    }
+
+    #[test]
+    fn spellings_of_one_workspace_share_their_setup_state() {
+        let dir = std::env::temp_dir().join(format!("schrumbi-key-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Beispiel")).unwrap();
+        let real = dir.join("Beispiel");
+        let other = dir.join("Beispiel").join(".").join("..").join("Beispiel");
+        let mut prefs = super::Prefs::default();
+        prefs.setup.insert(real.to_string_lossy().to_string(), super::SetupPrefs { completed: true, ..Default::default() });
+        prefs.setup.insert(other.to_string_lossy().to_string(), super::SetupPrefs { skipped: ["cards".to_string()].into(), ..Default::default() });
+        let prefs = super::settled(prefs);
+        assert_eq!(prefs.setup.len(), 1);
+        let joined = prefs.setup.get(&super::workspace_key(&real)).unwrap();
+        assert!(joined.completed && joined.skipped.contains("cards"));
+    }
+
+    #[test]
+    fn settings_changed_at_the_same_time_all_reach_the_disk() {
+        let handles: Vec<_> = (0..8)
+            .map(|t| {
+                std::thread::spawn(move || {
+                    for i in 0..60 {
+                        super::update(|p| {
+                            p.used_features.insert(format!("race-{t}-{i}"));
+                        });
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let disk: super::Prefs = serde_json::from_slice(&std::fs::read(super::settings_file().unwrap()).unwrap()).unwrap();
+        assert_eq!(disk.used_features.iter().filter(|f| f.starts_with("race-")).count(), 480);
+    }
+
+    #[test]
+    fn a_change_from_another_running_copy_is_kept() {
+        super::update(|p| p.tips_last = "vorher".into());
+        let file = super::settings_file().unwrap();
+        let mut other: super::Prefs = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        other.tips_last = "andere Kopie".into();
+        std::fs::write(&file, serde_json::to_vec_pretty(&other).unwrap()).unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3);
+        std::fs::File::options().write(true).open(&file).unwrap().set_modified(later).unwrap();
+        super::update(|p| p.tips_enabled = !p.tips_enabled);
+        let disk: super::Prefs = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(disk.tips_last, "andere Kopie");
+    }
 
     #[test]
     fn the_entry_just_stored_is_never_the_one_dropped() {

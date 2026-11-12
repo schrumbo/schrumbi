@@ -144,6 +144,10 @@ struct Store {
     notice: Option<Adopted>,
     /// Remembered cards exist but could not be read yet, like a file still in the cloud: nothing is written on its own.
     unread: bool,
+    /// Why the last write of the cards' state failed, until someone was told.
+    save_failed: Option<String>,
+    /// Writes fail since the last one that worked; told only once.
+    failing: bool,
 }
 
 static STORE: LazyLock<RwLock<Store>> = LazyLock::new(Default::default);
@@ -230,36 +234,50 @@ pub fn close() {
 }
 
 /// Writes the cards' state now, if anything is waiting. Called on quitting.
-pub fn flush() {
+/// Returns false when the write failed: the state stays waiting and `take_save_failure` tells why.
+pub fn flush() -> bool {
     let _guard = SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (root, json, unread) = {
         let mut store = STORE.write().unwrap();
         if !store.dirty {
-            return;
+            return true;
         }
         store.dirty = false;
-        let Some(root) = store.root.clone() else { return };
-        let Ok(json) = serde_json::to_vec_pretty(&store.file) else { return };
+        let Some(root) = store.root.clone() else { return true };
+        let Ok(json) = serde_json::to_vec_pretty(&store.file) else { return true };
         (root, json, store.unread)
     };
     let path = root.join(STORE_NAME);
     crate::core::workspace::backup(&path);
-    let tmp = root.join(format!("{STORE_NAME}.tmp"));
-    if std::fs::write(&tmp, json).is_err() {
-        return;
-    }
     if unread && path.exists() {
         let aside = root.join(format!("{STORE_NAME}.unread-{}", now()));
         if std::fs::hard_link(&path, &aside).is_err() {
-            let _ = std::fs::rename(&path, &aside);
+            let _ = std::fs::copy(&path, &aside);
         }
     }
-    if std::fs::rename(tmp, &path).is_ok() {
-        let stamp = stamp_of(&path);
-        let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        store.stamps[0] = stamp;
-        store.unread = false;
+    let written = crate::core::note_buffer::write_atomic(&path, &json);
+    let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    match written {
+        Ok(()) => {
+            store.stamps[0] = stamp_of(&path);
+            store.unread = false;
+            store.save_failed = None;
+            store.failing = false;
+            true
+        }
+        Err(e) => {
+            store.dirty = true;
+            if !std::mem::replace(&mut store.failing, true) {
+                store.save_failed = Some(crate::core::errors::explain_io(&e).unwrap_or_else(|| e.to_string()));
+            }
+            false
+        }
     }
+}
+
+/// Why the cards' progress could not be saved, once per failure; it is tried again on its own.
+pub fn take_save_failure() -> Option<String> {
+    STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner).save_failed.take()
 }
 
 /// Marks the state as changed; it reaches the disk a moment later, off the main thread, however fast answers come.
@@ -275,7 +293,9 @@ fn save() {
     if start && !cfg!(test) {
         std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_millis(250));
-            flush();
+            while !flush() {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
         });
     }
 }
@@ -1152,30 +1172,30 @@ fn work_out_stats(deck: &str, at: i64) -> Stats {
     result
 }
 
-/// Adds what an import brought along: progress and past reviews. Cards never reviewed there are taken as known and spread.
-pub fn adopt_import(states: Vec<(String, CardState)>, log: Vec<ReviewLog>, fresh: Vec<(String, String, String)>, at: i64) -> Option<Adopted> {
-    let p = prefs::get();
+/// Adds what an import brought along: progress and past reviews. Cards never reviewed there stay new.
+/// Returns what takes the progress back.
+pub fn adopt_import(states: Vec<(String, CardState)>, log: Vec<ReviewLog>) -> Vec<Swap> {
     let mut store = STORE.write().unwrap();
+    let mut back = Vec::with_capacity(states.len());
     for (id, state) in states {
-        store.file.cards.insert(id, state);
-    }
-    let fresh: Vec<(String, String, String)> = fresh.into_iter().filter(|(id, ..)| !store.file.cards.contains_key(id)).collect();
-    let (spread_states, days) = spread(&fresh, &store.file.cards, at, p.card_reviews_per_day as usize, p.card_retention.clamp(0.7, 0.99));
-    let adopted = (!spread_states.is_empty()).then(|| Adopted { count: spread_states.len(), spread: spread_states.len(), days, changes: spread_states.iter().map(|(id, state)| (id.clone(), Some(state.clone()), None)).collect(), root: store.root.clone() });
-    for (id, state) in spread_states {
-        store.file.cards.insert(id, state);
+        let before = store.file.cards.insert(id.clone(), state.clone());
+        back.push((id, Some(state), before));
     }
     let root = store.root.clone();
     store.log.extend(log.iter().cloned());
     store.log.sort_by_key(|l| l.at);
     drop(store);
-    if let Some(root) = root {
-        for entry in &log {
-            append_log(&root, entry);
+    if let Some(root) = root.filter(|_| !log.is_empty()) {
+        let lines: String = log.iter().filter_map(|entry| serde_json::to_string(entry).ok()).map(|line| line + "
+").collect();
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(root.join(LOG_NAME)) {
+            let _ = file.write_all(lines.as_bytes());
         }
+        let stamp = stamp_of(&root.join(LOG_NAME));
+        STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner).stamps[1] = stamp;
     }
     save();
-    adopted
+    back
 }
 
 /// The cards known so far, to leave out what an import already finds.
@@ -1354,6 +1374,27 @@ mod first_open {
         let cards = all_cards();
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].note.file_name().unwrap(), "A.md");
+        close();
+    }
+
+    #[test]
+    fn progress_that_could_not_be_written_stays_waiting_and_is_reported_once() {
+        let _guard = lock();
+        let root = vault("flush-fails", &[("A.md", "Alt? :: ja\nNeu? :: x\n")]);
+        scan(&root);
+        flush();
+        let blocker = root.join(format!(".{STORE_NAME}.tmp"));
+        std::fs::create_dir(&blocker).unwrap();
+        let card = all_cards().iter().find(|c| c.raw.front == "Alt?").cloned().unwrap();
+        set_suspended(&card, true);
+        assert!(!flush());
+        assert!(take_save_failure().is_some());
+        assert!(!flush());
+        assert!(take_save_failure().is_none(), "one failure is told once, not on every retry");
+        std::fs::remove_dir(&blocker).unwrap();
+        assert!(flush());
+        reopen(&root);
+        assert!(all_cards().iter().find(|c| c.raw.front == "Alt?").unwrap().suspended());
         close();
     }
 
@@ -1608,20 +1649,20 @@ mod first_open {
     }
 
     #[test]
-    fn imported_cards_never_reviewed_are_spread() {
+    fn imported_cards_never_reviewed_stay_new() {
         let _guard = lock();
-        let root = vault("import", &[("A.md", "Text\n")]);
+        let root = vault("import", &[("A.md", "Text
+")]);
         scan(&root);
         let reviewed = CardState { phase: Phase::Review, stability: 12., due: 9, last_review: Some(1), reps: 2, ..Default::default() };
-        let fresh = vec![("n1".to_string(), "Anki/D.md".to_string(), "F1".to_string()), ("n2".to_string(), "Anki/D.md".to_string(), "F2".to_string())];
-        let done = adopt_import(vec![("r".to_string(), reviewed.clone())], Vec::new(), fresh, now()).unwrap();
-        assert_eq!((done.count, done.spread), (2, 2));
+        let log = vec![ReviewLog { card: "r".to_string(), at: 1, rating: Rating::Good, phase: Phase::Review, days: 1. }; 3];
+        let back = adopt_import(vec![("r".to_string(), reviewed.clone())], log);
+        assert_eq!(back, vec![("r".to_string(), Some(reviewed.clone()), None)]);
         let store = STORE.read().unwrap();
         assert_eq!(store.file.cards["r"], reviewed);
-        assert_eq!(store.file.cards["n1"].phase, Phase::Review);
-        assert_eq!(store.file.cards["n2"].note, "Anki/D.md");
+        assert_eq!(store.file.cards.len(), 1);
         drop(store);
-        assert!(adopt_import(Vec::new(), Vec::new(), Vec::new(), now()).is_none());
+        assert_eq!(std::fs::read_to_string(root.join(LOG_NAME)).unwrap().lines().count(), 3);
         close();
     }
 }

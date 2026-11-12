@@ -294,9 +294,10 @@ pub fn run(message: Option<String>, manual: bool, cx: &mut App) {
             &|step| {
                 let _ = tx.send_blocking(step);
             },
+            manual,
         );
         let conflicts = if matches!(result, Err(GitError::Conflicts(_))) { git.conflicts().ok() } else { None };
-        let vault_error = vault.and_then(|v| v.sync(&|files| message::auto_message(files, &vault_modules, chrono::Local::now()), &|_| {}).err());
+        let vault_error = vault.and_then(|v| v.sync(&|files| message::auto_message(files, &vault_modules, chrono::Local::now()), &|_| {}, manual).err());
         (result, conflicts, vault_error)
     });
     cx.refresh_windows();
@@ -551,6 +552,7 @@ pub fn explain(error: &GitError) -> (String, Option<&'static str>) {
         GitError::TooOld(v) => (trf("Git %@ ist zu alt, nötig ist mindestens 2.38.", &[v]), Some("guide")),
         GitError::Timeout => (tr("Der Online-Speicher antwortet nicht. Deine Änderungen sind lokal gesichert."), Some("retry")),
         GitError::Conflicts(_) => (tr("Dateien wurden auf beiden Geräten geändert."), None),
+        GitError::ManyDeleted(n) => (trf("%@ Dateien fehlen auf einmal, deshalb pausiert das automatische Sichern. War das gewollt, klicke auf „Trotzdem sichern“.", &[&n.to_string()]), Some("anyway")),
         GitError::Other(m) if m.contains("dubious ownership") => (tr("Git vertraut diesem Ordner noch nicht, oft bei externen Laufwerken. Erlaube ihn einmal mit „git config --global --add safe.directory“ und dem Ordnerpfad."), Some("retry")),
         GitError::Other(_) => (tr("Das Synchronisieren hat nicht geklappt."), Some("retry")),
     }

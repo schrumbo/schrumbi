@@ -88,8 +88,10 @@ pub fn inspect(git: &Git) -> Inspection {
 }
 
 impl Git {
+    /// Starts a repository that keeps line endings as the files have them, so Obsidian and other apps see the same bytes on every device.
     pub fn init_repo(&self) -> Result<(), GitError> {
-        self.run(&["init", "-q"]).map(|_| ())
+        self.run(&["init", "-q"])?;
+        self.run(&["config", "core.autocrlf", "false"]).map(|_| ())
     }
 
     /// Whether the remote answers; for checking an address before it is saved.

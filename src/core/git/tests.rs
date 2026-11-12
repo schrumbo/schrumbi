@@ -53,7 +53,7 @@ fn devices(name: &str) -> (Git, Git) {
 }
 
 fn sync(git: &Git) -> Result<Report, GitError> {
-    git.sync(&|files| format!("Stand: {} Dateien", files.len()), &|_| {})
+    git.sync(&|files| format!("Stand: {} Dateien", files.len()), &|_| {}, false)
 }
 
 fn read(git: &Git, name: &str) -> String {
@@ -238,11 +238,38 @@ fn dangerous_arguments_are_refused() {
 }
 
 #[test]
+fn many_files_gone_at_once_pause_automatic_saving_until_asked() {
+    let (a, _) = devices("many-gone");
+    for i in 0..30 {
+        std::fs::write(a.root.join(format!("{i}.md")), "x").unwrap();
+    }
+    sync(&a).unwrap();
+    for i in 0..25 {
+        std::fs::remove_file(a.root.join(format!("{i}.md"))).unwrap();
+    }
+    assert_eq!(sync(&a), Err(GitError::ManyDeleted(25)));
+    assert!(a.run(&["ls-files", "0.md"]).unwrap().contains("0.md"), "nothing was recorded as deleted");
+    let report = a.sync(&|_| "weg".to_string(), &|_| {}, true).unwrap();
+    assert_eq!(report.committed, 25);
+}
+
+#[test]
+fn a_new_repository_keeps_line_endings_as_they_are() {
+    let dir = std::env::temp_dir().join(format!("schrumbi-git-crlf-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let git = Git::new(exe(), &dir);
+    git.init_repo().unwrap();
+    assert_eq!(git.run(&["config", "--local", "core.autocrlf"]).unwrap().trim(), "false");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn commit_messages_are_never_mistaken_for_commands() {
     let (a, _) = devices("message");
     for (i, text) in ["clean", "--force", "stash", "# Überschrift", "-x", "   "].iter().enumerate() {
         std::fs::write(a.root.join(format!("{i}.md")), "x").unwrap();
-        let report = a.sync(&|_| text.to_string(), &|_| {}).unwrap();
+        let report = a.sync(&|_| text.to_string(), &|_| {}, false).unwrap();
         assert!(report.pushed, "{text}");
         let subject = a.run(&["log", "-1", "--format=%s"]).unwrap();
         assert_eq!(subject.trim(), if text.trim().is_empty() { "Stand" } else { text });

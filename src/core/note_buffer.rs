@@ -35,6 +35,8 @@ pub struct NoteBuffer {
     pub missing: bool,
     /// The file is not UTF-8. It shows as unavailable and is never written, so it stays intact.
     pub undecodable: bool,
+    /// The file exists but cannot be read right now, e.g. locked by another app. Never written until it can be read again.
+    pub unreadable: bool,
     last_saved: String,
     known: Option<SystemTime>,
     /// Bumped whenever the text changes from outside the editor, so editors reload it.
@@ -54,7 +56,7 @@ pub struct NoteBuffer {
 
 impl NoteBuffer {
     pub fn open(path: &Path) -> Self {
-        let mut b = Self { path: path.to_path_buf(), text: String::new(), dirty: false, missing: false, undecodable: false, last_saved: String::new(), known: None, revision: 0, external: 0, conflict: None, held: false, save_wanted: false, touched: false, version: 0, snapshot: Mutex::new(None) };
+        let mut b = Self { path: path.to_path_buf(), text: String::new(), dirty: false, missing: false, undecodable: false, unreadable: false, last_saved: String::new(), known: None, revision: 0, external: 0, conflict: None, held: false, save_wanted: false, touched: false, version: 0, snapshot: Mutex::new(None) };
         b.load();
         b
     }
@@ -98,10 +100,17 @@ impl NoteBuffer {
             Err(e) => {
                 self.missing = !self.path.exists();
                 self.undecodable = e.kind() == std::io::ErrorKind::InvalidData;
+                self.unreadable = !self.missing && !self.undecodable;
                 return;
             }
         }
         self.undecodable = false;
+        self.unreadable = false;
+    }
+
+    /// The file is there but its text is not: not UTF-8, or not readable right now. Nothing is written then.
+    pub fn unavailable(&self) -> bool {
+        self.undecodable || self.unreadable
     }
 
     /// Follows a rename or move made by the app itself.
@@ -115,9 +124,9 @@ impl NoteBuffer {
         if self.held {
             return false;
         }
-        if self.undecodable {
+        if self.unavailable() {
             self.load();
-            return !self.undecodable;
+            return !self.unavailable();
         }
         let modified = self.modified();
         if modified.is_none() {
@@ -202,7 +211,7 @@ impl NoteBuffer {
 
     /// Writes the note, unless another app changed the file since it was read: that becomes a `conflict`.
     pub fn save(&mut self) -> std::io::Result<()> {
-        if self.conflict.is_some() || self.undecodable {
+        if self.conflict.is_some() || self.unavailable() {
             return Ok(());
         }
         if self.held {
@@ -285,8 +294,12 @@ impl NoteBuffer {
     }
 
     /// Takes on `text` as a deliberate step, e.g. from the undo history, and writes it.
+    /// Refused while another app's version waits for a decision, so neither version gets lost.
     pub fn restore(&mut self, text: String) -> std::io::Result<()> {
-        self.keep_mine();
+        if self.conflict.is_some() {
+            let name = self.path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            return Err(std::io::Error::other(super::i18n::trf("„%@“ wurde auch in einer anderen App geändert. Entscheide zuerst, welche Version bleibt.", &[&name])));
+        }
         self.replace(text);
         self.save()
     }
@@ -314,6 +327,21 @@ impl NoteBuffer {
     pub fn name(&self) -> String {
         self.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
     }
+}
+
+/// Text saved in an older encoding: UTF-16 when it says so or looks like it, else Windows-1252, which is what Windows editors wrote.
+pub fn decode_legacy(bytes: &[u8]) -> String {
+    if let Some((encoding, skip)) = encoding_rs::Encoding::for_bom(bytes) {
+        return encoding.decode_without_bom_handling(&bytes[skip..]).0.into_owned();
+    }
+    let pairs = bytes.len() / 2;
+    let zeros = |odd: usize| bytes.iter().skip(odd).step_by(2).filter(|b| **b == 0).count();
+    let encoding = match (zeros(1) * 3 > pairs, zeros(0) * 3 > pairs) {
+        (true, false) if pairs > 0 => encoding_rs::UTF_16LE,
+        (false, true) if pairs > 0 => encoding_rs::UTF_16BE,
+        _ => encoding_rs::WINDOWS_1252,
+    };
+    encoding.decode_without_bom_handling(bytes).0.into_owned()
 }
 
 /// Replaces the file in one step, so a crash leaves the old or the new version and never a part of one.
