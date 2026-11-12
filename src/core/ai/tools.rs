@@ -341,7 +341,7 @@ fn hidden(rel: &Path) -> bool {
 }
 
 /// A path a write tool names: inside the folder and never Schrumbi's own settings.
-fn resolve_write(lib: &Library, rel: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_write(lib: &Library, rel: &str) -> Result<PathBuf, String> {
     let path = resolve(lib, rel)?;
     if own_file(lib, &path) {
         return Err(HIDDEN.to_string());
@@ -516,7 +516,8 @@ fn planned_text(before: &str, args: &Value) -> Result<String, String> {
     }
 }
 
-fn has_link(line: &str) -> bool {
+/// Whether a line carries a link, which the permission card always shows in full.
+pub fn has_link(line: &str) -> bool {
     let l = line.to_lowercase();
     ["http://", "https://", "www.", "file:", "mailto:", "javascript:", "data:"].iter().any(|w| l.contains(w))
 }
@@ -606,16 +607,17 @@ fn appended(before: &str, lines: &[String]) -> String {
 pub fn inside_root(lib: &Library, path: &Path) -> Result<PathBuf, String> {
     let root = lib.root.as_ref().ok_or(NO_ROOT)?;
     if !path.is_absolute() {
-        return resolve(lib, &path.to_string_lossy());
+        return resolve_write(lib, &path.to_string_lossy());
     }
     if !super::acp::inside(root, path) {
         return Err(OUTSIDE.to_string());
     }
     let inner = anchored(path).strip_prefix(settled(root)).map(Path::to_path_buf).map_err(|_| OUTSIDE.to_string())?;
-    if hidden(&inner) || own_file(lib, path) {
+    let real = root.join(&inner);
+    if hidden(&inner) || own_file(lib, &real) {
         return Err(HIDDEN.to_string());
     }
-    Ok(root.join(inner))
+    Ok(real)
 }
 
 /// A text file as the user sees it, unsaved edits included; `line` counts from 1.
@@ -654,6 +656,15 @@ pub fn card_note(lib: &Library, source: &Path) -> PathBuf {
     deck.join(format!("{}.md", tr("Karteikarten")))
 }
 
+/// Checks that a new file name stays a plain name in its folder: no path, no hidden or app file, no drive.
+pub(crate) fn plain_name(name: &str) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.contains(['/', '\\', ':']) || trimmed.starts_with('.') || trimmed.eq_ignore_ascii_case("schrumbi.json") {
+        return Err("`name` is a plain file name: no path, no leading dot.".into());
+    }
+    Ok(())
+}
+
 fn note_file_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.contains(['/', '\\']) || name.starts_with('.') {
@@ -678,6 +689,22 @@ pub fn scope(lib: &Library, name: &str, args: &Value) -> Option<PathBuf> {
         "create_note" => create_folder(lib, args).ok(),
         _ => None,
     }
+}
+
+/// The arguments with the folder a new note would take from the current view written in, so card, permission and call use the same one.
+pub fn pinned(lib: &Library, name: &str, args: &Value) -> Value {
+    let mut out = args.clone();
+    if name == "create_note"
+        && arg_str(args, "folder").is_none()
+        && let Ok(folder) = create_folder(lib, args)
+        && let Some(map) = out.as_object_mut()
+    {
+        let place = rel(lib, &folder);
+        if !place.is_empty() {
+            map.insert("folder".into(), Value::String(place));
+        }
+    }
+    out
 }
 
 /// A text change Claude Code proposes, for the permission card.
@@ -960,9 +987,7 @@ pub fn call(lib: &mut Library, name: &str, args: &Value) -> Result<Outcome, Stri
             }
             let folder = resolve(lib, need_str(args, "folder")?)?;
             let name = arg_str(args, "name").map_or_else(|| name_of(&path), String::from);
-            if name.contains(['/', '\\']) {
-                return Err("`name` is a file name, not a path.".into());
-            }
+            plain_name(&name)?;
             let deadline = arg_str(args, "deadline");
             if let Some(id) = deadline
                 && lib.assignment(id).is_none()

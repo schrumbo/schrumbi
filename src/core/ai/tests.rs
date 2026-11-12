@@ -639,6 +639,10 @@ fn hidden_and_app_files_are_neither_read_nor_written_nor_moved() {
     assert!(turns.call(&mut lib, "s", "write_note", &json!({ "path": "schrumbi.json", "version": v, "mode": "replace", "text": "{}" })).is_err());
     assert!(tools::write_file(&mut lib, &root.join("schrumbi.json"), "{}", Some(&v)).is_err());
     assert!(tools::write_file(&mut lib, &root.join(".schrumbi-state.json"), "{}", None).is_err());
+    assert!(tools::write_file(&mut lib, Path::new("schrumbi.json"), "{}", Some(&v)).is_err(), "a relative path is no way around it");
+    assert!(tools::write_preview(&lib, Path::new("SCHRUMBI.json"), "{}").is_err());
+    assert!(turns.call(&mut lib, "s", "apply_inbox", &json!({ "files": [{ "path": "schrumbi.json", "module": "MA" }] })).is_err());
+    assert!(root.join("schrumbi.json").exists());
     std::fs::write(root.join("MA/N.md"), "x\n").unwrap();
     assert!(turns.call(&mut lib, "s", "file_document", &json!({ "path": "MA/N.md", "folder": ".git" })).is_err());
     assert_eq!(std::fs::read_to_string(root.join("schrumbi.json")).unwrap(), config);
@@ -715,7 +719,7 @@ fn cmd_shims_in_folders_with_spaces_get_every_argument() {
     use std::os::windows::process::CommandExt;
     use super::detect::{Agent, Cli};
     let base = folder("Muster-M Beispiel");
-    let bin = base.join("npm bin");
+    let bin = base.join("npm & bin");
     std::fs::create_dir_all(&bin).unwrap();
     std::fs::write(bin.join("claude.cmd"), "@echo off\r\necho [%1] [%2] [%3] [%4]\r\n").unwrap();
     let cli = Cli { agent: Agent::Claude, path: bin.join("claude.cmd") };
@@ -724,9 +728,9 @@ fn cmd_shims_in_folders_with_spaces_get_every_argument() {
     let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
     assert_eq!(said, format!("[mcp] [add] [\"{exe}\"] [\"a&b\"]"), "{}", String::from_utf8_lossy(&out.stderr));
     let line = super::detect::cmd_line(&cli.path, &["auth", "login"]);
-    let nested = std::process::Command::new("cmd").raw_arg(format!("/D /S /C \"cmd /D /S /C \"{line}\"\"")).output().unwrap();
+    let nested = std::process::Command::new("cmd").raw_arg(super::detect::terminal_args(Some(&line)).replace("/K", "/C")).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&nested.stdout).trim(), "[auth] [login] [] []", "{}", String::from_utf8_lossy(&nested.stderr));
-    assert!(super::detect::terminal_line(&base, Some(&line)).starts_with(&format!("start \"\" /D \"{}\" cmd /S /K \"\"", base.display())));
+    assert_eq!(super::detect::terminal_args(None), "");
 }
 
 #[test]
@@ -742,6 +746,35 @@ fn windows_install_folders_cover_the_native_installer_npm_and_winget() {
         assert!(dirs.iter().any(|d| d.ends_with(want)), "{want} in {dirs:?}");
     }
     assert!(!dirs.iter().any(|d| d.contains("nodejs")), "a missing variable adds nothing");
+}
+
+#[test]
+fn a_new_note_keeps_the_folder_it_was_asked_for_when_the_view_changes() {
+    let root = folder("pinned");
+    std::fs::create_dir_all(root.join("MA/Skripte")).unwrap();
+    let mut lib = open(&root);
+    lib.set_route(crate::core::library::Route::Module("m0".into()));
+    let args = json!({ "title": "Zusammenfassung", "text": "x" });
+    let pinned = tools::pinned(&lib, "create_note", &args);
+    assert_eq!(pinned["folder"], "MA/Skripte");
+    lib.set_route(crate::core::library::Route::Today);
+    assert!(tools::scope(&lib, "create_note", &pinned).unwrap().ends_with("MA/Skripte"));
+    assert!(tools::pinned(&lib, "write_note", &json!({ "path": "a.md" })).get("folder").is_none());
+}
+
+#[test]
+fn a_filing_name_never_moves_a_file_out_of_its_folder() {
+    let root = folder("names");
+    std::fs::create_dir_all(root.join("MA")).unwrap();
+    std::fs::write(root.join("MA/N.pdf"), b"%PDF").unwrap();
+    let mut lib = open(&root);
+    let mut turns = Turns::default();
+    for name in ["..", ".", "", "C:x", ".hidden.pdf", "schrumbi.json"] {
+        assert!(turns.call(&mut lib, "s", "file_document", &json!({ "path": "MA/N.pdf", "folder": "", "name": name })).is_err(), "{name:?}");
+        assert!(turns.call(&mut lib, "s", "apply_inbox", &json!({ "files": [{ "path": "MA/N.pdf", "folder": "", "name": name }] })).is_err(), "{name:?}");
+    }
+    assert!(root.join("MA/N.pdf").exists());
+    assert!(!root.parent().unwrap().join("-2").exists());
 }
 
 #[test]

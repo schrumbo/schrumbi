@@ -76,7 +76,7 @@ Vor jeder Änderung fragt Schrumbi in der Spalte, bei geschlossener Spalte unten
 | Knopf | Was passiert |
 |---|---|
 | {ui:Erlauben} | Diese eine Änderung |
-| {ui:In dieser Notiz heute erlauben} | Dieselbe Art Änderung in dieser Notiz bis Mitternacht ohne Nachfrage; bei neuen Notizen {ui:In diesem Ordner heute erlauben} |
+| {ui:In dieser Notiz heute erlauben} | Dieselbe Änderung in dieser Notiz bis Mitternacht ohne Nachfrage, nur für das Programm, das gefragt hat; bei neuen Notizen {ui:In diesem Ordner heute erlauben} |
 | {ui:Ablehnen} | Nichts wird geschrieben |
 | {ui:Ansehen} | Die ganze Änderung, bevor du entscheidest |
 

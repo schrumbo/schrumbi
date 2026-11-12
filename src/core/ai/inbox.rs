@@ -93,7 +93,7 @@ fn name_for(lib: &Library, row: &Row, module: Option<&str>, week: Option<u32>, i
 
 fn row_of(lib: &Library, v: &Value) -> Result<Row, String> {
     let rel = text(v, "path").ok_or("every file needs its `path`")?;
-    let path = tools::resolve(lib, rel)?;
+    let path = tools::resolve_write(lib, rel)?;
     if !path.is_file() {
         return Err(format!("No such file: {rel}"));
     }
@@ -134,7 +134,7 @@ fn row_of(lib: &Library, v: &Value) -> Result<Row, String> {
         }
     };
     row.name = match text(v, "name") {
-        Some(n) if n.contains(['/', '\\']) => return Err(format!("{rel}: `name` is a file name, not a path.")),
+        Some(n) if tools::plain_name(n).is_err() => return Err(format!("{rel}: `name` is a plain file name: no path, no leading dot.")),
         Some(n) => n.to_string(),
         None => name_for(lib, &row, module.as_deref(), assignment.as_ref().and_then(|a| a.week), assignment.as_ref().and_then(|a| a.iso_week)),
     };

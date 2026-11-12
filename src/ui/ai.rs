@@ -728,13 +728,20 @@ fn stop(server: &Server) {
     instance::remove(std::process::id());
 }
 
-/// Reads one line of at most `LINE_LIMIT` bytes; `None` at the end, on a read error or for a longer line.
-pub(crate) fn read_line(reader: &mut impl BufRead) -> Option<Vec<u8>> {
+#[derive(Debug, PartialEq)]
+enum Line {
+    Text(Vec<u8>),
+    TooLong,
+    End,
+}
+
+/// Reads one line of at most `LINE_LIMIT` bytes.
+fn read_line(reader: &mut impl BufRead) -> Line {
     let mut buf = Vec::new();
     match reader.by_ref().take(LINE_LIMIT as u64 + 1).read_until(b'\n', &mut buf) {
-        Ok(0) | Err(_) => None,
-        Ok(_) if buf.len() > LINE_LIMIT => None,
-        Ok(_) => Some(buf),
+        Ok(0) | Err(_) => Line::End,
+        Ok(_) if buf.len() > LINE_LIMIT => Line::TooLong,
+        Ok(_) => Line::Text(buf),
     }
 }
 
@@ -755,11 +762,27 @@ fn gone(stream: &TcpStream) -> bool {
 /// One local connection: a caller has `FIRST_LINE` to send a line with the token, lines are capped, a wrong token closes it,
 /// and while a call waits for the user the connection is watched so a card never outlives its caller.
 fn serve(stream: TcpStream, token: &str, stop: &AtomicBool, tx: &async_channel::Sender<Call>) {
-    let (Ok(mut writer), Ok(probe)) = (stream.try_clone(), stream.try_clone()) else { return };
+    let (Ok(mut writer), Ok(probe), Ok(guard)) = (stream.try_clone(), stream.try_clone(), stream.try_clone()) else { return };
     let _ = stream.set_read_timeout(Some(FIRST_LINE));
+    let known = Arc::new(AtomicBool::new(false));
+    let watched = known.clone();
+    let _ = std::thread::Builder::new().name("ai-deadline".into()).spawn(move || {
+        std::thread::sleep(FIRST_LINE);
+        if !watched.load(Ordering::Relaxed) {
+            let _ = guard.shutdown(std::net::Shutdown::Both);
+        }
+    });
     let mut reader = BufReader::new(stream);
     let mut trusted = false;
-    while let Some(line) = read_line(&mut reader) {
+    loop {
+        let line = match read_line(&mut reader) {
+            Line::Text(line) => line,
+            Line::TooLong => {
+                let _ = writeln!(writer, "{}", json!({ "ok": false, "error": "The request is larger than 1 MB; send less text at once." })).and_then(|()| writer.flush());
+                break;
+            }
+            Line::End => break,
+        };
         let mut close = false;
         let out = match serde_json::from_slice::<Value>(&line) {
             _ if stop.load(Ordering::Relaxed) => json!({ "ok": false, "error": OFF }),
@@ -774,6 +797,7 @@ fn serve(stream: TcpStream, token: &str, stop: &AtomicBool, tx: &async_channel::
             Ok(body) => {
                 if !trusted {
                     trusted = true;
+                    known.store(true, Ordering::Relaxed);
                     let _ = probe.set_read_timeout(None);
                 }
                 let (reply, answer) = mpsc::channel();
@@ -811,10 +835,10 @@ async fn respond(body: &Value, alive: &AtomicBool, cx: &mut AsyncApp) -> Value {
     }
 }
 
-/// What „heute erlauben“ would cover for an MCP write: the note for note writes, the folder for new notes, nothing for the rest.
-fn scope_of(name: &str, args: &Value, cx: &App) -> Option<Scope> {
+/// What „heute erlauben“ would cover for an MCP write: the note for note writes, the folder for new notes, nothing for the rest; only for the session that asked.
+fn scope_of(session: &str, name: &str, args: &Value, cx: &App) -> Option<Scope> {
     let folder = name == "create_note";
-    state::read(cx, |l| tools::scope(l, name, args)).map(|p| Scope::of(name, &p, folder))
+    state::read(cx, |l| tools::scope(l, name, args)).map(|p| Scope::of(&format!("{session} {name}"), &p, folder))
 }
 
 async fn run(session: &str, name: &str, args: &Value, alive: &AtomicBool, cx: &mut AsyncApp) -> Result<Value, String> {
@@ -822,12 +846,14 @@ async fn run(session: &str, name: &str, args: &Value, alive: &AtomicBool, cx: &m
         return Err(OFF.into());
     }
     cx.update(follow_root);
+    let pinned = cx.update(|cx| state::read(cx, |l| tools::pinned(l, name, args)));
+    let args = &pinned;
     if tools::is_write(name) {
         if cx.update(|cx| cx.global::<Ai>().read_only.contains(session)) {
             return Err(READ_ONLY.into());
         }
         let preview = cx.update(|cx| state::read(cx, |l| tools::preview(l, name, args)))?;
-        let scope = cx.update(|cx| scope_of(name, args, cx));
+        let scope = cx.update(|cx| scope_of(session, name, args, cx));
         if !cx.update(|cx| scope.as_ref().is_some_and(|s| allowed_today(s, cx))) {
             let terminal = cx.update(|cx| !cx.global::<Ai>().turns.is_bounded(session));
             let (id, answer) = cx.update(|cx| ask_for(session, name, scope, terminal, preview, cx));
@@ -1007,6 +1033,7 @@ pub fn toolbar_button(t: &Theme) -> Option<Button> {
 }
 
 const SHOWN_CHARS: usize = 400;
+const CARD_SCROLL: f32 = 320.;
 
 fn shortened(line: &str) -> String {
     if line.chars().count() <= SHOWN_CHARS { line.to_string() } else { format!("{}…", line.chars().take(SHOWN_CHARS).collect::<String>()) }
@@ -1017,9 +1044,9 @@ fn change_box(id: u64, preview: &Preview, t: &Theme) -> Option<AnyElement> {
     if preview.lines.is_empty() && preview.hidden == 0 && preview.full.is_none() {
         return None;
     }
-    let mut lines = div().id(("ai-ask-lines", id)).max_h(px(320.)).overflow_y_scroll().flex().flex_col().gap(px(space::XXS)).font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.secondary);
+    let mut lines = div().id(("ai-ask-lines", id)).max_h(px(CARD_SCROLL)).overflow_y_scroll().flex().flex_col().gap(px(space::XXS)).font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.secondary);
     for line in &preview.lines {
-        lines = lines.child(div().child(shortened(line)));
+        lines = lines.child(div().child(if tools::has_link(line) { line.clone() } else { shortened(line) }));
     }
     let more = match preview.hidden {
         0 => None,
@@ -1045,7 +1072,7 @@ pub fn ask_body(group: &[Waiting], cx: &App, t: &Theme) -> Option<Div> {
     let buttons = div().flex().flex_wrap().justify_end().gap(px(space::S));
     if let [w] = group {
         let id = w.id;
-        let today = today_label(w).map(|label| Button::new(("ai-today", id)).small().label(label).tooltip(tr("Weitere Änderungen dieser Art hier bis Mitternacht ohne Nachfrage")).on_click(move |_, _, cx| answer_ask(id, Answer::Today, cx)));
+        let today = today_label(w).map(|label| Button::new(("ai-today", id)).small().label(label).tooltip(tr("Gleiche Änderungen an derselben Stelle bis Mitternacht ohne Nachfrage")).on_click(move |_, _, cx| answer_ask(id, Answer::Today, cx)));
         return Some(
             body.child(div().font_weight(FontWeight::SEMIBOLD).child(w.preview.title.clone()))
                 .children(change_box(id, &w.preview, t))
@@ -1060,7 +1087,7 @@ pub fn ask_body(group: &[Waiting], cx: &App, t: &Theme) -> Option<Div> {
     let key = group_key(first);
     let open = cx.try_global::<Ai>().is_some_and(|ai| ai.open_groups.contains(&key));
     let ids: Vec<u64> = group.iter().map(|w| w.id).collect();
-    let mut rows = div().flex().flex_col().gap(px(space::XS));
+    let mut rows = div().id(("ai-group-rows", first.id)).max_h(px(CARD_SCROLL)).overflow_y_scroll().flex().flex_col().gap(px(space::XS));
     for w in group {
         let id = w.id;
         let row = div().flex().items_center().gap(px(space::S)).child(div().flex_1().min_w_0().text_size(px(font::CALLOUT)).child(w.preview.title.clone()));
@@ -1116,18 +1143,18 @@ pub fn ask_card(cx: &App, t: &Theme) -> Option<Stateful<Div>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LINE_LIMIT, gone, read_line};
+    use super::{LINE_LIMIT, Line, gone, read_line};
     use std::io::{BufReader, Cursor};
     use std::net::{TcpListener, TcpStream};
 
     #[test]
     fn a_line_longer_than_the_limit_ends_the_connection() {
         let mut ok = BufReader::new(Cursor::new(b"{\"a\":1}\nrest".to_vec()));
-        assert_eq!(read_line(&mut ok).unwrap(), b"{\"a\":1}\n");
+        assert_eq!(read_line(&mut ok), Line::Text(b"{\"a\":1}\n".to_vec()));
         let mut huge = BufReader::new(Cursor::new(vec![b'x'; LINE_LIMIT + 10]));
-        assert!(read_line(&mut huge).is_none());
+        assert_eq!(read_line(&mut huge), Line::TooLong);
         let mut empty = BufReader::new(Cursor::new(Vec::new()));
-        assert!(read_line(&mut empty).is_none());
+        assert_eq!(read_line(&mut empty), Line::End);
     }
 
     #[test]

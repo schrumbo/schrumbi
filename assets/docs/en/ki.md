@@ -76,7 +76,7 @@ Before every change Schrumbi asks in the column, or at the bottom right of the w
 | Button | What happens |
 |---|---|
 | {ui:Erlauben} | This one change |
-| {ui:In dieser Notiz heute erlauben} | The same kind of change in this note without asking until midnight; for new notes {ui:In diesem Ordner heute erlauben} |
+| {ui:In dieser Notiz heute erlauben} | The same change in this note without asking until midnight, only for the program that asked; for new notes {ui:In diesem Ordner heute erlauben} |
 | {ui:Ablehnen} | Nothing is written |
 | {ui:Ansehen} | The whole change, before you decide |
 

@@ -2267,7 +2267,7 @@ impl Settings {
             } else {
                 tr("Das Programm nutzt dein eigenes Konto dort; was du ihm zeigst, geht an diesen Anbieter. Lesen darf es in deinem Studienordner, ändern nur mit deinem Ja, und jede Änderung ist rückgängig.")
             }),
-            vec![row(tr("KI-Assistent verwenden"), Switch::new("ai-on").checked(prefs.enabled && !nothing).disabled(nothing).on_click(|v, _, cx| ai::set_enabled(*v, cx)), t), row(tr("Programme"), programs, t)],
+            vec![row(tr("KI-Assistent verwenden"), Switch::new("ai-on").checked(prefs.enabled && !nothing).disabled(nothing).when(nothing, |s| s.tooltip(tr("Erst ein KI-Programm installieren"))).on_click(|v, _, cx| ai::set_enabled(*v, cx)), t), row(tr("Programme"), programs, t)],
             t,
         ));
         if !ai::active() {
@@ -2289,7 +2289,7 @@ impl Settings {
                 .flex()
                 .items_center()
                 .gap(px(space::XS))
-                .child(motion::chevron("chevron", open, t.accent))
+                .child(motion::chevron("ai-advanced-chevron", open, t.accent))
                 .on_click(cx.listener(|s, _, _, cx| {
                     if !s.advanced.remove(AI_ADVANCED) {
                         s.advanced.insert(AI_ADVANCED.to_string());

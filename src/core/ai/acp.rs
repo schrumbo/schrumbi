@@ -230,10 +230,18 @@ pub fn decide(request: &RequestPermissionRequest, policy: &Policy) -> Decision {
             let mut places: Vec<PathBuf> = call.fields.locations.as_deref().unwrap_or_default().iter().map(|l| l.path.clone()).collect();
             places.extend(named_paths(call.fields.raw_input.as_ref()));
             let known = !places.is_empty() || kind != Kind::Read;
-            if known && places.iter().all(|p| inside(&policy.root, &policy.root.join(p))) { Decision::Allow } else { Decision::Ask }
+            if known && places.iter().all(|p| inside(&policy.root, &policy.root.join(p)) && !hidden_in(&policy.root, &policy.root.join(p))) { Decision::Allow } else { Decision::Ask }
         }
         _ => Decision::Ask,
     }
+}
+
+/// Whether `path` inside `root` passes through a folder or file whose name starts with a dot, such as `.git` or `.obsidian`.
+fn hidden_in(root: &Path, path: &Path) -> bool {
+    let real = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let base = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let inner = real.strip_prefix(&base).or_else(|_| path.strip_prefix(root)).unwrap_or(path);
+    inner.components().any(|c| matches!(c, std::path::Component::Normal(n) if n.to_string_lossy().starts_with('.')))
 }
 
 /// The paths a tool's input names: its path fields, and patterns that start at a root or step up; relative ones count from the study folder.

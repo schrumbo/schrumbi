@@ -315,6 +315,9 @@ fn searches_and_reads_without_locations_are_judged_by_their_input() {
     assert_eq!(acp::decide(&with("Read", ToolKind::Read, serde_json::json!({})), &policy), Decision::Ask, "a read that names nothing asks");
     assert_eq!(acp::decide(&with("Grep", ToolKind::Search, serde_json::json!({ "pattern": "Grenzwert", "path": "MA" })), &policy), Decision::Allow);
     assert_eq!(acp::decide(&with("Grep", ToolKind::Search, serde_json::json!({ "pattern": "Grenzwert" })), &policy), Decision::Allow, "no path searches the study folder");
+    assert_eq!(acp::decide(&with("Grep", ToolKind::Search, serde_json::json!({ "pattern": "https://", "path": ".git" })), &policy), Decision::Ask, "hidden folders ask");
+    assert_eq!(acp::decide(&with("Read", ToolKind::Read, serde_json::json!({ "file_path": "MA/../.obsidian/app.json" })), &policy), Decision::Ask);
+    assert_eq!(acp::decide(&with("Read", ToolKind::Read, serde_json::json!({ "file_path": "MA/.trash/x.md" })), &policy), Decision::Ask);
 }
 
 #[test]

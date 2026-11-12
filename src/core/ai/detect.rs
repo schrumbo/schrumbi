@@ -298,20 +298,16 @@ pub fn open_login(cli: &Cli, root: &Path) -> std::io::Result<()> {
     c.spawn().map(drop)
 }
 
-/// What `cmd` runs to open a console window in `root`, running `line` there when given.
-pub fn terminal_line(root: &Path, line: Option<&str>) -> String {
-    let start = format!("start \"\" /D {} cmd", cmd_quoted(&root.to_string_lossy()));
-    match line {
-        Some(line) => format!("{start} /S /K \"{line}\""),
-        None => start,
-    }
+/// The arguments of the console `cmd` that runs `line` and stays open; `/S` strips only the outer quotes, so `line` keeps its own.
+pub fn terminal_args(line: Option<&str>) -> String {
+    line.map(|line| format!("/S /K \"{line}\"")).unwrap_or_default()
 }
 
 #[cfg(windows)]
 fn windows_terminal(root: &Path, line: Option<&str>) -> Command {
     use std::os::windows::process::CommandExt;
-    let mut c = cmd_running(&terminal_line(root, line));
-    c.creation_flags(0x0800_0000);
+    let mut c = Command::new("cmd");
+    c.raw_arg(terminal_args(line)).current_dir(root).creation_flags(0x0000_0010);
     if let Some(path) = child_path() {
         c.env("PATH", path);
     }

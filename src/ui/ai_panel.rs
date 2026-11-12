@@ -104,6 +104,7 @@ enum Fix {
     Retry,
     Again,
     FetchAdapter,
+    Fetching,
     SignIn(crate::core::ai::detect::Agent),
 }
 
@@ -156,6 +157,7 @@ struct Session {
     granted: HashSet<PathBuf>,
     stopped: bool,
     slow: bool,
+    patient: bool,
     events: async_channel::Receiver<Event>,
     _run: Task<()>,
     _pump: Task<()>,
@@ -322,7 +324,7 @@ fn edit_line(e: &Edit) -> String {
 
 fn missing_text(m: &Missing) -> String {
     match m {
-        Missing::Adapter => tr("Für Claude fehlt noch ein Baustein. Schrumbi kann ihn jetzt holen."),
+        Missing::Adapter => tr("Für Claude fehlt noch ein Zusatzprogramm. Schrumbi kann es jetzt holen."),
         Missing::Node => tr("Codex braucht Node.js. Installiere es und versuch es noch einmal."),
         Missing::Program => tr("Das Programm ist nicht mehr installiert."),
         Missing::Command => tr("Der eigene Befehl ist leer."),
@@ -603,12 +605,12 @@ impl AiPanel {
             Fix::FetchAdapter => {
                 ai::install_claude(cx);
                 if let Some(Item::Notice { text, fix }) = self.items.get_mut(at) {
-                    *text = tr("Der Baustein wird geholt. Danach startet die KI mit „Noch einmal“.");
-                    *fix = Some(Fix::Again);
+                    *text = tr("Das Zusatzprogramm wird geholt. Danach startet die KI mit „Noch einmal“.");
+                    *fix = Some(Fix::Fetching);
                 }
                 self.touch(at);
             }
-            Fix::Restart | Fix::Again => {
+            Fix::Restart | Fix::Again | Fix::Fetching => {
                 if self.session.is_some() {
                     self.stop(cx);
                 }
@@ -695,6 +697,7 @@ impl AiPanel {
         });
         let file = transcript::file_for(&root, &id);
         let watched = id.clone();
+        let patient = launch.program.file_stem().is_some_and(|s| s.eq_ignore_ascii_case("npx"));
         let watch = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SLOW_START).await;
             let waiting = this.update(cx, |p, cx| p.mark_slow(&watched, cx)).unwrap_or(false);
@@ -704,7 +707,7 @@ impl AiPanel {
             cx.background_executor().timer(GIVE_UP - SLOW_START).await;
             let _ = this.update(cx, |p, cx| p.give_up(&watched, cx));
         });
-        self.session = Some(Session { id, commands: commands_tx, ready: false, file, seen: HashMap::new(), granted: HashSet::new(), stopped: false, slow: false, events, _run: run, _pump: pump, _watch: watch });
+        self.session = Some(Session { id, commands: commands_tx, ready: false, file, seen: HashMap::new(), granted: HashSet::new(), stopped: false, slow: false, patient, events, _run: run, _pump: pump, _watch: watch });
         self.schedule_idle(cx);
     }
 
@@ -716,11 +719,11 @@ impl AiPanel {
     }
 
     fn give_up(&mut self, id: &str, cx: &mut Context<Self>) {
-        if !self.session.as_ref().is_some_and(|s| s.id == id && !s.ready) {
+        if !self.session.as_ref().is_some_and(|s| s.id == id && !s.ready && !s.patient) {
             return;
         }
         self.stop(cx);
-        self.notice_fix(tr("Hat nicht geklappt: Das KI-Programm antwortet nicht. Prüf das Internet, oder wähl in Einstellungen → KI ein anderes."), Some(Fix::Again));
+        self.notice_fix(tr("Das KI-Programm antwortet nicht. Prüf das Internet oder wähl in Einstellungen → KI ein anderes Programm."), Some(Fix::Again));
         cx.notify();
     }
 
@@ -2175,15 +2178,20 @@ impl AiPanel {
             Item::Edit(e) => self.edit_card(at, e, cx, t),
             Item::Notice { text, fix } => {
                 let me = cx.entity();
-                let action = fix.map(|f| {
-                    let label = match f {
-                        Fix::Restart => tr("Neu starten"),
-                        Fix::Retry | Fix::Again => tr("Noch einmal"),
-                        Fix::FetchAdapter => tr("Holen"),
-                        Fix::SignIn(_) => tr("Anmelden"),
-                    };
-                    Button::new(("ai-fix", at)).ghost().xsmall().label(label).on_click(move |_, _, cx| me.update(cx, |p, cx| p.fix(at, f, cx)))
-                });
+                let download = if *fix == Some(Fix::Fetching) { ai::download(cx) } else { None };
+                let action: Option<AnyElement> = match download {
+                    Some(ai::Download::Running(p)) => Some(div().flex_none().text_size(px(font::CAPTION)).text_color(t.tertiary).child(trf("Lädt … %@", &[&format!("{} %", (p * 100.).round() as i64)])).into_any_element()),
+                    Some(ai::Download::Failed(_)) => Some(Button::new(("ai-fix", at)).ghost().xsmall().label(tr("Erneut versuchen")).tooltip(tr("Das Zusatzprogramm ließ sich nicht laden")).on_click(move |_, _, cx| me.update(cx, |p, cx| p.fix(at, Fix::FetchAdapter, cx))).into_any_element()),
+                    None => fix.map(|f| {
+                        let label = match f {
+                            Fix::Restart => tr("Neu starten"),
+                            Fix::Retry | Fix::Again | Fix::Fetching => tr("Noch einmal"),
+                            Fix::FetchAdapter => tr("Holen"),
+                            Fix::SignIn(_) => tr("Anmelden"),
+                        };
+                        Button::new(("ai-fix", at)).ghost().xsmall().label(label).on_click(move |_, _, cx| me.update(cx, |p, cx| p.fix(at, f, cx))).into_any_element()
+                    }),
+                };
                 div()
                     .flex()
                     .items_center()
