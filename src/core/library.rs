@@ -2764,7 +2764,14 @@ impl Library {
                     self.path_moved(&from, &target);
                     Change::Move { from: target, to: from }
                 }
-                Change::Trash(path) => trash_with_copy(&path)?,
+                Change::Trash(path) => {
+                    let settled = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                    let change = trash_with_copy(&path)?;
+                    if !self.buffers.get(&settled).is_some_and(|b| b.dirty) {
+                        self.close_tab(&settled);
+                    }
+                    change
+                }
                 Change::Restore { path, backup } => {
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)?;

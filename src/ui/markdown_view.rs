@@ -11,6 +11,7 @@ use gpui_kit::*;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
 use super::motion::Soft;
+use super::widgets::{KeyNav, tip};
 use super::selectable::{InlineKind, InlineSlot, LinkAction, selectable};
 use super::theme::{Theme, control, font, note_size, radius, space, iconsize};
 use crate::core::i18n::{tr, trf};
@@ -2905,7 +2906,7 @@ impl RenderOnce for Properties {
                             div()
                                 .id(SharedString::from(format!("md-prop-link-{i}-{n}")))
                                 .text_color(accent)
-                                .when(!sample, Styled::cursor_pointer)
+                                .when(!sample, |d| d.cursor_pointer().key_nav().soft(accent.opacity(0.12), radius::SMALL))
                                 .on_click(move |_, _, cx| {
                                     cx.stop_propagation();
                                     action(cx);
@@ -2923,7 +2924,7 @@ impl RenderOnce for Properties {
                                 .bg(accent.opacity(0.14))
                                 .text_color(accent)
                                 .when(!sample, |d| {
-                                    d.cursor_pointer().on_click(move |_, _, cx| {
+                                    d.cursor_pointer().key_nav().soft(accent.opacity(0.12), radius::SMALL).tooltip(tip(trf("Notizen mit %@ zeigen", &[&shown]))).on_click(move |_, _, cx| {
                                         cx.stop_propagation();
                                         super::state::act(cx, |l| l.show_tag(&tag));
                                     })

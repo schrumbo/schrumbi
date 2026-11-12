@@ -2165,8 +2165,7 @@
   "Notiz einbetten": "Embed note",
   "Formelblock": "Formula block",
   "Formelblock einfügen": "Insert formula block",
-  "Frühere Fassungen deiner Notizen erscheinen hier, sobald die Sicherung eingerichtet ist.": "Earlier versions of your notes appear here once backup is set up.",
-  "Sicherung einrichten…": "Set up backup…",
+  "Frühere Fassungen deiner Notizen erscheinen hier, sobald Sync eingerichtet ist.": "Earlier versions of your notes appear here once sync is set up.",
   "Gibt es bisher nur auf dem Mac": "Only on the Mac so far",
   "Nicht aufgelöst: %@": "Unresolved: %@",
   "Links auf Notizen, die es nicht gibt": "Links to notes that do not exist",
@@ -2177,5 +2176,8 @@
   "Orange": "Orange",
   "Türkis": "Turquoise",
   "Unbekannter Befehl: %@": "Unknown command: %@",
-  "Unbekannte Umgebung: %@": "Unknown environment: %@"
+  "Unbekannte Umgebung: %@": "Unknown environment: %@",
+  "Nicht aufgelöst": "Unresolved",
+  "Notizen mit %@ zeigen": "Show notes with %@",
+  "Entf": "Del"
 }

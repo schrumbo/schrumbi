@@ -299,7 +299,7 @@ impl RenderOnce for QueryBlock {
                     let folder = (seen.get(&name).copied().unwrap_or(0) > 1).then(|| f.parent().and_then(|p| p.strip_prefix(&root).ok()).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default()).filter(|p| !p.is_empty());
                     let hover = t.ink.opacity(0.05);
                     let sample = self.sample;
-                    div().id(("query-hit", (self.id as usize) * 1000 + i)).px(px(space::M)).py(px(space::XS)).flex().items_center().gap(px(space::S)).when(!sample, |d| d.cursor_pointer().soft(hover, 0.)).on_click(move |_, _, cx| if !sample { act(cx, |l| l.open_file(&open)) }).child(file_icon(&f, iconsize::S)).child(div().truncate().child(name)).children(folder.map(|p| div().flex_none().text_size(px(font::CAPTION)).text_color(t.tertiary).child(p)))
+                    div().id(("query-hit", (self.id as usize) * 1000 + i)).px(px(space::M)).py(px(space::XS)).flex().items_center().gap(px(space::S)).when(!sample, |d| d.cursor_pointer().soft(hover, 0.)).on_click(move |_, _, cx| if !sample { act(cx, |l| l.open_file(&open)) }).child(file_icon(&f, iconsize::S)).child(div().flex_none().max_w_1_2().truncate().child(name)).children(folder.map(|p| div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.tertiary).child(p)))
                 }))
                 .into_any_element()
             }

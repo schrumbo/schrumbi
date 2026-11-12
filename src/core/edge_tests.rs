@@ -1384,6 +1384,11 @@ fn undo_waits_for_a_running_trash_and_then_takes_it_back() {
     assert!(made.exists() && file.exists(), "the trash itself is taken back");
     assert!(lib.open_documents.contains(&dunce::canonicalize(&made).unwrap()), "its tab comes back");
     assert_eq!(lib.open_documents.len(), 1, "a file that had no tab gets none");
+    lib.redo();
+    assert!(!made.exists(), "redo trashes it again");
+    assert!(lib.open_documents.is_empty(), "and closes the tab undo brought back");
+    lib.undo();
+    assert!(made.exists() && lib.open_documents.len() == 1);
     lib.undo();
     assert!(!made.exists(), "and only then the step before it");
 }

@@ -170,7 +170,7 @@ impl NoteCompletion {
             ("Liste", "- ", "-"),
             ("Nummerierte Liste", "1. ", "1."),
             ("Tabelle", "|  |  |\n|--|--|\n|  |  |\n", "|"),
-            ("Formel", "$$\n\n$$", "$$"),
+            ("Formelblock", "$$\n\n$$", "$$"),
             ("Zitat", "> ", ">"),
             ("Hinweisbox", "> [!note] ", "> [!note]"),
             ("Notiz einbetten", "![[", "![["),
@@ -301,6 +301,22 @@ impl CompletionProvider for NoteCompletion {
                 self.slash_items(&typed, range)
             }
             None => Vec::new(),
+        };
+        let crlf = all.contains("\r\n") || super::state::read(cx, |l| l.buffers.get(&self.note).is_some_and(|b| b.text.contains("\r\n")));
+        let items = if crlf {
+            items
+                .into_iter()
+                .map(|mut item| {
+                    if let Some(CompletionTextEdit::Edit(edit)) = &mut item.text_edit
+                        && !edit.new_text.contains('\r')
+                    {
+                        edit.new_text = edit.new_text.replace('\n', "\r\n");
+                    }
+                    item
+                })
+                .collect()
+        } else {
+            items
         };
         Task::ready(Ok(CompletionResponse::Array(items)))
     }

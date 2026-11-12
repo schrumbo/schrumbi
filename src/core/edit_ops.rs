@@ -805,8 +805,7 @@ pub fn closing_mark(note: &str, line: usize) -> Option<String> {
 }
 
 /// A display formula on lines of its own: around the selection, or empty with the caret inside.
-pub fn math_block(s: &str, sel: Range<usize>) -> Edit {
-    let nl = if s.contains("\r\n") { "\r\n" } else { "\n" };
+pub fn math_block(s: &str, sel: Range<usize>, nl: &str) -> Edit {
     let line_start = s[..sel.start].rfind('\n').map_or(0, |i| i + 1);
     let line_end = before_cr(s, s[sel.end..].find('\n').map_or(s.len(), |i| sel.end + i));
     if sel.is_empty() && s[line_start..line_end].trim().is_empty() {
@@ -835,8 +834,11 @@ pub fn closes_formula(s: &str, caret: usize, typed: &str) -> Option<Edit> {
     if s[start..caret].trim_start() != "$" || !matches!(s[caret..end].trim_end(), "" | "$") {
         return None;
     }
+    if end == s.len() {
+        return None;
+    }
     let next_end = s[end + 1..].find('\n').map_or(s.len(), |i| end + 1 + i);
-    if end == s.len() || s[end + 1..next_end].trim() != "$$" {
+    if s[end + 1..next_end].trim() != "$$" {
         return None;
     }
     let above = s[..start].split('\n').filter(|l| l.trim() == "$$").count();
@@ -1472,18 +1474,25 @@ world");
     #[test]
     fn a_formula_block_gets_lines_of_its_own() {
         let s = "a\n\nb";
-        let e = math_block(s, 2..2);
+        let e = math_block(s, 2..2, "\n");
         assert_eq!(apply(s, &e), "a\n$$\n\n$$\nb");
         assert_eq!(e.select, 5..5);
         let s = "Text";
-        let e = math_block(s, 2..2);
+        let e = math_block(s, 2..2, "\n");
         assert_eq!(apply(s, &e), "Text\n$$\n\n$$");
         assert_eq!(e.select, 8..8);
         let s = "x = y^2 fertig";
-        let e = math_block(s, 0..7);
+        let e = math_block(s, 0..7, "\n");
         assert_eq!(apply(s, &e), "$$\nx = y^2\n$$\n fertig");
         assert_eq!(&apply(s, &e)[e.select.clone()], "x = y^2");
-        assert_eq!(apply("a\r\n", &math_block("a\r\n", 3..3)), "a\r\n$$\r\n\r\n$$");
+        assert_eq!(apply("a\r\n", &math_block("a\r\n", 3..3, "\r\n")), "a\r\n$$\r\n\r\n$$");
+        assert_eq!(apply("Text\r", &math_block("Text\r", 2..2, "\r\n")), "Text\r\n$$\r\n\r\n$$\r");
+    }
+
+    #[test]
+    fn typing_a_formula_mark_on_the_last_line_does_not_crash() {
+        assert!(closes_formula("$", 1, "$").is_none());
+        assert!(closes_formula("a\n$$\nx\n$", 8, "$").is_none());
     }
 
     #[test]

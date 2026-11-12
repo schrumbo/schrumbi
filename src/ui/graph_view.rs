@@ -18,7 +18,7 @@ use crate::core::shortcuts::ShortcutAction;
 use crate::core::vault::graph::{Graph, Layout, NodeKind, Options};
 use crate::core::vault::index;
 
-const HIT_MIN: f32 = 8.;
+const HIT_MIN: f32 = 12.;
 
 /// Positions stay for the whole session, so returning to the graph looks the same.
 #[derive(Default)]
@@ -332,7 +332,7 @@ impl Render for GraphView {
                 move |menu, _, _| {
                     let menu = Self::filter_item(menu, &me, tr("Tags"), options.tags, |o, v| o.tags = v);
                     let menu = Self::filter_item(menu, &me, tr("Anhänge"), options.attachments, |o, v| o.attachments = v);
-                    let menu = Self::filter_item(menu, &me, tr("Nicht angelegt"), options.missing, |o, v| o.missing = v);
+                    let menu = Self::filter_item(menu, &me, tr("Nicht aufgelöst"), options.missing, |o, v| o.missing = v);
                     Self::filter_item(menu, &me, tr("Ohne Links"), options.orphans, |o, v| o.orphans = v)
                 }
             }))
@@ -350,7 +350,7 @@ impl Render for GraphView {
             }))
             .child(Button::new("graph-zoom-out").ghost().small().icon(menu_icon("minus")).accessibility_label(tr("Verkleinern")).tooltip(tr("Verkleinern")).on_click(cx.listener(|v, _, _, cx| v.zoom_by(0.75, cx))))
             .child(Button::new("graph-zoom-in").ghost().small().icon(menu_icon("plus")).accessibility_label(tr("Vergrößern")).tooltip(tr("Vergrößern")).on_click(cx.listener(|v, _, _, cx| v.zoom_by(1.33, cx))))
-            .child(Button::new("graph-fit").ghost().small().icon(menu_icon("maximize")).accessibility_label(tr("Einpassen")).tooltip(format!("{}{}", tr("Einpassen"), ShortcutAction::ZoomReset.default_shortcut().map_or_else(String::new, |s| format!(" ({})", s.display())))).on_click(cx.listener(|v, _, _, cx| {
+            .child(Button::new("graph-fit").ghost().small().icon(menu_icon("maximize")).accessibility_label(tr("Einpassen")).tooltip(format!("{}{}", tr("Einpassen"), ShortcutAction::ZoomReset.hint())).on_click(cx.listener(|v, _, _, cx| {
                 v.hand_moved = false;
                 v.fit();
                 cx.notify();

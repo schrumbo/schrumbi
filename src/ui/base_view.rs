@@ -44,6 +44,8 @@ pub struct BaseView {
     filter_error: Option<String>,
     cursor: (usize, usize),
     editing: Option<(usize, usize, Entity<InputState>)>,
+    /// The note, column and shown value the open cell editor belongs to; rows can move while it is open.
+    edit_target: Option<(PathBuf, String, String)>,
     closed_groups: std::collections::BTreeSet<String>,
     pinned: std::collections::BTreeSet<PathBuf>,
     focus: FocusHandle,
@@ -77,7 +79,7 @@ impl BaseView {
         let source = std::fs::read_to_string(&path).unwrap_or_default();
         let parsed = Base::parse(&source);
         let sort = bases::view_sort(&source, 0);
-        Self { path, source, parsed, view: 0, table: None, built: None, sort, filters_open: false, filter_rows: Vec::new(), filter_error: None, cursor: (0, 0), editing: None, closed_groups: Default::default(), pinned: Default::default(), focus: cx.focus_handle(), list: UniformListScrollHandle::new(), version: 0, seen_generation: index::current().generation, task: None, _subs: Vec::new() }
+        Self { path, source, parsed, view: 0, table: None, built: None, sort, filters_open: false, filter_rows: Vec::new(), filter_error: None, cursor: (0, 0), editing: None, edit_target: None, closed_groups: Default::default(), pinned: Default::default(), focus: cx.focus_handle(), list: UniformListScrollHandle::new(), version: 0, seen_generation: index::current().generation, task: None, _subs: Vec::new() }
     }
 
     /// Gives the keyboard to the table.
@@ -260,8 +262,10 @@ impl BaseView {
         if column.contains('.') && !column.starts_with("note.") {
             return;
         }
-        let Some(cell) = table.rows.get(row).and_then(|r| r.cells.get(col)) else { return };
+        let Some(line) = table.rows.get(row) else { return };
+        let Some(cell) = line.cells.get(col) else { return };
         let value = cell.1.display();
+        self.edit_target = Some((line.path.clone(), column.clone(), value.clone()));
         let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
         input.update(cx, |s, cx| {
             let end = s.value().len();
@@ -286,12 +290,11 @@ impl BaseView {
     }
 
     fn commit_edit(&mut self, value: String, cx: &mut Context<Self>) {
-        let Some((row, col, _)) = self.editing.take() else { return };
-        let Some(table) = &self.table else { return };
-        let (Some(row), Some((_, column))) = (table.rows.get(row), table.columns.get(col)) else { return };
-        let unchanged = row.cells.get(col).is_some_and(|(_, v)| v.display() == value);
-        let (path, column) = (row.path.clone(), column.clone());
-        if !unchanged {
+        if self.editing.take().is_none() {
+            return;
+        }
+        let Some((path, column, before)) = self.edit_target.take() else { return };
+        if before != value {
             let kind = format!("cell:{}", path.display());
             let changed = act(cx, |l| {
                 let changed = l.edit_note(&path, &kind, tr("Eigenschaft geändert"), |text| bases::write_cell(text, &column, &value).unwrap_or_else(|| text.to_string()));

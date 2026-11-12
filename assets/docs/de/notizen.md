@@ -155,7 +155,7 @@ Notizen öffnen in der Live-Ansicht, in einer Spalte gut lesbarer Breite. Welche
 
 Beim Wechsel bleibt der Cursor an seiner Stelle im Text, und {key:Undo} nimmt auch Änderungen vor dem Wechsel zurück. Die Knöpfe bleiben an ihrem Platz; die {ui:Geteilte Ansicht} ist im Live-Editor ausgegraut.
 
-`/` am Zeilenanfang öffnet eine Liste zum Einfügen: Überschriften, Listen, Aufgaben, Tabelle, Formel, {ui:Hinweisbox}, {ui:Notiz einbetten} und mehr. Tippen filtert, rechts steht das Markdown-Zeichen dazu.
+`/` am Zeilenanfang öffnet eine Liste zum Einfügen: Überschriften, Listen, Aufgaben, Tabelle, {ui:Formelblock}, {ui:Hinweisbox}, {ui:Notiz einbetten} und mehr. Tippen filtert, rechts steht das Markdown-Zeichen dazu.
 
 ## In der Notiz suchen
 

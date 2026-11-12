@@ -58,8 +58,8 @@ pub struct FindBar {
     searching: bool,
     searching_shown: bool,
     search_epoch: u64,
-    /// The buttons in Tab order after the field: case, previous, next, replace, close.
-    stops: [FocusHandle; 5],
+    /// The buttons that take part in Tab: case, previous, next, replace toggle, close, replace one, replace all.
+    stops: [FocusHandle; 7],
     _subs: Vec<Subscription>,
 }
 
@@ -97,20 +97,24 @@ impl FindBar {
     /// Moves the keyboard through the bar's own field and buttons, so Tab never lands in the note behind it.
     fn step_focus(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
         let has = self.count > 0;
-        let [exact, prev, next, toggle, close] = self.stops.clone();
+        let [exact, prev, next, toggle, close, one, all] = self.stops.clone();
         let query = self.query.read(cx).focus_handle(cx);
         let replacement = self.replacement.read(cx).focus_handle(cx);
-        let mut order = vec![query, exact];
+        let mut order = Vec::new();
+        if self.can_replace {
+            order.push(toggle);
+        }
+        order.extend([query, exact]);
         if has {
             order.extend([prev, next]);
         }
-        if self.can_replace {
-            order.push(toggle);
-            if self.replacing {
-                order.push(replacement);
+        order.push(close);
+        if self.can_replace && self.replacing {
+            order.push(replacement);
+            if has {
+                order.extend([one, all]);
             }
         }
-        order.push(close);
         let at = order.iter().position(|f| f.contains_focused(window, cx)).unwrap_or(0);
         let to = if back { (at + order.len() - 1) % order.len() } else { (at + 1) % order.len() };
         window.focus(&order[to], cx);
@@ -207,7 +211,7 @@ impl Render for FindBar {
         let has = self.count > 0 && !waiting;
         let (prev, next, close, exact, toggle) = (cx.entity(), cx.entity(), cx.entity(), cx.entity(), cx.entity());
         let (replace_one, replace_all) = (cx.entity(), cx.entity());
-        let [exact_stop, prev_stop, next_stop, toggle_stop, close_stop] = self.stops.clone();
+        let [exact_stop, prev_stop, next_stop, toggle_stop, close_stop, one_stop, all_stop] = self.stops.clone();
         let first = div()
             .flex()
             .items_center()
@@ -262,8 +266,8 @@ impl Render for FindBar {
                         .gap(px(space::XS))
                         .child(div().w(px(control::S)).flex_none())
                         .child(div().w(px(260.)).flex_none().child(Input::new(&self.replacement).small().prefix(icon("replace", iconsize::XS, t.secondary))))
-                        .child(Button::new("find-replace-one").ghost().small().h(px(control::S)).label(tr("Ersetzen")).disabled(!has).on_click(move |_, _, cx| replace_one.update(cx, |_, cx| cx.emit(FindEvent::Replace))))
-                        .child(Button::new("find-replace-all").ghost().small().h(px(control::S)).label(tr("Alle ersetzen")).disabled(!has).on_click(move |_, _, cx| replace_all.update(cx, |_, cx| cx.emit(FindEvent::ReplaceAll)))),
+                        .child(Button::new("find-replace-one").ghost().small().h(px(control::S)).track_focus(&one_stop).label(tr("Ersetzen")).disabled(!has).on_click(move |_, _, cx| replace_one.update(cx, |_, cx| cx.emit(FindEvent::Replace))))
+                        .child(Button::new("find-replace-all").ghost().small().h(px(control::S)).track_focus(&all_stop).label(tr("Alle ersetzen")).disabled(!has).on_click(move |_, _, cx| replace_all.update(cx, |_, cx| cx.emit(FindEvent::ReplaceAll)))),
                 )
             })
     }

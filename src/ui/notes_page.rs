@@ -1273,8 +1273,7 @@ impl Render for NotesPage {
         } else if rows.is_empty() {
             let (name, title, detail) = match view {
                 _ if filtered => ("search", tr("Nichts gefunden"), tr("Ändere den Filter.")),
-                View::Search => ("search", tr("Inhalt durchsuchen"), tr("Tippe oben ein Wort oder Suchbefehle wie tag:#x.")),
-                View::Files => ("book-open", tr("Noch keine Notizen"), tr("Mit ⌘N legst du die erste an.")),
+                View::Search | View::Files => ("search", tr("Inhalt durchsuchen"), tr("Tippe oben ein Wort oder Suchbefehle wie tag:#x.")),
                 View::Tags => ("tag", tr("Noch keine Tags"), tr("Schreibe #tag in eine Notiz.")),
                 View::Marks => ("bookmark", tr("Keine Lesezeichen"), tr("Lesezeichen setzt du über die Befehlspalette, sie stehen auch in Obsidian.")),
                 View::Tasks => ("circle-check", tr("Alles erledigt"), tr("In deinen Notizen ist keine Aufgabe mehr offen.")),

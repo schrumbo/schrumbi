@@ -21,7 +21,7 @@ use crate::core::vault::canvas::{Canvas, Edge, Node, NodeKind};
 use crate::core::vault::index;
 
 const HANDLE: f32 = 16.;
-const CONNECTOR: f32 = 8.;
+const CONNECTOR: f32 = 12.;
 const PAD_MIN: f32 = 8.;
 const DOT_HIT: f32 = 24.;
 const DOT_SHOWN: f32 = 18.;
@@ -87,6 +87,8 @@ pub struct CanvasView {
     redo: Vec<String>,
     last_edit: Option<std::time::Instant>,
     save_task: Option<Task<()>>,
+    /// The open text field has already taken its undo step; further typing joins it.
+    typed: bool,
     seen_generation: u64,
     /// Texts of note cards, read again when the vault changed.
     card_texts: std::cell::RefCell<std::collections::HashMap<PathBuf, (u64, String)>>,
@@ -98,7 +100,13 @@ impl CanvasView {
     pub fn new(path: PathBuf, _: &mut Window, cx: &mut Context<Self>) -> Self {
         let source = std::fs::read_to_string(&path).unwrap_or_default();
         let doc = Canvas::parse(&source);
-        Self { path, doc, source, pan: (0., 0.), zoom: 1., fitted: false, selection: BTreeSet::new(), selected_edge: None, gesture: None, guides: Vec::new(), edge_mode: false, space_down: false, editing: None, menu_at: None, bounds: Default::default(), undo: Vec::new(), redo: Vec::new(), last_edit: None, save_task: None, seen_generation: index::current().generation, card_texts: Default::default(), focus: cx.focus_handle(), _subs: Vec::new() }
+        cx.on_release(|v: &mut Self, _| {
+            if v.save_task.take().is_some() {
+                let _ = write_atomic(&v.path, v.source.as_bytes());
+            }
+        })
+        .detach();
+        Self { path, doc, source, pan: (0., 0.), zoom: 1., fitted: false, selection: BTreeSet::new(), selected_edge: None, gesture: None, guides: Vec::new(), edge_mode: false, space_down: false, editing: None, menu_at: None, bounds: Default::default(), undo: Vec::new(), redo: Vec::new(), last_edit: None, save_task: None, typed: false, seen_generation: index::current().generation, card_texts: Default::default(), focus: cx.focus_handle(), _subs: Vec::new() }
     }
 
     /// Gives the keyboard to the canvas.
@@ -136,18 +144,24 @@ impl CanvasView {
     fn changed(&mut self, cx: &mut Context<Self>) {
         let Some(doc) = &self.doc else { return };
         self.source = doc.to_json();
-        let (path, bytes) = (self.path.clone(), self.source.clone().into_bytes());
-        self.save_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(SAVE_DELAY).await;
-            let result = cx.background_spawn(async move { write_atomic(&path, &bytes) }).await;
-            let _ = this.update(cx, |v, cx| {
-                v.save_task = None;
-                match result {
-                    Ok(()) => super::state::reindex(cx),
-                    Err(e) => act(cx, |l| l.last_error = Some(e.to_string())),
-                }
-            });
-        }));
+        if self.save_task.is_none() {
+            self.save_task = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(SAVE_DELAY).await;
+                let Ok((path, text)) = this.update(cx, |v, _| (v.path.clone(), v.source.clone())) else { return };
+                let bytes = text.clone().into_bytes();
+                let result = cx.background_spawn(async move { write_atomic(&path, &bytes) }).await;
+                let _ = this.update(cx, |v, cx| {
+                    v.save_task = None;
+                    match result {
+                        Ok(()) => super::state::reindex(cx),
+                        Err(e) => act(cx, |l| l.last_error = Some(e.to_string())),
+                    }
+                    if v.source != text {
+                        v.changed(cx);
+                    }
+                });
+            }));
+        }
         cx.notify();
     }
 
@@ -363,6 +377,7 @@ impl CanvasView {
             Field::Line(input)
         };
         self.editing = Some((id.to_string(), field));
+        self.typed = false;
         cx.notify();
     }
 
@@ -374,7 +389,7 @@ impl CanvasView {
         }
     }
 
-    /// Writes the text being typed into the canvas right away, so it is saved even if the field never loses focus.
+    /// Writes the text being typed into the canvas right away, so a short save delay later it is on disk even if the field never loses focus.
     fn keep_edit(&mut self, cx: &mut Context<Self>) {
         let Some((id, field)) = &self.editing else { return };
         let value = match field {
@@ -390,7 +405,8 @@ impl CanvasView {
         if same {
             return;
         }
-        self.before_edit(true);
+        let merge = std::mem::replace(&mut self.typed, true);
+        self.before_edit(merge);
         let doc = self.doc.as_mut().unwrap();
         match &mut doc.nodes[position].kind {
             NodeKind::Text(t) | NodeKind::Link(t) => *t = value,
@@ -488,6 +504,16 @@ impl CanvasView {
         edge.to_end = Some("arrow".to_string());
         doc.edges.push(edge);
         self.changed(cx);
+    }
+
+    /// The colour all selected objects share, `Some(None)` when they all have the default one.
+    fn shared_color(&self) -> Option<Option<String>> {
+        let doc = self.doc.as_ref()?;
+        let nodes = doc.nodes.iter().filter(|n| self.selection.contains(&n.id)).map(|n| n.color.clone());
+        let edge = self.selected_edge.as_ref().and_then(|id| doc.edges.iter().find(|e| e.id == *id)).map(|e| e.color.clone());
+        let mut colors = nodes.chain(edge);
+        let first = colors.next()?;
+        colors.all(|c| c == first).then_some(first)
     }
 
     fn set_color(&mut self, color: Option<String>, cx: &mut Context<Self>) {
@@ -1068,6 +1094,7 @@ impl Render for CanvasView {
             let ring = t.primary;
             let secondary = t.secondary;
             let hover = t.ink.opacity(0.05);
+            let current = self.shared_color();
             let bar_w = DOT_HIT * (PRESETS.len() + 1) as f32 + space::XS * 2. + 2.;
             let bar_h = DOT_HIT + space::XS * 2. + 2.;
             let mut span = doc.nodes.iter().filter(|n| self.selection.contains(&n.id)).fold(None::<(f32, f32, f32)>, |acc, n| {
@@ -1107,10 +1134,11 @@ impl Render for CanvasView {
                         .tooltip(tip(tr("Standardfarbe")))
                         .soft(hover, radius::FULL)
                         .on_click(cx.listener(|v, _, _, cx| v.set_color(None, cx)))
-                        .child(div().size(px(DOT_SHOWN)).rounded_full().border_1().border_color(secondary).group_hover("canvas-color-none", move |s| s.border_color(ring))),
+                        .child(div().size(px(DOT_SHOWN)).rounded_full().border_1().border_color(secondary).when(current == Some(None), |s| s.border_2().border_color(ring)).group_hover("canvas-color-none", move |s| s.border_color(ring))),
                 )
                 .children(PRESETS.iter().enumerate().map(|(i, (key, _))| {
                     let shown = color_of(Some(&key.to_string())).unwrap_or(secondary);
+                    let on = current.as_ref().is_some_and(|c| c.as_deref() == Some(*key));
                     let key = key.to_string();
                     let group = SharedString::from(format!("canvas-color-{i}"));
                     div()
@@ -1125,7 +1153,7 @@ impl Render for CanvasView {
                         .tooltip(tip(tr(COLOR_NAMES[i])))
                         .soft(hover, radius::FULL)
                         .on_click(cx.listener(move |v, _, _, cx| v.set_color(Some(key.clone()), cx)))
-                        .child(div().size(px(DOT_SHOWN)).rounded_full().bg(shown).group_hover(group, move |s| s.border_2().border_color(ring)))
+                        .child(div().size(px(DOT_SHOWN)).rounded_full().bg(shown).when(on, |s| s.border_2().border_color(ring)).group_hover(group, move |s| s.border_2().border_color(ring)))
                 }))
         });
         let zoom_label = format!("{}%", (zoom * 100.).round());
@@ -1234,14 +1262,16 @@ impl Render for CanvasView {
                         }));
                     }
                     let none = me.clone();
-                    let mut menu = menu.item(PopupMenuItem::new(tr("Standardfarbe")).icon(menu_icon("circle")).on_click(move |_, _, cx| none.update(cx, |v, cx| v.set_color(None, cx))));
+                    let current = me.read(cx).shared_color();
+                    let mut menu = menu.item(PopupMenuItem::new(tr("Standardfarbe")).checked(current == Some(None)).on_click(move |_, _, cx| none.update(cx, |v, cx| v.set_color(None, cx))));
                     for (i, (key, _)) in PRESETS.iter().enumerate() {
                         let (me, key) = (me.clone(), key.to_string());
                         let shown = color_of(Some(&key)).unwrap_or_default();
-                        menu = menu.item(PopupMenuItem::new(tr(COLOR_NAMES[i])).icon(menu_icon("circle-dot").text_color(shown)).on_click(move |_, _, cx| me.update(cx, |v, cx| v.set_color(Some(key.clone()), cx))));
+                        let on = current.as_ref().is_some_and(|c| c.as_deref() == Some(key.as_str()));
+                        menu = menu.item(PopupMenuItem::new(tr(COLOR_NAMES[i])).checked(on).icon(menu_icon("circle-dot").text_color(shown)).on_click(move |_, _, cx| me.update(cx, |v, cx| v.set_color(Some(key.clone()), cx))));
                     }
                     let delete = me.clone();
-                    menu.separator().item(PopupMenuItem::new(tr("Löschen")).icon(menu_icon("trash-2")).on_click(move |_, _, cx| delete.update(cx, |v, cx| v.delete_selection(cx))))
+                    menu.separator().item(PopupMenuItem::new(format!("{} ({})", tr("Löschen"), if cfg!(target_os = "macos") { "⌫".to_string() } else { tr("Entf") })).icon(menu_icon("trash-2")).on_click(move |_, _, cx| delete.update(cx, |v, cx| v.delete_selection(cx))))
                 }
             });
         div().size_full().flex().flex_col().child(bar).child(surface).into_any_element()

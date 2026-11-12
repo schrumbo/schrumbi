@@ -237,8 +237,9 @@ impl Render for VersionList {
         self.sync_path(cx);
         let t = Theme::get(cx);
         if sync::get(cx).git.is_none() {
-            return unavailable("history", tr("Noch kein Verlauf"), tr("Frühere Fassungen deiner Notizen erscheinen hier, sobald die Sicherung eingerichtet ist."), &t)
-                .child(div().pt(px(space::S)).child(Button::new("history-setup").small().label(tr("Sicherung einrichten…")).on_click(|_, _, cx| act(cx, |l| if l.root.is_some() { l.show_sync_setup = true }))))
+            let has_root = state::read(cx, |l| l.root.is_some());
+            return unavailable("history", tr("Noch kein Verlauf"), tr("Frühere Fassungen deiner Notizen erscheinen hier, sobald Sync eingerichtet ist."), &t)
+                .when(has_root, |d| d.child(div().pt(px(space::S)).child(Button::new("history-setup").small().label(tr("Sync einrichten…")).on_click(|_, _, cx| act(cx, |l| l.show_sync_setup = true)))))
                 .into_any_element();
         }
         if self.versions.is_empty() {

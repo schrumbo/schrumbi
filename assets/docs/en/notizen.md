@@ -155,7 +155,7 @@ Notes open in the Live view, in a column of comfortable reading width. You choos
 
 Switching keeps the cursor at its place in the text, and {key:Undo} also takes back changes made before the switch. The buttons stay where they are; {ui:Geteilte Ansicht} is greyed out in the live editor.
 
-`/` at the start of a line opens a list to insert from: headings, lists, tasks, table, formula, {ui:Hinweisbox}, {ui:Notiz einbetten} and more. Typing filters; the Markdown mark shows on the right.
+`/` at the start of a line opens a list to insert from: headings, lists, tasks, table, {ui:Formelblock}, {ui:Hinweisbox}, {ui:Notiz einbetten} and more. Typing filters; the Markdown mark shows on the right.
 
 ## Find in a Note
 

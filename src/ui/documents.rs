@@ -3713,7 +3713,8 @@ impl NoteView {
             }))
             .on_action(cx.listener(|n, _: &MathBlock, w, cx| {
                 let (s, r) = n.with_text(cx);
-                n.apply(edit_ops::math_block(&s, r), w, cx)
+                let nl = n.line_break(&s, cx);
+                n.apply(edit_ops::math_block(&s, r, nl), w, cx)
             }))
             .on_action(cx.listener(|n, _: &Quote, w, cx| {
                 let (s, r) = n.with_text(cx);
