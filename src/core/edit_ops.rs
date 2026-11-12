@@ -804,6 +804,51 @@ pub fn closing_mark(note: &str, line: usize) -> Option<String> {
     (above % 2 == 0 && below % 2 == 0).then(|| format!("{indent}{mark}"))
 }
 
+/// A display formula on lines of its own: around the selection, or empty with the caret inside.
+pub fn math_block(s: &str, sel: Range<usize>, nl: &str) -> Edit {
+    let line_start = s[..sel.start].rfind('\n').map_or(0, |i| i + 1);
+    let line_end = before_cr(s, s[sel.end..].find('\n').map_or(s.len(), |i| sel.end + i));
+    if sel.is_empty() && s[line_start..line_end].trim().is_empty() {
+        let inside = line_start + 2 + nl.len();
+        return Edit { range: line_start..line_end, text: format!("$${nl}{nl}$$"), select: inside..inside };
+    }
+    if sel.is_empty() {
+        let inside = line_end + nl.len() + 2 + nl.len();
+        return Edit { range: line_end..line_end, text: format!("{nl}$${nl}{nl}$$"), select: inside..inside };
+    }
+    let pre = if sel.start == line_start { "" } else { nl };
+    let post = if sel.end == line_end { "" } else { nl };
+    let inner = &s[sel.clone()];
+    let text = format!("{pre}$${nl}{inner}{nl}$${post}");
+    let from = sel.start + pre.len() + 2 + nl.len();
+    Edit { range: sel, text, select: from..from + inner.len() }
+}
+
+/// Typing the second `$` of a `$$` line inside a formula whose closing `$$` already waits on the next line steps onto that line instead of adding another.
+pub fn closes_formula(s: &str, caret: usize, typed: &str) -> Option<Edit> {
+    if typed != "$" {
+        return None;
+    }
+    let start = s[..caret].rfind('\n').map_or(0, |i| i + 1);
+    let end = s[caret..].find('\n').map_or(s.len(), |i| caret + i);
+    if s[start..caret].trim_start() != "$" || !matches!(s[caret..end].trim_end(), "" | "$") {
+        return None;
+    }
+    if end == s.len() {
+        return None;
+    }
+    let next_end = s[end + 1..].find('\n').map_or(s.len(), |i| end + 1 + i);
+    if s[end + 1..next_end].trim() != "$$" {
+        return None;
+    }
+    let above = s[..start].split('\n').filter(|l| l.trim() == "$$").count();
+    if above % 2 == 0 {
+        return None;
+    }
+    let landed = start + next_end - (end + 1) - usize::from(s[..next_end].ends_with('\r'));
+    Some(Edit { range: start..end + 1, text: String::new(), select: landed..landed })
+}
+
 /// Typing an opening bracket adds its partner; a closing one steps over the partner that is already there.
 pub fn typed_pair(s: &str, caret: usize, typed: &str) -> Option<Edit> {
     let next = s[caret..].chars().next();
@@ -1424,6 +1469,48 @@ world");
         assert_eq!(closing_mark("```\nx\n```", 2), None);
         assert_eq!(closing_mark("```\n\n```", 0), None);
         assert_eq!(closing_mark("text", 0), None);
+    }
+
+    #[test]
+    fn a_formula_block_gets_lines_of_its_own() {
+        let s = "a\n\nb";
+        let e = math_block(s, 2..2, "\n");
+        assert_eq!(apply(s, &e), "a\n$$\n\n$$\nb");
+        assert_eq!(e.select, 5..5);
+        let s = "Text";
+        let e = math_block(s, 2..2, "\n");
+        assert_eq!(apply(s, &e), "Text\n$$\n\n$$");
+        assert_eq!(e.select, 8..8);
+        let s = "x = y^2 fertig";
+        let e = math_block(s, 0..7, "\n");
+        assert_eq!(apply(s, &e), "$$\nx = y^2\n$$\n fertig");
+        assert_eq!(&apply(s, &e)[e.select.clone()], "x = y^2");
+        assert_eq!(apply("a\r\n", &math_block("a\r\n", 3..3, "\r\n")), "a\r\n$$\r\n\r\n$$");
+        assert_eq!(apply("Text\r", &math_block("Text\r", 2..2, "\r\n")), "Text\r\n$$\r\n\r\n$$\r");
+    }
+
+    #[test]
+    fn typing_a_formula_mark_on_the_last_line_does_not_crash() {
+        assert!(closes_formula("$", 1, "$").is_none());
+        assert!(closes_formula("a\n$$\nx\n$", 8, "$").is_none());
+    }
+
+    #[test]
+    fn typing_the_closing_formula_mark_uses_the_one_already_there() {
+        let s = "$$\nx^2\n$$\n$$";
+        let e = closes_formula(s, 8, "$").unwrap();
+        assert_eq!(apply(s, &e), "$$\nx^2\n$$");
+        assert_eq!(e.select, 9..9);
+        let s = "$$\nx^2\n$$\n$$\ny";
+        assert_eq!(apply(s, &closes_formula(s, 8, "$").unwrap()), "$$\nx^2\n$$\ny");
+        let s = "$$\r\nx\r\n$$\r\n$$\r\ny";
+        let e = closes_formula(s, 8, "$").unwrap();
+        assert_eq!(apply(s, &e), "$$\r\nx\r\n$$\r\ny");
+        assert_eq!(e.select, 9..9);
+        assert_eq!(closes_formula("$$\nx\n$\n$$", 6, "$").map(|e| apply("$$\nx\n$\n$$", &e)).as_deref(), Some("$$\nx\n$$"));
+        assert_eq!(closes_formula("a\n$\n$$", 3, "$"), None);
+        assert_eq!(closes_formula("$$\nx\n$$\n\n$\n$$", 10, "$"), None);
+        assert_eq!(closes_formula("$$\nx\n$$\n$$", 9, "x"), None);
     }
 
     #[test]

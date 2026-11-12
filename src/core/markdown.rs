@@ -34,7 +34,7 @@ pub fn toggle_task(text: &str, line: usize) -> String {
 /// Front matter `title:` or the first heading.
 pub fn title(text: &str) -> Option<String> {
     static FRONT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^title:\s*(.+)$").unwrap());
-    let head: String = text.chars().take(4000).collect();
+    let head: String = text.trim_start_matches('\u{feff}').chars().take(4000).collect();
     if head.starts_with("---")
         && let Some(c) = FRONT.captures(&head)
     {

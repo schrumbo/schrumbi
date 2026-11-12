@@ -11,6 +11,7 @@ use gpui_kit::*;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
 use super::motion::Soft;
+use super::widgets::{KeyNav, tip};
 use super::selectable::{InlineKind, InlineSlot, LinkAction, selectable};
 use super::theme::{Theme, control, font, note_size, radius, space, iconsize};
 use crate::core::i18n::{tr, trf};
@@ -2115,7 +2116,13 @@ fn image_at(p: PathBuf, alt: &str, source_written: &str, cx: &Ctx) -> AnyElement
         cx.order.set(order + 1);
         let open = p.clone();
         let sample = is_sample_base(cx.base);
-        let drawn = div().id(("md-image", order)).when(!sample, |d| d.cursor_pointer().soft(cx.t.ink.opacity(0.04), radius::CONTROL)).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::preview::show(&open, cx) }).child(img(p).when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL)));
+        let natural = (width.is_none() && height.is_none()).then(|| pixel_size(&p)).flatten();
+        let picture = img(p).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL));
+        let drawn = div().id(("md-image", order)).when(!sample, |d| d.cursor_pointer().soft(cx.t.ink.opacity(0.04), radius::CONTROL)).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::preview::show(&open, cx) });
+        let drawn = match natural {
+            Some((w, h)) => drawn.w_full().max_w(px(w)).aspect_ratio(w / h).max_h(px(560.)).child(picture.size_full()),
+            None => drawn.max_w_full().child(picture.when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.))),
+        };
         let source_name = source_written.to_string();
         match (cx.focus.and_then(|f| f.edit_item.clone()), cx.block) {
             (Some(edit), item) => drawn
@@ -2133,6 +2140,77 @@ fn image_at(p: PathBuf, alt: &str, source_written: &str, cx: &Ctx) -> AnyElement
             _ => drawn.into_any_element(),
         }
     }
+}
+
+thread_local! {
+    static PIXEL_SIZES: RefCell<HashMap<PathBuf, Option<(f32, f32)>>> = RefCell::new(HashMap::new());
+}
+
+/// The pixel size an image file states in its header, read once per file; `None` for kinds without one, like SVG.
+fn pixel_size(path: &Path) -> Option<(f32, f32)> {
+    if let Some(known) = PIXEL_SIZES.with(|s| s.borrow().get(path).copied()) {
+        return known;
+    }
+    let found = header_size(path);
+    PIXEL_SIZES.with(|s| {
+        let mut sizes = s.borrow_mut();
+        if sizes.len() > 512 {
+            sizes.clear();
+        }
+        sizes.insert(path.to_path_buf(), found);
+    });
+    found
+}
+
+fn header_size(path: &Path) -> Option<(f32, f32)> {
+    use std::io::Read;
+    let mut head = Vec::new();
+    std::fs::File::open(path).ok()?.take(256 * 1024).read_to_end(&mut head).ok()?;
+    image_header_size(&head)
+}
+
+fn image_header_size(head: &[u8]) -> Option<(f32, f32)> {
+    let at = |i: usize, n: usize| head.get(i..i + n);
+    let be16 = |i| at(i, 2).map(|b| u16::from_be_bytes([b[0], b[1]]) as u32);
+    let le16 = |i| at(i, 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as u32);
+    let be32 = |i| at(i, 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+    let le32 = |i| at(i, 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let le24 = |i| at(i, 3).map(|b| u32::from_le_bytes([b[0], b[1], b[2], 0]));
+    let size = if head.starts_with(b"\x89PNG") {
+        (be32(16)?, be32(20)?)
+    } else if head.starts_with(b"GIF8") {
+        (le16(6)?, le16(8)?)
+    } else if head.starts_with(b"BM") {
+        ((le32(18)? as i32).unsigned_abs(), (le32(22)? as i32).unsigned_abs())
+    } else if head.starts_with(b"RIFF") && at(8, 4) == Some(&b"WEBP"[..]) {
+        match at(12, 4)? {
+            b"VP8 " => (le16(26)? & 0x3fff, le16(28)? & 0x3fff),
+            b"VP8L" => {
+                let bits = le32(21)?;
+                ((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1)
+            }
+            b"VP8X" => (le24(24)? + 1, le24(27)? + 1),
+            _ => return None,
+        }
+    } else if head.starts_with(&[0xff, 0xd8]) {
+        let mut i = 2;
+        loop {
+            if *head.get(i)? != 0xff {
+                i += 1;
+                continue;
+            }
+            let marker = *head.get(i + 1)?;
+            match marker {
+                0xff => i += 1,
+                0x01 | 0xd0..=0xd8 => i += 2,
+                0xc0..=0xcf if !matches!(marker, 0xc4 | 0xc8 | 0xcc) => break (be16(i + 7)?, be16(i + 5)?),
+                _ => i += 2 + be16(i + 2)? as usize,
+            }
+        }
+    } else {
+        return None;
+    };
+    (size.0 > 0 && size.1 > 0).then_some((size.0 as f32, size.1 as f32))
 }
 
 thread_local! {
@@ -2249,23 +2327,33 @@ fn list_items(start: &Option<u64>, items: &[Item], first: usize, cx: &Ctx) -> Di
                     let special = !done && mark != ' ';
                     let line = item.line;
                     let toggle = cx.on_toggle.clone();
-                    div()
-                        .id(SharedString::from(format!("task-{line}")))
-        .capture_any_mouse_down(|_, _, _| press_control())
-                        .mt(px(space::XS))
-                        .ml(px(space::XXS))
+                    let reach = (control::S - iconsize::S) / 2.;
+                    let shown = div()
                         .size(px(iconsize::S))
-                        .flex_none()
                         .rounded(px(radius::SMALL))
-                        .soft(if done { t.on_accent.opacity(0.2) } else { t.ink.opacity(0.1) }, radius::SMALL)
                         .flex()
                         .items_center()
                         .justify_center()
                         .when(done, |d| d.bg(t.accent))
                         .when(!done, |d| d.border_1().border_color(if special { t.accent } else { t.secondary }))
                         .when(special, |d| d.text_size(px(font::CAPTION2)).text_color(t.accent).child(mark.to_string()))
+                        .when(done, |d| d.child(super::widgets::icon("check", iconsize::XS, t.on_accent)));
+                    div()
+                        .id(SharedString::from(format!("task-{line}")))
+                        .capture_any_mouse_down(|_, _, _| press_control())
+                        .mt(px(space::XS - reach))
+                        .ml(px(space::XXS - reach))
+                        .mr(px(-reach))
+                        .mb(px(-reach))
+                        .size(px(control::S))
+                        .flex_none()
+                        .rounded(px(radius::SMALL))
+                        .soft(t.ink.opacity(0.08), radius::SMALL)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(shown)
                         .when(toggle.is_some(), |d| d.cursor_pointer().tooltip(super::widgets::tip(if done { tr("Als offen markieren") } else { tr("Als erledigt markieren") })))
-                        .when(done, |d| d.child(super::widgets::icon("check", iconsize::XS, t.on_accent)))
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();
                             if let Some(f) = &toggle {
@@ -2445,7 +2533,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                 .child(div().w(px(3.)).flex_none().rounded_full().bg(t.accent.opacity(0.6)))
                 .child(div().flex_1().flex().flex_col().gap(px(space::S)).text_color(t.secondary).children(render_blocks(inner, cx)))
                 .into_any_element(),
-            Block::Code(lang, code) => match super::embeds::special_block(lang.as_deref(), code, cx.base, cx.order.get(), t) {
+            Block::Code(lang, code) => match super::embeds::special_block(lang.as_deref(), code, cx.base, cx.focus.and_then(|f| f.note.as_deref()), cx.order.get(), t) {
                 Some(element) => element,
                 None => code_block(lang.as_deref(), code, cx),
             },
@@ -2789,10 +2877,12 @@ impl RenderOnce for Properties {
         div().flex().flex_col().pb(px(space::S)).border_b_1().border_color(separator).text_size(px(note_size(font::CALLOUT))).children(self.items.into_iter().enumerate().map(move |(i, (name, values))| {
             let base = base.clone();
             let row = ElementId::NamedChild(std::sync::Arc::new(id.clone()), SharedString::from(format!("row-{i}")));
+            let tags = matches!(name.as_str(), "tags" | "tag");
             div()
                 .id(row)
                 .flex()
-                .items_start()
+                .items_center()
+                .min_h(px(control::S))
                 .gap(px(space::M))
                 .py(px(space::XXS))
                 .mx(px(-space::S))
@@ -2816,10 +2906,28 @@ impl RenderOnce for Properties {
                             div()
                                 .id(SharedString::from(format!("md-prop-link-{i}-{n}")))
                                 .text_color(accent)
-                                .when(!sample, Styled::cursor_pointer)
+                                .when(!sample, |d| d.cursor_pointer().key_nav().soft(accent.opacity(0.12), radius::SMALL))
                                 .on_click(move |_, _, cx| {
                                     cx.stop_propagation();
                                     action(cx);
+                                })
+                                .child(shown)
+                                .into_any_element()
+                        }
+                        None if tags => {
+                            let tag = value.trim_start_matches('#').to_string();
+                            let shown = format!("#{tag}");
+                            div()
+                                .id(SharedString::from(format!("md-prop-tag-{i}-{n}")))
+                                .px(px(space::XS))
+                                .rounded(px(radius::SMALL))
+                                .bg(accent.opacity(0.14))
+                                .text_color(accent)
+                                .when(!sample, |d| {
+                                    d.cursor_pointer().key_nav().soft(accent.opacity(0.12), radius::SMALL).tooltip(tip(trf("Notizen mit %@ zeigen", &[&shown]))).on_click(move |_, _, cx| {
+                                        cx.stop_propagation();
+                                        super::state::act(cx, |l| l.show_tag(&tag));
+                                    })
                                 })
                                 .child(shown)
                                 .into_any_element()
@@ -3014,9 +3122,9 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
                         .id(("md-fold", i))
                 .capture_any_mouse_down(|_, _, _| press_control())
                         .absolute()
-                        .top(px(note.first_line_middle(i).map_or(space::S, |middle| middle - 9.)))
-                        .left(px(0.))
-                        .size(px(18.))
+                        .top(px(note.first_line_middle(i).map_or(space::S, |middle| middle - control::S / 2.)))
+                        .left(px(-space::XXS))
+                        .size(px(control::S))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -3277,6 +3385,26 @@ mod reader_tests {
                 Block::Nothing => "nothing",
             })
             .collect()
+    }
+
+    #[test]
+    fn image_headers_tell_their_size() {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend_from_slice(&2400u32.to_be_bytes());
+        png.extend_from_slice(&400u32.to_be_bytes());
+        assert_eq!(super::image_header_size(&png), Some((2400., 400.)));
+        let gif = b"GIF89a\x58\x02\x2c\x01";
+        assert_eq!(super::image_header_size(gif), Some((600., 300.)));
+        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 17, 8, 0x01, 0x90, 0x09, 0x60];
+        assert_eq!(super::image_header_size(&jpeg), Some((2400., 400.)));
+        assert_eq!(super::image_header_size(b"<svg"), None);
+        assert_eq!(super::image_header_size(&[0xff, 0xd8, 0xff]), None);
+    }
+
+    #[test]
+    fn a_note_with_a_byte_order_mark_shows_its_properties() {
+        assert_eq!(kinds("\u{feff}---\ntitle: BOM\ntags: [bom]\n---\nText\n"), ["properties", "paragraph"]);
+        assert_eq!(kinds("\u{feff}---\r\ntitle: BOM\r\n---\r\nText\r\n"), ["properties", "paragraph"]);
     }
 
     #[test]

@@ -1244,7 +1244,8 @@ impl Library {
     pub fn new_untitled_note(&mut self, folder: Option<&Path>) -> Option<PathBuf> {
         let vault = super::vault::index::current();
         let beside = self.active_document.as_deref().and_then(Path::parent).filter(|p| p.starts_with(&vault.root)).map(Path::to_path_buf);
-        let folder = folder.map(Path::to_path_buf).or(beside).or_else(|| self.vault_root().map(|r| vault.config.new_note_folder(&r, None)))?;
+        let chosen = (vault.config.new_file_location == "folder").then(|| self.vault_root().map(|r| vault.config.new_note_folder(&r, None))).flatten();
+        let folder = folder.map(Path::to_path_buf).or(chosen).or(beside).or_else(|| self.vault_root().map(|r| vault.config.new_note_folder(&r, None)))?;
         let target = unique_path(&folder.join(format!("{}.md", tr("Unbenannt"))));
         let written = std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(&target, ""));
         if let Err(e) = written {
@@ -2811,13 +2812,29 @@ impl Library {
                     self.path_moved(&from, &target);
                     Change::Move { from: target, to: from }
                 }
-                Change::Trash(path) => trash_with_copy(&path)?,
+                Change::Trash(path) => {
+                    let settled = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                    let change = trash_with_copy(&path)?;
+                    if !self.buffers.get(&settled).is_some_and(|b| b.dirty) {
+                        self.close_tab(&settled);
+                    }
+                    change
+                }
                 Change::InTrash(path) => anyhow::bail!(trf("„%@“ liegt im Papierkorb. Hole es dort zurück.", &[&name_of(&path)])),
                 Change::Restore { path, backup } => {
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
-                    move_path(&backup, &unique_path(&path))?;
+                    let target = unique_path(&path);
+                    move_path(&backup, &target)?;
+                    let settled = dunce::canonicalize(&target).unwrap_or_else(|_| target.clone());
+                    if let Some(i) = self.closed_documents.iter().rposition(|(p, _)| *p == path || *p == settled) {
+                        let (_, at) = self.closed_documents.remove(i);
+                        if !self.open_documents.contains(&settled) {
+                            self.open_documents.insert(at.min(self.open_documents.len()), settled);
+                            self.save_documents();
+                        }
+                    }
                     Change::Trash(path)
                 }
                 Change::Replaced { path, backup } => {
@@ -3702,7 +3719,7 @@ impl Library {
         self.refresh();
         let message = match &done[..] {
             [] => return,
-            [(path, _)] => trf("In den Papierkorb: %@", &[&name_of(path)]),
+            [(path, _)] => trf("In den Papierkorb: %@", &[&if path.extension().is_some_and(|e| e == "md") { path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default() } else { name_of(path) }]),
             _ => trf("%lld Dateien in den Papierkorb", &[&done.len()]),
         };
         let (only_trash, undoable): (Vec<_>, Vec<_>) = done.into_iter().map(|(_, c)| c).partition(|c| matches!(c, Change::InTrash(_)));

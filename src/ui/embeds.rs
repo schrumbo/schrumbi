@@ -201,13 +201,13 @@ fn open_large(image: Arc<Image>, w: f32, h: f32, window: &mut Window, cx: &mut A
 }
 
 /// Code blocks that are really something else. `None` means ordinary code.
-pub fn special_block(lang: Option<&str>, code: &str, base: Option<&Path>, id: u64, t: &Theme) -> Option<AnyElement> {
+pub fn special_block(lang: Option<&str>, code: &str, base: Option<&Path>, note: Option<&Path>, id: u64, t: &Theme) -> Option<AnyElement> {
     let lang = lang?.to_lowercase();
     let sample = super::markdown_view::is_sample_base(base);
     match lang.as_str() {
         "mermaid" => Some(Diagram { code: code.to_string(), id, sample }.into_any_element()),
         "math" | "latex" if false => None,
-        "query" => Some(QueryBlock { query: code.trim().to_string(), id, sample }.into_any_element()),
+        "query" => Some(QueryBlock { query: code.trim().to_string(), note: note.map(Path::to_path_buf), id, sample }.into_any_element()),
         "base" => Some(BaseBlock { source: code.to_string(), this: base.map(|b| b.join(".")), id, sample }.into_any_element()),
         "dataview" | "dataviewjs" | "tasks" | "excalidraw" | "kanban" | "tracker" | "chart" | "ad-note" => Some(plugin_block(&lang, code, id, t)),
         _ => None,
@@ -242,6 +242,8 @@ pub fn note_plugin(path: &Path, text: &str) -> Option<&'static str> {
 #[derive(IntoElement)]
 struct QueryBlock {
     query: String,
+    /// The note the block sits in; it never lists itself.
+    note: Option<PathBuf>,
     id: u64,
     sample: bool,
 }
@@ -270,21 +272,37 @@ impl RenderOnce for QueryBlock {
             Ok(Vec::new())
         });
         let head = div().px(px(space::M)).py(px(space::XS)).flex().items_center().gap(px(space::XS)).bg(t.secondary_bg).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("search", iconsize::XS, t.tertiary)).child(div().truncate().child(self.query.clone()));
+        let result = result.map(|files| match &self.note {
+            Some(note) => {
+                let settled = dunce::canonicalize(note).unwrap_or_else(|_| note.clone());
+                files.into_iter().filter(|f| f != note && *f != settled).collect()
+            }
+            None => files,
+        });
         let body: AnyElement = match result {
             Err(e) => div().p(px(space::S)).child(caption(e, &t)).into_any_element(),
             Ok(files) if files.is_empty() => div().p(px(space::M)).child(caption(tr("Keine Treffer"), &t)).into_any_element(),
-            Ok(files) => div()
+            Ok(files) => {
+                let stem = |f: &Path| f.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                let mut seen: HashMap<String, usize> = HashMap::new();
+                for f in files.iter().take(50) {
+                    *seen.entry(stem(f)).or_default() += 1;
+                }
+                let root = vault.root.clone();
+                div()
                 .flex()
                 .flex_col()
                 .py(px(space::XS))
                 .children(files.into_iter().take(50).enumerate().map(|(i, f)| {
                     let open = f.clone();
-                    let name = f.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                    let name = stem(&f);
+                    let folder = (seen.get(&name).copied().unwrap_or(0) > 1).then(|| f.parent().and_then(|p| p.strip_prefix(&root).ok()).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default()).filter(|p| !p.is_empty());
                     let hover = t.ink.opacity(0.05);
                     let sample = self.sample;
-                    div().id(("query-hit", (self.id as usize) * 1000 + i)).px(px(space::M)).py(px(space::XS)).flex().items_center().gap(px(space::S)).when(!sample, |d| d.cursor_pointer().soft(hover, 0.)).on_click(move |_, _, cx| if !sample { act(cx, |l| l.open_file(&open)) }).child(file_icon(&f, iconsize::S)).child(div().truncate().child(name))
+                    div().id(("query-hit", (self.id as usize) * 1000 + i)).px(px(space::M)).py(px(space::XS)).flex().items_center().gap(px(space::S)).when(!sample, |d| d.cursor_pointer().soft(hover, 0.)).on_click(move |_, _, cx| if !sample { act(cx, |l| l.open_file(&open)) }).child(file_icon(&f, iconsize::S)).child(div().flex_none().max_w_1_2().truncate().child(name)).children(folder.map(|p| div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.tertiary).child(p)))
                 }))
-                .into_any_element(),
+                .into_any_element()
+            }
         };
         grouped(&t).child(head).child(body)
     }

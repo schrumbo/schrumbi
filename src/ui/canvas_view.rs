@@ -5,11 +5,13 @@ use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::Sizable;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::browser::DraggedFile;
+use super::motion::Soft;
 use super::state::act;
 use super::theme::{Theme, font, radius, space};
 use super::widgets::*;
@@ -18,7 +20,12 @@ use crate::core::note_buffer::write_atomic;
 use crate::core::vault::canvas::{Canvas, Edge, Node, NodeKind};
 use crate::core::vault::index;
 
-const HANDLE: f32 = 8.;
+const HANDLE: f32 = 16.;
+const CONNECTOR: f32 = 12.;
+const PAD_MIN: f32 = 8.;
+const DOT_HIT: f32 = 24.;
+const DOT_SHOWN: f32 = 18.;
+const COLOR_NAMES: [&str; 6] = ["Rot", "Orange", "Gelb", "Grün", "Türkis", "Violett"];
 const SNAP: f64 = 6.;
 const MIN_SIZE: f64 = 40.;
 const SAVE_DELAY: Duration = Duration::from_millis(400);
@@ -46,6 +53,10 @@ actions!(schrumbi_walk, [NextItem, PreviousItem]);
 /// Obsidian's six preset card colors.
 const PRESETS: [(&str, u32); 6] = [("1", 0xe93147), ("2", 0xec7500), ("3", 0xe0ac00), ("4", 0x08b94e), ("5", 0x00bfbc), ("6", 0x7852ee)];
 
+fn pad(base: f32, zoom: f32) -> f32 {
+    (base * zoom).max(PAD_MIN)
+}
+
 fn color_of(node_color: Option<&String>) -> Option<Hsla> {
     let c = node_color?;
     if let Some((_, rgb_value)) = PRESETS.iter().find(|(k, _)| k == c) {
@@ -70,11 +81,18 @@ pub struct CanvasView {
     edge_mode: bool,
     space_down: bool,
     editing: Option<(String, Field)>,
+    menu_at: Option<(f64, f64, bool)>,
     bounds: Rc<std::cell::Cell<Bounds<Pixels>>>,
     undo: Vec<String>,
     redo: Vec<String>,
     last_edit: Option<std::time::Instant>,
     save_task: Option<Task<()>>,
+    /// The open text field has already taken its undo step; further typing joins it.
+    typed: bool,
+    /// The last save failed, so the file on disk is older than the canvas shown.
+    unsaved: bool,
+    /// Held while the file is written, so a save on close never overlaps one still running.
+    writing: std::sync::Arc<std::sync::Mutex<()>>,
     seen_generation: u64,
     /// Texts of note cards, read again when the vault changed.
     card_texts: std::cell::RefCell<std::collections::HashMap<PathBuf, (u64, String)>>,
@@ -86,7 +104,14 @@ impl CanvasView {
     pub fn new(path: PathBuf, _: &mut Window, cx: &mut Context<Self>) -> Self {
         let source = std::fs::read_to_string(&path).unwrap_or_default();
         let doc = Canvas::parse(&source);
-        Self { path, doc, source, pan: (0., 0.), zoom: 1., fitted: false, selection: BTreeSet::new(), selected_edge: None, gesture: None, guides: Vec::new(), edge_mode: false, space_down: false, editing: None, bounds: Default::default(), undo: Vec::new(), redo: Vec::new(), last_edit: None, save_task: None, seen_generation: index::current().generation, card_texts: Default::default(), focus: cx.focus_handle(), _subs: Vec::new() }
+        cx.on_release(|v: &mut Self, _| {
+            if v.save_task.take().is_some() || v.unsaved {
+                let _held = v.writing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let _ = write_atomic(&v.path, v.source.as_bytes());
+            }
+        })
+        .detach();
+        Self { path, doc, source, pan: (0., 0.), zoom: 1., fitted: false, selection: BTreeSet::new(), selected_edge: None, gesture: None, guides: Vec::new(), edge_mode: false, space_down: false, editing: None, menu_at: None, bounds: Default::default(), undo: Vec::new(), redo: Vec::new(), last_edit: None, save_task: None, typed: false, unsaved: false, writing: Default::default(), seen_generation: index::current().generation, card_texts: Default::default(), focus: cx.focus_handle(), _subs: Vec::new() }
     }
 
     /// Gives the keyboard to the canvas.
@@ -96,7 +121,7 @@ impl CanvasView {
 
     fn reload_if_changed(&mut self) {
         let generation = index::current().generation;
-        if self.save_task.is_some() || self.gesture.is_some() || std::mem::replace(&mut self.seen_generation, generation) == generation {
+        if self.save_task.is_some() || self.unsaved || self.gesture.is_some() || std::mem::replace(&mut self.seen_generation, generation) == generation {
             return;
         }
         let Ok(text) = std::fs::read_to_string(&self.path) else { return };
@@ -124,18 +149,31 @@ impl CanvasView {
     fn changed(&mut self, cx: &mut Context<Self>) {
         let Some(doc) = &self.doc else { return };
         self.source = doc.to_json();
-        let (path, bytes) = (self.path.clone(), self.source.clone().into_bytes());
-        self.save_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(SAVE_DELAY).await;
-            let result = cx.background_spawn(async move { write_atomic(&path, &bytes) }).await;
-            let _ = this.update(cx, |v, cx| {
-                v.save_task = None;
-                match result {
-                    Ok(()) => super::state::reindex(cx),
-                    Err(e) => act(cx, |l| l.last_error = Some(e.to_string())),
-                }
-            });
-        }));
+        if self.save_task.is_none() {
+            self.save_task = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(SAVE_DELAY).await;
+                let Ok((path, text, writing)) = this.update(cx, |v, _| (v.path.clone(), v.source.clone(), v.writing.clone())) else { return };
+                let bytes = text.clone().into_bytes();
+                let result = cx
+                    .background_spawn(async move {
+                        let _held = writing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        write_atomic(&path, &bytes)
+                    })
+                    .await;
+                let _ = this.update(cx, |v, cx| {
+                    v.save_task = None;
+                    v.unsaved = result.is_err();
+                    match result {
+                        Ok(()) if v.editing.is_none() => super::state::reindex(cx),
+                        Ok(()) => {}
+                        Err(e) => act(cx, |l| l.last_error = Some(e.to_string())),
+                    }
+                    if v.source != text {
+                        v.changed(cx);
+                    }
+                });
+            }));
+        }
         cx.notify();
     }
 
@@ -212,8 +250,8 @@ impl CanvasView {
 
     fn handle_at(&self, x: f64, y: f64) -> Option<(String, (i8, i8))> {
         let doc = self.doc.as_ref()?;
-        let reach = (HANDLE / self.zoom) as f64;
         for n in doc.nodes.iter().rev().filter(|n| self.selection.contains(&n.id)) {
+            let reach = ((HANDLE / self.zoom) as f64).min(n.width.min(n.height) / 3.);
             for (hx, hy) in [(-1, -1), (1, -1), (-1, 1), (1, 1)] {
                 let px_ = n.x + n.width * (hx as f64 + 1.) / 2.;
                 let py_ = n.y + n.height * (hy as f64 + 1.) / 2.;
@@ -227,7 +265,7 @@ impl CanvasView {
 
     fn edge_handle_at(&self, x: f64, y: f64) -> Option<(String, &'static str)> {
         let doc = self.doc.as_ref()?;
-        let reach = (HANDLE / self.zoom) as f64;
+        let reach = (CONNECTOR / self.zoom) as f64;
         let offset = (14. / self.zoom) as f64;
         for n in doc.nodes.iter().rev().filter(|n| self.selection.contains(&n.id)) {
             for side in ["top", "right", "bottom", "left"] {
@@ -266,6 +304,12 @@ impl CanvasView {
         self.selection = BTreeSet::from([id.clone()]);
         self.changed(cx);
         self.start_edit(&id, window, cx);
+    }
+
+    fn add_card_here(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let size = self.bounds.get().size;
+        let (x, y) = self.to_doc(point(self.origin().x + size.width / 2., self.origin().y + size.height / 2.));
+        cx.defer_in(window, move |v, window, cx| v.add_text(x, y, window, cx));
     }
 
     fn add_group(&mut self, cx: &mut Context<Self>) {
@@ -325,8 +369,10 @@ impl CanvasView {
                 s.set_selected_range(end..end, cx);
             });
             self._subs = vec![cx.subscribe_in(&area, window, |this, _, e: &InputEvent, window, cx| {
-                if matches!(e, InputEvent::Blur) {
-                    this.finish_edit(window, cx);
+                match e {
+                    InputEvent::Blur => this.finish_edit(window, cx),
+                    InputEvent::Change => this.keep_edit(cx),
+                    _ => {}
                 }
             })];
             Field::Text(area)
@@ -334,30 +380,48 @@ impl CanvasView {
             let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
             input.update(cx, |s, cx| s.focus(window, cx));
             self._subs = vec![cx.subscribe_in(&input, window, |this, _, e: &InputEvent, window, cx| {
-                if matches!(e, InputEvent::Blur | InputEvent::PressEnter { .. }) {
-                    this.finish_edit(window, cx);
+                match e {
+                    InputEvent::Blur | InputEvent::PressEnter { .. } => this.finish_edit(window, cx),
+                    InputEvent::Change => this.keep_edit(cx),
+                    _ => {}
                 }
             })];
             Field::Line(input)
         };
         self.editing = Some((id.to_string(), field));
+        self.typed = false;
         cx.notify();
     }
 
     fn finish_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((id, field)) = self.editing.take() else { return };
-        let value = match &field {
+        self.keep_edit(cx);
+        if self.editing.take().is_some() {
+            if self.typed && self.save_task.is_none() {
+                super::state::reindex(cx);
+            }
+            window.focus(&self.focus, cx);
+            cx.notify();
+        }
+    }
+
+    /// Writes the text being typed into the canvas right away, so a short save delay later it is on disk even if the field never loses focus.
+    fn keep_edit(&mut self, cx: &mut Context<Self>) {
+        let Some((id, field)) = &self.editing else { return };
+        let value = match field {
             Field::Line(input) => input.read(cx).value().to_string(),
             Field::Text(area) => area.read(cx).value().to_string(),
         };
-        window.focus(&self.focus, cx);
-        let Some(position) = self.doc.as_ref().and_then(|d| d.nodes.iter().position(|n| n.id == id)) else { return };
-        let same = matches!(&self.doc.as_ref().unwrap().nodes[position].kind, NodeKind::Text(t) | NodeKind::Link(t) if *t == value);
+        let Some(position) = self.doc.as_ref().and_then(|d| d.nodes.iter().position(|n| n.id == *id)) else { return };
+        let same = match &self.doc.as_ref().unwrap().nodes[position].kind {
+            NodeKind::Text(t) | NodeKind::Link(t) => *t == value,
+            NodeKind::Group { label, .. } => label.as_deref().unwrap_or("") == value,
+            NodeKind::File { .. } => true,
+        };
         if same {
-            cx.notify();
             return;
         }
-        self.before_edit(false);
+        let merge = std::mem::replace(&mut self.typed, true);
+        self.before_edit(merge);
         let doc = self.doc.as_mut().unwrap();
         match &mut doc.nodes[position].kind {
             NodeKind::Text(t) | NodeKind::Link(t) => *t = value,
@@ -457,6 +521,16 @@ impl CanvasView {
         self.changed(cx);
     }
 
+    /// The colour all selected objects share, `Some(None)` when they all have the default one.
+    fn shared_color(&self) -> Option<Option<String>> {
+        let doc = self.doc.as_ref()?;
+        let nodes = doc.nodes.iter().filter(|n| self.selection.contains(&n.id)).map(|n| n.color.clone());
+        let edge = self.selected_edge.as_ref().and_then(|id| doc.edges.iter().find(|e| e.id == *id)).map(|e| e.color.clone());
+        let mut colors = nodes.chain(edge);
+        let first = colors.next()?;
+        colors.all(|c| c == first).then_some(first)
+    }
+
     fn set_color(&mut self, color: Option<String>, cx: &mut Context<Self>) {
         self.before_edit(false);
         let Some(doc) = &mut self.doc else { return };
@@ -525,6 +599,34 @@ impl CanvasView {
                 }
             }
         }
+        cx.notify();
+    }
+
+    fn on_right_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing.is_some() {
+            self.finish_edit(window, cx);
+        }
+        window.focus(&self.focus, cx);
+        let (x, y) = self.to_doc(e.position);
+        match self.node_at(x, y) {
+            Some(id) => {
+                self.selected_edge = None;
+                if !self.selection.contains(&id) {
+                    self.selection = BTreeSet::from([id]);
+                }
+            }
+            None => match self.edge_at(x, y) {
+                Some(edge) => {
+                    self.selected_edge = Some(edge);
+                    self.selection.clear();
+                }
+                None => {
+                    self.selected_edge = None;
+                    self.selection.clear();
+                }
+            },
+        }
+        self.menu_at = Some((x, y, !self.selection.is_empty() || self.selected_edge.is_some()));
         cx.notify();
     }
 
@@ -700,7 +802,7 @@ impl CanvasView {
 
     fn node_content(&self, node: &Node, zoom: f32, t: &Theme, cx: &mut App) -> AnyElement {
         let size = font::BODY * zoom;
-        let title = |s: String| div().p(px(space::S * zoom)).text_size(px(size)).font_weight(FontWeight::SEMIBOLD).truncate().child(s);
+        let title = |s: String| div().p(px(pad(space::S, zoom))).size_full().overflow_hidden().text_size(px(size)).font_weight(FontWeight::SEMIBOLD).truncate().child(s);
         if zoom < 0.3 {
             let name = match &node.kind {
                 NodeKind::Text(text) => text.lines().next().unwrap_or_default().trim_start_matches('#').trim().to_string(),
@@ -711,9 +813,9 @@ impl CanvasView {
             return title(name).into_any_element();
         }
         match &node.kind {
-            NodeKind::Text(text) if (zoom - 1.).abs() < 0.3 => card_note(text, t),
+            NodeKind::Text(text) if (zoom - 1.).abs() < 0.3 => card_note(text, zoom, t),
             NodeKind::Text(text) => mini_markdown(text, zoom, t),
-            NodeKind::Link(url) => div().p(px(space::S * zoom)).flex().items_center().gap(px(space::XS * zoom)).child(icon("link", 14. * zoom, t.secondary)).child(div().truncate().text_size(px(size)).text_color(t.accent_text).child(url.clone())).into_any_element(),
+            NodeKind::Link(url) => div().p(px(pad(space::S, zoom))).size_full().overflow_hidden().flex().items_center().gap(px(space::XS * zoom)).child(icon("link", 14. * zoom, t.secondary)).child(div().truncate().text_size(px(size)).text_color(t.accent_text).child(url.clone())).into_any_element(),
             NodeKind::Group { background: Some(picture), style, .. } => {
                 let full = index::current().root.join(picture);
                 let fit = match style.as_deref() {
@@ -757,7 +859,7 @@ impl CanvasView {
                 } else {
                     div().p(px(space::S * zoom)).child(file_icon(&full, 28. * zoom)).into_any_element()
                 };
-                div().size_full().flex().flex_col().child(div().flex_none().px(px(space::S * zoom)).py(px(space::XS * zoom)).bg(t.secondary_bg).text_size(px(font::CAPTION * zoom)).text_color(t.secondary).truncate().child(name)).child(div().flex_1().min_h_0().overflow_hidden().child(body)).into_any_element()
+                div().size_full().flex().flex_col().child(div().flex_none().px(px(pad(space::S, zoom))).py(px(space::XS * zoom)).bg(t.secondary_bg).text_size(px(font::CAPTION * zoom)).text_color(t.secondary).truncate().child(name)).child(div().flex_1().min_h_0().overflow_hidden().child(body)).into_any_element()
             }
         }
     }
@@ -796,7 +898,7 @@ fn mini_markdown(source: &str, zoom: f32, t: &Theme) -> AnyElement {
         let plain = strip_inline(&text_part);
         div().min_h(px(size * 1.4)).text_size(px(size * scale)).line_height(px(size * scale * 1.35)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD)).child(plain)
     });
-    div().p(px(space::M * zoom)).flex().flex_col().gap(px(space::XXS * zoom)).text_color(t.ink).children(lines).into_any_element()
+    div().p(px(pad(space::M, zoom))).size_full().overflow_hidden().flex().flex_col().gap(px(space::XXS * zoom)).text_color(t.ink).children(lines).into_any_element()
 }
 
 fn strip_inline(line: &str) -> String {
@@ -1004,23 +1106,69 @@ impl Render for CanvasView {
         .inset_0();
         let has_selection = !self.selection.is_empty() || self.selected_edge.is_some();
         let colors = has_selection.then(|| {
-            let t2 = t.clone();
             let ring = t.primary;
+            let secondary = t.secondary;
+            let hover = t.ink.opacity(0.05);
+            let current = self.shared_color();
+            let bar_w = DOT_HIT * (PRESETS.len() + 1) as f32 + space::XS * 2. + 2.;
+            let bar_h = DOT_HIT + space::XS * 2. + 2.;
+            let mut span = doc.nodes.iter().filter(|n| self.selection.contains(&n.id)).fold(None::<(f32, f32, f32)>, |acc, n| {
+                let (x, y) = self.to_view(n.x, n.y);
+                let x1 = x + n.width as f32 * zoom;
+                Some(acc.map_or((x, x1, y), |(a, b, c)| (a.min(x), b.max(x1), c.min(y))))
+            });
+            if span.is_none()
+                && let Some(edge) = self.selected_edge.as_ref().and_then(|id| doc.edges.iter().find(|e| e.id == *id))
+                && let Some((a, b)) = edge_points(&doc, edge)
+            {
+                let (x, y) = self.to_view((a.0 + b.0) / 2., (a.1 + b.1) / 2.);
+                span = Some((x, x, y));
+            }
+            let (left, top) = span.map_or((space::M, space::M), |(x0, x1, y)| (((x0 + x1) / 2. - bar_w / 2.).clamp(space::M, (vw - bar_w - space::M).max(space::M)), (y - bar_h - space::XL).clamp(space::M, (vh - bar_h - space::M).max(space::M))));
             div()
                 .absolute()
-                .top(px(space::M))
-                .left(px(space::M))
+                .top(px(top))
+                .left(px(left))
                 .p(px(space::XS))
                 .flex()
-                .gap(px(space::XS))
                 .rounded(px(radius::CONTROL))
                 .bg(t.column)
                 .border_1()
                 .border_color(t.separator)
-                .child(div().id("canvas-color-none").size(px(18.)).rounded_full().border_1().border_color(t2.secondary).cursor_pointer().hover(move |s| s.border_color(ring)).key_nav().tooltip(tip(tr("Standardfarbe"))).on_click(cx.listener(|v, _, _, cx| v.set_color(None, cx))))
-                .children(PRESETS.iter().enumerate().map(|(i, (key, value))| {
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .id("canvas-color-none")
+                        .group("canvas-color-none")
+                        .size(px(DOT_HIT))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .key_nav()
+                        .tooltip(tip(tr("Standardfarbe")))
+                        .soft(hover, radius::FULL)
+                        .on_click(cx.listener(|v, _, _, cx| v.set_color(None, cx)))
+                        .child(div().size(px(DOT_SHOWN)).rounded_full().border_1().border_color(secondary).when(current == Some(None), |s| s.border_2().border_color(ring)).group_hover("canvas-color-none", move |s| s.border_color(ring))),
+                )
+                .children(PRESETS.iter().enumerate().map(|(i, (key, _))| {
+                    let shown = color_of(Some(&key.to_string())).unwrap_or(secondary);
+                    let on = current.as_ref().is_some_and(|c| c.as_deref() == Some(*key));
                     let key = key.to_string();
-                    div().id(("canvas-color", i)).size(px(18.)).rounded_full().bg(rgb(*value)).cursor_pointer().hover(move |s| s.border_2().border_color(ring)).key_nav().tooltip(tip(tr("Farbe"))).on_click(cx.listener(move |v, _, _, cx| v.set_color(Some(key.clone()), cx)))
+                    let group = SharedString::from(format!("canvas-color-{i}"));
+                    div()
+                        .id(("canvas-color", i))
+                        .group(group.clone())
+                        .size(px(DOT_HIT))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .key_nav()
+                        .tooltip(tip(tr(COLOR_NAMES[i])))
+                        .soft(hover, radius::FULL)
+                        .on_click(cx.listener(move |v, _, _, cx| v.set_color(Some(key.clone()), cx)))
+                        .child(div().size(px(DOT_SHOWN)).rounded_full().bg(shown).when(on, |s| s.border_2().border_color(ring)).group_hover(group, move |s| s.border_2().border_color(ring)))
                 }))
         });
         let zoom_label = format!("{}%", (zoom * 100.).round());
@@ -1036,6 +1184,7 @@ impl Render for CanvasView {
             .bg(t.column)
             .border_1()
             .border_color(t.separator)
+            .child(Button::new("canvas-card").ghost().small().icon(menu_icon("sticky-note")).accessibility_label(tr("Karte anlegen")).tooltip(tr("Karte anlegen")).on_click(cx.listener(|v, _, window, cx| v.add_card_here(window, cx))))
             .child(Button::new("canvas-group").ghost().small().icon(menu_icon("square-dashed")).tooltip(tr("Gruppe anlegen")).on_click(cx.listener(|v, _, _, cx| v.add_group(cx))))
             .child(Button::new("canvas-out").ghost().small().icon(menu_icon("minus")).tooltip(tr("Verkleinern")).on_click(cx.listener(|v, _, _, cx| {
                 v.zoom_center(1. / 1.2);
@@ -1079,6 +1228,7 @@ impl Render for CanvasView {
             }))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_down))
             .on_mouse_move(cx.listener(|v, e: &MouseMoveEvent, _, cx| v.on_move(e, cx)))
             .on_mouse_up(MouseButton::Left, cx.listener(|v, _, _, cx| v.on_up(cx)))
             .on_mouse_up(MouseButton::Middle, cx.listener(|v, _, _, cx| v.on_up(cx)))
@@ -1115,7 +1265,30 @@ impl Render for CanvasView {
             .when(empty, |d| d.child(div().absolute().inset_0().flex().items_center().justify_center().child(caption(tr("Doppelklick legt eine Karte an"), &t))))
             .children(colors)
             .children(edge_hint)
-            .child(tools);
+            .child(tools)
+            .context_menu({
+                let me = cx.entity();
+                move |menu, _, cx| {
+                    let Some((x, y, object)) = me.read(cx).menu_at else { return menu };
+                    if !object {
+                        let me = me.clone();
+                        return menu.item(PopupMenuItem::new(tr("Karte hier")).icon(menu_icon("sticky-note")).on_click(move |_, window, cx| {
+                            me.update(cx, |_, cx| cx.defer_in(window, move |v, window, cx| v.add_text(x, y, window, cx)));
+                        }));
+                    }
+                    let none = me.clone();
+                    let current = me.read(cx).shared_color();
+                    let mut menu = menu.item(PopupMenuItem::new(tr("Standardfarbe")).checked(current == Some(None)).on_click(move |_, _, cx| none.update(cx, |v, cx| v.set_color(None, cx))));
+                    for (i, (key, _)) in PRESETS.iter().enumerate() {
+                        let (me, key) = (me.clone(), key.to_string());
+                        let shown = color_of(Some(&key)).unwrap_or_default();
+                        let on = current.as_ref().is_some_and(|c| c.as_deref() == Some(key.as_str()));
+                        menu = menu.item(PopupMenuItem::new(tr(COLOR_NAMES[i])).checked(on).icon(menu_icon("circle-dot").text_color(shown)).on_click(move |_, _, cx| me.update(cx, |v, cx| v.set_color(Some(key.clone()), cx))));
+                    }
+                    let delete = me.clone();
+                    menu.separator().item(PopupMenuItem::new(format!("{} ({})", tr("Löschen"), if cfg!(target_os = "macos") { "⌫".to_string() } else { tr("Entf") })).icon(menu_icon("trash-2")).on_click(move |_, _, cx| delete.update(cx, |v, cx| v.delete_selection(cx))))
+                }
+            });
         div().size_full().flex().flex_col().child(bar).child(surface).into_any_element()
     }
 }
@@ -1125,7 +1298,7 @@ thread_local! {
 }
 
 /// A text card drawn as the note it is, not a sketch of it.
-fn card_note(text: &str, t: &Theme) -> AnyElement {
+fn card_note(text: &str, zoom: f32, t: &Theme) -> AnyElement {
     let note = CARD_NOTES.with(|cards| {
         let mut cards = cards.borrow_mut();
         if cards.len() > 512 {
@@ -1133,5 +1306,5 @@ fn card_note(text: &str, t: &Theme) -> AnyElement {
         }
         cards.entry(text.to_string()).or_insert_with(|| std::rc::Rc::new(super::markdown_view::parse(text))).clone()
     });
-    super::markdown_view::render(&note, None, None, t).into_any_element()
+    div().size_full().p(px(pad(space::M, zoom))).overflow_hidden().child(super::markdown_view::render(&note, None, None, t)).into_any_element()
 }

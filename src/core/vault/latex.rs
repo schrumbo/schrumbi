@@ -68,6 +68,96 @@ fn absolute_values(text: &str) -> String {
     out
 }
 
+fn array_end(text: &str) -> Option<usize> {
+    static EDGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\(begin|end)\{array\}").unwrap());
+    let mut depth = 0usize;
+    for edge in EDGE.captures_iter(text) {
+        if &edge[1] == "begin" {
+            depth += 1;
+        } else if depth == 0 {
+            return edge.get(0).map(|m| m.start());
+        } else {
+            depth -= 1;
+        }
+    }
+    None
+}
+
+fn array_rows(body: &str) -> Vec<&str> {
+    let bytes = body.as_bytes();
+    let (mut braces, mut envs, mut from, mut at) = (0usize, 0usize, 0, 0);
+    let mut rows = Vec::new();
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\\' => {
+                let rest = &body[at..];
+                if rest.starts_with("\\\\") {
+                    if braces == 0 && envs == 0 {
+                        rows.push(&body[from..at]);
+                        from = at + 2;
+                    }
+                    at += 2;
+                    continue;
+                }
+                if rest.starts_with("\\begin") {
+                    envs += 1;
+                } else if rest.starts_with("\\end") {
+                    envs = envs.saturating_sub(1);
+                } else if matches!(bytes.get(at + 1), Some(b'{' | b'}')) {
+                    at += 1;
+                }
+            }
+            b'{' => braces += 1,
+            b'}' => braces = braces.saturating_sub(1),
+            _ => {}
+        }
+        at += 1;
+    }
+    rows.push(&body[from..]);
+    rows
+}
+
+/// Keeps the rules of an `array` where the drawing finds them: bars stay in the column list, and a rule across the rows becomes the capital letter of the row boundary it sits on.
+fn array_rules(text: &str) -> String {
+    static BEGIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\begin\{array\}\s*\{([^{}]*)\}").unwrap());
+    const END: &str = "\\end{array}";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(found) = BEGIN.captures(rest) {
+        let (whole, spec) = (found.get(0).unwrap(), found[1].split_whitespace().collect::<String>());
+        let Some(end) = array_end(&rest[whole.end()..]).map(|e| whole.end() + e) else { break };
+        let body = &rest[whole.end()..end];
+        out.push_str(&rest[..whole.start()]);
+        let plain_spec = !spec.is_empty() && spec.chars().all(|c| matches!(c, 'l' | 'c' | 'r' | '|'));
+        let mut kept: Vec<&str> = Vec::new();
+        let mut rules = String::new();
+        let rows = array_rows(body);
+        let count = rows.len();
+        for (i, row) in rows.into_iter().enumerate() {
+            let mut row = row.trim_start();
+            let mut ruled = false;
+            while let Some(after) = row.strip_prefix("\\hline") {
+                ruled = true;
+                row = after.trim_start();
+            }
+            if ruled && let Some(letter) = u8::try_from(kept.len()).ok().filter(|n| *n < 26).map(|n| (b'A' + n) as char) {
+                rules.push(letter);
+            }
+            if !(i + 1 == count && i > 0 && row.trim().is_empty()) {
+                kept.push(row.trim_end());
+            }
+        }
+        if plain_spec && (spec.contains('|') || !rules.is_empty()) {
+            out.push_str(&format!("\\begin{{array}}{{{spec}{rules}}}{}{END}", kept.join(" \\\\ ")));
+        } else {
+            out.push_str(&rest[whole.start()..end + END.len()]);
+        }
+        rest = &rest[end + END.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Macro definitions seen so far; MathJax, and so Obsidian, keeps them for later formulas on the page.
 static MACROS: LazyLock<Mutex<Vec<(String, String)>>> = LazyLock::new(Default::default);
 
@@ -280,6 +370,9 @@ pub fn prepare(latex: &str) -> String {
     let text = take_definitions(&shown);
     let text = expand(&text);
     let text = absolute_values(&case_columns(&environments(&text)));
+    let text = array_rules(&text);
+    let text = each_command(&text, "tag*", |x| format!("\\qquad {x}"));
+    let text = each_command(&text, "tag", |x| format!("\\qquad ({x})"));
     let text = each_command(&text, "ce", |f| format!("{{{}}}", chemistry(f)));
     let text = each_command(&text, "pu", |f| format!("{{\\mathrm{{{f}}}}}"));
     let text = text.replace("\\mathscr", "\\mathcal");
@@ -325,6 +418,23 @@ mod tests {
     #[test]
     fn case_columns_keep_their_gap() {
         assert_eq!(case_columns(r"\begin{cases} x & x>0 \\ -x \end{cases}"), r"\begin{cases}& x & \quad & x>0 \\ & -x\end{cases}");
+    }
+
+    #[test]
+    fn a_tag_becomes_a_number_behind_the_formula() {
+        assert_eq!(prepare(r"x = 1 \tag{1}"), r"x = 1 \qquad (1)");
+        assert_eq!(prepare(r"x \tag*{A}"), r"x \qquad A");
+        assert_eq!(prepare(r"\tagged"), r"\tagged");
+    }
+
+    #[test]
+    fn array_rules_are_kept_for_the_drawing() {
+        assert_eq!(array_rules(r"\begin{array}{c|c} a & b \\ \hline c & d \end{array}"), r"\begin{array}{c|cB}a & b \\ c & d\end{array}");
+        assert_eq!(array_rules(r"\begin{array}{|c|c|}\hline a & b \\ \hline c & d \\ \hline\end{array}"), r"\begin{array}{|c|c|ABC}a & b \\ c & d\end{array}");
+        assert_eq!(array_rules(r"\begin{array}{cc} a & b \\ c & d \end{array}"), r"\begin{array}{cc} a & b \\ c & d \end{array}");
+        assert_eq!(array_rules(r"x \begin{array}{c}\begin{array}{c|c}a&b\end{array} \\ \hline c\end{array} y"), r"x \begin{array}{cB}\begin{array}{c|c}a&b\end{array} \\ c\end{array} y");
+        assert_eq!(array_rules(r"\begin{array}{c|c} ä & ö \end{array}"), r"\begin{array}{c|c}ä & ö\end{array}");
+        assert_eq!(array_rules(r"\begin{array}{c|c} a"), r"\begin{array}{c|c} a");
     }
 
     #[test]

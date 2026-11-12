@@ -7,7 +7,7 @@ Notes are Markdown files in your folder. Obsidian reads them the same way.
 1. {key:newFile} or {ui:Neue Notiz}. Schrumbi creates `Unbenannt.md`.
 2. Type a name, {key:return}.
 
-{key:escape} keeps the name `Unbenannt.md`. On a module page, {key:newFile} opens a window where you choose type and place.
+If Obsidian is set to a fixed folder for new notes, it goes there. {key:escape} keeps the name `Unbenannt.md`. On a module page, {key:newFile} opens a window where you choose type and place.
 
 ## Files
 
@@ -155,9 +155,11 @@ On the left in {ui:Seiten}, the page list. {key:pageList} shows and hides it. A 
 | {ui:Lesen} / {ui:Bearbeiten} | {key:togglePreview} |
 | {ui:Geteilte Ansicht}, source only | {key:splitPreview} |
 
-You choose the editor in {key:OpenSettings} → {ui:Notizen}: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} or {ui:Quelltext: Text mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} in the {ui:Darstellung} menu or the {key:CommandPalette} switches at once.
+Notes open in the Live view, in a column of comfortable reading width. You choose the editor in {key:OpenSettings} → {ui:Notizen}: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} or {ui:Quelltext: Text mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} in the {ui:Darstellung} menu or the {key:CommandPalette} switches at once. {ui:Text in voller Breite} in the note's {ui:Mehr} menu uses the whole area.
 
-Switching keeps your place in the text, and {key:Undo} also takes back changes made before the switch. The buttons stay where they are; {ui:Geteilte Ansicht} is greyed out in the live editor.
+Switching keeps the cursor at its place in the text, and {key:Undo} also takes back changes made before the switch. The buttons stay where they are; {ui:Geteilte Ansicht} is greyed out in the live editor.
+
+`/` at the start of a line opens a list to insert from: headings, lists, tasks, table, {ui:Formelblock}, {ui:Hinweisbox}, {ui:Notiz einbetten} and more. Typing filters; the Markdown mark shows on the right.
 
 ## Find in a Note
 
@@ -176,7 +178,7 @@ All matches are marked, the current one stronger. Case and umlauts do not matter
 
 ## Spelling
 
-Unknown words are underlined. Point at one, then {ui:Zum Wörterbuch hinzufügen}, also in the right-click menu. Without a mouse: {ui:Zum Wörterbuch hinzufügen} in the {key:CommandPalette} adds the word at the caret.
+Mac only; on Windows and Linux the setting and the command are hidden until checking is available there. Unknown words are underlined. Point at one, then {ui:Zum Wörterbuch hinzufügen}, also in the right-click menu. Without a mouse: {ui:Zum Wörterbuch hinzufügen} in the {key:CommandPalette} adds the word at the caret.
 
 The words are listed in the settings under {ui:Eigenes Wörterbuch}; the cross removes one. All open notes pick it up at once.
 
@@ -188,7 +190,7 @@ A single line over about 250 KB opens in the source instead of the Live view. Th
 
 The Live view shows only the start of a line over about 32 KB; {ui:Lesen} shows all of it, and a click on the note under it opens the line in the source.
 
-From about 80 KB spelling checks only the text around the caret. The bar below says {ui:Rechtschreibung nur um die Schreibmarke}.
+On the Mac, from about 80 KB spelling checks only the text around the caret. The bar below says {ui:Rechtschreibung nur um die Schreibmarke}.
 
 ## Saving
 

@@ -671,6 +671,11 @@ impl NotesPage {
         self.cache = Some(Cache { key, rows: Rc::new(rows), open_tasks, loading });
     }
 
+    /// Whether the folder holds no file the list could show, once it is known.
+    pub fn holds_nothing(&self) -> bool {
+        self.view == View::Files && self.cache.as_ref().is_some_and(|c| !c.loading && c.rows.is_empty())
+    }
+
     fn rows(&self) -> Rc<Vec<Row>> {
         self.cache.as_ref().map(|c| c.rows.clone()).unwrap_or_default()
     }
@@ -945,11 +950,19 @@ impl NotesPage {
     fn line(&self, row: &Row, i: usize, active: Option<&PathBuf>, me: &Entity<Self>, t: &Theme) -> AnyElement {
         let hover = t.ink.opacity(0.05);
         let selected = self.selected.as_ref().is_some_and(|s| same_row(s, row));
+        let pick = (row.clone(), me.clone());
         let base = |id: (&'static str, usize)| {
             let focus = self.focus.clone();
+            let (picked, picker) = pick.clone();
             div()
                 .id(id)
-                .on_mouse_down(MouseButton::Right, move |_, window, cx| window.focus(&focus, cx))
+                .on_mouse_down(MouseButton::Right, move |_, window, cx| {
+                    window.focus(&focus, cx);
+                    picker.update(cx, |s, cx| {
+                        s.selected = Some(picked.clone());
+                        cx.notify();
+                    })
+                })
                 .w_full()
                 .h(px(control::M))
                 .pr(px(space::S + space::XS))
@@ -958,7 +971,7 @@ impl NotesPage {
                 .gap(px(space::XS))
                 .cursor_pointer()
                 .text_size(px(font::CALLOUT))
-                .when(selected, |d| d.bg(t.ink.opacity(0.08)))
+                .when(selected, |d| d.bg(t.ink.opacity(0.08)).soft(t.ink.opacity(0.04), 0.))
                 .when(!selected, |d| d.soft(hover, 0.))
         };
         let click = |row: &Row, me: &Entity<Self>| {
@@ -1219,9 +1232,9 @@ impl Render for NotesPage {
             .children(marks)
             .child(self.view_button(View::Tasks, "circle-check", tr("Aufgaben"), open_tasks, &t, cx))
             .child(div().flex_1())
-            .child(Button::new("explorer-hide").ghost().small().icon(menu_icon("panel-left-close")).tooltip(tr("Dateien ausblenden")).on_click(|_, _, cx| set_hidden(true, cx)))
-            .child(Button::new("explorer-new").ghost().small().icon(menu_icon("square-pen")).tooltip(format!("{}{}", tr("Neue Notiz"), crate::core::shortcuts::ShortcutAction::NewFile.hint())).on_click(cx.listener(|s, _, window, cx| s.new_note(window, cx))))
-            .child(Button::new("explorer-more").ghost().small().icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu({
+            .child(Button::new("explorer-hide").ghost().small().size(px(control::M)).icon(menu_icon("panel-left-close")).tooltip(tr("Dateien ausblenden")).on_click(|_, _, cx| set_hidden(true, cx)))
+            .child(Button::new("explorer-new").ghost().small().size(px(control::M)).icon(menu_icon("square-pen")).tooltip(format!("{}{}", tr("Neue Notiz"), crate::core::shortcuts::ShortcutAction::NewFile.hint())).on_click(cx.listener(|s, _, window, cx| s.new_note(window, cx))))
+            .child(Button::new("explorer-more").ghost().small().size(px(control::M)).icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu({
                 let me = me.clone();
                 move |menu, _, _| {
                     let (a, b, c, d) = (me.clone(), me.clone(), me.clone(), me.clone());
@@ -1257,11 +1270,12 @@ impl Render for NotesPage {
         let loading = self.cache.as_ref().is_some_and(|c| c.loading);
         let body: AnyElement = if rows.is_empty() && loading {
             div().size_full().flex().items_center().justify_center().child(motion::loading(iconsize::L, t.secondary)).into_any_element()
+        } else if rows.is_empty() && view == View::Files && !filtered {
+            div().size_full().into_any_element()
         } else if rows.is_empty() {
             let (name, title, detail) = match view {
                 _ if filtered => ("search", tr("Nichts gefunden"), tr("Ändere den Filter.")),
-                View::Search => ("search", tr("Inhalt durchsuchen"), tr("Tippe oben ein Wort oder Suchbefehle wie tag:#x.")),
-                View::Files => ("book-open", tr("Noch keine Notizen"), tr("Mit ⌘N legst du die erste an.")),
+                View::Search | View::Files => ("search", tr("Inhalt durchsuchen"), tr("Tippe oben ein Wort oder Suchbefehle wie tag:#x.")),
                 View::Tags => ("tag", tr("Noch keine Tags"), tr("Schreibe #tag in eine Notiz.")),
                 View::Marks => ("bookmark", tr("Keine Lesezeichen"), tr("Lesezeichen setzt du über die Befehlspalette, sie stehen auch in Obsidian.")),
                 View::Tasks => ("circle-check", tr("Alles erledigt"), tr("In deinen Notizen ist keine Aufgabe mehr offen.")),
@@ -1466,4 +1480,14 @@ mod tests {
         assert!(!unlisted_rename(&made, "", None, &root));
         std::fs::remove_dir_all(&root).unwrap();
     }
+}
+
+/// The notes page with no note open: one way to start, by mouse and by key.
+pub fn no_note_open(empty: bool, t: &Theme) -> AnyElement {
+    let (title, detail, label) = if empty { (tr("Noch keine Notizen"), tr("Hier entsteht deine erste Mitschrift."), tr("Erste Notiz schreiben")) } else { (tr("Keine Notiz offen"), tr("Öffne eine Notiz oder schreib eine neue."), tr("Neue Notiz")) };
+    let hint = crate::core::shortcuts::ShortcutAction::NewFile.active_shortcut().map(|s| trf("oder %@", &[&s.display()]));
+    unavailable("book-open", title, detail, t)
+        .child(div().pt(px(space::S)).child(Button::new("notes-start").primary().icon(menu_icon("square-pen")).label(label).on_click(|_, window, cx| window.dispatch_action(Box::new(super::app::NewFile), cx))))
+        .children(hint.map(|h| div().text_size(px(font::CAPTION)).text_color(t.tertiary).child(h)))
+        .into_any_element()
 }

@@ -19,6 +19,8 @@ enum Context_ {
     Tag { typed: String, start: usize },
     /// `/` at the start of a line.
     Slash { typed: String, start: usize },
+    /// `\` with the command typed so far inside a formula, and where the `\` starts in the line.
+    Command { typed: String, start: usize },
 }
 
 fn context_at(line: &str, column: usize) -> Option<Context_> {
@@ -28,6 +30,12 @@ fn context_at(line: &str, column: usize) -> Option<Context_> {
     {
         let start = before[..open].chars().count();
         return Some(Context_::Link { typed: before[open + 2..].to_string(), start });
+    }
+    if let Some(slash) = before.rfind('\\')
+        && before[slash + 1..].chars().all(|c| c.is_ascii_alphabetic())
+        && (slash == 0 || !before[..slash].ends_with('\\'))
+    {
+        return Some(Context_::Command { typed: before[slash + 1..].to_string(), start: before[..slash].chars().count() });
     }
     let word_start = before.rfind(char::is_whitespace).map_or(0, |i| i + before[i..].chars().next().map_or(1, char::len_utf8));
     if let Some(rest) = before[word_start..].strip_prefix('#')
@@ -134,6 +142,7 @@ impl NoteCompletion {
                     Some(alias) => (format!("{alias} → {name}"), format!("[[{link}|{alias}{close}")),
                     None => (name, format!("[[{link}{close}")),
                 };
+                let label = if label.chars().count() > 48 { format!("{}…", label.chars().take(47).collect::<String>()) } else { label };
                 item(label, detail, format!("{i:05}"), range, text)
             })
             .collect();
@@ -152,27 +161,109 @@ impl NoteCompletion {
     }
 
     fn slash_items(&self, typed: &str, range: Range) -> Vec<CompletionItem> {
-        let commands: [(&str, &str); 17] = [
-            ("Überschrift 1", "# "),
-            ("Überschrift 2", "## "),
-            ("Überschrift 3", "### "),
-            ("Überschrift 4", "#### "),
-            ("Fußnote", "[^1]"),
-            ("Eingebettete Notiz", "![["),
-            ("Aufgabe", "- [ ] "),
-            ("Liste", "- "),
-            ("Nummerierte Liste", "1. "),
-            ("Zitat", "> "),
-            ("Callout", "> [!note] "),
-            ("Code", "```\n\n```"),
-            ("Tabelle", "|  |  |\n|--|--|\n|  |  |\n"),
-            ("Trennlinie", "---\n"),
-            ("Formel", "$$\n\n$$"),
-            ("Karteikarte", " :: "),
-            ("Lückentext", "{{c1::}}"),
+        let commands: [(&str, &str, &str); 17] = [
+            ("Überschrift 1", "# ", "#"),
+            ("Überschrift 2", "## ", "##"),
+            ("Überschrift 3", "### ", "###"),
+            ("Überschrift 4", "#### ", "####"),
+            ("Aufgabe", "- [ ] ", "- [ ]"),
+            ("Liste", "- ", "-"),
+            ("Nummerierte Liste", "1. ", "1."),
+            ("Tabelle", "|  |  |\n|--|--|\n|  |  |\n", "|"),
+            ("Formelblock", "$$\n\n$$", "$$"),
+            ("Zitat", "> ", ">"),
+            ("Hinweisbox", "> [!note] ", "> [!note]"),
+            ("Notiz einbetten", "![[", "![["),
+            ("Code", "```\n\n```", "```"),
+            ("Trennlinie", "---\n", "---"),
+            ("Fußnote", "[^1]", "[^1]"),
+            ("Karteikarte", " :: ", "::"),
+            ("Lückentext", "{{c1::}}", "{{c1::}}"),
         ];
-        commands.iter().enumerate().filter(|(_, (name, _))| score(&tr(name), typed).is_some()).map(|(i, (name, text))| item(tr(name), None, format!("{i:05}"), range, text.to_string())).collect()
+        let mut found: Vec<(i64, usize, String, &str, &str)> = commands.iter().enumerate().filter_map(|(i, (name, text, mark))| score(&tr(name), typed).map(|s| (s, i, tr(name), *text, *mark))).collect();
+        found.sort_by_key(|f| (f.0, f.1));
+        found.into_iter().enumerate().map(|(i, (_, _, name, text, mark))| item(name, Some(mark.to_string()), format!("{i:05}"), range, text.to_string())).collect()
     }
+
+    fn command_items(&self, typed: &str, range: Range) -> Vec<CompletionItem> {
+        let mut found: Vec<(i64, usize, &str, &str)> = LATEX.iter().enumerate().filter_map(|(i, (name, text))| score(name, typed).map(|s| (s, i, *name, *text))).collect();
+        found.sort_by_key(|f| (f.0, f.1));
+        found.truncate(30);
+        found.into_iter().enumerate().map(|(i, (_, _, name, text))| item(format!("\\{name}"), None, format!("{i:05}"), range, text.to_string())).collect()
+    }
+}
+
+const LATEX: [(&str, &str); 40] = [
+    ("frac", "\\frac{}{}"),
+    ("sqrt", "\\sqrt{}"),
+    ("sum", "\\sum_{}^{}"),
+    ("int", "\\int_{}^{}"),
+    ("lim", "\\lim_{}"),
+    ("prod", "\\prod_{}^{}"),
+    ("cdot", "\\cdot"),
+    ("times", "\\times"),
+    ("infty", "\\infty"),
+    ("partial", "\\partial"),
+    ("nabla", "\\nabla"),
+    ("leq", "\\leq"),
+    ("geq", "\\geq"),
+    ("neq", "\\neq"),
+    ("approx", "\\approx"),
+    ("in", "\\in"),
+    ("subseteq", "\\subseteq"),
+    ("to", "\\to"),
+    ("Rightarrow", "\\Rightarrow"),
+    ("Leftrightarrow", "\\Leftrightarrow"),
+    ("forall", "\\forall"),
+    ("exists", "\\exists"),
+    ("mathbb", "\\mathbb{}"),
+    ("mathcal", "\\mathcal{}"),
+    ("mathrm", "\\mathrm{}"),
+    ("text", "\\text{}"),
+    ("vec", "\\vec{}"),
+    ("overline", "\\overline{}"),
+    ("binom", "\\binom{}{}"),
+    ("left", "\\left( \\right)"),
+    ("begin", "\\begin{pmatrix}\n\n\\end{pmatrix}"),
+    ("alpha", "\\alpha"),
+    ("beta", "\\beta"),
+    ("gamma", "\\gamma"),
+    ("delta", "\\delta"),
+    ("epsilon", "\\varepsilon"),
+    ("lambda", "\\lambda"),
+    ("mu", "\\mu"),
+    ("pi", "\\pi"),
+    ("sigma", "\\sigma"),
+];
+
+/// Whether `offset` sits inside a formula: between `$` signs on its line or within a `$$` block.
+fn in_formula(all: &str, line_start: usize, offset: usize) -> bool {
+    let line = &all[line_start..offset];
+    let blocks = all[..line_start].split('\n').filter(|l| l.trim() == "$$").count();
+    blocks % 2 == 1 || line.matches('$').count() % 2 == 1
+}
+
+/// Colours what was typed where it occurs in a suggestion, nothing while nothing is typed.
+fn highlight_typed(query: &str, item: &CompletionItem) -> Vec<std::ops::Range<usize>> {
+    let typed = query.trim_start_matches(['[', '/', '#', '!', '\\']).to_lowercase();
+    if typed.is_empty() {
+        return Vec::new();
+    }
+    let label = item.label.to_lowercase();
+    match label.find(&typed) {
+        Some(at) if label.len() == item.label.len() => vec![at..at + typed.len()],
+        _ => Vec::new(),
+    }
+}
+
+/// Sets the suggestions and their highlighting on a note's editor.
+pub fn attach(state: &mut gpui_kit::component::input::EditorState, note: PathBuf) {
+    let lsp = state.lsp_mut();
+    lsp.completion_provider = Some(provider(note));
+    lsp.set_completion_highlighter(Rc::new(highlight_typed));
+}
+
+impl NoteCompletion {
 }
 
 impl CompletionProvider for NoteCompletion {
@@ -198,6 +289,12 @@ impl CompletionProvider for NoteCompletion {
                 let range = Range { start: Position { line: line_number, character: start_utf16 }, end: Position { line: line_number, character: caret } };
                 self.tag_items(&typed, range)
             }
+            Some(Context_::Command { typed, start }) if in_formula(&all, line_start, offset) => {
+                let start_utf16: u32 = line.chars().take(start).map(|c| c.len_utf16() as u32).sum();
+                let range = Range { start: Position { line: line_number, character: start_utf16 }, end: Position { line: line_number, character: caret } };
+                self.command_items(&typed, range)
+            }
+            Some(Context_::Command { .. }) => Vec::new(),
             Some(Context_::Slash { typed, start }) => {
                 let start_utf16: u32 = line.chars().take(start).map(|c| c.len_utf16() as u32).sum();
                 let range = Range { start: Position { line: line_number, character: start_utf16 }, end: Position { line: line_number, character: caret } };
@@ -205,11 +302,27 @@ impl CompletionProvider for NoteCompletion {
             }
             None => Vec::new(),
         };
+        let crlf = all.contains("\r\n") || super::state::read(cx, |l| l.buffers.get(&self.note).is_some_and(|b| b.text.contains("\r\n")));
+        let items = if crlf {
+            items
+                .into_iter()
+                .map(|mut item| {
+                    if let Some(CompletionTextEdit::Edit(edit)) = &mut item.text_edit
+                        && !edit.new_text.contains('\r')
+                    {
+                        edit.new_text = edit.new_text.replace('\n', "\r\n");
+                    }
+                    item
+                })
+                .collect()
+        } else {
+            items
+        };
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 
     fn is_completion_trigger(&self, _: usize, new_text: &str, _: &mut App) -> bool {
-        new_text.chars().count() == 1 && new_text.chars().all(|c| c.is_alphanumeric() || matches!(c, '[' | '/' | '#' | '^' | ' ' | '-' | '_'))
+        new_text.chars().count() == 1 && new_text.chars().all(|c| c.is_alphanumeric() || matches!(c, '[' | '/' | '#' | '^' | ' ' | '-' | '_' | '\\'))
     }
 }
 
@@ -231,6 +344,23 @@ mod tests {
         assert_eq!(context_at("a/b", 3), None);
         assert_eq!(context_at("/a b", 4), None);
         assert_eq!(context_at("normal", 3), None);
+        assert_eq!(context_at("$\\fr", 4), Some(Context_::Command { typed: "fr".into(), start: 1 }));
+        assert_eq!(context_at("$\\\\", 3), None);
+    }
+
+    #[test]
+    fn formulas_are_known_by_their_dollars() {
+        assert!(super::in_formula("a $x", 0, 4));
+        assert!(!super::in_formula("a $x$ b", 0, 7));
+        assert!(super::in_formula("$$\nx", 3, 4));
+        assert!(!super::in_formula("$$\nx\n$$\ny", 8, 9));
+    }
+
+    #[test]
+    fn slash_commands_that_start_with_the_letters_come_first() {
+        let menu = super::NoteCompletion { note: "a.md".into() };
+        let labels: Vec<String> = menu.slash_items("t", lsp_types::Range::default()).into_iter().map(|i| i.label).collect();
+        assert_eq!(labels.first().map(String::as_str), Some("Tabelle"));
     }
 
     #[test]

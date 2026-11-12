@@ -1428,7 +1428,8 @@ views:
     fn editing_a_cell_writes_only_that_property() {
         let note = "---\nstatus: offen\ntags: [a]\n---\nText\n";
         assert_eq!(write_cell(note, "note.status", "fertig").unwrap(), "---\nstatus: fertig\ntags: [a]\n---\nText\n");
-        assert!(write_cell(note, "tags", "x, y").unwrap().contains("  - x\n  - y\n"));
+        assert!(write_cell(note, "tags", "x, y").unwrap().contains("tags: [x, y]\n"));
+        assert!(write_cell("---\ntags:\n  - a\n---\n", "tags", "a, y").unwrap().contains("  - a\n  - y\n"));
         assert_eq!(write_cell(note, "file.name", "x"), None);
         assert_eq!(write_cell(note, "formula.x", "x"), None);
         assert!(write_cell("Text", "neu", "1").unwrap().starts_with("---\nneu: "));

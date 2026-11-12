@@ -36,12 +36,70 @@ fn current_typst_names(body: &str) -> String {
     out
 }
 
+const ARRAY_RULES: &str = r#"let mitexarray(arg0: "l", ..args) = {
+    if args.pos().len() == 0 {
+      return
+    }
+    let spec = if type(arg0) == str { arg0 } else { get-tex-str(arg0) }
+    let aligns = ()
+    let vlines = ()
+    let hlines = ()
+    for ch in spec.clusters() {
+      if ch == "|" {
+        vlines.push(aligns.len())
+      } else if ch in ("l", "c", "r") {
+        aligns.push(ch)
+      } else if ch >= "A" and ch <= "Z" {
+        hlines.push(str.to-unicode(ch) - 65)
+      }
+    }
+    if aligns.len() == 0 {
+      aligns = ("l",)
+    }
+    let matrix = args.pos().map(row => if type(row) == array { row } else { (row,) })
+    let n = matrix.len()
+    let m = calc.max(..matrix.map(row => row.len()))
+    matrix = matrix.map(row => row + (m - row.len()) * (none,))
+    set align(("l": left, "c": center, "r": right).at(aligns.at(0)))
+    let cells = matrix.flatten().map(it => $it$)
+    if vlines.len() == 0 and hlines.len() == 0 {
+      pad(y: 0.2em, grid(columns: m, column-gutter: 0.5em, row-gutter: 0.5em, ..cells))
+    } else {
+      context {
+        let rule = 0.5pt + text.fill
+        pad(y: 0.2em, grid(
+          columns: m,
+          inset: (x: 0.25em, y: 0.25em),
+          stroke: (x, y) => (
+            left: if x in vlines { rule },
+            right: if x == m - 1 and m in vlines { rule },
+            top: if y in hlines { rule },
+            bottom: if y == n - 1 and n in hlines { rule },
+          ),
+          ..cells
+        ))
+      }
+    }
+  }"#;
+
+/// What the converter wrote, in words for the reader: the command or environment it does not know.
+fn readable_error(error: &str) -> String {
+    let named = |marker: &str| error.split_once(marker).and_then(|(_, rest)| rest.split_whitespace().next()).map(|name| name.trim_start_matches('\\').to_string());
+    if let Some(name) = named("unknown command: ") {
+        return crate::core::i18n::trf("Unbekannter Befehl: %@", &[&format!("\\{name}")]);
+    }
+    if let Some(name) = named("unknown environment: ") {
+        return crate::core::i18n::trf("Unbekannte Umgebung: %@", &[&name]);
+    }
+    error.trim_start_matches("error: ").to_string()
+}
+
 /// A Typst code block that draws the formula with every LaTeX command the converter knows.
 fn typst_formula(latex: &str, display: bool) -> Result<String, String> {
     let prepared = super::latex::prepare(latex);
-    let body = current_typst_names(&mitex::convert_math(&prepared, None)?);
+    let body = current_typst_names(&mitex::convert_math(&prepared, None).map_err(|e| readable_error(&e))?);
     let quoted = format!("${body}$").replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "");
-    Ok(format!("{{ import \"/mitex.typ\": mitex-scope; math.equation(block: {display}, eval(\"{quoted}\", scope: mitex-scope)) }}"))
+    Ok(format!("{{ import \"/mitex.typ\": mitex-scope, get-tex-str; {ARRAY_RULES}; math.equation(block: {display}, eval(\"{quoted}\", scope: mitex-scope + (mitexarray: mitexarray))) }}"))
 }
 
 /// A Mermaid diagram as SVG.
@@ -431,4 +489,40 @@ mod math_tests {
         assert!(super::math_svg(r"\frac{", true, "#000000").is_err());
         assert!(super::math_svg(r"\begin{tabular}a\end{tabular}", true, "#000000").is_err());
     }
+
+    #[test]
+    fn an_unknown_command_is_named_in_the_error() {
+        assert_eq!(super::math_svg(r"\foo{x}", true, "#000000").unwrap_err(), r"Unbekannter Befehl: \foo");
+        assert_eq!(super::math_svg(r"a + \fraq{1}{2}", false, "#000000").unwrap_err(), r"Unbekannter Befehl: \fraq");
+        assert_eq!(super::math_markup(r"\foo{x}", false).unwrap_err(), r"Unbekannter Befehl: \foo");
+        assert_eq!(super::math_svg(r"\begin{nonsense}a\end{nonsense}", true, "#000000").unwrap_err(), "Unbekannte Umgebung: nonsense");
+    }
+
+    #[test]
+    fn known_commands_and_macros_are_not_flagged() {
+        crate::core::vault::latex::learn_macros(r"$\newcommand{\Zwuzzel}[1]{z_{#1}}$");
+        for latex in [r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}", r"\begin{aligned} a &= b \\ c &= d \end{aligned}", r"\begin{cases} 1 & x > 0 \\ 0 & \text{sonst} \end{cases}", r"\mathbb{R} \mathcal{L}", r"\binom{n}{k}", r"\frac{1}{2} \sqrt{x}", r"\sum_{i=1}^n \int_0^1 x\,dx", r"\ce{H2O + CO2 -> H2CO3}", r"\Zwuzzel{3}", r"x \tag{1}"] {
+            assert!(super::math_svg(latex, true, "#000000").is_ok(), "{latex}");
+            assert!(super::math_markup(latex, true).is_ok(), "{latex}");
+        }
+    }
+
+    #[test]
+    fn a_tag_adds_its_number() {
+        let plain = super::math_svg(r"x = 1", true, "#000000").unwrap();
+        let tagged = super::math_svg(r"x = 1 \tag{1}", true, "#000000").unwrap();
+        assert!(tagged.1 > plain.1 + 10., "{} vs {}", tagged.1, plain.1);
+    }
+
+    #[test]
+    fn array_rules_are_drawn() {
+        let strokes = |latex: &str| super::math_svg(latex, true, "#000000").unwrap_or_else(|e| panic!("{latex}: {e}")).0.matches("stroke=").count();
+        let plain = strokes(r"\begin{array}{cc} a & b \\ c & d \end{array}");
+        let barred = strokes(r"\begin{array}{c|c} a & b \\ c & d \end{array}");
+        let ruled = strokes(r"\begin{array}{c|c} a & b \\ \hline c & d \end{array}");
+        let boxed = strokes(r"\begin{array}{|c|c|} \hline a & b \\ \hline c & d \\ \hline \end{array}");
+        assert_eq!(plain, 0);
+        assert!(barred > plain && ruled > barred && boxed > ruled, "{plain} {barred} {ruled} {boxed}");
+    }
 }
+
