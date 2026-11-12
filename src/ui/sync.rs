@@ -44,6 +44,8 @@ pub struct Sync {
     pub saved: u64,
     /// When the running sync started, for showing progress only on long uploads.
     pub started: Option<Instant>,
+    /// The user confirmed that many files gone at once may be recorded by the next sync.
+    pub deletions_allowed: bool,
     /// The last resolution, for taking it back.
     pub resolved: Option<Resolved>,
     pending: Option<Option<String>>,
@@ -266,7 +268,14 @@ fn fetch_only(cx: &mut App) {
     .detach();
 }
 
+/// Syncs once and records many files gone at once, after the user confirmed it.
+pub fn run_anyway(cx: &mut App) {
+    cx.global_mut::<Sync>().deletions_allowed = true;
+    run(None, true, cx);
+}
+
 /// One sync. A second request while one runs is remembered and follows it.
+
 pub fn run(message: Option<String>, manual: bool, cx: &mut App) {
     let Some(git) = get(cx).git.clone() else { return };
     if get(cx).step.is_some() {
@@ -276,6 +285,7 @@ pub fn run(message: Option<String>, manual: bool, cx: &mut App) {
     act(cx, |l| l.begin_sync());
     let modules = modules(cx);
     let s = cx.global_mut::<Sync>();
+    let allowed = std::mem::take(&mut s.deletions_allowed);
     s.step = Some(Step::Saving);
     s.started = Some(Instant::now());
     crate::core::git::cmd::UPLOAD_PERCENT.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -294,10 +304,10 @@ pub fn run(message: Option<String>, manual: bool, cx: &mut App) {
             &|step| {
                 let _ = tx.send_blocking(step);
             },
-            manual,
+            allowed,
         );
         let conflicts = if matches!(result, Err(GitError::Conflicts(_))) { git.conflicts().ok() } else { None };
-        let vault_error = vault.and_then(|v| v.sync(&|files| message::auto_message(files, &vault_modules, chrono::Local::now()), &|_| {}, manual).err());
+        let vault_error = vault.and_then(|v| v.sync(&|files| message::auto_message(files, &vault_modules, chrono::Local::now()), &|_| {}, allowed).err());
         (result, conflicts, vault_error)
     });
     cx.refresh_windows();
@@ -552,7 +562,7 @@ pub fn explain(error: &GitError) -> (String, Option<&'static str>) {
         GitError::TooOld(v) => (trf("Git %@ ist zu alt, nötig ist mindestens 2.38.", &[v]), Some("guide")),
         GitError::Timeout => (tr("Der Online-Speicher antwortet nicht. Deine Änderungen sind lokal gesichert."), Some("retry")),
         GitError::Conflicts(_) => (tr("Dateien wurden auf beiden Geräten geändert."), None),
-        GitError::ManyDeleted(n) => (trf("%@ Dateien fehlen auf einmal, deshalb pausiert das automatische Sichern. War das gewollt, klicke auf „Trotzdem sichern“.", &[&n.to_string()]), Some("anyway")),
+        GitError::ManyDeleted(n) => (trf("%@ Dateien fehlen auf einmal, deshalb pausiert das Sichern. War das gewollt, klicke auf „Trotzdem sichern“.", &[&n.to_string()]), Some("anyway")),
         GitError::Other(m) if m.contains("dubious ownership") => (tr("Git vertraut diesem Ordner noch nicht, oft bei externen Laufwerken. Erlaube ihn einmal mit „git config --global --add safe.directory“ und dem Ordnerpfad."), Some("retry")),
         GitError::Other(_) => (tr("Das Synchronisieren hat nicht geklappt."), Some("retry")),
     }

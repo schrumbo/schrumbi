@@ -216,8 +216,9 @@ fn unskip(item: Item, cx: &mut App) {
     });
 }
 
-/// Brings a dismissed or finished list back; from the settings.
+/// Brings a dismissed or finished list back, with the steps that were skipped; from the settings.
 pub fn restore(cx: &mut App) {
+    remember(cx, |s| s.skipped.clear());
     settle(cx, false, false);
 }
 
@@ -661,16 +662,41 @@ impl Render for SetupCard {
                         )),
                 )
                 .child(div().flex_1())
-                .child(link_button("setup-skip-all", tr("Alle überspringen"), &t).text_size(px(font::CAPTION)).text_color(t.secondary).tooltip(tip(tr("Geht jederzeit später, auch aus den Einstellungen"))).on_click(move |_, _, cx| {
-                    remember(cx, |s| s.skipped.extend(all.iter().map(|i| i.key().to_string())));
+                .child(link_button("setup-skip-all", tr("Alle überspringen"), &t).text_size(px(font::CAPTION)).text_color(t.secondary).tooltip(tip(tr("Geht jederzeit später, auch aus den Einstellungen"))).on_click({
+                    let me = cx.entity();
+                    move |_, _, cx| {
+                        let keys: Vec<String> = all.iter().map(|i| i.key().to_string()).collect();
+                        me.update(cx, |s, _| s.had_open = false);
+                        remember(cx, |s| s.skipped.extend(keys.iter().cloned()));
+                        let undo_root = root(cx);
+                        act(cx, |l| {
+                            l.notify(
+                                tr("Einrichten übersprungen"),
+                                "eye-off",
+                                Some(tr("Rückgängig")),
+                                Some(Box::new(move |l: &mut Library| {
+                                    prefs::update_setup(&undo_root, |s| {
+                                        for key in &keys {
+                                            s.skipped.remove(key);
+                                        }
+                                        s.completed = false;
+                                    });
+                                    l.mark_setup(false, false);
+                                })),
+                            )
+                        });
+                    }
                 })),
         );
+        let mut rest = div().w_full().flex().flex_col();
         if more {
-            for item in Item::ALL.into_iter().filter(|i| *i != first) {
+            let (open, done): (Vec<Item>, Vec<Item>) = Item::ALL.into_iter().filter(|i| *i != first).partition(|i| open_items.contains(i));
+            for item in open.into_iter().chain(done) {
                 let row = self.row(item, false, &facts, &snap, &marks, window, cx, &t);
-                body = body.child(divider(&t)).child(row);
+                rest = rest.child(divider(&t)).child(row);
             }
         }
+        body = body.child(div().w_full().child(motion::reveal("setup-more-body", more, rest)));
         self.fields.prune();
         let footer = div()
             .flex()

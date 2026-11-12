@@ -249,13 +249,13 @@ pub fn flush() -> bool {
     };
     let path = root.join(STORE_NAME);
     crate::core::workspace::backup(&path);
-    if unread && path.exists() {
+    let kept = if unread && path.exists() {
         let aside = root.join(format!("{STORE_NAME}.unread-{}", now()));
-        if std::fs::hard_link(&path, &aside).is_err() {
-            let _ = std::fs::copy(&path, &aside);
-        }
-    }
-    let written = crate::core::note_buffer::write_atomic(&path, &json);
+        std::fs::hard_link(&path, &aside).or_else(|_| std::fs::copy(&path, &aside).map(|_| ())).or_else(|_| std::fs::rename(&path, &aside))
+    } else {
+        Ok(())
+    };
+    let written = kept.and_then(|()| crate::core::note_buffer::write_atomic(&path, &json));
     let mut store = STORE.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     match written {
         Ok(()) => {

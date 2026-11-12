@@ -150,6 +150,10 @@ fn renaming_a_folder_points_links_into_it_at_the_new_place_and_a_moved_note_keep
     assert_eq!(reached, vec![Some(root.join("x.md")), Some(root.join("Bee/pic.png")), Some(moved.clone())], "{text:?}");
     lib.undo();
     assert_eq!(std::fs::read_to_string(root.join("Bee/n.md")).unwrap(), "Text [x](../x.md) ![](pic.png) [[n]]\n");
+    lib.redo();
+    assert_eq!(std::fs::read_to_string(&moved).unwrap(), text, "{:?}", lib.last_error);
+    assert!(!root.join("Bee/n.md").exists());
+    assert_eq!(names(&root.join("Z/Y")), vec!["n.md".to_string()]);
 }
 
 #[test]
@@ -261,7 +265,13 @@ fn a_note_in_an_old_encoding_gets_a_readable_copy_and_stays_as_it_is() {
     assert_eq!(std::fs::read(&latin).unwrap(), b"M\xfcller \x80 Gr\xfc\xdfe\n");
     assert_eq!(std::fs::read_to_string(lib.utf8_copy(&wide).unwrap()).unwrap(), "Säure\n");
     assert_eq!(std::fs::read(&wide).unwrap(), utf16);
+    assert_eq!(lib.utf8_copy(&latin).unwrap(), copy, "a second click opens the same copy");
+    let mixed = root.join("Physik.md");
+    std::fs::write(&mixed, b"Gr\xc3\xbc\xc3\x9fe und M\xfcller\n").unwrap();
+    assert_eq!(std::fs::read_to_string(lib.utf8_copy(&mixed).unwrap()).unwrap(), "Grüße und Müller\n", "UTF-8 with one stray byte keeps its umlauts");
+    std::fs::write(&copy, "bearbeitet").unwrap();
     assert_eq!(lib.utf8_copy(&latin).unwrap().file_name().unwrap(), "Bio (UTF-8)-2.md");
+    assert_eq!(std::fs::read_to_string(&copy).unwrap(), "bearbeitet");
 }
 
 #[test]

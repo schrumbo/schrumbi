@@ -28,7 +28,7 @@ Oben in der {ui:Übersicht} steht eine Liste, die sich von selbst abhakt.
 - {ui:Überspringen} zählt als erledigt. {ui:Doch einrichten} holt den Punkt zurück. {ui:Alle überspringen} erledigt den Rest auf einmal.
 - Die Zeile mit {ui:Einrichten} klappt die Liste zu, das X blendet sie aus.
 - Fertig oder ausgeblendet gilt für alle Geräte mit diesem Ordner. Was nur ein Gerät betrifft, etwa der Kalender, kommt dort einzeln und einmal.
-- {key:OpenSettings} → {ui:Allgemein} → {ui:Einrichten in der Übersicht} zeigt sie wieder.
+- {key:OpenSettings} → {ui:Allgemein} → {ui:Einrichten in der Übersicht} zeigt sie wieder, übersprungene Punkte auch.
 - Sind alle Punkte erledigt, sagt die Liste {ui:Alles eingerichtet} und verschwindet.
 
 > [!tip] Alles auf einmal

@@ -296,9 +296,12 @@ impl NoteBuffer {
     /// Takes on `text` as a deliberate step, e.g. from the undo history, and writes it.
     /// Refused while another app's version waits for a decision, so neither version gets lost.
     pub fn restore(&mut self, text: String) -> std::io::Result<()> {
+        let name = self.path.file_name().unwrap_or_default().to_string_lossy().to_string();
         if self.conflict.is_some() {
-            let name = self.path.file_name().unwrap_or_default().to_string_lossy().to_string();
             return Err(std::io::Error::other(super::i18n::trf("„%@“ wurde auch in einer anderen App geändert. Entscheide zuerst, welche Version bleibt.", &[&name])));
+        }
+        if self.unavailable() {
+            return Err(std::io::Error::other(super::i18n::trf("„%@“ ist gerade nicht lesbar und bleibt, wie es ist.", &[&name])));
         }
         self.replace(text);
         self.save()
@@ -336,12 +339,29 @@ pub fn decode_legacy(bytes: &[u8]) -> String {
     }
     let pairs = bytes.len() / 2;
     let zeros = |odd: usize| bytes.iter().skip(odd).step_by(2).filter(|b| **b == 0).count();
-    let encoding = match (zeros(1) * 3 > pairs, zeros(0) * 3 > pairs) {
-        (true, false) if pairs > 0 => encoding_rs::UTF_16LE,
-        (false, true) if pairs > 0 => encoding_rs::UTF_16BE,
-        _ => encoding_rs::WINDOWS_1252,
-    };
-    encoding.decode_without_bom_handling(bytes).0.into_owned()
+    match (zeros(1) * 3 > pairs, zeros(0) * 3 > pairs) {
+        (true, false) if pairs > 0 => return encoding_rs::UTF_16LE.decode_without_bom_handling(bytes).0.into_owned(),
+        (false, true) if pairs > 0 => return encoding_rs::UTF_16BE.decode_without_bom_handling(bytes).0.into_owned(),
+        _ => {}
+    }
+    let mut text = String::new();
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match std::str::from_utf8(rest) {
+            Ok(valid) => {
+                text.push_str(valid);
+                break;
+            }
+            Err(e) => {
+                let (valid, after) = rest.split_at(e.valid_up_to());
+                text.push_str(std::str::from_utf8(valid).unwrap_or_default());
+                let bad = e.error_len().unwrap_or(after.len());
+                text.push_str(&encoding_rs::WINDOWS_1252.decode_without_bom_handling(&after[..bad]).0);
+                rest = &after[bad..];
+            }
+        }
+    }
+    text
 }
 
 /// Replaces the file in one step, so a crash leaves the old or the new version and never a part of one.

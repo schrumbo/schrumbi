@@ -254,6 +254,19 @@ fn many_files_gone_at_once_pause_automatic_saving_until_asked() {
 }
 
 #[test]
+fn moving_a_folder_of_files_is_never_taken_for_files_gone() {
+    let (a, _) = devices("many-moved");
+    std::fs::create_dir_all(a.root.join("WiSe")).unwrap();
+    for i in 0..30 {
+        std::fs::write(a.root.join(format!("WiSe/{i}.md")), "x").unwrap();
+    }
+    sync(&a).unwrap();
+    std::fs::rename(a.root.join("WiSe"), a.root.join("Archiv")).unwrap();
+    assert!(sync(&a).is_ok());
+    assert!(a.run(&["ls-files", "Archiv/0.md"]).unwrap().contains("0.md"));
+}
+
+#[test]
 fn a_new_repository_keeps_line_endings_as_they_are() {
     let dir = std::env::temp_dir().join(format!("schrumbi-git-crlf-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

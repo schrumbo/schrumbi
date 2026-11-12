@@ -542,14 +542,18 @@ pub fn write(package: Package, folder: &Path, keep_progress: bool, known: &HashS
                 continue;
             }
             let front = cards[0].front.clone();
+            let original = body.clone();
+            let probe = parse::cards_in(&distinguished(&original, &front, 2));
+            let movable: Vec<bool> = cards.iter().enumerate().map(|(i, c)| probe.get(i).is_none_or(|p| p.id != c.id)).collect();
+            let clashes = |cards: &[parse::RawCard], seen: &HashSet<String>| cards.iter().zip(&movable).any(|(c, m)| *m && (seen.contains(&c.id) || known.contains(&c.id)));
             let mut n = 2;
-            while cards.iter().any(|c| seen.contains(&c.id) || known.contains(&c.id)) && n < 1000 {
-                let next = distinguished(&body, &front, n);
-                cards = parse::cards_in(&next);
-                if cards.is_empty() {
-                    cards = parse::cards_in(&body);
+            while clashes(&cards, &seen) && n < 1000 {
+                let next = distinguished(&original, &front, n);
+                let tried = parse::cards_in(&next);
+                if tried.len() != cards.len() {
                     break;
                 }
+                cards = tried;
                 body = next;
                 n += 1;
             }
@@ -777,6 +781,18 @@ mod tests {
         assert!(cards.iter().any(|c| c.back == "house") && cards.iter().any(|c| c.back == "home"), "{note}");
         assert!(cards.iter().any(|c| c.front == "Haus") && cards.iter().any(|c| c.front == "Haus (2)"), "only the second one gets a suffix: {note}");
         assert_eq!((result.added, result.duplicates), (3, 1));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reversed_cards_with_the_same_answer_keep_their_questions_as_they_are() {
+        let dir = scratch("same-back");
+        let result = write(deck("Vokabeln", &["anfangen ::: to begin", "beginnen ::: to begin", "Haus ::: house", "Haus ::: home"]), &dir, true, &HashSet::new(), |p| p.to_string_lossy().to_string()).unwrap();
+        let note = std::fs::read_to_string(dir.join("Vokabeln.md")).unwrap();
+        assert!(note.contains("beginnen ::: to begin") && !note.contains("beginnen ("), "{note}");
+        assert!(note.contains("Haus (2) ::: home"), "{note}");
+        assert!(note.len() < 200, "{note}");
+        assert_eq!((result.added, result.duplicates), (4, 0));
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -418,7 +418,7 @@ fn settled(mut prefs: Prefs) -> Prefs {
     }
     let mut setup: BTreeMap<String, SetupPrefs> = BTreeMap::new();
     for (key, entry) in std::mem::take(&mut prefs.setup) {
-        let joined = setup.entry(workspace_key(std::path::Path::new(&key))).or_default();
+        let joined = setup.entry(spelled(std::path::Path::new(&key))).or_default();
         joined.collapsed |= entry.collapsed;
         joined.dismissed |= entry.dismissed;
         joined.completed |= entry.completed;
@@ -431,7 +431,27 @@ fn settled(mut prefs: Prefs) -> Prefs {
 
 /// One spelling for every way of naming a workspace folder, so its remembered state is found again.
 pub fn workspace_key(root: &std::path::Path) -> String {
-    dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()).to_string_lossy().into_owned()
+    static KEYS: LazyLock<Mutex<HashMap<PathBuf, String>>> = LazyLock::new(Mutex::default);
+    let mut keys = KEYS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    keys.entry(root.to_path_buf()).or_insert_with(|| spelled(&dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()))).clone()
+}
+
+fn spelled(path: &std::path::Path) -> String {
+    use std::path::Component;
+    let mut parts: Vec<String> = Vec::new();
+    let mut start = String::new();
+    for part in path.components() {
+        match part {
+            Component::Prefix(p) => start = p.as_os_str().to_string_lossy().to_uppercase(),
+            Component::RootDir => start.push(std::path::MAIN_SEPARATOR),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop();
+            }
+            Component::Normal(name) => parts.push(name.to_string_lossy().into_owned()),
+        }
+    }
+    start + &parts.join(std::path::MAIN_SEPARATOR_STR)
 }
 
 fn load(file: Option<&std::path::Path>) -> Prefs {
@@ -596,7 +616,7 @@ mod tests {
         prefs.setup.insert(other.to_string_lossy().to_string(), super::SetupPrefs { skipped: ["cards".to_string()].into(), ..Default::default() });
         let prefs = super::settled(prefs);
         assert_eq!(prefs.setup.len(), 1);
-        let joined = prefs.setup.get(&super::workspace_key(&real)).unwrap();
+        let joined = prefs.setup.values().next().unwrap();
         assert!(joined.completed && joined.skipped.contains("cards"));
     }
 

@@ -139,7 +139,7 @@ pub struct CardsPage {
     list_scroll: UniformListScrollHandle,
     deck_scroll: UniformListScrollHandle,
     review_scroll: ScrollHandle,
-    cached: Option<((u64, u64, i64, String, Filter, Order, String), Rc<Vec<usize>>, [usize; 6])>,
+    cached: Option<((usize, u64, u64, i64, String, Filter, Order, String), Rc<Vec<usize>>, [usize; 6])>,
     decks: Option<((u64, Vec<String>, String), Rc<Vec<DeckRow>>)>,
     all: Arc<Vec<Card>>,
     _subs: Vec<Subscription>,
@@ -628,7 +628,7 @@ impl CardsPage {
 
     fn visible(&mut self, now: i64, cx: &App) -> Rc<Vec<usize>> {
         let query = fold(self.query.read(cx).value().trim());
-        let key = (index::current().generation, cards::revision(), now / 60, self.deck.clone(), self.filter, self.order, query.clone());
+        let key = (Arc::as_ptr(&self.all) as usize, index::current().generation, cards::revision(), now / 60, self.deck.clone(), self.filter, self.order, query.clone());
         if let Some((k, rows, _)) = &self.cached
             && *k == key
         {
@@ -1346,7 +1346,7 @@ impl CardsPage {
             let listed = all.clone();
             uniform_list("cards-list", count, move |range, _, cx| {
                 let t = Theme::get(cx);
-                range.map(|i| { let card = &listed[shown[i]]; Self::card_row(card, i, selected.as_deref() == Some(card.id()), marked.contains(card.id()), now, me.clone(), &t) }).collect::<Vec<_>>()
+                range.filter_map(|i| { let card = listed.get(shown[i])?; Some(Self::card_row(card, i, selected.as_deref() == Some(card.id()), marked.contains(card.id()), now, me.clone(), &t)) }).collect::<Vec<_>>()
             })
             .track_scroll(&self.list_scroll)
             .size_full()

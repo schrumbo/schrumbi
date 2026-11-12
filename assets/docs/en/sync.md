@@ -26,7 +26,7 @@ The line at the bottom of the sidebar shows the state, a click opens details.
 
 Offline, it backs up locally and uploads later. You do not need to do anything.
 
-If many files are gone at once, automatic saving pauses. If that was on purpose, {ui:Trotzdem sichern}.
+If many files are gone at once, saving pauses, also when started by hand. If that was on purpose, {ui:Trotzdem sichern}.
 
 ## Conflicts
 

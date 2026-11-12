@@ -26,7 +26,7 @@ Die Zeile unten in der Seitenleiste zeigt den Stand, ein Klick öffnet Details.
 
 Offline wird lokal gesichert und später hochgeladen. Du musst nichts tun.
 
-Fehlen viele Dateien auf einmal, pausiert das automatische Sichern. War das gewollt, {ui:Trotzdem sichern}.
+Fehlen viele Dateien auf einmal, pausiert das Sichern, auch von Hand. War das gewollt, {ui:Trotzdem sichern}.
 
 ## Konflikte
 

@@ -56,7 +56,9 @@ impl Git {
     /// Unless `deletions_allowed`, a state that deletes many tracked files at once is not made.
     fn commit_all(&self, status: &RepoStatus, message: &dyn Fn(&[ChangedFile]) -> String, deletions_allowed: bool, report: &mut Report) -> Result<(), GitError> {
         report.nested = status.nested.clone();
-        let deleted = status.changed.iter().filter(|f| f.kind == ChangeKind::Deleted).count();
+        let name = |path: &str| path.rsplit('/').next().unwrap_or(path).to_string();
+        let arrived: std::collections::HashSet<String> = status.changed.iter().filter(|f| f.kind == ChangeKind::New).map(|f| name(&f.path)).collect();
+        let deleted = status.changed.iter().filter(|f| f.kind == ChangeKind::Deleted && !arrived.contains(&name(&f.path))).count();
         if !deletions_allowed && deleted > MANY_DELETED {
             let tracked = self.run_bulk(&["ls-files", "-z"], None)?.split('\0').filter(|p| !p.is_empty()).count();
             if deleted * 10 > tracked * 3 {
@@ -159,12 +161,12 @@ impl Git {
     }
 
     /// One full sync: save, fetch, take in, upload. A missing connection is not a failure, the state stays local.
-    /// `asked` is a sync the user started; only that one records a mass deletion.
-    pub fn sync(&self, message: &dyn Fn(&[ChangedFile]) -> String, progress: &dyn Fn(Step), asked: bool) -> Result<Report, GitError> {
+    /// Many files gone at once are only recorded when `deletions_allowed`, which the user confirmed.
+    pub fn sync(&self, message: &dyn Fn(&[ChangedFile]) -> String, progress: &dyn Fn(Step), deletions_allowed: bool) -> Result<Report, GitError> {
         let mut report = Report::default();
         progress(Step::Saving);
         let status = self.preflight()?;
-        self.commit_all(&status, message, asked, &mut report)?;
+        self.commit_all(&status, message, deletions_allowed, &mut report)?;
         let Some(remote) = self.remote() else { return Err(GitError::NoRemote) };
         for attempt in 0..PUSH_ATTEMPTS {
             progress(Step::Fetching);

@@ -1705,6 +1705,9 @@ impl Library {
         if let Some(reason) = super::cards::take_save_failure() {
             self.last_error = Some(trf("Der Lernfortschritt konnte gerade nicht gesichert werden: %@ Schrumbi versucht es weiter.", &[&reason]));
         }
+        for buffer in self.buffers.values_mut().filter(|b| b.unreadable) {
+            buffer.reload_if_changed();
+        }
         self.reevaluate();
     }
 
@@ -2756,7 +2759,7 @@ impl Library {
             }
         }
         inverse.retain(|c| !matches!(c, Change::Cards { swaps, .. } if swaps.is_empty()));
-        inverse.reverse();
+        failed.retain(|c| !matches!(c, Change::InTrash(_)));
         failed.reverse();
         self.refresh();
         (Step { label: step.label, changes: inverse, series: false }, failed)
@@ -3065,17 +3068,25 @@ impl Library {
         let made = std::fs::read(path).and_then(|bytes| {
             let stem = path.file_stem().unwrap_or_default().to_string_lossy();
             let extension = path.extension().map_or_else(|| "md".to_string(), |e| e.to_string_lossy().into_owned());
-            let target = unique_path(&path.with_file_name(format!("{stem} (UTF-8).{extension}")));
-            super::note_buffer::write_atomic(&target, super::note_buffer::decode_legacy(&bytes).as_bytes()).map(|()| target)
+            let text = super::note_buffer::decode_legacy(&bytes);
+            let wanted = path.with_file_name(format!("{stem} (UTF-8).{extension}"));
+            if std::fs::read_to_string(&wanted).is_ok_and(|there| there == text) {
+                return Ok((wanted, false));
+            }
+            let target = unique_path(&wanted);
+            super::note_buffer::write_atomic(&target, text.as_bytes()).map(|()| (target, true))
         });
         let target = match made {
-            Ok(target) => target,
+            Ok((target, false)) => {
+                self.open_document(&target);
+                return Some(target);
+            }
+            Ok((target, true)) => target,
             Err(e) => {
                 self.last_error = Some(trf("Die UTF-8-Kopie konnte nicht angelegt werden: %@", &[&explain(&e.into())]));
                 return None;
             }
         };
-        self.mark_made_here(&target);
         self.refresh();
         self.commit(trf("Angelegt: %@", &[&name_of(&target)]), "square-pen", vec![Change::Trash(target.clone())]);
         self.open_document(&target);
@@ -3116,7 +3127,7 @@ impl Library {
         };
         let message = match done.skipped_media {
             0 => message,
-            n => format!("{message} · {}", trf("%@ Medien ausgelassen", &[&n.to_string()])),
+            n => format!("{message} · {}", trf("%@ Bilder oder Töne ausgelassen", &[&n.to_string()])),
         };
         let mut changes: Vec<Change> = done.created.into_iter().map(Change::Trash).collect();
         changes.extend(done.appended.into_iter().map(|(path, bytes)| Change::Bytes { path, bytes }));
@@ -4015,6 +4026,9 @@ impl Library {
     /// Opens a file as a tab in the main window.
     pub fn open_document(&mut self, path: &Path) {
         let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if let Some(buffer) = self.buffers.get_mut(&path).filter(|b| b.unavailable()) {
+            buffer.reload_if_changed();
+        }
         if self.raise_if_windowed(&path) {
             return;
         }
