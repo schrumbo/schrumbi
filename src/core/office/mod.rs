@@ -48,6 +48,16 @@ pub fn kind(path: &Path) -> Option<Kind> {
     }
 }
 
+/// Decodes delimited text as UTF-8, UTF-16 or Windows-1252.
+pub fn decode_text(bytes: &[u8]) -> String {
+    sheet::decode_text(bytes)
+}
+
+/// Whether a file is delimited text that reads best as a table.
+pub fn is_delimited(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("csv") || e.eq_ignore_ascii_case("tsv"))
+}
+
 /// Renders a Word or PowerPoint file to PDF bytes; a broken picture costs only the picture.
 pub fn render_pdf(path: &Path) -> Result<Vec<u8>, OpenError> {
     let bytes = std::fs::read(path).map_err(|_| OpenError::Broken)?;

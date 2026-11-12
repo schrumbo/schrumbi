@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -14,6 +15,17 @@ struct Playing {
 
 thread_local! {
     static PLAYER: RefCell<Option<Playing>> = const { RefCell::new(None) };
+    static LENGTHS: RefCell<HashMap<PathBuf, Option<Duration>>> = RefCell::new(HashMap::new());
+}
+
+/// How long a file runs, read once from its header; `None` when the format does not say.
+pub fn length(path: &Path) -> Option<Duration> {
+    LENGTHS.with(|l| *l.borrow_mut().entry(path.to_path_buf()).or_insert_with(|| std::fs::File::open(path).ok().and_then(|f| Decoder::try_from(f).ok()).and_then(|d| d.total_duration())))
+}
+
+/// Whether any sound is playing right now.
+pub fn any_playing() -> bool {
+    PLAYER.with(|p| p.borrow().as_ref().is_some_and(|x| !x.sink.is_paused() && !x.sink.empty()))
 }
 
 /// Starts, pauses or resumes a file.

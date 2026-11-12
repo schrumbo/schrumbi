@@ -488,6 +488,28 @@ impl RenderOnce for PdfEmbed {
     }
 }
 
+thread_local! {
+    static TICKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn keep_ticking(cx: &mut App) {
+    if TICKING.replace(true) {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(Duration::from_millis(100)).await;
+            let playing = super::audio::any_playing();
+            let _ = cx.update(|cx| cx.refresh_windows());
+            if !playing {
+                break;
+            }
+        }
+        TICKING.set(false);
+    })
+    .detach();
+}
+
 /// One line for an audio file: play, pause, position.
 pub fn audio(path: PathBuf, id: u64, _: &Theme) -> AnyElement {
     AudioLine { path, id }.into_any_element()
@@ -504,8 +526,9 @@ impl RenderOnce for AudioLine {
         let t = Theme::get(cx);
         let playing = super::audio::is_playing(&self.path);
         let (position, total) = super::audio::progress(&self.path);
+        let total = total.or_else(|| super::audio::length(&self.path));
         if playing {
-            window.request_animation_frame();
+            keep_ticking(cx);
         }
         let name = self.path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let toggle = self.path.clone();
