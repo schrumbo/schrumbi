@@ -10,7 +10,7 @@ use super::motion::{Soft, loading};
 use super::preview::FilePreview;
 use super::state::{self, act};
 use super::sync;
-use super::theme::{Theme, font, iconsize, space};
+use super::theme::{Theme, font, hover, iconsize, space};
 use super::widgets::*;
 use crate::core::git::history::Version;
 use crate::core::i18n::{tr, trf};
@@ -252,7 +252,7 @@ impl Render for VersionList {
             return unavailable("history", tr("Noch kein Verlauf"), tr("Er beginnt mit dem ersten Sichern."), &t).into_any_element();
         }
         let today = chrono::Local::now().date_naive();
-        let hover = t.ink.opacity(0.05);
+        let hover = t.ink.opacity(hover::ROW);
         let mut list = div().flex().flex_col().py(px(space::S));
         let current_selected = self.selected.is_none();
         list = list.child(
@@ -265,8 +265,8 @@ impl Render for VersionList {
                 .gap(px(space::M))
                 .cursor_pointer()
                 .key_nav()
-                .when(current_selected, |d| d.bg(t.ink.opacity(0.08)))
-                .when(!current_selected, |d| d.soft(hover, 0.))
+                .when(current_selected, |d| d.relative().child(super::motion::row_fill(t.ink.opacity(0.08))))
+                .when(!current_selected, |d| d.soft_row(hover))
                 .child(div().size(px(space::S)).rounded_full().bg(t.accent))
                 .child(div().font_weight(FontWeight::MEDIUM).child(tr("Aktuell")))
                 .on_click(cx.listener(|s, _, _, cx| s.select(None, cx))),
@@ -292,8 +292,8 @@ impl Render for VersionList {
                     .gap(px(space::M))
                     .cursor_pointer()
                     .key_nav()
-                    .when(selected, |d| d.bg(t.ink.opacity(0.08)))
-                    .when(!selected, |d| d.soft(hover, 0.))
+                    .when(selected, |d| d.relative().child(super::motion::row_fill(t.ink.opacity(0.08))))
+                    .when(!selected, |d| d.soft_row(hover))
                     .child(div().mt(px(space::XS)).size(px(space::S)).rounded_full().border_1().border_color(t.tertiary))
                     .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(v.subject.clone())).child(caption(time, &t).font_features(tabular())))
                     .tip(v.subject.clone())

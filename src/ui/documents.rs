@@ -212,7 +212,7 @@ fn block_menu(menu: gpui_kit::component::menu::PopupMenu, me: Entity<NoteView>, 
 /// Buttons that show on a table to make it bigger.
 fn table_tools(me: &Entity<NoteView>, i: usize, line: usize, count: usize, group: SharedString, t: &Theme) -> AnyElement {
     let (row_me, column_me) = (me.clone(), me.clone());
-    let tool = |id: (&'static str, usize), label: String| div().id(id).h(px(control::S)).px(px(space::S)).flex().items_center().rounded(px(radius::SMALL)).bg(t.secondary_bg).border_1().border_color(t.separator).text_size(px(font::CAPTION)).text_color(t.secondary).cursor_pointer().soft(t.ink.opacity(0.06), radius::SMALL).child(label);
+    let tool = |id: (&'static str, usize), label: String| div().id(id).h(px(control::S)).px(px(space::S)).flex().items_center().rounded(px(radius::SMALL)).bg(t.secondary_bg).border_1().border_color(t.separator).text_size(px(font::CAPTION)).text_color(t.secondary).cursor_pointer().soft(t.ink.opacity(hover::RAISED), radius::SMALL).child(label);
     div()
         .flex()
         .gap(px(space::XS))
@@ -1990,10 +1990,10 @@ impl NoteView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(radius::SMALL))
+                .rounded(px(radius::INNER))
                 .cursor_pointer()
                 .key_nav()
-                .soft(lit, radius::SMALL)
+                .soft(lit, radius::INNER)
                 .tip(help)
                 .on_mouse_down(MouseButton::Left, |_, window, cx| {
                     window.prevent_default();
@@ -2129,7 +2129,7 @@ impl NoteView {
     fn gutter(me: &Entity<Self>, i: usize, line: usize, count: usize, is_table: bool, label: String, group: SharedString, extra: Option<AnyElement>, t: &Theme) -> Div {
         let (add_me, menu_me) = (me.clone(), me.clone());
         let lit = t.ink.opacity(hover::CONTROL);
-        let handle = |id: (&'static str, usize), name: &'static str| div().id(id).size(px(control::S)).flex().items_center().justify_center().rounded(px(radius::SMALL)).cursor_pointer().key_nav().soft(lit, radius::SMALL).child(icon(name, iconsize::S, t.tertiary));
+        let handle = |id: (&'static str, usize), name: &'static str| div().id(id).size(px(control::S)).flex().items_center().justify_center().rounded(px(radius::INNER)).cursor_pointer().key_nav().soft(lit, radius::INNER).child(icon(name, iconsize::S, t.tertiary));
         div()
             .flex()
             .justify_end()
@@ -2151,7 +2151,7 @@ impl NoteView {
                 div()
                     .id(("live-grip", i))
                     .on_drag(DraggedLines { line, count, label }, |d, _, _, cx| cx.new(|_| d.clone()))
-                    .child(Button::new(("live-grip-menu", i)).ghost().xsmall().icon(menu_icon("grip-vertical")).tooltip(tr("Ziehen zum Verschieben, Klick für das Menü")).dropdown_menu(move |m, _, _| block_menu(m, menu_me.clone(), line, count, is_table))),
+                    .child(Button::new(("live-grip-menu", i)).ghost().small().icon(menu_icon("grip-vertical")).tooltip(tr("Ziehen zum Verschieben, Klick für das Menü")).dropdown_menu(move |m, _, _| block_menu(m, menu_me.clone(), line, count, is_table))),
             )
     }
 
@@ -2766,7 +2766,7 @@ impl NoteView {
                 .w(px(control::S))
                 .h(px(control::S - 2. * space::XXS))
                 .rounded(px(radius::SMALL))
-                .when(!active && !off, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
+                .when(!active && !off, |d| d.soft(t.ink.opacity(hover::RAISED), radius::SMALL))
                 .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm())
                 .child(icon(icon_name, iconsize::XS, if active { t.primary } else if off { t.secondary.opacity(0.4) } else { t.secondary }));
             let slot = div()
@@ -3160,13 +3160,13 @@ impl NoteView {
                             let edit_me = me.clone();
                             let edit = div()
                                 .id(("live-fence-edit", i))
-                                .size(px(iconsize::L))
+                                .size(px(control::S))
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded(px(radius::SMALL))
+                                .rounded(px(radius::INNER))
                                 .cursor_pointer()
-                                .soft(t.ink.opacity(0.1), radius::SMALL)
+                                .soft(t.ink.opacity(hover::RAISED), radius::INNER)
                                 .tip(tr("Quelltext bearbeiten"))
                                 .on_click(move |_, window, cx| edit_me.update(cx, |n, cx| n.open_line(line, Some(0), window, cx)))
                                 .child(icon("code-xml", iconsize::S, t.tertiary))
@@ -4665,7 +4665,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
         let (open, menu, middle, target) = (doc.clone(), doc.clone(), doc.clone(), doc.clone());
         let accent = t.accent;
         let is_dirty = dirty[i];
-        let hover = t.ink.opacity(0.04);
+        let hover = t.ink.opacity(hover::ROW);
         let is_beside = beside.as_ref() == Some(doc);
         let (others, rightwards) = (docs.len() > 1, docs.len() > i + 1);
         let squeezed = widths[i] + 0.5 < natural[i] && !is_dirty;
@@ -4678,12 +4678,12 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                 .flex_none()
                 .size(px(control::S))
                 .m(px((iconsize::M - control::S) / 2.))
-                .rounded_full()
+                .rounded(px(radius::INNER))
                 .flex()
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .soft(t.ink.opacity(0.1), radius::FULL)
+                .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
                 .child(if is_dirty && !pointed { div().size(px(space::S)).rounded_full().bg(t.secondary).into_any_element() } else { icon("x", iconsize::XS, t.secondary).into_any_element() })
                 .tip(format!("{}{}", if is_dirty { tr("Ungesicherte Änderungen – Tab schließen") } else { tr("Tab schließen") }, ShortcutAction::CloseTab.hint()))
                 .on_click(move |_, _, cx| {
@@ -4716,8 +4716,8 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
                 .py(px(space::XS))
                 .rounded(px(radius::INNER))
                 .cursor_pointer().key_nav()
-                .when(active, |d| d.bg(t.ink.opacity(0.1)).soft(t.ink.opacity(0.04), radius::INNER))
-                .when(is_beside, |d| d.bg(t.ink.opacity(0.04)).soft(t.ink.opacity(0.02), radius::INNER))
+                .when(active, |d| d.bg(t.ink.opacity(0.1)).soft(hover, radius::INNER))
+                .when(is_beside, |d| d.bg(t.ink.opacity(0.04)).soft(hover, radius::INNER))
                 .when(!active && !is_beside, |d| d.soft(hover, radius::INNER))
                 .tooltip(hint)
                 .on_hover(move |on, _, _| HOVERED_TAB.with_borrow_mut(|h| {

@@ -11,7 +11,7 @@ use gpui_kit::*;
 
 use super::state::{self, act};
 use super::motion::Soft;
-use super::theme::{Theme, font, radius, space, iconsize};
+use super::theme::{Theme, font, hover, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::filing::FileRole;
@@ -179,8 +179,8 @@ fn file_line(path: &std::path::Path, extra: Vec<(String, Box<dyn Fn(&mut App)>)>
         .items_center()
         .gap(px(space::S))
         .py(px(space::XXS))
-        .rounded(px(radius::SMALL))
-        .soft(t.ink.opacity(0.05), radius::SMALL)
+        .rounded(px(radius::INNER))
+        .soft(t.ink.opacity(hover::ROW), radius::INNER)
         .tip(tr("Doppelklick zum Öffnen"))
         .on_click(move |e, _, cx| {
             if e.click_count() >= 2 {
@@ -263,7 +263,7 @@ fn details(l: &Library, a: &Assignment, t: &Theme, note: &Entity<TextareaState>,
         info_row("calendar", day::due(a.due, l.now), None, t).into_any_element()
     } else {
         let move_id = id.clone();
-        div().id("due-row").w_full().rounded(px(radius::INNER)).soft(t.ink.opacity(0.06), radius::INNER).cursor_pointer().key_nav().tip(tr("Termin verschieben")).on_click(move |_, _, cx| act(cx, |l| l.reschedule_id = Some(move_id.clone()))).child(info_row("calendar", day::due(a.due, l.now), None, t)).into_any_element()
+        div().id("due-row").w_full().rounded(px(radius::INNER)).soft(t.ink.opacity(hover::ROW), radius::INNER).cursor_pointer().key_nav().tip(tr("Termin verschieben")).on_click(move |_, _, cx| act(cx, |l| l.reschedule_id = Some(move_id.clone()))).child(info_row("calendar", day::due(a.due, l.now), None, t)).into_any_element()
     };
     let mut info = div().flex().flex_col().gap(px(space::S)).child(due_row).child(info_row(
         "clock",

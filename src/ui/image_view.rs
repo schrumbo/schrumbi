@@ -7,7 +7,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::motion::Soft;
-use super::theme::{Theme, control, font, iconsize, radius, space};
+use super::theme::{Theme, control, font, hover, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::tr;
 use crate::core::vault::render;
@@ -223,7 +223,7 @@ impl Render for ImageView {
                     .border_color(t.separator)
                     .shadow_md()
                     .child(Button::new("image-out").ghost().small().icon(menu_icon("zoom-out")).tooltip(tr("Verkleinern (⌘−)")).on_click(move |_, _, cx| m1.update(cx, |v, cx| v.zoom_to(scale * 0.8, None, natural, cx))))
-                    .child(div().id("image-percent").w(px(52.)).h(px(control::S)).flex().items_center().justify_center().text_size(px(font::CALLOUT)).font_features(tabular()).rounded(px(radius::INNER)).cursor_pointer().key_nav().soft(t.ink.opacity(0.06), radius::INNER).tip(if fitted { tr("Auf 100 % (⌘1)") } else { tr("Einpassen (⌘0)") }).child(format!("{:.0} %", scale * 100.)).on_click(move |_, _, cx| m2.update(cx, |v, cx| if fitted { v.zoom_to(1., None, natural, cx) } else { v.reset(cx) })))
+                    .child(div().id("image-percent").w(px(52.)).h(px(control::S)).flex().items_center().justify_center().text_size(px(font::CALLOUT)).font_features(tabular()).rounded(px(radius::INNER)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::INNER).tip(if fitted { tr("Auf 100 % (⌘1)") } else { tr("Einpassen (⌘0)") }).child(format!("{:.0} %", scale * 100.)).on_click(move |_, _, cx| m2.update(cx, |v, cx| if fitted { v.zoom_to(1., None, natural, cx) } else { v.reset(cx) })))
                     .child(Button::new("image-in").ghost().small().icon(menu_icon("zoom-in")).tooltip(tr("Vergrößern (⌘+)")).on_click(move |_, _, cx| m3.update(cx, |v, cx| v.zoom_to(scale * 1.25, None, natural, cx))))
                     .child(div().px(px(space::S)).text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child(info))
                     .child(Button::new("image-fit").ghost().small().icon(menu_icon("maximize")).tooltip(tr("Einpassen (⌘0)")).on_click(move |_, _, cx| m4.update(cx, |v, cx| v.reset(cx)))),

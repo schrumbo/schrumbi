@@ -14,7 +14,7 @@ use gpui_kit::*;
 use crate::core::vault::query as vault_query;
 use super::state::{self, act};
 use super::motion::{self, Soft};
-use super::theme::{Theme, calendar, control, font, radius, space, iconsize};
+use super::theme::{Theme, calendar, control, font, hover, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::catalog::{self, CatalogFile, FileKind, Query};
 use crate::core::day;
@@ -704,7 +704,7 @@ impl FileBrowser {
         if f.is_brief {
             meta = meta.child(div().flex().items_center().gap(px(space::XXS)).child(icon("clipboard-list", iconsize::XS, t.secondary)).child(tr("Aufgabe")));
         }
-        let hover = t.ink.opacity(0.045);
+        let hover = t.ink.opacity(hover::ROW);
         let first_spot = item.spots.first().cloned();
         div()
             .id(SharedString::from(format!("file-{}", path.display())))
@@ -759,7 +759,7 @@ impl FileBrowser {
                                 .gap(px(space::XS))
                                 .child(div().min_w_0().truncate().child(highlighted(&f.display_name(), &terms, t)))
                                 .when(dot, |d| d.child(div().id("unsaved-dot").flex_none().size(px(calendar::DOT)).rounded_full().bg(t.accent).tip(tr("Noch nicht gesichert"))))
-                                .when(is_copy, |d| d.child(div().flex_none().px(px(space::S)).rounded_full().bg(t.orange.opacity(0.18)).text_size(px(font::CAPTION)).text_color(t.orange).child(tr("Konflikt"))))
+                                .when(is_copy, |d| d.child(div().flex_none().px(px(space::S)).rounded_full().bg(t.orange.opacity(0.18)).text_size(px(font::CAPTION)).text_color(t.orange_text).child(tr("Konflikt"))))
                                 .into_any_element()
                         }
                     })
@@ -770,7 +770,7 @@ impl FileBrowser {
                             .id(("spot", i))
                             .px(px(space::XS))
                             .rounded(px(radius::SMALL))
-                            .soft(hover, radius::SMALL)
+                            .soft(t.ink.opacity(hover::CONTROL), radius::SMALL)
                             .cursor_pointer()
                             .truncate()
                             .text_size(px(font::CAPTION))
@@ -878,7 +878,7 @@ impl FileBrowser {
             .mt(px(space::S))
             .rounded(px(radius::INNER))
             .cursor_pointer().key_nav()
-            .soft(t.ink.opacity(0.05), radius::INNER)
+            .soft(t.ink.opacity(hover::ROW), radius::INNER)
             .on_click(move |_, _, cx| {
                 entity.update(cx, |this, cx| {
                     if !this.toggled.remove(&id) {
@@ -906,7 +906,7 @@ impl FileBrowser {
                 .rounded(px(radius::SMALL))
                 .text_size(px(font::CALLOUT))
                 .cursor_pointer().key_nav()
-                .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
+                .when(!active, |d| d.soft(t.ink.opacity(hover::RAISED), radius::SMALL))
                 .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
                 .child(match k {
                     FileKind::Documents => tr("Dokumente"),
@@ -967,7 +967,7 @@ impl FileBrowser {
                     .text_color(t.accent_text)
                     .cursor_pointer()
                     .key_nav()
-                    .soft(t.accent.opacity(0.12), radius::FULL)
+                    .soft(t.accent.opacity(hover::RAISED), radius::FULL)
                     .tip(tr("Überall suchen"))
                     .child(trf("In %@", &[&m.code]))
                     .child(icon("x", iconsize::XS, t.accent_text))
@@ -1138,7 +1138,7 @@ impl Render for FileBrowser {
         let l = lib.read(cx);
         let current = current_week(l);
         let bar = self.filter_bar(l, current, &t, &me);
-        let query_error = self.query_error.clone().map(|e| div().px(px(space::L)).py(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red).child(e));
+        let query_error = self.query_error.clone().map(|e| div().px(px(space::L)).py(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red_text).child(e));
         let lines = self.line_list(current);
         if lines != self.lines {
             self.list.reset(lines.len());

@@ -13,7 +13,7 @@ use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use super::motion::Soft;
 use super::widgets::{KeyNav, Tip};
 use super::selectable::{InlineKind, InlineSlot, LinkAction, selectable};
-use super::theme::{Theme, control, font, note_size, radius, space, iconsize};
+use super::theme::{Theme, control, font, hover, note_size, radius, space, iconsize};
 use crate::core::i18n::{tr, trf};
 use crate::core::markdown::{self, Run, TokenKind};
 use crate::core::vault::syntax::{self, CalloutHead, MarkColor};
@@ -1389,6 +1389,39 @@ pub fn press_control() {
     CONTROL_PRESSED.with(|c| c.set(true));
 }
 
+const RING_STRENGTH: f32 = 0.4;
+
+/// A border in `color` that fades in over the element it ends while the pointer is on it, with `help` as its tooltip.
+pub fn hover_ring(color: Hsla, radius: f32, help: impl Into<SharedString>) -> HoverRing {
+    HoverRing { color, radius, help: help.into() }
+}
+
+#[derive(IntoElement)]
+pub struct HoverRing {
+    color: Hsla,
+    radius: f32,
+    help: SharedString,
+}
+
+impl RenderOnce for HoverRing {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let state = window.use_keyed_state("ring-state", cx, |_, _| false);
+        let level = super::motion::follow("ring-level", if *state.read(cx) { 1. } else { 0. }, super::motion::FAST, window, cx);
+        div()
+            .id("ring")
+            .absolute()
+            .inset_0()
+            .rounded(px(self.radius))
+            .border_1()
+            .border_color(Hsla { a: self.color.a * RING_STRENGTH * level, ..self.color })
+            .on_hover(move |hovered, _, cx| state.update(cx, |s, cx| {
+                *s = *hovered;
+                cx.notify();
+            }))
+            .tip(self.help)
+    }
+}
+
 /// Whether the press now ending landed on a control; asking ends it.
 pub fn take_control_press() -> bool {
     CONTROL_PRESSED.with(Cell::take)
@@ -1484,7 +1517,8 @@ fn linked_image(src: &str, alt: &str, target: Option<&str>, cx: &Ctx) -> AnyElem
     let order = cx.order.get();
     cx.order.set(order + 1);
     let action = link_action(target, cx.base);
-    div().id(("md-image-link", order)).when(!is_sample_base(cx.base), |d| d.cursor_pointer().soft(cx.t.ink.opacity(0.04), radius::CONTROL)).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| action(cx)).child(shown).into_any_element()
+    let sample = is_sample_base(cx.base);
+    div().id(("md-image-link", order)).relative().when(!sample, |d| d.cursor_pointer()).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| action(cx)).child(shown).when(!sample, |d| d.child(hover_ring(cx.t.accent, radius::CONTROL, tr("Öffnen")))).into_any_element()
 }
 
 /// What a plain click on text in this block should do.
@@ -2002,7 +2036,7 @@ fn file_card(path: PathBuf, detail: Option<String>, action: String, cx: &Ctx) ->
         .rounded(px(radius::CONTROL))
         .border_1()
         .border_color(t.separator)
-        .when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(0.04), radius::CONTROL))
+        .when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(hover::ROW), radius::CONTROL))
         .on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) })
         .child(super::widgets::file_icon(&path, iconsize::L))
         .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(name)).when_some(detail, |d, text| d.child(super::widgets::caption(text, t))))
@@ -2060,7 +2094,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
     let open = path.clone();
     let sample = is_sample_base(cx.base);
     if cx.chain.len() >= 3 {
-        return div().id(("md-embed-link", order)).text_color(t.accent_text).when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(0.04), radius::SMALL)).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) }).child(name).into_any_element();
+        return div().id(("md-embed-link", order)).text_color(t.accent_text).when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(hover::CONTROL), radius::SMALL)).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) }).child(name).into_any_element();
     }
     let note = embedded_note(&path, target);
     let mut chain = cx.chain.clone();
@@ -2083,7 +2117,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
                 .items_center()
                 .gap(px(space::XS))
                 .bg(t.secondary_bg)
-                .when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(0.04), 0.))
+                .when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(hover::RAISED), 0.))
                 .text_size(px(font::CAPTION))
                 .text_color(t.secondary)
                 .on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) })
@@ -2118,11 +2152,14 @@ fn image_at(p: PathBuf, alt: &str, source_written: &str, cx: &Ctx) -> AnyElement
         let sample = is_sample_base(cx.base);
         let natural = (width.is_none() && height.is_none()).then(|| pixel_size(&p)).flatten();
         let picture = img(p).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL));
-        let drawn = div().id(("md-image", order)).when(!sample, |d| d.cursor_pointer().soft(cx.t.ink.opacity(0.04), radius::CONTROL)).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::preview::show(&open, cx) });
+        let ring = (!sample).then(|| hover_ring(cx.t.accent, radius::CONTROL, tr("Vergrößern")));
+        let drawn = div().id(("md-image", order)).relative().when(!sample, |d| d.cursor_pointer()).capture_any_mouse_down(|_, _, _| press_control());
         let drawn = match natural {
             Some((w, h)) => drawn.w_full().max_w(px(w)).aspect_ratio(w / h).max_h(px(560.)).child(picture.size_full()),
             None => drawn.max_w_full().child(picture.when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.))),
-        };
+        }
+        .children(ring)
+        .on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::preview::show(&open, cx) });
         let source_name = source_written.to_string();
         match (cx.focus.and_then(|f| f.edit_item.clone()), cx.block) {
             (Some(edit), item) => drawn
@@ -2283,10 +2320,10 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(radius::SMALL))
+                .rounded(px(radius::INNER))
                 .bg(t.secondary_bg)
                 .cursor_pointer()
-                .soft(t.ink.opacity(0.06), radius::SMALL)
+                .soft(t.ink.opacity(hover::RAISED), radius::INNER)
                 .invisible()
                 .group_hover(group, |s| s.visible())
                 .tip(tr("Code kopieren"))
@@ -2347,8 +2384,8 @@ fn list_items(start: &Option<u64>, items: &[Item], first: usize, cx: &Ctx) -> Di
                         .mb(px(-reach))
                         .size(px(control::S))
                         .flex_none()
-                        .rounded(px(radius::SMALL))
-                        .soft(t.ink.opacity(0.08), radius::SMALL)
+                        .rounded(px(radius::INNER))
+                        .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
                         .flex()
                         .items_center()
                         .justify_center()
@@ -2400,7 +2437,7 @@ fn list_items(start: &Option<u64>, items: &[Item], first: usize, cx: &Ctx) -> Di
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .soft(t.ink.opacity(0.06), radius::SMALL)
+                    .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
                     .tip(tr(if folded { "Ausklappen" } else { "Einklappen" }))
                     .on_click(move |_, _, cx| {
                         cx.stop_propagation();
@@ -2575,7 +2612,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                             .items_center()
                             .gap(px(space::XS))
                             .cursor_pointer()
-                            .soft(t.ink.opacity(0.04), radius::INNER)
+                            .soft(t.ink.opacity(hover::ROW), radius::INNER)
                             .capture_any_mouse_down(|_, _, _| press_control())
                             .font_weight(FontWeight::MEDIUM)
                             .child(super::motion::chevron(("md-details-chevron", order), is_open, t.secondary))
@@ -2855,7 +2892,7 @@ fn properties_row(props: &[frontmatter::Property], cx: &Ctx) -> AnyElement {
     }
     let order = cx.order.get();
     cx.order.set(order + 1);
-    Properties { id: ElementId::from(("md-properties", order)), items: visible.into_iter().map(|p| (p.name.clone(), p.values.clone())).collect(), base: cx.base.map(Path::to_path_buf), secondary: cx.t.secondary, separator: cx.t.separator, accent: cx.t.accent_text }.into_any_element()
+    Properties { id: ElementId::from(("md-properties", order)), items: visible.into_iter().map(|p| (p.name.clone(), p.values.clone())).collect(), base: cx.base.map(Path::to_path_buf), secondary: cx.t.secondary, ink: cx.t.ink, separator: cx.t.separator, accent: cx.t.accent_text }.into_any_element()
 }
 
 #[derive(IntoElement)]
@@ -2864,13 +2901,14 @@ struct Properties {
     items: Vec<(String, Vec<String>)>,
     base: Option<PathBuf>,
     secondary: Hsla,
+    ink: Hsla,
     separator: Hsla,
     accent: Hsla,
 }
 
 impl RenderOnce for Properties {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let (secondary, separator, accent) = (self.secondary, self.separator, self.accent);
+        let (secondary, ink, separator, accent) = (self.secondary, self.ink, self.separator, self.accent);
         let base = self.base.clone();
         let sample = is_sample_base(base.as_deref());
         let id = self.id.clone();
@@ -2889,7 +2927,7 @@ impl RenderOnce for Properties {
                 .px(px(space::S))
                 .when(!sample, |d| {
                     d.cursor_pointer()
-                        .soft(secondary.opacity(0.1), radius::INNER)
+                        .soft(ink.opacity(hover::ROW), radius::INNER)
                         .tip(tr("In den Details bearbeiten"))
                         .on_click(|_, _, cx| super::state::act(cx, |l| {
                             l.show_properties = true;
@@ -2906,7 +2944,7 @@ impl RenderOnce for Properties {
                             div()
                                 .id(SharedString::from(format!("md-prop-link-{i}-{n}")))
                                 .text_color(accent)
-                                .when(!sample, |d| d.cursor_pointer().key_nav().soft(accent.opacity(0.12), radius::SMALL))
+                                .when(!sample, |d| d.cursor_pointer().key_nav().soft(accent.opacity(hover::CONTROL), radius::SMALL))
                                 .on_click(move |_, _, cx| {
                                     cx.stop_propagation();
                                     action(cx);
@@ -2924,7 +2962,7 @@ impl RenderOnce for Properties {
                                 .bg(accent.opacity(0.14))
                                 .text_color(accent)
                                 .when(!sample, |d| {
-                                    d.cursor_pointer().key_nav().soft(accent.opacity(0.12), radius::SMALL).tip(trf("Notizen mit %@ zeigen", &[&shown])).on_click(move |_, _, cx| {
+                                    d.cursor_pointer().key_nav().soft(accent.opacity(hover::RAISED), radius::SMALL).tip(trf("Notizen mit %@ zeigen", &[&shown])).on_click(move |_, _, cx| {
                                         cx.stop_propagation();
                                         super::state::act(cx, |l| l.show_tag(&tag));
                                     })
@@ -3129,7 +3167,7 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
-                        .soft(t.ink.opacity(0.06), radius::SMALL)
+                        .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
                         .when(is_open, |d| d.invisible().group_hover(group, |s| s.visible()))
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();

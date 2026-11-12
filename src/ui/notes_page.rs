@@ -15,7 +15,7 @@ use super::browser::DraggedFile;
 use super::drive::Mark;
 use super::motion::{self, Soft, chevron};
 use super::state::{self, act};
-use super::theme::{Theme, control, explorer, font, iconsize, radius, space};
+use super::theme::{Theme, control, explorer, font, hover, iconsize, radius, space, tint};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Route;
@@ -922,12 +922,12 @@ impl NotesPage {
 
     fn view_button(&self, view: View, icon_name: &'static str, label: String, badge: usize, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let on = self.view == view;
-        let hover = t.ink.opacity(0.06);
+        let hover = t.ink.opacity(hover::CONTROL);
         let accent = t.accent;
         div()
             .id(icon_name)
             .relative()
-            .size(px(control::M))
+            .size(px(control::S))
             .flex()
             .items_center()
             .justify_center()
@@ -948,7 +948,7 @@ impl NotesPage {
     }
 
     fn line(&self, row: &Row, i: usize, active: Option<&PathBuf>, me: &Entity<Self>, t: &Theme) -> AnyElement {
-        let hover = t.ink.opacity(0.05);
+        let hover = t.ink.opacity(hover::ROW);
         let selected = self.selected.as_ref().is_some_and(|s| same_row(s, row));
         let pick = (row.clone(), me.clone());
         let base = |id: (&'static str, usize)| {
@@ -971,8 +971,8 @@ impl NotesPage {
                 .gap(px(space::XS))
                 .cursor_pointer()
                 .text_size(px(font::CALLOUT))
-                .when(selected, |d| d.bg(t.ink.opacity(0.08)).soft(t.ink.opacity(0.04), 0.))
-                .when(!selected, |d| d.soft(hover, 0.))
+                .when(selected, |d| d.child(motion::row_fill(t.ink.opacity(0.08))).soft_row(hover))
+                .when(!selected, |d| d.soft_row(hover))
         };
         let click = |row: &Row, me: &Entity<Self>| {
             let (row, me) = (row.clone(), me.clone());
@@ -1097,10 +1097,10 @@ impl NotesPage {
                     .mark("task", text.clone())
                     .pl(px(space::M))
                     .gap(px(space::S))
-                    .child(div().id(("task-box", i)).flex_none().size(px(iconsize::S)).rounded(px(radius::SMALL)).soft(t.ink.opacity(0.08), radius::SMALL).border_1().border_color(t.secondary).cursor_pointer().aria_label(tr("Abhaken")).tip(tr("Abhaken")).on_click(move |_, _, cx| {
+                    .child(div().id(("task-box", i)).flex_none().size(px(control::S)).mx(px(-(control::S - iconsize::S) / 2.)).flex().items_center().justify_center().rounded(px(radius::INNER)).soft(t.ink.opacity(hover::CONTROL), radius::INNER).cursor_pointer().aria_label(tr("Abhaken")).tip(tr("Abhaken")).on_click(move |_, _, cx| {
                         cx.stop_propagation();
                         finish(&tick, line, &label, cx);
-                    }))
+                    }).child(div().size(px(iconsize::S)).rounded(px(radius::SMALL)).border_1().border_color(t.secondary)))
                     .child(div().flex_1().min_w_0().truncate().child(text.clone()))
                     .child(caption(note.clone(), t).flex_none().max_w(px(90.)).truncate())
                     .on_click(click(row, me))
@@ -1232,9 +1232,9 @@ impl Render for NotesPage {
             .children(marks)
             .child(self.view_button(View::Tasks, "circle-check", tr("Aufgaben"), open_tasks, &t, cx))
             .child(div().flex_1())
-            .child(Button::new("explorer-hide").ghost().small().size(px(control::M)).icon(menu_icon("panel-left-close")).tooltip(tr("Dateien ausblenden")).on_click(|_, _, cx| set_hidden(true, cx)))
-            .child(Button::new("explorer-new").ghost().small().size(px(control::M)).icon(menu_icon("square-pen")).tooltip(format!("{}{}", tr("Neue Notiz"), crate::core::shortcuts::ShortcutAction::NewFile.hint())).on_click(cx.listener(|s, _, window, cx| s.new_note(window, cx))))
-            .child(Button::new("explorer-more").ghost().small().size(px(control::M)).icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu({
+            .child(Button::new("explorer-hide").ghost().small().size(px(control::S)).icon(menu_icon("panel-left-close")).tooltip(tr("Dateien ausblenden")).on_click(|_, _, cx| set_hidden(true, cx)))
+            .child(Button::new("explorer-new").ghost().small().size(px(control::S)).icon(menu_icon("square-pen")).tooltip(format!("{}{}", tr("Neue Notiz"), crate::core::shortcuts::ShortcutAction::NewFile.hint())).on_click(cx.listener(|s, _, window, cx| s.new_note(window, cx))))
+            .child(Button::new("explorer-more").ghost().small().size(px(control::S)).icon(menu_icon("ellipsis")).tooltip(tr("Mehr")).dropdown_menu({
                 let me = me.clone();
                 move |menu, _, _| {
                     let (a, b, c, d) = (me.clone(), me.clone(), me.clone(), me.clone());
@@ -1296,7 +1296,7 @@ impl Render for NotesPage {
         };
         let _ = active;
         let accent = t.accent;
-        let handle = div().id("explorer-split").occlude().absolute().top_0().bottom_0().right_0().w(px(space::XS)).flex_none().cursor_col_resize().border_r_1().border_color(t.separator).soft(accent.opacity(0.3), 0.).on_drag(ExplorerSplit, |d, _, _, cx| cx.new(|_| d.clone()));
+        let handle = div().id("explorer-split").occlude().absolute().top_0().bottom_0().right_0().w(px(space::XS)).flex_none().cursor_col_resize().border_r_1().border_color(t.separator).soft(accent.opacity(tint::SELECTED_EDGE), 0.).on_drag(ExplorerSplit, |d, _, _, cx| cx.new(|_| d.clone()));
         if self.resizing && !cx.has_active_drag() {
             self.resizing = false;
             let width = self.width;
