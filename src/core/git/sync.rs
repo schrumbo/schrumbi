@@ -103,6 +103,8 @@ impl Git {
             return Ok(());
         }
         let before = self.head();
+        let kept = self.untracked_app_data();
+        let message = crate::core::i18n::tr("Stand vom anderen Gerät übernommen");
         if status.ahead == 0 {
             self.run_bulk(&["merge", "-q", "--ff-only", "@{u}"], None)?;
         } else {
@@ -111,17 +113,20 @@ impl Git {
                 return Err(GitError::Conflicts(conflicts.into_iter().map(|c| c.path).collect()));
             }
             if !automatic.is_empty() {
-                let resolved = self.merge_resolved(&HashMap::new(), &automatic, &crate::core::i18n::tr("Stand vom anderen Gerät übernommen"))?;
+                let resolved = self.merge_resolved(&HashMap::new(), &automatic, &message)?;
                 report.pulled.extend(resolved.pulled);
                 return Ok(());
             }
-            let message = crate::core::i18n::tr("Stand vom anderen Gerät übernommen");
-            self.run_bulk(&["merge", "-q", "-m", &message, "@{u}"], None)?;
+            if let Err(e) = self.run_bulk(&["merge", "-q", "-m", &message, "@{u}"], None) {
+                let _ = self.restore_app_data(&kept, &message);
+                return Err(e);
+            }
         }
         if let Some(before) = before {
             report.pulled.extend(self.settle_times(&before)?);
             self.keep_app_data(&before);
         }
+        self.restore_app_data(&kept, &message)?;
         Ok(())
     }
 

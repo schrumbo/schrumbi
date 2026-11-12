@@ -748,11 +748,32 @@ pub fn choose_file(id: &str, window: &mut Window, cx: &mut App) {
     cx.refresh_windows();
 }
 
-/// A design that was loaded: its id, its name, and the earlier copy it took the place of.
+/// A design that was loaded: its id, its name, the earlier copy it took the place of and the design chosen before.
 pub struct Loaded {
     pub id: String,
     pub name: String,
     pub replaced: Option<Vec<u8>>,
+    pub previous: String,
+}
+
+static REVERTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Takes back a design that replaced an earlier copy: the old file returns and the design chosen before is chosen again.
+/// Windows follow on their next frame through `follow_undo`.
+pub fn undo_load(id: &str, bytes: &[u8], previous: &str) -> Result<(), String> {
+    themes::revert(id, bytes).map_err(|e| trf("Design konnte nicht gespeichert werden: %@", &[&e]))?;
+    prefs::update(|p| select_file(p, previous));
+    REVERTED.store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
+/// Draws in the design chosen again by `undo_load`.
+pub fn follow_undo(window: &mut Window, cx: &mut App) {
+    if REVERTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        super::platform::set_window_appearance(native_appearance());
+        refresh(window, cx);
+        cx.refresh_windows();
+    }
 }
 
 fn load(path: &std::path::Path) -> Result<Loaded, String> {
@@ -762,10 +783,10 @@ fn load(path: &std::path::Path) -> Result<Loaded, String> {
     let design = themes::parse(&bytes)?;
     if let Some(id) = themes::id_of(path) {
         themes::rescan();
-        return Ok(Loaded { id, name: design.name, replaced: None });
+        return Ok(Loaded { id, name: design.name, replaced: None, previous: String::new() });
     }
     let placed = themes::install(&bytes, &design).map_err(|e| trf("Design konnte nicht gespeichert werden: %@", &[&e]))?;
-    Ok(Loaded { id: placed.id, name: design.name, replaced: placed.replaced })
+    Ok(Loaded { id: placed.id, name: design.name, replaced: placed.replaced, previous: String::new() })
 }
 
 /// Asks for a design file, checks it, keeps a copy and switches to it. `done` gets what was loaded or the German reason; a copy it replaced is announced in the main window as well.
@@ -774,13 +795,20 @@ pub fn pick_and_load(handle: AnyWindowHandle, cx: &mut App, done: impl FnOnce(Re
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let task = cx.background_spawn(async move { load(&path) });
         cx.spawn(async move |cx| {
-            let result = task.await.map_err(|m| trf("%@ wurde nicht geladen: %@", &[&name, &m]));
+            let mut result = task.await.map_err(|m| trf("%@ wurde nicht geladen: %@", &[&name, &m]));
             cx.update(|cx| {
-                if let Ok(loaded) = &result {
+                if let Ok(loaded) = &mut result {
+                    loaded.previous = prefs::with(|p| p.theme_file.clone());
                     let _ = handle.update(cx, |_, window, cx| choose_file(&loaded.id, window, cx));
-                    if loaded.replaced.is_some() {
+                    if let Some(bytes) = loaded.replaced.clone() {
                         let text = trf("Design „%@“ ersetzt", &[&loaded.name]);
-                        super::state::act(cx, |l| l.notify(text, "check", None, None));
+                        let (id, previous) = (loaded.id.clone(), loaded.previous.clone());
+                        let undo: crate::core::library::Undo = Box::new(move |l| {
+                            if let Err(m) = undo_load(&id, &bytes, &previous) {
+                                l.notify(m, "circle-alert", None, None);
+                            }
+                        });
+                        super::state::act(cx, |l| l.notify(text, "check", Some(crate::core::i18n::tr("Rückgängig")), Some(undo)));
                     }
                 }
                 done(result, cx);
@@ -874,7 +902,7 @@ pub fn apply(t: Theme, window: Option<&mut Window>, cx: &mut App) {
     k.link = t.accent;
     k.link_hover = t.accent.opacity(0.85);
     k.link_active = t.accent.opacity(0.7);
-    k.switch = t.ink.opacity(if dark { 0.22 } else { 0.15 });
+    k.switch = if dark { t.ink.opacity(0.22) } else { t.control_border() };
     k.switch_thumb = gpui_kit::white();
     k.list_active = t.accent.opacity(0.15);
     k.list_hover = t.ink.opacity(0.06);

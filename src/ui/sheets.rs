@@ -37,7 +37,7 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
     let (sync_setup, conflicts) = lib.update(cx, |l, _| (std::mem::take(&mut l.show_sync_setup), std::mem::take(&mut l.show_conflicts)));
     if sync_setup {
         let view = cx.new(|cx| super::sync_panel::SyncSetup::new(window, cx));
-        show(view, 760., window, cx);
+        show_with(view, 760., false, false, window, cx);
         return;
     }
     if conflicts {
@@ -85,7 +85,6 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
         ((std::mem::take(&mut l.show_quick_add), l.quick_add_kind.take(), l.quick_add_day.take()), std::mem::take(&mut l.show_quick_open), l.new_note.take(), module, l.import_path.take(), l.reschedule_id.take(), setup, l.setup_only.take())
     });
     if setup {
-        let alone = only.is_some();
         let view = cx.new(|cx| {
             let setup = Setup::new(window, cx);
             match only {
@@ -99,7 +98,13 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
             super::state::return_focus_to_page(cx);
         })
         .detach();
-        window.open_dialog(cx, move |d, _, _| d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().overlay_closable(false).keyboard(alone).close_button(false).on_ok(pass_enter).child(view.clone()));
+        window.open_dialog(cx, move |d, _, _| {
+            let leaving = view.clone();
+            d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().overlay_closable(false).close_button(false).on_ok(pass_enter).on_cancel(move |_, _, cx| {
+                leaving.update(cx, |s, cx| s.leave(cx));
+                false
+            }).child(view.clone())
+        });
     } else if let Some(p) = import {
         let view = cx.new(|cx| ImportCalendar::new(&p, cx));
         show(view, 640., window, cx);

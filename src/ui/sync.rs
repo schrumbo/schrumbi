@@ -34,6 +34,8 @@ pub struct Sync {
     pub offline: bool,
     /// The workspace has no remote, which is how it was set up: states are only saved here.
     pub local_only: bool,
+    /// The app's own files stay on this device, as `.gitignore` said at the last refresh.
+    pub app_data_left_out: bool,
     /// When the newest state was made, as a Unix time.
     pub last_commit: Option<i64>,
     pub conflicts: Vec<ConflictFile>,
@@ -212,7 +214,7 @@ pub fn hide_offer(cx: &mut App) {
 pub fn refresh(cx: &mut App) {
     let Some(git) = get(cx).git.clone() else { return };
     let generation = get(cx).generation;
-    let task = cx.background_spawn(async move { git.status().map(|status| (status, git.last_commit_time(), git.has_remote())) });
+    let task = cx.background_spawn(async move { git.status().map(|status| (status, git.last_commit_time(), git.has_remote(), !git.app_data_synced())) });
     let job = cx.spawn(async move |cx| {
         let result = task.await;
         cx.update(|cx| {
@@ -221,10 +223,11 @@ pub fn refresh(cx: &mut App) {
                 return;
             }
             match result {
-                Ok((status, last_commit, remote)) => {
+                Ok((status, last_commit, remote, left_out)) => {
                     s.status = Some(status);
                     s.last_commit = last_commit;
                     s.local_only = !remote;
+                    s.app_data_left_out = left_out;
                 }
                 Err(e) => s.error = Some(e),
             }

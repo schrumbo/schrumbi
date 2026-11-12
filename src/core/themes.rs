@@ -523,7 +523,7 @@ pub fn install(bytes: &[u8], design: &Design) -> io::Result<Placed> {
             Ok(old) => {
                 let same = match parse(&old) {
                     Ok(d) => d.name == design.name,
-                    Err(_) => true,
+                    Err(_) => false,
                 };
                 if !same {
                     n += 1;

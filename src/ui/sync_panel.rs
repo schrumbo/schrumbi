@@ -886,13 +886,17 @@ impl Render for SyncSetup {
 
 /// The switch for taking the app's own files (tasks, cards, settings) along; shown on the sync page of the settings.
 pub fn app_data_switch(cx: &App) -> Switch {
-    let on = sync::get(cx).git.as_ref().is_none_or(|g| g.app_data_synced());
-    Switch::new("s-app-data").checked(on).disabled(sync::get(cx).git.is_none()).on_click(|v, _, cx| set_app_data(*v, cx))
+    let s = sync::get(cx);
+    Switch::new("s-app-data").checked(!s.app_data_left_out).disabled(s.git.is_none() || s.step.is_some()).on_click(|v, _, cx| set_app_data(*v, cx))
 }
 
 /// Takes the app's own files in or out of sync; the files on disk are never touched.
 pub fn set_app_data(on: bool, cx: &mut App) {
+    if sync::get(cx).step.is_some() {
+        return;
+    }
     let Some(git) = sync::get(cx).git.clone() else { return };
+    cx.global_mut::<sync::Sync>().app_data_left_out = !on;
     let message = if on { tr("App-Daten wieder dabei") } else { tr("App-Daten bleiben hier") };
     let task = cx.background_spawn(async move { git.set_app_data_synced(on, &message) });
     cx.spawn(async move |cx| {

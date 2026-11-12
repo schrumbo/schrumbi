@@ -187,7 +187,11 @@ impl Git {
             if add.is_empty() { current.clone() } else { format!("{current}{separator}{}\n", add.join("\n")) }
         };
         if text != current {
-            std::fs::write(&path, text).map_err(|e| GitError::Other(e.to_string()))?;
+            let temp = path.with_extension("schrumbi-tmp");
+            std::fs::write(&temp, text).and_then(|()| std::fs::rename(&temp, &path)).map_err(|e| {
+                let _ = std::fs::remove_file(&temp);
+                GitError::Other(e.to_string())
+            })?;
             self.run(&["add", "--", ".gitignore"])?;
         }
         if !on {
@@ -224,6 +228,54 @@ impl Git {
                 let _ = std::fs::write(&path, blob.raw);
             }
         }
+    }
+
+    /// Whether this device took the app file out of sync: it is not in the history here and listed in the local `.gitignore`.
+    pub(super) fn left_out_here(&self, name: &str) -> bool {
+        APP_DATA.contains(&name)
+            && self.run(&["cat-file", "-e", &format!("HEAD:{name}")]).is_err()
+            && read_ignore(&self.root.join(".gitignore")).is_ok_and(|ignore| lists(&ignore, name))
+    }
+
+    /// The app files that are on disk here but not in the history, read before taking in the other device's states,
+    /// for Git overwrites ignored files without asking.
+    pub(super) fn untracked_app_data(&self) -> Vec<(&'static str, Vec<u8>)> {
+        APP_DATA
+            .iter()
+            .filter(|name| self.run(&["cat-file", "-e", &format!("HEAD:{name}")]).is_err())
+            .filter_map(|name| std::fs::read(self.root.join(name)).ok().map(|bytes| (*name, bytes)))
+            .collect()
+    }
+
+    /// Puts this device's app files back after taking in the other device's states. A file still left out here stays as it was;
+    /// one that syncs again keeps both devices' changes and is saved as a new state. Returns whether a state was made.
+    pub(super) fn restore_app_data(&self, kept: &[(&str, Vec<u8>)], message: &str) -> Result<bool, GitError> {
+        let ignore = read_ignore(&self.root.join(".gitignore")).unwrap_or_default();
+        let mut staged = false;
+        for (name, bytes) in kept {
+            let path = self.root.join(name);
+            let now = std::fs::read(&path).ok();
+            if now.as_deref() == Some(bytes.as_slice()) {
+                continue;
+            }
+            if lists(&ignore, name) {
+                std::fs::write(&path, bytes).map_err(|e| GitError::Other(e.to_string()))?;
+                continue;
+            }
+            let local = String::from_utf8_lossy(bytes);
+            let merged = match now.as_deref().map(String::from_utf8_lossy) {
+                Some(theirs) => super::merge_json::merge_file(name, None, &local, &theirs).unwrap_or_else(|| local.to_string()),
+                None => local.to_string(),
+            };
+            std::fs::write(&path, merged).map_err(|e| GitError::Other(e.to_string()))?;
+            self.run(&["add", "--", name])?;
+            staged = true;
+        }
+        if !staged || self.output(&["diff", "--cached", "--quiet"], None, LOCAL)?.code == 0 {
+            return Ok(false);
+        }
+        self.checked(&["commit", "-q", "--cleanup=whitespace", "-F", "-"], Some(message.as_bytes().to_vec()), LOCAL)?;
+        Ok(true)
     }
 
     /// When the newest state was made, as a Unix time; `None` before the first.

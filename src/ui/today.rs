@@ -352,7 +352,7 @@ fn open_row(lib: &Library, t: &Theme) -> Option<Div> {
     let today = day::local_date(lib.now);
     let (tomorrow, next_week) = (today + chrono::Days::new(1), day::monday(today) + chrono::Days::new(7));
     let moving = ids.clone();
-    let shift = Button::new("move-all").small().ghost().label(tr("Alle verschieben")).dropdown_menu(move |menu, _, _| {
+    let shift = Button::new("move-all").small().ghost().label(tr("Alle verschieben")).dropdown_caret(true).dropdown_menu(move |menu, _, _| {
         let (a, b) = (moving.clone(), moving.clone());
         menu.item(PopupMenuItem::new(tr("Auf morgen")).on_click(move |_, _, cx| act(cx, |l| l.move_all(&a, tomorrow))))
             .item(PopupMenuItem::new(tr("Auf nächsten Montag")).on_click(move |_, _, cx| act(cx, |l| l.move_all(&b, next_week))))

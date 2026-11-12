@@ -299,7 +299,15 @@ pub struct QuickOpen {
     index: usize,
     focused: bool,
     link_to: Option<String>,
+    found: std::cell::RefCell<Option<Found>>,
     _subs: Vec<Subscription>,
+}
+
+/// What a query found, kept until the query, the catalog or the open tabs change.
+struct Found {
+    key: (String, usize, usize, usize),
+    files: Vec<(CatalogFile, bool)>,
+    extra: std::rc::Rc<Vec<VaultHit>>,
 }
 
 impl EventEmitter<Dismissed> for QuickOpen {}
@@ -311,6 +319,7 @@ struct VaultHit {
     icon: &'static str,
     open: Option<(PathBuf, String)>,
     create: Option<String>,
+    search: Option<String>,
 }
 
 fn vault_hits(query: &str) -> Vec<VaultHit> {
@@ -325,7 +334,7 @@ fn vault_hits(query: &str) -> Vec<VaultHit> {
         let tag = tag.to_lowercase();
         for (name, _) in vault.tag_tree().into_iter().filter(|(n, _)| n.starts_with(&tag)) {
             for path in vault.notes_with_tag(&name).into_iter().take(20) {
-                hits.push(VaultHit { label: path.file_stem().unwrap_or_default().to_string_lossy().to_string(), detail: format!("#{name}"), icon: "tag", open: Some((path, String::new())), create: None });
+                hits.push(VaultHit { label: path.file_stem().unwrap_or_default().to_string_lossy().to_string(), detail: format!("#{name}"), icon: "tag", open: Some((path, String::new())), create: None, search: None });
             }
         }
         hits.truncate(40);
@@ -337,16 +346,16 @@ fn vault_hits(query: &str) -> Vec<VaultHit> {
         let Some(facts) = vault.notes.get(&path) else { return hits };
         let sub = sub.to_lowercase();
         if block {
-            hits.extend(facts.blocks.iter().filter(|(id, _)| id.to_lowercase().contains(&sub)).map(|(id, _)| VaultHit { label: format!("^{id}"), detail: relative(&path), icon: "pilcrow", open: Some((path.clone(), format!("#^{id}"))), create: None }));
+            hits.extend(facts.blocks.iter().filter(|(id, _)| id.to_lowercase().contains(&sub)).map(|(id, _)| VaultHit { label: format!("^{id}"), detail: relative(&path), icon: "pilcrow", open: Some((path.clone(), format!("#^{id}"))), create: None, search: None }));
         } else {
-            hits.extend(facts.headings.iter().filter(|(_, h, _)| h.to_lowercase().contains(&sub)).map(|(_, h, _)| VaultHit { label: h.clone(), detail: relative(&path), icon: "heading", open: Some((path.clone(), format!("#{h}"))), create: None }));
+            hits.extend(facts.headings.iter().filter(|(_, h, _)| h.to_lowercase().contains(&sub)).map(|(_, h, _)| VaultHit { label: h.clone(), detail: relative(&path), icon: "heading", open: Some((path.clone(), format!("#{h}"))), create: None, search: None }));
         }
         return hits;
     }
     let lower = query.to_lowercase();
     for (path, facts) in &vault.notes {
         if let Some(alias) = facts.aliases.iter().find(|a| a.to_lowercase().contains(&lower)) {
-            hits.push(VaultHit { label: alias.clone(), detail: relative(path), icon: "corner-down-right", open: Some((path.clone(), String::new())), create: None });
+            hits.push(VaultHit { label: alias.clone(), detail: relative(path), icon: "corner-down-right", open: Some((path.clone(), String::new())), create: None, search: None });
         }
     }
     let needle = fold(query).split_whitespace().collect::<Vec<_>>().join(" ");
@@ -356,7 +365,7 @@ fn vault_hits(query: &str) -> Vec<VaultHit> {
     });
     hits.truncate(20);
     if vault.resolve(query, None).is_none() && !query.contains(['|', '#', '^', '[', ']', '\\', ':', '*', '?', '"', '<', '>']) {
-        hits.push(VaultHit { label: trf("Neue Notiz „%@“ anlegen", &[&query.to_string()]), detail: String::new(), icon: "file-plus", open: None, create: Some(query.to_string()) });
+        hits.push(VaultHit { label: trf("Neue Notiz „%@“ anlegen", &[&query.to_string()]), detail: String::new(), icon: "file-plus", open: None, create: Some(query.to_string()), search: None });
     }
     hits
 }
@@ -418,13 +427,30 @@ impl QuickOpen {
             InputEvent::PressEnter { .. } => this.open(cx),
             _ => {}
         })];
-        Self { query, index: 0, focused: false, link_to, _subs: subs }
+        Self { query, index: 0, focused: false, link_to, found: Default::default(), _subs: subs }
+    }
+
+    fn found(&self, cx: &App) -> (Vec<(CatalogFile, bool)>, std::rc::Rc<Vec<VaultHit>>) {
+        let q = self.query.read(cx).value().to_string();
+        let key = state::read(cx, |l| (q.clone(), l.catalog.as_ptr() as usize, l.catalog.len(), l.open_documents.len()));
+        if let Some(f) = self.found.borrow().as_ref().filter(|f| f.key == key) {
+            return (f.files.clone(), f.extra.clone());
+        }
+        let files = match &self.link_to {
+            Some(id) => self.link_results(id, cx),
+            None => self.results(cx),
+        };
+        let mut extra = if self.link_to.is_some() { Vec::new() } else { vault_hits(&q) };
+        let typed = q.trim();
+        if self.link_to.is_none() && files.is_empty() && !typed.is_empty() {
+            extra.insert(0, VaultHit { label: trf("In allen Dateien suchen: „%@“", &[&typed.to_string()]), detail: String::new(), icon: "search", open: None, create: None, search: Some(typed.to_string()) });
+        }
+        let extra = std::rc::Rc::new(extra);
+        *self.found.borrow_mut() = Some(Found { key, files: files.clone(), extra: extra.clone() });
+        (files, extra)
     }
 
     fn results(&self, cx: &App) -> Vec<(CatalogFile, bool)> {
-        if let Some(id) = &self.link_to {
-            return self.link_results(id, cx);
-        }
         let q = self.query.read(cx).value().to_string();
         state::read(cx, |l| {
             let terms: Vec<String> = fold(&q).split(' ').filter(|t| !t.is_empty()).map(String::from).collect();
@@ -476,11 +502,8 @@ impl QuickOpen {
         if self.link_to.is_some() {
             return;
         }
-        let files = self.results(cx);
-        let target = files.get(self.index).map(|(f, _)| f.file.path.clone()).or_else(|| {
-            let q = self.query.read(cx).value().to_string();
-            vault_hits(&q).get(self.index.saturating_sub(files.len())).and_then(|h| h.open.as_ref().map(|(p, _)| p.clone()))
-        });
+        let (files, extra) = self.found(cx);
+        let target = files.get(self.index).map(|(f, _)| f.file.path.clone()).or_else(|| extra.get(self.index.saturating_sub(files.len())).and_then(|h| h.open.as_ref().map(|(p, _)| p.clone())));
         if let Some(path) = target.filter(|p| super::vault_tools::in_vault(p, cx)) {
             cx.emit(Dismissed);
             super::vault_tools::open_in_obsidian(&path, cx);
@@ -488,7 +511,7 @@ impl QuickOpen {
     }
 
     fn open(&mut self, cx: &mut Context<Self>) {
-        let files = self.results(cx);
+        let (files, hits) = self.found(cx);
         if let Some(id) = self.link_to.clone() {
             if let Some((f, _)) = files.get(self.index) {
                 let p = f.file.path.clone();
@@ -503,8 +526,6 @@ impl QuickOpen {
             act(cx, |l| l.open_file(&p));
             return;
         }
-        let q = self.query.read(cx).value().to_string();
-        let hits = vault_hits(&q);
         let Some(hit) = hits.get(self.index - files.len()) else { return };
         cx.emit(Dismissed);
         if let Some((path, sub)) = &hit.open {
@@ -517,6 +538,11 @@ impl QuickOpen {
         } else if let Some(name) = &hit.create {
             act(cx, |l| l.create_link_target(name, None));
             state::reindex(cx);
+        } else if let Some(q) = hit.search.clone() {
+            act(cx, |l| {
+                l.search_query = q;
+                l.set_route(crate::core::library::Route::Search);
+            });
         }
     }
 }
@@ -529,9 +555,8 @@ impl Render for QuickOpen {
         }
         let t = Theme::get(cx);
         let room = list_room(f32::from(window.viewport_size().height), QUICK_CHROME, QUICK_LIST);
-        let items = self.results(cx);
+        let (items, extra) = self.found(cx);
         let linking = self.link_to.is_some();
-        let extra = if linking { Vec::new() } else { vault_hits(&self.query.read(cx).value()) };
         self.index = self.index.min((items.len() + extra.len()).saturating_sub(1));
         let me = cx.entity();
         let mut list = div().flex().flex_col().gap(px(space::XXS)).px(px(space::XS)).py(px(space::S));

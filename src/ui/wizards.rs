@@ -394,7 +394,7 @@ impl Setup {
     }
 
     /// What the close button and Esc do: the same as "Später einrichten", and on the last page the same as going on.
-    fn leave(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn leave(&mut self, cx: &mut Context<Self>) {
         self.finish(self.step == SETUP_DONE && self.only.is_none(), cx);
     }
 
@@ -462,6 +462,7 @@ impl Render for Setup {
             let folders = self.folders.clone();
             window.on_next_frame(move |window, cx| folders.update(cx, |f, cx| f.focus_filter(window, cx)));
         } else if self.focused_step != Some(self.step) {
+            window.focus(&self.focus, cx);
             let focus = self.focus.clone();
             window.on_next_frame(move |window, cx| window.focus(&focus, cx));
         }

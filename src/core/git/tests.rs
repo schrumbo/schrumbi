@@ -585,6 +585,50 @@ fn leaving_the_app_files_out_untracks_them_and_deletes_nothing_anywhere() {
 }
 
 #[test]
+fn taking_the_app_files_back_in_keeps_what_the_other_device_did_meanwhile() {
+    let (a, b) = devices("appdata-back");
+    let name = ".schrumbi-cards.json";
+    let store = |x: &str, y: &str| format!("{{\"version\":0,\"cards\":{{\"x\":{x},\"y\":{y}}}}}");
+    let fresh = "{\"reps\":0}";
+    let reviewed = |at: i64| format!("{{\"reps\":1,\"lastReview\":{at},\"stability\":2.0}}");
+    std::fs::write(a.root.join(name), store(fresh, fresh)).unwrap();
+    sync(&a).unwrap();
+    sync(&b).unwrap();
+    a.set_app_data_synced(false, "aus").unwrap();
+    sync(&a).unwrap();
+    sync(&b).unwrap();
+    assert!(!b.app_data_synced());
+    std::fs::write(a.root.join(name), store(&reviewed(5), fresh)).unwrap();
+    std::fs::write(b.root.join(name), store(fresh, &reviewed(7))).unwrap();
+    a.set_app_data_synced(true, "an").unwrap();
+    sync(&a).unwrap();
+    sync(&b).unwrap();
+    let merged: serde_json::Value = serde_json::from_str(&read(&b, name)).unwrap();
+    assert_eq!(merged["cards"]["y"]["lastReview"], 7, "the review made here while sync was off survives");
+    assert_eq!(merged["cards"]["x"]["lastReview"], 5);
+    sync(&a).unwrap();
+    assert_eq!(read(&a, name), read(&b, name));
+}
+
+#[test]
+fn leaving_the_app_files_out_while_the_other_device_changes_them_keeps_ours() {
+    let (a, b) = devices("appdata-race");
+    let name = ".schrumbi-state.json";
+    std::fs::write(a.root.join(name), "{\"v\":0}").unwrap();
+    sync(&a).unwrap();
+    sync(&b).unwrap();
+    std::fs::write(a.root.join(name), "{\"v\":\"hier\"}").unwrap();
+    a.set_app_data_synced(false, "aus").unwrap();
+    std::fs::write(b.root.join(name), "{\"v\":\"dort\"}").unwrap();
+    sync(&b).unwrap();
+    sync(&a).unwrap();
+    assert_eq!(read(&a, name), "{\"v\":\"hier\"}");
+    assert!(!a.run(&["ls-files"]).unwrap().contains(name));
+    sync(&b).unwrap();
+    assert_eq!(read(&b, name), "{\"v\":\"dort\"}");
+}
+
+#[test]
 fn an_unreadable_gitignore_is_never_rewritten() {
     let (a, _) = devices("badignore");
     let bytes = [0xffu8, 0xfe, b'\n', b'x', b'\n'];

@@ -283,7 +283,7 @@ struct Notice {
 enum ThemeNote {
     Problem(String),
     Removed { id: String, name: String, bytes: Vec<u8>, was_active: bool, stamp: u64 },
-    Replaced { id: String, name: String, bytes: Vec<u8>, stamp: u64 },
+    Replaced { id: String, name: String, bytes: Vec<u8>, previous: String, stamp: u64 },
 }
 
 /// The settings window: Allgemein, Semester, Module, Notizen, Tastenkürzel.
@@ -826,7 +826,6 @@ impl Settings {
 
     fn go(&mut self, tab: Tab) {
         self.tab = tab;
-        self.pages[tab as usize].set_offset(point(px(0.), px(0.)));
     }
 
     fn open_result(&mut self, hit: Hit, window: &mut Window, cx: &mut Context<Self>) {
@@ -835,6 +834,7 @@ impl Settings {
         match hit.to {
             HitTarget::Setting(tab, label) => {
                 self.go(tab);
+                self.pages[tab as usize].set_offset(point(px(0.), px(0.)));
                 self.light_up(label, window, cx);
             }
             HitTarget::Module(id) => self.show_module(id),
@@ -1090,7 +1090,7 @@ impl Settings {
                         theme::pick_and_load(window.window_handle(), cx, move |result, cx| {
                             let _ = me.update(cx, |s, cx| {
                                 s.theme_note = match result {
-                                    Ok(loaded) => loaded.replaced.map(|bytes| ThemeNote::Replaced { id: loaded.id, name: loaded.name, bytes, stamp: s.note_later(cx) }),
+                                    Ok(loaded) => loaded.replaced.map(|bytes| ThemeNote::Replaced { id: loaded.id, name: loaded.name, bytes, previous: loaded.previous, stamp: s.note_later(cx) }),
                                     Err(m) => Some(ThemeNote::Problem(m)),
                                 };
                                 cx.notify();
@@ -2666,10 +2666,10 @@ impl Settings {
                     .child(div().id("theme-note-text").min_w_0().truncate().tip(text.clone()).child(text))
                     .child(div().flex_none().text_color(t.tertiary).child("·"))
                     .child(div().flex_none().child(link_button("theme-undo", tr("Rückgängig"), t).on_click(cx.listener(|s, _, window, cx| {
-                        if let Some(ThemeNote::Replaced { id, bytes, .. }) = s.theme_note.take() {
-                            match themes::revert(&id, &bytes) {
-                                Ok(()) => theme::choose_file(&id, window, cx),
-                                Err(e) => s.theme_note = Some(ThemeNote::Problem(trf("Design konnte nicht gespeichert werden: %@", &[&e]))),
+                        if let Some(ThemeNote::Replaced { id, bytes, previous, .. }) = s.theme_note.take() {
+                            match theme::undo_load(&id, &bytes, &previous) {
+                                Ok(()) => theme::follow_undo(window, cx),
+                                Err(m) => s.theme_note = Some(ThemeNote::Problem(m)),
                             }
                         }
                         cx.notify();
