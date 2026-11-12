@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -69,7 +69,7 @@ fn color_of(node_color: Option<&String>) -> Option<Hsla> {
 /// A `.canvas` file as its own document. Coordinates are stored as in the file, the view only pans and zooms.
 pub struct CanvasView {
     path: PathBuf,
-    doc: Option<Canvas>,
+    doc: Option<Rc<Canvas>>,
     source: String,
     pan: (f32, f32),
     zoom: f32,
@@ -103,7 +103,7 @@ pub struct CanvasView {
 impl CanvasView {
     pub fn new(path: PathBuf, _: &mut Window, cx: &mut Context<Self>) -> Self {
         let source = std::fs::read_to_string(&path).unwrap_or_default();
-        let doc = Canvas::parse(&source);
+        let doc = Canvas::parse(&source).map(Rc::new);
         cx.on_release(|v: &mut Self, _| {
             if v.save_task.take().is_some() || v.unsaved {
                 let _held = v.writing.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -126,7 +126,7 @@ impl CanvasView {
         }
         let Ok(text) = std::fs::read_to_string(&self.path) else { return };
         if text != self.source {
-            self.doc = Canvas::parse(&text);
+            self.doc = Canvas::parse(&text).map(Rc::new);
             self.source = text;
             self.selection.clear();
         }
@@ -183,7 +183,7 @@ impl CanvasView {
         if let Some(doc) = &self.doc {
             to.push(doc.to_json());
         }
-        self.doc = Canvas::parse(&state);
+        self.doc = Canvas::parse(&state).map(Rc::new);
         self.last_edit = None;
         let known: BTreeSet<String> = self.doc.as_ref().map_or_else(Default::default, |d| d.nodes.iter().map(|n| n.id.clone()).collect());
         self.selection.retain(|id| known.contains(id));
@@ -216,7 +216,7 @@ impl CanvasView {
     }
 
     fn fit_all(&mut self) {
-        let area = self.doc.as_ref().and_then(Canvas::bounds);
+        let area = self.doc.as_deref().and_then(Canvas::bounds);
         self.fit_to(area);
     }
 
@@ -287,8 +287,9 @@ impl CanvasView {
     fn edge_at(&self, x: f64, y: f64) -> Option<String> {
         let doc = self.doc.as_ref()?;
         let reach = (6. / self.zoom) as f64;
+        let nodes = node_map(doc);
         doc.edges.iter().find_map(|e| {
-            let (a, b) = edge_points(doc, e)?;
+            let (a, b) = edge_points(&nodes, e)?;
             let (dx, dy) = (b.0 - a.0, b.1 - a.1);
             let t = (((x - a.0) * dx + (y - a.1) * dy) / (dx * dx + dy * dy).max(1.)).clamp(0., 1.);
             let (nx, ny) = (a.0 + dx * t, a.1 + dy * t);
@@ -298,7 +299,7 @@ impl CanvasView {
 
     fn add_text(&mut self, x: f64, y: f64, window: &mut Window, cx: &mut Context<Self>) {
         self.before_edit(false);
-        let Some(doc) = &mut self.doc else { return };
+        let Some(doc) = self.doc.as_mut().map(Rc::make_mut) else { return };
         let id = doc.new_id();
         doc.nodes.push(Node::text(id.clone(), x - 130., y - 30., String::new()));
         self.selection = BTreeSet::from([id.clone()]);
@@ -316,7 +317,7 @@ impl CanvasView {
         let size = self.bounds.get().size;
         let (x, y) = self.to_doc(point(self.origin().x + size.width / 2., self.origin().y + size.height / 2.));
         self.before_edit(false);
-        let Some(doc) = &mut self.doc else { return };
+        let Some(doc) = self.doc.as_mut().map(Rc::make_mut) else { return };
         let id = doc.new_id();
         let mut group = Node::text(id.clone(), x - 240., y - 160., String::new());
         group.kind = NodeKind::Group { label: Some(tr("Gruppe")), background: None, style: None };
@@ -331,7 +332,7 @@ impl CanvasView {
         let vault = index::current();
         let (mut x, y) = self.to_doc(at);
         self.before_edit(false);
-        let Some(doc) = &mut self.doc else { return };
+        let Some(doc) = self.doc.as_mut().map(Rc::make_mut) else { return };
         let mut added = BTreeSet::new();
         for path in paths {
             let Ok(relative) = path.strip_prefix(&vault.root) else {
@@ -422,7 +423,7 @@ impl CanvasView {
         }
         let merge = std::mem::replace(&mut self.typed, true);
         self.before_edit(merge);
-        let doc = self.doc.as_mut().unwrap();
+        let doc = Rc::make_mut(self.doc.as_mut().unwrap());
         match &mut doc.nodes[position].kind {
             NodeKind::Text(t) | NodeKind::Link(t) => *t = value,
             NodeKind::Group { label, .. } => *label = (!value.is_empty()).then_some(value),
@@ -436,7 +437,7 @@ impl CanvasView {
             return;
         }
         self.before_edit(false);
-        let Some(doc) = &mut self.doc else { return };
+        let Some(doc) = self.doc.as_mut().map(Rc::make_mut) else { return };
         for id in std::mem::take(&mut self.selection) {
             doc.remove_node(&id);
         }
@@ -448,7 +449,7 @@ impl CanvasView {
 
     fn duplicate(&mut self, cx: &mut Context<Self>) {
         self.before_edit(false);
-        let Some(doc) = &mut self.doc else { return };
+        let Some(doc) = self.doc.as_mut().map(Rc::make_mut) else { return };
         let mut fresh = BTreeSet::new();
         let copies: Vec<Node> = doc.nodes.iter().filter(|n| self.selection.contains(&n.id)).cloned().collect();
         for mut node in copies {
@@ -467,7 +468,7 @@ impl CanvasView {
             return;
         }
         self.before_edit(true);
-        let Some(doc) = &mut self.doc else { return };
+        let Some(doc) = self.doc.as_mut().map(Rc::make_mut) else { return };
         let moved = moved_with_groups(doc, &self.selection);
         for n in doc.nodes.iter_mut() {
             if grow {
@@ -509,7 +510,7 @@ impl CanvasView {
 
     fn connect(&mut self, from: &str, side: Option<&str>, to: &str, cx: &mut Context<Self>) {
         self.before_edit(false);
-        let Some(doc) = &mut self.doc else { return };
+        let Some(doc) = self.doc.as_mut().map(Rc::make_mut) else { return };
         let (Some(a), Some(b)) = (doc.nodes.iter().find(|n| n.id == from).cloned(), doc.nodes.iter().find(|n| n.id == to).cloned()) else { return };
         let (ax, ay) = (a.x + a.width / 2., a.y + a.height / 2.);
         let (bx, by) = (b.x + b.width / 2., b.y + b.height / 2.);
@@ -533,7 +534,7 @@ impl CanvasView {
 
     fn set_color(&mut self, color: Option<String>, cx: &mut Context<Self>) {
         self.before_edit(false);
-        let Some(doc) = &mut self.doc else { return };
+        let Some(doc) = self.doc.as_mut().map(Rc::make_mut) else { return };
         for n in doc.nodes.iter_mut().filter(|n| self.selection.contains(&n.id)) {
             n.color = color.clone();
         }
@@ -682,7 +683,7 @@ impl CanvasView {
                         }
                     }
                 }
-                if let Some(doc) = &mut self.doc {
+                if let Some(doc) = self.doc.as_mut().map(Rc::make_mut) {
                     for (id, sx, sy) in starts.iter() {
                         if let Some(n) = doc.nodes.iter_mut().find(|n| n.id == *id) {
                             n.x = (sx + dx).round();
@@ -693,7 +694,7 @@ impl CanvasView {
             }
             Some(Gesture::Resize { id, handle, from, start }) => {
                 let (dx, dy) = (x - from.0, y - from.1);
-                if let Some(doc) = &mut self.doc
+                if let Some(doc) = self.doc.as_mut().map(Rc::make_mut)
                     && let Some(n) = doc.nodes.iter_mut().find(|n| n.id == *id)
                 {
                     let (sx, sy, sw, sh) = *start;
@@ -875,9 +876,17 @@ fn moved_with_groups(doc: &Canvas, selection: &BTreeSet<String>) -> BTreeSet<Str
     moved
 }
 
-fn edge_points(doc: &Canvas, e: &Edge) -> Option<((f64, f64), (f64, f64))> {
-    let a = doc.nodes.iter().find(|n| n.id == e.from)?;
-    let b = doc.nodes.iter().find(|n| n.id == e.to)?;
+fn node_map(doc: &Canvas) -> HashMap<&str, &Node> {
+    let mut map = HashMap::with_capacity(doc.nodes.len());
+    for n in &doc.nodes {
+        map.entry(n.id.as_str()).or_insert(n);
+    }
+    map
+}
+
+fn edge_points(nodes: &HashMap<&str, &Node>, e: &Edge) -> Option<((f64, f64), (f64, f64))> {
+    let a = *nodes.get(e.from.as_str())?;
+    let b = *nodes.get(e.to.as_str())?;
     let from_side = e.from_side.clone().unwrap_or_else(|| Canvas::facing_side(a, b.x + b.width / 2., b.y + b.height / 2.).to_string());
     let to_side = e.to_side.clone().unwrap_or_else(|| Canvas::facing_side(b, a.x + a.width / 2., a.y + a.height / 2.).to_string());
     Some((Canvas::side_point(a, &from_side), Canvas::side_point(b, &to_side)))
@@ -885,20 +894,35 @@ fn edge_points(doc: &Canvas, e: &Edge) -> Option<((f64, f64), (f64, f64))> {
 
 /// Cards scale with the zoom, which the regular reader cannot; this draws the common blocks at any size.
 fn mini_markdown(source: &str, zoom: f32, t: &Theme) -> AnyElement {
-    static BLOCK_ID: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\s\^[A-Za-z0-9-]+\s*$").unwrap());
     let size = font::BODY * zoom;
-    let lines = source.lines().take(60).map(|line| {
-        let line = BLOCK_ID.replace(line, "");
-        let trimmed = line.trim_start();
-        let level = trimmed.chars().take_while(|c| *c == '#').count();
-        let (text_part, scale, bold) = match level {
-            1..=6 if trimmed.chars().nth(level) == Some(' ') => (trimmed[level + 1..].to_string(), 1.5 - level as f32 * 0.08, true),
-            _ => (trimmed.strip_prefix("- ").map_or_else(|| trimmed.to_string(), |r| format!("• {r}")), 1., false),
-        };
-        let plain = strip_inline(&text_part);
-        div().min_h(px(size * 1.4)).text_size(px(size * scale)).line_height(px(size * scale * 1.35)).when(bold, |d| d.font_weight(FontWeight::SEMIBOLD)).child(plain)
+    let lines = MINI_LINES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() > 512 {
+            cache.clear();
+        }
+        cache.entry(source.to_string()).or_insert_with(|| Rc::new(mini_lines(source))).clone()
     });
+    let lines = lines.iter().map(|(plain, scale, bold)| div().min_h(px(size * 1.4)).text_size(px(size * scale)).line_height(px(size * scale * 1.35)).when(*bold, |d| d.font_weight(FontWeight::SEMIBOLD)).child(plain.clone()));
     div().p(px(pad(space::M, zoom))).size_full().overflow_hidden().flex().flex_col().gap(px(space::XXS * zoom)).text_color(t.ink).children(lines).into_any_element()
+}
+
+/// The lines a card sketch draws: text, size against the body text and whether it is bold.
+fn mini_lines(source: &str) -> Vec<(SharedString, f32, bool)> {
+    static BLOCK_ID: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\s\^[A-Za-z0-9-]+\s*$").unwrap());
+    source
+        .lines()
+        .take(60)
+        .map(|line| {
+            let line = BLOCK_ID.replace(line, "");
+            let trimmed = line.trim_start();
+            let level = trimmed.chars().take_while(|c| *c == '#').count();
+            let (text_part, scale, bold) = match level {
+                1..=6 if trimmed.chars().nth(level) == Some(' ') => (trimmed[level + 1..].to_string(), 1.5 - level as f32 * 0.08, true),
+                _ => (trimmed.strip_prefix("- ").map_or_else(|| trimmed.to_string(), |r| format!("• {r}")), 1., false),
+            };
+            (SharedString::from(strip_inline(&text_part)), scale, bold)
+        })
+        .collect()
 }
 
 fn strip_inline(line: &str) -> String {
@@ -1002,16 +1026,23 @@ impl Render for CanvasView {
                 out
             })
             .collect();
+        let by_id = node_map(&doc);
+        let (left, top) = ((-40. - pan.0) / zoom, (-40. - pan.1) / zoom);
+        let (right, bottom) = ((vw + 40. - pan.0) / zoom, (vh + 40. - pan.1) / zoom);
+        let shown = |a: (f64, f64), b: (f64, f64)| (a.0.max(b.0) as f32) >= left && (a.0.min(b.0) as f32) <= right && (a.1.max(b.1) as f32) >= top && (a.1.min(b.1) as f32) <= bottom;
         let edge_lines: Vec<((f64, f64), (f64, f64), Hsla, bool, bool)> = doc.edges.iter().filter_map(|e| {
-            let (a, b) = edge_points(&doc, e)?;
+            let (a, b) = edge_points(&by_id, e).filter(|(a, b)| shown(*a, *b))?;
             let selected = self.selected_edge.as_ref() == Some(&e.id);
             Some((a, b, if selected { accent } else { color_of(e.color.as_ref()).unwrap_or(t.secondary) }, e.to_end.as_deref().unwrap_or("arrow") == "arrow", e.from_end.as_deref() == Some("arrow")))
         }).collect();
         let labels: Vec<AnyElement> = doc.edges.iter().filter(|_| !far).filter_map(|e| {
             let label = e.label.clone()?;
-            let (a, b) = edge_points(&doc, e)?;
+            let (a, b) = edge_points(&by_id, e)?;
             let (x, y) = self.to_view((a.0 + b.0) / 2., (a.1 + b.1) / 2.);
             let half = label.chars().count() as f32 * font::CAPTION * 0.28 + space::XS;
+            if x + half < 0. || x - half > vw || y + font::CAPTION * 2. < 0. || y - font::CAPTION > vh {
+                return None;
+            }
             Some(div().absolute().left(px(x - half)).top(px(y - font::CAPTION)).px(px(space::XS)).rounded(px(radius::SMALL)).bg(t.content).text_size(px(font::CAPTION)).text_color(t.secondary).child(label).into_any_element())
         }).collect();
         let preview = match &self.gesture {
@@ -1119,7 +1150,7 @@ impl Render for CanvasView {
             });
             if span.is_none()
                 && let Some(edge) = self.selected_edge.as_ref().and_then(|id| doc.edges.iter().find(|e| e.id == *id))
-                && let Some((a, b)) = edge_points(&doc, edge)
+                && let Some((a, b)) = edge_points(&by_id, edge)
             {
                 let (x, y) = self.to_view((a.0 + b.0) / 2., (a.1 + b.1) / 2.);
                 span = Some((x, x, y));
@@ -1294,6 +1325,7 @@ impl Render for CanvasView {
 }
 
 thread_local! {
+    static MINI_LINES: std::cell::RefCell<HashMap<String, Rc<Vec<(SharedString, f32, bool)>>>> = std::cell::RefCell::new(HashMap::new());
     static CARD_NOTES: std::cell::RefCell<std::collections::HashMap<String, std::rc::Rc<super::markdown_view::ParsedNote>>> = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
