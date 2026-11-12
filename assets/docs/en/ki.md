@@ -71,7 +71,7 @@ The column's tasks are there as commands:
 
 ## Changes
 
-Before every change Schrumbi asks in the column, or at the bottom right of the window when the column is closed. {key:tab} moves between the buttons, {key:return} presses the chosen one, {key:escape} declines.
+Before every change Schrumbi asks in the column, or at the bottom right of the window when the column is closed. {key:escape} declines. At the bottom right, {key:tab} moves between the buttons and {key:return} presses the chosen one.
 
 | Button | What happens |
 |---|---|

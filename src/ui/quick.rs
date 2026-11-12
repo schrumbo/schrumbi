@@ -276,7 +276,7 @@ impl Render for QuickAdd {
                         .cursor_pointer()
                         .key_nav()
                         .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
-                        .tip(format!("{} (Esc)", tr("Schließen")))
+                        .tip(format!("{}{}", tr("Schließen"), key_hint("escape")))
                         .on_click(move |_, _, cx| close.update(cx, |_, cx| cx.emit(Dismissed)))
                         .child(icon("x", iconsize::S, t.secondary)),
                 ),
@@ -379,24 +379,24 @@ pub fn list_room(window_height: f32, chrome: f32, want: f32) -> f32 {
 const QUICK_CHROME: f32 = 100.;
 const QUICK_LIST: f32 = 360.;
 
-/// How a name fits the whole query: 2 for the exact name without extension, 1 for a name starting with it, else 0; with the name's length for ties.
-fn name_rank(name: &str, terms: &[String]) -> (u8, usize) {
-    fit(&fold(crate::core::naming::stem(name)), &terms.join(" "))
-}
-
+/// How a folded name fits the whole query: 2 for the exact name, 1 for a name starting with it, else 0; with the name's length for ties.
 fn fit(folded: &str, needle: &str) -> (u8, usize) {
     let tier = if needle.is_empty() { 0 } else if folded == needle { 2 } else if folded.starts_with(needle) { 1 } else { 0 };
     (tier, folded.chars().count())
 }
 
 fn order(scored: &mut [(&CatalogFile, f64)], terms: &[String]) {
-    scored.sort_by(|a, b| {
-        let (x, y) = (name_rank(a.0.name(), terms), name_rank(b.0.name(), terms));
+    let needle = terms.join(" ");
+    let mut ranked: Vec<((u8, usize), (&CatalogFile, f64))> = scored.iter().map(|s| (fit(&fold(crate::core::naming::stem(s.0.name())), &needle), *s)).collect();
+    ranked.sort_by(|(x, a), (y, b)| {
         y.0.cmp(&x.0)
             .then_with(|| if x.0 > 0 { x.1.cmp(&y.1) } else { std::cmp::Ordering::Equal })
             .then_with(|| b.1.total_cmp(&a.1))
             .then_with(|| b.0.date.cmp(&a.0.date))
     });
+    for (slot, (_, s)) in scored.iter_mut().zip(ranked) {
+        *slot = s;
+    }
 }
 
 actions!(schrumbi_quick, [QuickUp, QuickDown]);

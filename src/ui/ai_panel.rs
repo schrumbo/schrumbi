@@ -2194,7 +2194,7 @@ impl AiPanel {
             .border_1()
             .border_color(t.accent.opacity(0.5))
             .bg(t.accent.opacity(0.04))
-            .children(ai::ask_body(group, cx, t))
+            .children(ai::ask_body(group, None, cx, t))
             .into_any_element()
     }
 
@@ -2431,7 +2431,7 @@ impl AiPanel {
         let action = if self.turn && empty {
             Button::new("ai-stop").small().icon(menu_icon("square")).tooltip(format!("{} ({})", tr("Stopp"), crate::core::prefs::Shortcut { key: ".".into(), command: true, shift: false, option: false, control: false }.display())).on_click(move |_, _, cx| me_send.update(cx, |p, cx| p.cancel(cx)))
         } else {
-            Button::new("ai-send").primary().small().icon(menu_icon("arrow-up")).disabled(empty).tooltip(tr("Senden (⏎)")).on_click(move |_, window, cx| {
+            Button::new("ai-send").primary().small().icon(menu_icon("arrow-up")).disabled(empty).tooltip(format!("{}{}", tr("Senden"), key_hint("return"))).on_click(move |_, window, cx| {
                 let text = input.read(cx).value().to_string();
                 if me_send.update(cx, |p, cx| p.send(text, cx)) {
                     input.update(cx, |s, cx| s.set_value("", window, cx));

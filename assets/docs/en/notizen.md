@@ -22,8 +22,9 @@ If Obsidian is set to a fixed folder for new notes, it goes there. {key:escape} 
 - {key:renameNote} also renames the open note, as does a click on its title at the top.
 - A click opens the file in its own tab. If it is already open, its tab comes to the front.
 - Dragging a file onto a folder moves it.
+- {key:escape} first empties the filter field, a second {key:escape} leaves it.
 - Below 800 pixels of window width the file list folds away so the note has room. The button at the left of the bar brings it back until you quit the app.
-- If the study folder is missing when saving, the message says so: it was moved or deleted.
+- If the study folder is missing when saving, the message says so: it was moved or deleted. {ui:Ordner neu anlegen} creates it again in the same place, {ui:Anderen Ordner wählen} opens another one. If only the folder of an open note is gone, {ui:Ordner neu anlegen} in its notice creates it again and saves the text.
 - Right-click → {ui:Abgabe zuordnen} makes the file count for a submission. The pill at the top of the note shows what it belongs to.
 - {ui:In den Papierkorb} does not ask. {key:Undo} brings the file back.
 - Very large files then live only in the system trash and come back from there. If the drive has no trash, they stay where they are.

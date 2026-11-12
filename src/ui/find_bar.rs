@@ -236,7 +236,7 @@ impl Render for FindBar {
             .child(Button::new("find-prev").ghost().size(px(control::S)).flex_none().track_focus(&prev_stop).accessibility_label(tr("Vorheriger Treffer")).icon(menu_icon("chevron-up")).disabled(!has).tooltip(format!("{} ({})", tr("Vorheriger Treffer"), step_hint(false))).on_click(move |_, _, cx| prev.update(cx, |_, cx| cx.emit(FindEvent::Step(false)))))
             .child(Button::new("find-next").ghost().size(px(control::S)).flex_none().track_focus(&next_stop).accessibility_label(tr("Nächster Treffer")).icon(menu_icon("chevron-down")).disabled(!has).tooltip(format!("{} ({})", tr("Nächster Treffer"), step_hint(true))).on_click(move |_, _, cx| next.update(cx, |_, cx| cx.emit(FindEvent::Step(true)))))
             .child(div().flex_1())
-            .child(Button::new("find-close").ghost().size(px(control::S)).flex_none().track_focus(&close_stop).accessibility_label(tr("Schließen")).icon(menu_icon("x")).tooltip(format!("{} (Esc)", tr("Schließen"))).on_click(move |_, _, cx| close.update(cx, |_, cx| cx.emit(FindEvent::Close))));
+            .child(Button::new("find-close").ghost().size(px(control::S)).flex_none().track_focus(&close_stop).accessibility_label(tr("Schließen")).icon(menu_icon("x")).tooltip(format!("{}{}", tr("Schließen"), key_hint("escape"))).on_click(move |_, _, cx| close.update(cx, |_, cx| cx.emit(FindEvent::Close))));
         div()
             .id("find-bar")
             .key_context("FindBar")

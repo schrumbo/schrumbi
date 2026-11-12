@@ -2553,7 +2553,17 @@ impl NoteView {
     fn save_notice(&self, window: &mut Window, cx: &mut Context<Self>, t: &Theme) -> impl IntoElement + use<> {
         let me = cx.entity();
         let pending = self.save_pending.is_some();
-        let retry = Button::new("save-retry").small().primary().label(tr("Erneut versuchen")).track_focus(&self.retry_focus).loading(pending).disabled(pending).on_click(move |_, _, cx| me.update(cx, |n, cx| n.retry_save(cx)));
+        let gone = self.save_problem.is_some() && folder_gone(&self.path);
+        let retry = Button::new("save-retry").small().primary().label(if gone { tr("Ordner neu anlegen") } else { tr("Erneut versuchen") }).track_focus(&self.retry_focus).loading(pending).disabled(pending).on_click(move |_, _, cx| {
+            me.update(cx, |n, cx| {
+                if gone && let Some(dir) = n.path.parent() && let Err(e) = std::fs::create_dir_all(dir) {
+                    n.save_problem = Some(trf("Ordner konnte nicht angelegt werden: %@", &[&e]));
+                    cx.notify();
+                    return;
+                }
+                n.retry_save(cx)
+            })
+        });
         let dirty = state::read(cx, |l| l.buffers.get(&self.path).is_some_and(|b| b.dirty));
         let open = self.save_problem.is_some() && dirty;
         let detail = self.save_problem.clone();
@@ -4773,7 +4783,7 @@ pub fn document_bar(current: &Path, actions: AnyElement, t: &Theme, window: &Win
         .items_center()
         .gap(px(space::S))
         .pl(px(space::S))
-        .pr(px(space::M))
+        .pr(px(space::M + fit.covered()))
         .flex_none().h(px(control::SUBBAR))
         .border_b_1()
         .border_color(if focused { t.accent.opacity(0.6) } else { t.separator })

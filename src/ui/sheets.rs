@@ -98,9 +98,10 @@ pub fn present(lib: &Entity<Library>, window: &mut Window, cx: &mut App) {
             super::state::return_focus_to_page(cx);
         })
         .detach();
-        window.open_dialog(cx, move |d, _, _| {
+        window.open_dialog(cx, move |d, window, _| {
             let leaving = view.clone();
-            d.entrance(DialogEntrance::FadeSlide).w(px(760.)).p_0().overlay_closable(false).close_button(false).on_ok(pass_enter).on_cancel(move |_, _, cx| {
+            let room = f32::from(window.viewport_size().width) - 2. * super::theme::space::L;
+            d.entrance(DialogEntrance::FadeSlide).w(px(760f32.min(room).max(0.))).p_0().overlay_closable(false).close_button(false).on_ok(pass_enter).on_cancel(move |_, _, cx| {
                 leaving.update(cx, |s, cx| s.leave(cx));
                 false
             }).child(view.clone())
