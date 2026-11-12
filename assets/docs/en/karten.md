@@ -30,6 +30,8 @@ The {{c1::variance}} is the square of the {{c2::standard deviation}}.
 
 Without typing: select text and {ui:Karte aus Auswahl…}, or {ui:Neue Karte} with {key:n}.
 
+While there are no cards, the page shows only the two simplest ways to write one; {ui:Mehr Schreibweisen} unfolds the rest.
+
 ## Study
 
 {key:space} starts. What is due today gets studied.
@@ -47,7 +49,7 @@ Without typing: select text and {ui:Karte aus Auswahl…}, or {ui:Neue Karte} wi
 | {key:Redo} | Give an undone answer again |
 | {key:escape} | Quit |
 
-Scheduling uses FSRS-6, like Anki. A new day starts at 4 am.
+Scheduling uses FSRS-6, like Anki. A higher target means more reviews: above 95 % costs a lot of time for little gain. A new day starts at 4 am.
 
 ## Before the Exam
 

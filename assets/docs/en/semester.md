@@ -57,7 +57,7 @@ Files belong to the week's submission once you file them, create a note for it o
 
 ## Grades
 
-{key:goRecord} shows points and grades.
+{key:goRecord} shows points and grades. {ui:Leistungen} appears in the sidebar once a module has points or a grade; the shortcut and the command palette open the page before that too.
 
 - A {ui:Note} sets {ui:Bestanden} to match the grading system.
 - Clicking a module name opens its partial results, such as exam 60 % and project 40 %.

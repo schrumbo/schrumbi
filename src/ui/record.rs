@@ -11,7 +11,7 @@ use super::fields::{Fields, format_grade, format_number, parse_number};
 use super::pages::Pages;
 use super::state::edit_config;
 use super::motion::{self, Soft};
-use super::theme::{Theme, control, font, space, radius};
+use super::theme::{Theme, control, font, hover, space, radius};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::model::{GradeComponent, GradingSystem, StudyConfig};
@@ -37,6 +37,7 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
     let weight = sum(graded.iter().filter_map(|m| m.ects));
     let average = (weight > 0.).then(|| graded.iter().map(|m| m.effective_grade().unwrap_or(0.) * m.ects.unwrap_or(0.)).sum::<f64>() / weight);
     let passed = c.modules.iter().filter(|m| m.passed).count();
+    let started = planned > 0. || !graded.is_empty() || passed > 0;
 
     let tiles = div()
         .flex()
@@ -59,7 +60,14 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
                 .child(caption(tr("bestanden"), t)),
         );
 
-    let mut col = div().w_full().max_w(px(control::CONTENT_MAX)).mx_auto().p(px(space::XL)).flex().flex_col().gap(px(space::XL)).child(tiles);
+    let mut col = div().w_full().max_w(px(control::CONTENT_MAX)).mx_auto().p(px(space::XL)).flex().flex_col().gap(px(space::XL));
+    col = if started {
+        col.child(tiles)
+    } else if c.modules.is_empty() {
+        col.child(caption(tr("Noch keine Module. Du legst sie unter Einstellungen → Module an."), t))
+    } else {
+        col.child(caption(tr("Trag bei einem Modul Punkte oder eine Note ein, dann siehst du hier deinen Stand."), t))
+    };
 
     for s in &semesters {
         let ms: Vec<_> = c.modules.iter().filter(|m| m.semester == s.id).collect();
@@ -95,7 +103,7 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
     }
     let grade_keys: Vec<String> = semesters.iter().flat_map(|s| c.modules.iter().filter(|m| m.semester == s.id).map(|m| format!("grade-{}", m.id))).collect();
     fields.chain(&grade_keys, window, cx);
-    if graded.is_empty() {
+    if started && graded.is_empty() {
         col = col.child(caption(tr("Notensystem und Bezeichnung der Punkte änderst du unter Einstellungen → Allgemein. Teilleistungen (z. B. Klausur 60 %, Projekt 40 %) ergeben die Modulnote automatisch."), t));
     }
     div().w_full().flex().justify_center().child(col)
@@ -150,7 +158,7 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
                 .ml(px(-space::S))
                 .rounded(px(radius::INNER))
                 .cursor_pointer().key_nav()
-                .soft(t.ink.opacity(0.06), radius::INNER)
+                .soft(t.ink.opacity(hover::ROW), radius::INNER)
                 .tip(if expanded { tr("Teilleistungen ausblenden") } else { tr("Teilleistungen anzeigen") })
                 .on_click({
                     let id = id.clone();
@@ -174,14 +182,29 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
                 None => div().id(SharedString::from(format!("computed-{id}"))).w(px(90.)).text_right().child(m.effective_grade().map_or("–".into(), |g| format_grade(g, system))).tip(tr("Aus Teilleistungen berechnet")).into_any_element(),
             })
         })
-        .child(div().w(px(90.)).flex().justify_center().child(Checkbox::new(SharedString::from(format!("passed-{id}"))).checked(m.passed).on_click(move |v, _, cx| {
-            let (id, v) = (i3.clone(), *v);
-            edit_config(cx, |c| {
-                if let Some(m) = c.module_mut(&id) {
-                    m.passed = v;
-                }
-            });
-        })));
+        .child({
+            let passed = m.passed;
+            div()
+                .id(SharedString::from(format!("passed-row-{id}")))
+                .w(px(90.))
+                .min_h(px(control::S))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(radius::INNER))
+                .cursor_pointer()
+                .key_nav()
+                .soft(t.ink.opacity(hover::ROW), radius::INNER)
+                .on_click(move |_, _, cx| {
+                    let id = i3.clone();
+                    edit_config(cx, |c| {
+                        if let Some(m) = c.module_mut(&id) {
+                            m.passed = !passed;
+                        }
+                    });
+                })
+                .child(Checkbox::new(SharedString::from(format!("passed-{id}"))).checked(passed).tab_stop(false))
+        });
     div().flex().flex_col().gap(px(space::S)).px(px(space::L)).py(px(space::S)).child(header).child(motion::reveal(SharedString::from(format!("parts-{}", m.id)), expanded, if expanded { div().pl(px(space::XXL)).child(components_editor(m, system, fields, window, cx, t)) } else { div() }))
 }
 

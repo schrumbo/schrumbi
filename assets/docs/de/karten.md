@@ -30,6 +30,8 @@ Die {{c1::Varianz}} ist das Quadrat der {{c2::Standardabweichung}}.
 
 Ohne Tippen: Text markieren und {ui:Karte aus Auswahl…}, oder {ui:Neue Karte} mit {key:n}.
 
+Solange es keine Karten gibt, zeigt die Seite nur die zwei einfachsten Schreibweisen; {ui:Mehr Schreibweisen} klappt den Rest auf.
+
 ## Lernen
 
 {key:space} startet. Gelernt wird, was heute fällig ist.
@@ -47,7 +49,7 @@ Ohne Tippen: Text markieren und {ui:Karte aus Auswahl…}, oder {ui:Neue Karte} 
 | {key:Redo} | Zurückgenommene Antwort erneut geben |
 | {key:escape} | Beenden |
 
-Geplant wird mit FSRS-6, wie in Anki. Ein neuer Tag beginnt um 4 Uhr.
+Geplant wird mit FSRS-6, wie in Anki. Ein höheres Ziel heißt mehr Wiederholungen: Über 95 % kostet viel Zeit und bringt wenig. Ein neuer Tag beginnt um 4 Uhr.
 
 ## Vor der Prüfung
 

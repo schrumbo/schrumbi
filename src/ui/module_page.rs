@@ -14,7 +14,7 @@ use super::browser::week_title;
 use super::pages::Pages;
 use super::state::act;
 use super::motion::{self, Soft};
-use super::theme::{Theme, control, font, radius, space, iconsize};
+use super::theme::{Theme, control, font, hover, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::filing::FileRole;
@@ -104,7 +104,6 @@ impl Render for SplitDrag {
 }
 
 fn disclosure(id: &'static str, title: String, open: bool, view: Entity<Pages>, toggle: fn(&mut ModuleState), t: &Theme) -> Stateful<Div> {
-    let hover = t.ink.opacity(0.05);
     div()
         .id(id)
         .flex()
@@ -115,7 +114,7 @@ fn disclosure(id: &'static str, title: String, open: bool, view: Entity<Pages>, 
         .mt(px(space::S))
         .rounded(px(radius::INNER))
         .cursor_pointer().key_nav()
-        .soft(hover, radius::INNER)
+        .soft(t.ink.opacity(hover::ROW), radius::INNER)
         .child(motion::chevron("chevron", open, t.tertiary))
         .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
         .on_click(move |_, _, cx| view.update(cx, |p, cx| {
@@ -132,7 +131,7 @@ fn file_pills(lib: &Library, a: &Assignment, st: &ModuleState, view: Entity<Page
     let all: Vec<(std::path::PathBuf, bool)> = e.briefs.iter().map(|p| (p.clone(), true)).chain(e.files.iter().map(|p| (p.clone(), false))).collect();
     let expanded = st.expanded_files.contains(&a.id);
     let limit = if expanded { all.len() } else { 3 };
-    let (fill, hover) = (t.ink.opacity(0.05), t.ink.opacity(0.1));
+    let (fill, over) = (t.ink.opacity(0.05), t.ink.opacity(hover::CONTROL));
     let mut row = div().pl(px(space::XXL)).flex().flex_wrap().gap(px(space::XS));
     for (path, brief) in all.iter().take(limit) {
         let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -145,11 +144,12 @@ fn file_pills(lib: &Library, a: &Assignment, st: &ModuleState, view: Entity<Page
                 .items_center()
                 .gap(px(space::XS))
                 .max_w(px(180.))
+                .min_h(px(control::S))
                 .px(px(space::S))
                 .py(px(space::XS))
                 .rounded(px(radius::CONTROL))
                 .bg(fill)
-                .soft(hover, radius::CONTROL)
+                .soft(over, radius::CONTROL)
                 .cursor_pointer().key_nav()
                 .text_size(px(font::CAPTION))
                 .tip(if brief { trf("Aufgabenstellung: %@", &[&name]) } else { name.clone() })
@@ -174,11 +174,14 @@ fn file_pills(lib: &Library, a: &Assignment, st: &ModuleState, view: Entity<Page
         row = row.child(
             div()
                 .id(SharedString::from(format!("more-files-{}", a.id)))
+                .min_h(px(control::S))
+                .flex()
+                .items_center()
                 .px(px(space::S))
                 .py(px(space::XS))
                 .rounded(px(radius::CONTROL))
                 .bg(fill)
-                .soft(hover, radius::CONTROL)
+                .soft(over, radius::CONTROL)
                 .cursor_pointer().key_nav()
                 .text_size(px(font::CAPTION))
                 .font_weight(FontWeight::MEDIUM)
@@ -238,7 +241,7 @@ fn show_all(id: &'static str, total: usize, all: bool, view: Entity<Pages>, togg
         .rounded(px(radius::INNER))
         .cursor_pointer()
         .key_nav()
-        .soft(t.ink.opacity(0.05), radius::INNER)
+        .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
         .text_size(px(font::CALLOUT))
         .text_color(t.accent_text)
         .child(if all { tr("Weniger zeigen") } else { trf("Alle %lld zeigen", &[&total]) })
@@ -431,7 +434,7 @@ pub fn header(lib: &Library, m: &Module, width: f32, t: &Theme) -> Div {
 }
 
 fn more_link(id: &'static str, label: String, t: &Theme) -> Stateful<Div> {
-    div().id(id).flex_none().flex().items_center().h(px(control::S)).px(px(space::S)).mr(px(-space::S)).cursor_pointer().key_nav().soft(t.ink.opacity(0.05), radius::INNER).text_size(px(font::CALLOUT)).text_color(t.accent_text).child(label)
+    div().id(id).flex_none().flex().items_center().h(px(control::S)).px(px(space::S)).mr(px(-space::S)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::INNER).text_size(px(font::CALLOUT)).text_color(t.accent_text).child(label)
 }
 
 fn section(title: impl IntoElement, link: Option<Stateful<Div>>) -> Div {
@@ -596,7 +599,6 @@ fn overview_rail(lib: &Library, m: &Module, t: &Theme) -> Option<Div> {
     let links: Vec<_> = m.links.iter().filter(|k| k.url().is_some()).cloned().collect();
     if !links.is_empty() {
         any = true;
-        let hover = t.ink.opacity(0.05);
         let rows = links.into_iter().enumerate().map(|(i, link)| {
             let url = link.url().map(|u| u.to_string()).unwrap_or_default();
             div()
@@ -608,7 +610,7 @@ fn overview_rail(lib: &Library, m: &Module, t: &Theme) -> Option<Div> {
                 .h(px(super::theme::control::M))
                 .cursor_pointer()
                 .key_nav()
-                .soft(hover, 0.)
+                .soft_row(t.ink.opacity(hover::ROW))
                 .tip(link.address.clone())
                 .child(icon("external-link", iconsize::S, t.secondary))
                 .child(div().flex_1().min_w_0().truncate().child(if link.title.is_empty() { link.address.clone() } else { link.title.clone() }))
@@ -628,7 +630,7 @@ pub fn overview(lib: &Library, m: &Module, width: f32, st: &ModuleState, view: E
     let wide = width >= TWO_COLUMNS;
     let edit_id = m.id.clone();
     let hint = rail.is_none().then(|| {
-        div().id("module-add-details").cursor_pointer().key_nav().text_size(px(font::CALLOUT)).text_color(t.secondary).hover({ let c = t.primary; move |s| s.text_color(c) }).child(tr("Termine, Links und Noten in den Moduleinstellungen ergänzen")).on_click(move |_, _, cx| super::settings::open_module(&edit_id, cx))
+        div().id("module-add-details").min_h(px(control::S)).flex().items_center().px(px(space::S)).mx(px(-space::S)).rounded(px(radius::INNER)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::INNER).text_size(px(font::CALLOUT)).text_color(t.secondary).child(tr("Termine, Links und Noten in den Moduleinstellungen ergänzen")).on_click(move |_, _, cx| super::settings::open_module(&edit_id, cx))
     });
     let body = if wide {
         let (rail_width, gap) = if width >= WIDE_RAIL { (RAIL, space::XXL) } else { (NARROW_RAIL, space::XL) };

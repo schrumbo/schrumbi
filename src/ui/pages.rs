@@ -11,7 +11,7 @@ use super::preview::FilePreview;
 use super::record::{self, RecordState};
 use super::state::{self, act};
 use super::motion::Soft;
-use super::theme::{Theme, control, font, space, iconsize, radius, tab};
+use super::theme::{Theme, control, font, hover, space, iconsize, radius, tab};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::tr;
@@ -194,7 +194,6 @@ impl Pages {
                 .children(entries.into_iter().map(|a| {
                     let id = a.id.clone();
                     let color = t.palette(lib.module(a).map_or("blue", |m| m.color.as_str()));
-                    let hover = t.ink.opacity(0.06);
                     div()
                         .id(SharedString::from(format!("entry-{}", a.id)))
                         .flex()
@@ -204,7 +203,7 @@ impl Pages {
                         .py(px(space::XS))
                         .rounded(px(radius::INNER))
                         .cursor_pointer().key_nav()
-                        .soft(hover, radius::INNER)
+                        .soft(t.ink.opacity(hover::ROW), radius::INNER)
                         .text_size(px(font::CAPTION))
                         .tip(tr("Details öffnen"))
                         .child(div().size(px(space::S)).rounded_full().bg(color))
@@ -494,7 +493,7 @@ impl Pages {
                     .child(div().flex_none().min_w_0().h_full().overflow_hidden().w(relative(self.split_share)).capture_any_mouse_down(|_, _, cx| set_beside_active(false, cx)).child(view))
                     .child(div().h_full().w(px(space::XS)).flex_none().border_r_1().border_color(t.separator))
                     .child(div().flex_1().min_w_0().h_full().overflow_hidden().capture_any_mouse_down(|_, _, cx| set_beside_active(true, cx)).on_action(move |_: &super::app::CloseTab, _, cx| super::documents::close_tab(&closing, cx)).child(right))
-                    .child(div().id("doc-split").absolute().top_0().bottom_0().left(relative(self.split_share)).w(px(tab::SPLIT_GRIP)).cursor_col_resize().soft_edge(accent.opacity(0.06), 0., accent.opacity(0.3), space::XS).on_click(cx.listener(|p, e: &ClickEvent, _, cx| {
+                    .child(div().id("doc-split").absolute().top_0().bottom_0().left(relative(self.split_share)).w(px(tab::SPLIT_GRIP)).cursor_col_resize().soft_edge(accent.opacity(hover::ROW), 0., accent.opacity(0.3), space::XS).on_click(cx.listener(|p, e: &ClickEvent, _, cx| {
                         if e.click_count() >= 2 {
                             p.split_share = 0.5;
                             crate::core::prefs::update(|prefs| prefs.split_share = 0.5);

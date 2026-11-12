@@ -7,7 +7,7 @@ use gpui_kit::*;
 
 use super::motion::{self, Soft};
 use super::state::{self, act};
-use super::theme::{Theme, font, hints, iconsize, radius, space};
+use super::theme::{Theme, control, font, hints, hover, iconsize, radius, space};
 use super::widgets::*;
 use super::widgets::Tip as _;
 use crate::core::i18n::tr;
@@ -222,14 +222,14 @@ pub fn card(right: f32, bottom: f32, t: &Theme, cx: &App) -> Option<AnyElement> 
                             div()
                                 .id("tip-close")
                                 .flex_none()
-                                .size(px(space::L))
-                                .rounded_full()
+                                .size(px(control::S))
+                                .rounded(px(radius::INNER))
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .cursor_pointer()
                                 .key_nav()
-                                .soft(t.ink.opacity(0.1), radius::FULL)
+                                .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
                                 .tip(tr("Für heute schließen"))
                                 .on_click(|_, _, cx| dismiss(cx))
                                 .child(icon("x", iconsize::XS, t.secondary)),

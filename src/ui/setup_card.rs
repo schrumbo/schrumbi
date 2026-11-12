@@ -11,7 +11,7 @@ use gpui_kit::*;
 use super::fields::Fields;
 use super::motion::{self, Soft};
 use super::state::{self, act, edit_config};
-use super::theme::{Theme, font, hints, iconsize, radius, space};
+use super::theme::{Theme, control, font, hints, hover, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{Library, Route};
@@ -20,6 +20,25 @@ use crate::core::naming::Naming;
 use crate::core::prefs::{self, NoteEditor, SetupPrefs};
 use crate::core::setup::{self, Facts, Item};
 use crate::core::{day, schedule, workspace};
+
+thread_local! {
+    static SKIPPED_TOAST: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Lets Undo take back "Alle überspringen" while its toast is still the one shown; any other Undo goes on to the history.
+pub fn register_undo(cx: &mut App) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        cx.on_action(|_: &super::app::Undo, cx| {
+            let live = SKIPPED_TOAST.take().is_some_and(|id| state::read(cx, |l| l.toast.as_ref().is_some_and(|t| t.id == id)));
+            if live {
+                act(cx, |l| l.perform_toast_action());
+            } else {
+                cx.propagate();
+            }
+        });
+    });
+}
 
 /// The list at the top of the overview that ticks itself as the workspace gets set up.
 pub struct SetupCard {
@@ -85,13 +104,6 @@ impl Render for CalendarAsk {
                 cx.notify();
             })));
         }
-        if !self.expanded {
-            return div().flex().child(Button::new("calendar-ask-open").small().label(tr("Moodle-Kalender verbinden")).on_click(cx.listener(|this, _, _, cx| {
-                this.expanded = true;
-                this.focus = true;
-                cx.notify();
-            })));
-        }
         let value = self.draft.clone().or_else(|| state::calendar_source(cx)).unwrap_or_default();
         let me = cx.entity().downgrade();
         let field = self.fields.input("calendar-ask", &value, "https://…", window, cx, move |v, cx| {
@@ -109,12 +121,13 @@ impl Render for CalendarAsk {
                 }
             }));
         }
-        if std::mem::take(&mut self.focus) {
+        if self.expanded && std::mem::take(&mut self.focus) {
             let f = field.clone();
             cx.defer_in(window, move |_, window, cx| f.update(cx, |s, cx| s.focus(window, cx)));
         }
         let ready = value.trim().starts_with("http");
-        div()
+        let esc_field = field.clone();
+        let form = div()
             .w_full()
             .flex()
             .flex_col()
@@ -125,9 +138,42 @@ impl Render for CalendarAsk {
                     .flex()
                     .items_center()
                     .gap(px(space::S))
-                    .child(div().flex_1().min_w_0().max_w(px(hints::URL_WIDTH)).child(Input::new(&field).small()))
-                    .child(Button::new("calendar-ask-fetch").primary().small().label(tr("Abrufen")).disabled(!ready).on_click(cx.listener(|this, _, _, cx| this.fetch(cx)))),
-            )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .max_w(px(hints::URL_WIDTH))
+                            .capture_action(cx.listener(move |this, _: &gpui_kit::component::input::Escape, window, cx| {
+                                if !esc_field.read(cx).value().is_empty() {
+                                    esc_field.update(cx, |s, cx| s.set_value(String::new(), window, cx));
+                                    this.draft = Some(String::new());
+                                } else if this.folds {
+                                    this.expanded = false;
+                                    this.draft = None;
+                                    window.blur(cx);
+                                } else {
+                                    return;
+                                }
+                                cx.stop_propagation();
+                                cx.notify();
+                            }))
+                            .child(Input::new(&field).small()),
+                    )
+                    .child(Button::new("calendar-ask-fetch").primary().small().label(tr("Abrufen")).disabled(!ready).when(!ready, |b| b.tooltip(tr("Erst eine Adresse einfügen"))).on_click(cx.listener(|this, _, _, cx| this.fetch(cx)))),
+            );
+        let open = self.expanded;
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .when(!open, |d| {
+                d.child(div().flex().child(Button::new("calendar-ask-open").small().label(tr("Moodle-Kalender verbinden")).on_click(cx.listener(|this, _, _, cx| {
+                    this.expanded = true;
+                    this.focus = true;
+                    cx.notify();
+                }))))
+            })
+            .child(motion::reveal("calendar-ask-form", open, form))
     }
 }
 
@@ -412,10 +458,12 @@ impl SetupCard {
             .flex()
             .flex_col()
             .gap(px(space::S))
-            .child(div().flex().items_center().gap(px(space::M)).child(label(tr("Nach Muster benennen"), t)).child(Switch::new("setup-naming").checked(on).on_click(|v, _, cx| {
-                let v = *v;
-                edit_config(cx, |c| c.set_naming_convention(v));
-            })))
+            .child(div().flex().child(
+                toggle_row("setup-naming", div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(tr("Nach Muster benennen")), Switch::new("setup-naming-switch").checked(on).tab_stop(false), t, move |_, _, cx| edit_config(cx, |c| c.set_naming_convention(!on)))
+                    .w(px(hints::FORM_LABEL + space::M + 2. * space::XL))
+                    .mx(px(-space::S))
+                    .px(px(space::S)),
+            ))
             .when(on, |d| {
                 d.child(div().flex().items_center().gap(px(space::M)).child(label(tr("Dein Kürzel"), t)).child(div().w(px(hints::DATE_WIDTH)).child(Input::new(&author).small())))
                     .child(div().flex().items_center().gap(px(space::M)).child(label(tr("Beispiel"), t)).child(div().min_w_0().truncate().font_family(Theme::mono_family()).text_size(px(font::CAPTION)).text_color(t.secondary).child(example)))
@@ -577,7 +625,7 @@ impl Render for SetupCard {
                     .rounded(px(radius::CONTROL))
                     .cursor_pointer()
                     .key_nav()
-                    .soft(t.ink.opacity(0.05), radius::CONTROL)
+                    .soft(t.ink.opacity(hover::ROW), radius::CONTROL)
                     .tip(if collapsed { tr("Aufklappen") } else { tr("Zuklappen") })
                     .on_click(move |_, _, cx| {
                         prefs::update_setup(&fold_root, |s| s.collapsed = !s.collapsed);
@@ -593,14 +641,14 @@ impl Render for SetupCard {
                 div()
                     .id("setup-close")
                     .flex_none()
-                    .size(px(space::XL))
-                    .rounded_full()
+                    .size(px(control::S))
+                    .rounded(px(radius::INNER))
                     .flex()
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
                     .key_nav()
-                    .soft(t.ink.opacity(0.1), radius::FULL)
+                    .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
                     .tip(tr("Ausblenden; die Einstellungen zeigen die Liste wieder"))
                     .on_click(move |_, _, cx| {
                         settle(cx, false, true);
@@ -644,7 +692,7 @@ impl Render for SetupCard {
                         .rounded(px(radius::CONTROL))
                         .cursor_pointer()
                         .key_nav()
-                        .soft(t.ink.opacity(0.05), radius::CONTROL)
+                        .soft(t.ink.opacity(hover::ROW), radius::CONTROL)
                         .on_click(move |_, _, cx| {
                             me.update(cx, |s, cx| {
                                 s.more = !s.more;
@@ -683,7 +731,8 @@ impl Render for SetupCard {
                                     });
                                     l.mark_setup(false, false);
                                 })),
-                            )
+                            );
+                            SKIPPED_TOAST.set(l.toast.as_ref().map(|t| t.id));
                         });
                     }
                 })),

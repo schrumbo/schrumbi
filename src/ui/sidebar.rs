@@ -2,14 +2,13 @@ use std::collections::HashMap;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
-use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::act;
 use super::drive::Mark;
 use super::motion::Soft;
-use super::theme::{Theme, font, space, iconsize, radius, control};
+use super::theme::{Theme, font, hover, space, iconsize, radius, control};
 use super::widgets::{KeyNav, icon, Tip};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{self, Library, Route};
@@ -61,8 +60,13 @@ fn row() -> f32 {
     if names() { ROW_WIDE } else { ROW }
 }
 
-/// Switches between icons only and icons with names.
+/// Switches between icons only and icons with names; in a window too narrow for names it says so instead.
 pub fn toggle_compact(cx: &mut App) {
+    let width = cx.active_window().and_then(|w| w.update(cx, |_, window, _| f32::from(window.viewport_size().width)).ok());
+    if width.is_some_and(|w| w < NAMES_MIN_WINDOW) {
+        act(cx, |l| l.notify(tr("Die Seitenleiste zeigt Namen erst in breiteren Fenstern."), "panel-left-open", None, None));
+        return;
+    }
     prefs::update(|p| p.sidebar_compact = !p.sidebar_compact);
     super::state::lib(cx).update(cx, |_, cx| cx.notify());
 }
@@ -99,6 +103,11 @@ fn entries(lib: &Library) -> Vec<Entry> {
         Entry { key: Some("notes"), route: Route::Notes, icon: "book-open", label: tr("Notizen"), shortcut: Some(ShortcutAction::GoNotes), badge: 0, urgent: false },
         Entry { key: Some("cards"), route: Route::Cards, icon: "layers", label: tr("Karten"), shortcut: Some(ShortcutAction::GoCards), badge: crate::core::cards::counts("", crate::core::cards::now()).total(), urgent: false },
     ]
+}
+
+/// Whether a module has a grade or a credit value, which is when the grades page earns its place in the sidebar.
+fn record_started(lib: &Library) -> bool {
+    lib.config.as_ref().is_some_and(|c| c.modules.iter().any(|m| m.ects.is_some() || m.grade.is_some() || m.passed || m.components.iter().any(|x| x.grade.is_some())))
 }
 
 /// Shows or hides a sidebar entry.
@@ -147,14 +156,13 @@ fn pill(n: usize, tint: Hsla) -> Div {
 /// One row: the glyph with its count on it and, unless the sidebar is compact, the name beside it; the shortcut lives in the tooltip.
 #[allow(clippy::too_many_arguments)]
 fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: String, count: Option<(usize, Hsla)>, help: String, t: &Theme) -> Stateful<Div> {
-    let (accent, selected, hover) = (t.accent, t.ink.opacity(0.08), t.ink.opacity(0.05));
+    let (accent, selected) = (t.accent, t.ink.opacity(0.08));
     let wide = names();
     let faded = dim && !active;
     let shown = label.clone();
     div()
         .id(id)
         .mark("tab", label)
-        .group("sidebar-tab")
         .relative()
         .w(px(if wide { WIDE } else { RAIL } - 2. * space::XS))
         .mx(px(space::XS))
@@ -166,7 +174,7 @@ fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: Stri
         .cursor_pointer().key_nav()
         .overflow_hidden()
         .when(active, |d| d.bg(selected).child(div().absolute().left_0().top(px(space::S)).bottom(px(space::S)).w(px(space::XXS)).rounded_r(px(space::XXS)).bg(accent)))
-        .when(!active, |d| d.soft(hover, radius::CONTROL))
+        .when(!active, |d| d.soft(t.ink.opacity(hover::ROW), radius::CONTROL))
         .child(
             div()
                 .relative()
@@ -176,11 +184,11 @@ fn tab(id: SharedString, active: bool, dim: bool, glyph: AnyElement, label: Stri
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(div().when(faded, |d| d.opacity(0.7).group_hover("sidebar-tab", |s| s.opacity(1.))).child(glyph))
+                .child(div().when(faded, |d| d.opacity(0.7)).child(glyph))
                 .when_some(count.filter(|_| !wide), |d, (n, tint)| d.child(badge(n, tint))),
         )
         .when(wide, |d| {
-            d.child(div().flex_1().min_w_0().truncate().when(faded, |d| d.opacity(0.7).group_hover("sidebar-tab", |s| s.opacity(1.))).when(active, |d| d.font_weight(FontWeight::MEDIUM)).child(shown))
+            d.child(div().flex_1().min_w_0().truncate().when(faded, |d| d.opacity(0.7)).when(active, |d| d.font_weight(FontWeight::MEDIUM)).child(shown))
                 .when_some(count, |d, (n, tint)| d.child(pill(n, tint).flex_none().mr(px(space::S))))
         })
         .tip(help)
@@ -200,6 +208,9 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
     for e in entries(lib) {
         let active = is_active(lib, &e.route);
         if !active && e.key.is_some_and(|k| hidden.iter().any(|h| h == k)) {
+            continue;
+        }
+        if !active && e.route == Route::Record && !record_started(lib) {
             continue;
         }
         let (hide_key, hide_label) = (e.key, e.label.clone());
@@ -342,7 +353,7 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
         .overflow_hidden()
         .child(top)
         .when(!modules.is_empty(), |d| d.child(div().mx(px(space::M)).my(px(space::S)).h(px(1.)).bg(t.separator)))
-        .child(div().flex_1().min_h_0().relative().child(div().id("tab-modules").size_full().overflow_y_scroll().track_scroll(&scroll).child(mods)).vertical_scrollbar(&scroll).children(fade(true, more_above, t)).children(fade(false, more_below, t)))
+        .child(div().flex_1().min_h_0().relative().child(div().id("tab-modules").size_full().overflow_y_scroll().track_scroll(&scroll).child(mods)).children(fade(true, more_above, t)).children(fade(false, more_below, t)))
         .child(bottom)
 }
 

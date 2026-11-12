@@ -15,7 +15,7 @@ use super::motion::Soft;
 use super::motion;
 use super::pages::Pages;
 use super::state::{self, act};
-use super::theme::{self, Theme, crumb, font, space, iconsize, radius, control};
+use super::theme::{self, Theme, crumb, font, hover, space, iconsize, radius, control};
 use super::widgets::*;
 use super::{sheets, sidebar, today};
 use crate::core::i18n::{tr, trf};
@@ -48,8 +48,7 @@ pub struct MainWindow {
     _subs: Vec<Subscription>,
 }
 
-const INSPECTOR_WIDTH: f32 = 340.;
-const AI_WIDTH: f32 = 400.;
+const PANEL_WIDTH: f32 = 360.;
 const PANEL_MIN: f32 = 280.;
 const PANEL_MAX: f32 = 640.;
 const PAGE_KEEPS: f32 = 480.;
@@ -66,31 +65,32 @@ impl Render for PanelEdge {
     }
 }
 
-fn wanted_width(ki: bool) -> f32 {
-    crate::core::prefs::with(|p| if ki { p.ai.width } else { p.inspector_width }).unwrap_or(if ki { AI_WIDTH } else { INSPECTOR_WIDTH })
+fn wanted_width() -> f32 {
+    crate::core::prefs::with(|p| p.inspector_width.or(p.ai.width)).unwrap_or(PANEL_WIDTH)
 }
 
-fn docked_width(ki: bool, window_width: f32) -> f32 {
-    wanted_width(ki).clamp(PANEL_MIN, PANEL_MAX.min((window_width - sidebar::rail_for(window_width) - PAGE_KEEPS).max(PANEL_MIN)))
+fn docked_width(window_width: f32) -> f32 {
+    wanted_width().clamp(PANEL_MIN, PANEL_MAX.min((window_width - sidebar::rail_for(window_width) - PAGE_KEEPS).max(PANEL_MIN)))
 }
 
 /// Whether the right panel floats over the page because beside it the page would get too narrow.
-fn panel_floats(ki: bool, window_width: f32) -> bool {
-    window_width - sidebar::rail_for(window_width) - docked_width(ki, window_width) < PAGE_KEEPS
+fn panel_floats(window_width: f32) -> bool {
+    window_width - sidebar::rail_for(window_width) - docked_width(window_width) < PAGE_KEEPS
 }
 
-fn panel_max(ki: bool, window_width: f32) -> f32 {
-    let keeps = if panel_floats(ki, window_width) { FLOAT_GAP } else { PAGE_KEEPS };
+fn panel_max(window_width: f32) -> f32 {
+    let keeps = if panel_floats(window_width) { FLOAT_GAP } else { PAGE_KEEPS };
     PANEL_MAX.min((window_width - sidebar::rail_for(window_width) - keeps).max(PANEL_MIN))
 }
 
-/// How wide the right panel is on a tab: what the user dragged it to, within what the window leaves.
-fn panel_width(ki: bool, window_width: f32) -> f32 {
-    wanted_width(ki).clamp(PANEL_MIN, panel_max(ki, window_width))
+/// How wide the right panel is, for Details and KI alike: what the user dragged it to, within what the window leaves.
+fn panel_width(window_width: f32) -> f32 {
+    wanted_width().clamp(PANEL_MIN, panel_max(window_width))
 }
 
 impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        super::setup_card::register_undo(cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Suchen")));
         let inspector = cx.new(|cx| Inspector::new(window, cx));
         let pages = cx.new(|cx| Pages::new(window, cx));
@@ -238,7 +238,7 @@ impl MainWindow {
     /// Where the open note lives: each folder leads into the explorer, the name renames it.
     /// Narrow rows fold the folders into one "…" first, then the deadline gives way, the name last.
     fn crumbs(lib: &Library, path: &std::path::Path, room: f32, window: &Window, t: &Theme) -> Div {
-        let hover = t.ink.opacity(0.06);
+        let over = t.ink.opacity(hover::CONTROL);
         let vault = crate::core::vault::index::current();
         let folders: Vec<String> = path.parent().and_then(|p| p.strip_prefix(&vault.root).ok()).map(|p| p.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect()).unwrap_or_default();
         let skipped = folders.len().saturating_sub(3);
@@ -271,13 +271,15 @@ impl MainWindow {
                 .flex_none()
                 .max_w(px(crumb::FOLDER_MAX))
                 .truncate()
+                .h(px(control::S))
+                .line_height(px(control::S))
                 .px(px(space::XS))
                 .rounded(px(radius::SMALL))
                 .cursor_pointer()
                 .key_nav()
                 .text_size(px(font::CALLOUT))
                 .text_color(t.secondary)
-                .soft(hover, radius::SMALL)
+                .soft(over, radius::SMALL)
                 .tip(rel.clone())
                 .on_click(move |_, _, cx| {
                     crate::core::prefs::update(|p| p.notes_explorer_hidden = false);
@@ -315,13 +317,15 @@ impl MainWindow {
                 .flex_none()
                 .w(px(plan.name))
                 .truncate()
+                .h(px(control::S))
+                .line_height(px(control::S))
                 .px(px(space::XS))
                 .rounded(px(radius::SMALL))
                 .cursor_pointer()
                 .key_nav()
                 .text_size(px(font::TITLE3))
                 .font_weight(FontWeight::BOLD)
-                .soft(hover, radius::SMALL)
+                .soft(over, radius::SMALL)
                 .tip(format!("{name}\n{}{}", tr("Klicken zum Umbenennen"), ShortcutAction::RenameNote.hint()))
                 .on_click(move |_, _, cx| super::app::rename_file(rename.clone(), cx))
                 .child(name),
@@ -394,7 +398,7 @@ impl MainWindow {
                     .when(offered && show, |b| b.bg(t.ink.opacity(0.14)))
                     .icon(menu_icon("panel-right"))
                     .disabled(!offered)
-                    .tooltip(if offered { format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()) } else { tr("Diese Seite hat keine Details") })
+                    .tooltip(if offered { format!("{}{}", if show { tr("Details ausblenden") } else { tr("Details einblenden") }, ShortcutAction::ToggleInspector.hint()) } else { tr("Keine Details auf dieser Seite") })
                     .on_click(|_, _, cx| super::ai::toggle_details(cx)),
             )
             .child(super::coach::anchor(div().id("coach-search")).w(px(search_width)).flex_none().key_context("SearchField").map(|d| if folded {
@@ -611,13 +615,16 @@ impl Render for MainWindow {
         }
         if self.resizing.is_some() && !cx.has_active_drag() {
             if let Some(w) = self.resizing.take() {
-                crate::core::prefs::update(|p| if column { p.ai.width = Some(w) } else { p.inspector_width = Some(w) });
+                crate::core::prefs::update(|p| {
+                    p.inspector_width = Some(w);
+                    p.ai.width = None;
+                });
             }
         }
         let panel_open = column || inspector_open;
-        let full = self.resizing.unwrap_or_else(|| panel_width(column, width));
+        let full = self.resizing.unwrap_or_else(|| panel_width(width));
         let inspector_target = if panel_open { full } else { 0. };
-        let floating = panel_open && panel_floats(column, width);
+        let floating = panel_open && panel_floats(width);
         let reserved = if floating { 0. } else { inspector_target };
         let slot_w = motion::follow("right-panel-width", inspector_target, if self.resizing.is_some() { std::time::Duration::ZERO } else { motion::MEDIUM }, window, cx);
         let page_width = width - left - reserved;
@@ -716,7 +723,7 @@ impl Render for MainWindow {
                         let head = div().h(px(control::SUBBAR)).flex_none().flex().items_center().gap(px(space::XS)).pl(px(space::S)).pr(px(space::S)).border_b_1().border_color(t.separator)
                             .child(super::ai::panel_tabs(false, &t, cx))
                             .child(div().flex_1())
-                            .child(Button::new("details-close").ghost().size(px(control::S)).rounded_full().icon(menu_icon("x")).tooltip(format!("{}{}", tr("Details ausblenden"), ShortcutAction::ToggleInspector.hint())).on_click(|_, _, cx| super::ai::close_panel(cx)));
+                            .child(Button::new("details-close").ghost().size(px(control::S)).rounded(px(radius::INNER)).icon(menu_icon("x")).tooltip(format!("{}{}", tr("Details ausblenden"), ShortcutAction::ToggleInspector.hint())).on_click(|_, _, cx| super::ai::close_panel(cx)));
                         div().size_full().flex().flex_col().child(head).child(div().flex_1().min_h_0().child(self.inspector.clone())).into_any_element()
                     }
                     None => self.inspector.clone().into_any_element(),
@@ -731,12 +738,15 @@ impl Render for MainWindow {
                     .left_0()
                     .w(px(EDGE_GRIP))
                     .cursor_col_resize()
-                    .hover(|s| s.bg(t.accent.opacity(0.25)))
+                    .soft(t.accent.opacity(hover::RAISED), 0.)
                     .when(self.resizing.is_some(), |d| d.bg(t.accent.opacity(0.35)))
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         if e.click_count() == 2 {
                             this.resizing = None;
-                            crate::core::prefs::update(|p| if column { p.ai.width = None } else { p.inspector_width = None });
+                            crate::core::prefs::update(|p| {
+                                p.inspector_width = None;
+                                p.ai.width = None;
+                            });
                             let _ = window;
                             cx.notify();
                         }
@@ -764,7 +774,7 @@ impl Render for MainWindow {
                 )
                 .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<PanelEdge>, window, cx| {
                     let total = f32::from(window.viewport_size().width);
-                    let max = panel_max(column, total);
+                    let max = panel_max(total);
                     let w = (total - f32::from(e.event.position.x)).round().clamp(PANEL_MIN, max);
                     if this.resizing != Some(w) {
                         this.resizing = Some(w);
