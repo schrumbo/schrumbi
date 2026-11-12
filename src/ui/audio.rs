@@ -18,9 +18,23 @@ thread_local! {
     static LENGTHS: RefCell<HashMap<PathBuf, Option<Duration>>> = RefCell::new(HashMap::new());
 }
 
-/// How long a file runs, read once from its header; `None` when the format does not say.
-pub fn length(path: &Path) -> Option<Duration> {
-    LENGTHS.with(|l| *l.borrow_mut().entry(path.to_path_buf()).or_insert_with(|| std::fs::File::open(path).ok().and_then(|f| Decoder::try_from(f).ok()).and_then(|d| d.total_duration())))
+/// How long a file runs, read once from its header in the background; `None` while reading and when the format does not say.
+pub fn length(path: &Path, cx: &mut gpui_kit::App) -> Option<Duration> {
+    if let Some(known) = LENGTHS.with(|l| l.borrow().get(path).copied()) {
+        return known;
+    }
+    LENGTHS.with(|l| l.borrow_mut().insert(path.to_path_buf(), None));
+    let path = path.to_path_buf();
+    cx.spawn(async move |cx| {
+        let read = path.clone();
+        let total = cx.background_executor().spawn(async move { std::fs::File::open(&read).ok().and_then(|f| Decoder::try_from(f).ok()).and_then(|d| d.total_duration()) }).await;
+        if total.is_some() {
+            LENGTHS.with(|l| l.borrow_mut().insert(path, total));
+            cx.update(|cx| cx.refresh_windows());
+        }
+    })
+    .detach();
+    None
 }
 
 /// Whether any sound is playing right now.
