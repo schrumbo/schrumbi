@@ -3875,13 +3875,48 @@ impl<M: InputModeKind> InputBaseState<M> {
         }
     }
 
+    /// The grapheme boundary next to `offset` within its line, or `None` at the line's edge.
+    ///
+    /// Only a window around `offset` is segmented, so long lines stay cheap.
+    fn grapheme_boundary(&self, offset: usize, forward: bool) -> Option<usize> {
+        const WINDOW: usize = 256;
+        let offset = self.text.clip_offset(offset.min(self.text.len()), Bias::Left);
+        let row = self.text.offset_to_point(offset).row;
+        let line_start = self.text.line_start_offset(row);
+        let line_end = self.text.line_end_offset(row);
+        let start = self
+            .text
+            .clip_offset(offset.saturating_sub(WINDOW).max(line_start), Bias::Left);
+        let end = self
+            .text
+            .clip_offset((offset + WINDOW).min(line_end), Bias::Right);
+        let window = self.text.slice(start..end).to_string();
+        let at = offset - start;
+        let mut bounds = window
+            .grapheme_indices(true)
+            .map(|(i, _)| i)
+            .chain([window.len()]);
+        let found = if forward {
+            bounds.find(|i| *i > at)
+        } else {
+            bounds.take_while(|i| *i < at).last()
+        }?;
+        Some(start + found)
+    }
+
     pub(super) fn previous_boundary(&self, offset: usize) -> usize {
-        let offset = self.cursor_boundary(offset.saturating_sub(1), Bias::Left);
+        let target = self
+            .grapheme_boundary(offset, false)
+            .unwrap_or(offset.saturating_sub(1));
+        let offset = self.cursor_boundary(target, Bias::Left);
         self.clamp_offset_to_visible_backward(offset)
     }
 
     pub(super) fn next_boundary(&self, offset: usize) -> usize {
-        let offset = self.cursor_boundary(offset.saturating_add(1), Bias::Right);
+        let target = self
+            .grapheme_boundary(offset, true)
+            .unwrap_or(offset.saturating_add(1));
+        let offset = self.cursor_boundary(target, Bias::Right);
         self.clamp_offset_to_visible_forward(offset)
     }
 
@@ -6073,6 +6108,41 @@ mod tests {
                     state.redo(&Redo, window, cx);
                     assert_eq!(state.content(), before);
                     assert!(!state.tokens_visible());
+                });
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_caret_and_deletion_step_by_grapheme(cx: &mut TestAppContext) {
+        let view = InputView::build_textarea(cx, |state| state);
+        view.window_handle
+            .update(cx, |_, window, cx| {
+                view.input.update(cx, |state, cx| {
+                    let family = "👨\u{200d}👩\u{200d}👧";
+                    let accent = "e\u{301}";
+                    let flag = "🇩🇪";
+                    state.set_value(format!("a{family}{accent}{flag}\r\nb"), window, cx);
+                    let after_family = 1 + family.len();
+                    let after_accent = after_family + accent.len();
+                    let after_flag = after_accent + flag.len();
+                    assert_eq!(state.next_boundary(1), after_family);
+                    assert_eq!(state.next_boundary(after_family), after_accent);
+                    assert_eq!(state.next_boundary(after_accent), after_flag);
+                    assert_eq!(state.next_boundary(after_flag), after_flag + 2);
+                    assert_eq!(state.previous_boundary(after_flag + 2), after_flag);
+                    assert_eq!(state.previous_boundary(after_flag), after_accent);
+                    assert_eq!(state.previous_boundary(after_accent), after_family);
+                    assert_eq!(state.previous_boundary(after_family), 1);
+
+                    state.set_selected_range(after_flag..after_flag, cx);
+                    state.backspace(&Backspace, window, cx);
+                    assert_eq!(state.value().as_ref(), format!("a{family}{accent}\r\nb"));
+                    state.backspace(&Backspace, window, cx);
+                    assert_eq!(state.value().as_ref(), format!("a{family}\r\nb"));
+                    state.set_selected_range(1..1, cx);
+                    state.delete(&Delete, window, cx);
+                    assert_eq!(state.value().as_ref(), "a\r\nb");
                 });
             })
             .unwrap();
