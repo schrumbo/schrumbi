@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -7,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -63,6 +65,31 @@ def churn(a, b, *paths):
         if added != "-":
             total += int(added) + int(removed)
     return total
+
+
+@contextlib.contextmanager
+def heavy():
+    if os.environ.get("SCHRUMBI_HEAVY"):
+        yield
+        return
+    with open(Path(tempfile.gettempdir()) / "schrumbi-heavy.lock", "a+") as f:
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                time.sleep(3)
+        os.environ["SCHRUMBI_HEAVY"] = "1"
+        try:
+            yield
+        finally:
+            del os.environ["SCHRUMBI_HEAVY"]
 
 
 def clippy(scope):
@@ -281,8 +308,9 @@ def hook(data):
         state["seen"] = tree
         if churn(state["green"], tree, "*.rs", "Cargo.toml", "Cargo.lock"):
             scope = changed_lines(state["green"], tree)
-            errors, warnings = clippy(scope)
-            failed = errors or tests()
+            with heavy():
+                errors, warnings = clippy(scope)
+                failed = errors or tests()
             if failed:
                 save(session, state)
                 emit(decision="block", reason="Gate failed. Fix the cause:\n" + cap(failed + warnings))
@@ -324,13 +352,14 @@ def cli(args):
         return 0
     tree = snapshot()
     scope = changed_lines(git("rev-parse", f"{args.base}^{{tree}}"), tree)
-    errors, warnings = clippy(scope)
-    failed = list(errors)
-    if not errors:
-        failed += tests()
-    findings = warnings + ui_lint(scope)
-    if args.deep:
-        findings += deep()
+    with heavy():
+        errors, warnings = clippy(scope)
+        failed = list(errors)
+        if not errors:
+            failed += tests()
+        findings = warnings + ui_lint(scope)
+        if args.deep:
+            findings += deep()
     if failed or findings:
         print(cap(failed + findings))
         return 1
