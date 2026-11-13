@@ -15,11 +15,10 @@ pub(crate) struct InputLine {
     pub(crate) text: SharedString,
     content: Content,
 }
-// Keep the ordinary shaped row inline: boxing it would add an allocation to
-// every existing plain-text row. Only token rows allocate fragment storage.
-#[allow(clippy::large_enum_variant)]
+// The shaped row is boxed: inline it is several kilobytes, and a long
+// soft-wrapped line keeps thousands of mostly unshaped rows.
 enum Content {
-    Text(ShapedLine),
+    Text(Box<ShapedLine>),
     Inline(Vec<InlineFragment>),
 }
 impl From<ShapedLine> for InputLine {
@@ -28,11 +27,25 @@ impl From<ShapedLine> for InputLine {
             len: line.len,
             width: line.width,
             text: line.text.clone(),
-            content: Content::Text(line),
+            content: Content::Text(Box::new(line)),
         }
     }
 }
 impl InputLine {
+    /// A row far from the viewport and every cursor: it keeps its byte length
+    /// but is not shaped, so a long soft-wrapped line costs only what shows.
+    pub(crate) fn unshaped(len: usize) -> Self {
+        Self {
+            len,
+            width: px(0.),
+            text: SharedString::default(),
+            content: Content::Inline(Vec::new()),
+        }
+    }
+    /// Whether this row was left unshaped by [`Self::unshaped`].
+    pub(crate) fn is_unshaped(&self) -> bool {
+        self.len > 0 && matches!(&self.content, Content::Inline(fragments) if fragments.is_empty())
+    }
     pub(crate) fn inline(text: SharedString, fragments: Vec<InlineFragment>) -> Self {
         let width = fragments.last().map_or(px(0.), |f| f.x + f.width);
         Self {

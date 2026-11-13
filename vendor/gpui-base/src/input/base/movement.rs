@@ -1,5 +1,5 @@
 use crate::input::InputModeKind;
-use gpui::{Context, Pixels, Point, Window};
+use gpui::{Context, Pixels, Point, Window, px};
 use sum_tree::Bias;
 
 use crate::input::{
@@ -152,7 +152,27 @@ impl<M: InputModeKind> InputBaseState<M> {
 
             // If in visible range, prefer to use position to get column.
             if let Some(line) = last_layout.line(next_point.row) {
-                if let Some((x, line_end_affinity)) = line.closest_index_for_position(
+                let unshaped = line
+                    .wrapped_lines
+                    .get(next_display_point.local_row)
+                    .is_some_and(|row| row.is_unshaped());
+                let estimated = unshaped
+                    .then(|| self.display_map.line(next_point.row))
+                    .flatten()
+                    .and_then(|item| item.wrapped_lines.get(next_display_point.local_row).cloned())
+                    .and_then(|range| {
+                        let chars = if last_layout.space_width > px(0.) {
+                            (preferred_x / last_layout.space_width).round() as usize
+                        } else {
+                            0
+                        };
+                        let text = self.text.slice_line(next_point.row).to_string();
+                        let row = text.get(range.clone())?;
+                        Some(range.start + row.char_indices().nth(chars).map_or(row.len(), |(ix, _)| ix))
+                    });
+                if let Some(local) = estimated {
+                    new_offset = line_start_offset + local;
+                } else if let Some((x, line_end_affinity)) = line.closest_index_for_position(
                     Point {
                         x: preferred_x,
                         y: next_display_point.local_row * last_layout.line_height,
