@@ -44,6 +44,8 @@ pub struct ModuleState {
     pub show_later: bool,
     pub all_past: bool,
     pub all_later: bool,
+    /// Shows the older open deadlines that fold under the newest one.
+    pub show_earlier: bool,
     pub expanded_files: std::collections::HashSet<String>,
     /// Takes the keyboard while the page is not searching its files.
     pub focus: Option<FocusHandle>,
@@ -298,7 +300,7 @@ pub fn follow(lib: &Library, m: &Module, st: &mut ModuleState, now: Instant, red
 /// The deadlines in the order the list shows them, for walking through by keyboard.
 pub fn deadline_order(lib: &Library, m: &Module, st: &ModuleState) -> Vec<String> {
     let b = buckets(lib, m);
-    let mut out: Vec<String> = b.attention.iter().map(|a| a.id.clone()).collect();
+    let mut out: Vec<String> = b.attention.iter().take(if st.show_earlier { usize::MAX } else { 1 }).map(|a| a.id.clone()).collect();
     out.extend(b.weeks.into_values().flatten().map(|a| a.id.clone()));
     if st.show_later {
         out.extend(b.later.iter().take(shown(st.all_later, &b.later)).map(|a| a.id.clone()));
@@ -331,8 +333,16 @@ pub fn deadlines(lib: &Library, m: &Module, st: &ModuleState, view: Entity<Pages
     }
     if !attention.is_empty() {
         col = col.child(div().flex().items_center().gap(px(space::S)).mt(px(space::S)).py(px(space::XS)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(tr("Noch offen")));
-        for (a, leaving) in attention {
-            col = col.child(div().mx(px(-space::S)).child(motion::reveal(SharedString::from(format!("attention-{}", a.id)), !leaving, div().w_full().relative().px(px(space::S)).child(entry(lib, a, st, view.clone(), t)).when(leaving, |d| d.child(div().absolute().inset_0().occlude())))));
+        let first = attention.iter().position(|(_, leaving)| !leaving).unwrap_or(0);
+        let mut earlier = Vec::new();
+        for (i, (a, leaving)) in attention.into_iter().enumerate() {
+            let row = div().mx(px(-space::S)).child(motion::reveal(SharedString::from(format!("attention-{}", a.id)), !leaving, div().w_full().relative().px(px(space::S)).child(entry(lib, a, st, view.clone(), t)).when(leaving, |d| d.child(div().absolute().inset_0().occlude()))));
+            if i <= first || leaving { col = col.child(row) } else { earlier.push(row) }
+        }
+        if !earlier.is_empty() {
+            let count = earlier.len();
+            col = col.child(motion::flip("earlier", disclosure("earlier", trf("Aus früheren Wochen (%lld)", &[&count]), st.show_earlier, view.clone(), |s| s.show_earlier = !s.show_earlier, t)));
+            col = col.child(motion::reveal("earlier-rows", st.show_earlier, div().w_full().flex().flex_col().children(earlier)));
         }
     }
     for (week, entries) in b.weeks {
@@ -671,7 +681,7 @@ mod tests {
     fn doing_the_selected_deadline_moves_the_cursor_to_the_next() {
         let mut lib = module_lib("cursor");
         let m = lib.module_by_id("m0").cloned().unwrap();
-        let mut st = ModuleState::default();
+        let mut st = ModuleState { show_earlier: true, ..Default::default() };
         let now = Instant::now();
         assert_eq!(follow(&lib, &m, &mut st, now, false), None);
         let rows = deadline_order(&lib, &m, &st);
@@ -696,7 +706,9 @@ mod tests {
         lib.select(Some(rows[0].clone()));
         follow(&lib, &m, &mut st, now, true);
         lib.toggle_done(&rows[0]);
-        assert_eq!(follow(&lib, &m, &mut st, now, true), Some(rows[1].clone()));
+        let next = deadline_order(&lib, &m, &st).first().cloned();
+        assert!(next.is_some() && next.as_ref() != Some(&rows[0]), "the next entry takes the place of the done one");
+        assert_eq!(follow(&lib, &m, &mut st, now, true), next);
         assert!(st.leaving.is_empty());
     }
 

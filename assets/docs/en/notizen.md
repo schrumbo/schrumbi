@@ -9,6 +9,8 @@ Notes are Markdown files in your folder. Obsidian reads them the same way.
 
 If Obsidian is set to a fixed folder for new notes, it goes there. {key:escape} keeps the name `Unbenannt.md`. On a module page, {key:newFile} opens a window where you choose type and place.
 
+{ui:Neue Leinwand} and {ui:Neue Tabelle (Base)} are in the {ui:Mehr} menu above the file list and in the command palette. Obsidian opens both files too.
+
 ## Files
 
 | Key | Effect |

@@ -534,6 +534,11 @@ impl Render for MainWindow {
                     None => cx.propagate(),
                 }
             })
+            .on_action(|_: &super::app::NewCard, window, cx| {
+                if state::read(cx, |l| l.root.is_some()) {
+                    super::cards_page::new_card(window, cx);
+                }
+            })
             .on_action(cx.listener(|this, _: &super::app::NewFile, window, cx| {
                 if !this.pages.update(cx, |p, cx| p.new_note_in_explorer(window, cx)) {
                     cx.propagate();

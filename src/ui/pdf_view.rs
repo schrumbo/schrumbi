@@ -55,6 +55,7 @@ const SHARP_BUDGET: usize = 128 * 1024 * 1024;
 const PREVIEW_BUDGET: usize = 48 * 1024 * 1024;
 const TEXT_PAGES_KEPT: usize = 32;
 const SHARP_SETTLE: Duration = Duration::from_millis(140);
+const SETTLE_AFTER_OPEN: Duration = Duration::from_millis(600);
 const LINE_STEP: f32 = 48.;
 const MIN_SCALE: f32 = 0.25;
 const MAX_SCALE: f32 = 6.;
@@ -551,6 +552,7 @@ pub struct PdfView {
     fit: Fit,
     geo: Geometry,
     view_bounds: Bounds<Pixels>,
+    laid_out_in: Option<(Size<Pixels>, Instant)>,
     pending: Option<Anchor>,
     zoom_point: Option<(f32, f32)>,
     last_mouse: Option<(f32, f32)>,
@@ -737,6 +739,7 @@ impl PdfView {
             fit: Fit::Width,
             geo: Geometry::default(),
             view_bounds: Bounds::default(),
+            laid_out_in: None,
             pending: None,
             zoom_point: None,
             last_mouse: None,
@@ -4422,6 +4425,13 @@ impl Render for PdfView {
             self.geo.tops.clear();
         }
         let scale = if self.geo.tops.is_empty() { 0. } else { self.geo.scale };
+        let window_size = window.viewport_size();
+        let known = self.view_bounds.size.width > px(0.);
+        let settled = self.laid_out_in.filter(|(size, _)| *size == window_size).map(|(_, since)| since);
+        if known && scale > 0. && settled.is_some_and(|since| since.elapsed() > SETTLE_AFTER_OPEN) && (view.0 - self.geo.view.0).abs() > 1. && !matches!(self.fit, Fit::Scale(_)) {
+            self.fit = Fit::Scale(scale);
+        }
+        self.laid_out_in = known.then(|| (window_size, settled.unwrap_or_else(Instant::now)));
         self.update_geometry(view);
         if scale > 0. && (self.geo.scale - scale).abs() >= 0.0005 {
             self.hold_sharp(cx);

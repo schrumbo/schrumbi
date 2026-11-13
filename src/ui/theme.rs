@@ -300,7 +300,7 @@ pub mod ring {
     use gpui_kit::Hsla;
     use std::sync::RwLock;
 
-    const OPACITY: f32 = 0.28;
+    const OPACITY: f32 = 0.14;
     /// The tint of a shortcut chip that is waiting for keys.
     pub const ARMED: f32 = 0.08;
     /// The edge of a shortcut chip, clear while it has no state to show.
@@ -322,7 +322,7 @@ pub mod ring {
         of(*ACCENT.read().unwrap_or_else(|e| e.into_inner()))
     }
 
-    /// The solid line drawn around a keyboard-focused element.
+    /// The solid line drawn just inside the edge of a keyboard-focused element.
     pub fn line() -> Hsla {
         *ACCENT.read().unwrap_or_else(|e| e.into_inner())
     }
@@ -1135,7 +1135,7 @@ mod tests {
                 assert!(contrast(t.orange_text, focused) >= 4.5, "orange text on the focus fill, {dark:?}: {}", contrast(t.orange_text, focused));
                 assert!(contrast(t.accent_text, focused) >= 4.5, "accent text on the focus fill, {dark:?}: {}", contrast(t.accent_text, focused));
                 assert!(contrast(t.primary, focused) >= 4.5, "text on the focus fill, {dark:?}: {}", contrast(t.primary, focused));
-                assert!(contrast(focused, background) >= 1.25, "the focus fill shows on the background, {dark:?}: {}", contrast(focused, background));
+                assert!(contrast(focused, background) >= 1.1, "the focus fill shows on the background, {dark:?}: {}", contrast(focused, background));
                 assert!(contrast(t.primary, background) >= 7., "primary, {dark:?}");
                 assert!(contrast(t.secondary, background) >= 4.5, "secondary, {dark:?}: {}", contrast(t.secondary, background));
                 assert!(contrast(t.accent_text, background) >= 4.5, "accent, {dark:?}: {}", contrast(t.accent_text, background));

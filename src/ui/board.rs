@@ -231,7 +231,9 @@ fn cell(lib: &Library, d: NaiveDate, month: u32, items: &[&Assignment], first: N
         total
     };
     let hidden = total - shown;
-    let used = if narrow { usize::from(total > 0) } else { shown + usize::from(hidden > 0) };
+    let sessions = if narrow { Vec::new() } else { lib.sessions_on(d) };
+    let classes = sessions.len().min(capacity.saturating_sub(shown + usize::from(hidden > 0)));
+    let used = if narrow { usize::from(total > 0) } else { shown + usize::from(hidden > 0) + classes };
     let free_height = row_height - 2. * cal::CELL_PAD - cal::DAY - (used as f32 + 1.) * space::XXS - used as f32 * cal::CHIP;
     let number = div()
         .id(("board-cell-day", ce))
@@ -277,6 +279,7 @@ fn cell(lib: &Library, d: NaiveDate, month: u32, items: &[&Assignment], first: N
         .when(narrow && total > 0, |c| c.child(dots(lib, d, items, t)))
         .children(items.iter().take(shown).map(|a| chip(lib, a, t)))
         .when(!narrow && hidden > 0, |c| c.child(more_button(d, hidden)))
+        .children(sessions.iter().take(classes).map(|(m, s)| session_line(m, s, t)))
         .when(free_height >= cal::DOT, |c| c.child(DayArea(empty_area(d, free_height, t)).dropdown_menu(move |menu, _, _| day_menu(menu, d))))
         .into_any_element()
 }
@@ -600,6 +603,26 @@ fn agenda_row(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
         .child(div().flex_1())
         .child(add_button(d))
         .into_any_element()
+}
+
+fn session_line(m: &Module, s: &Session, t: &Theme) -> Stateful<Div> {
+    let title = if s.title.is_empty() { m.code.clone() } else { s.title.clone() };
+    let place = if s.location.is_empty() { String::new() } else { format!(" · {}", s.location) };
+    div()
+        .id(SharedString::from(format!("mclass-{}", s.id)))
+        .flex_none()
+        .w_full()
+        .h(px(cal::CHIP))
+        .pl(px(space::XS))
+        .flex()
+        .items_center()
+        .gap(px(space::XS))
+        .text_size(px(font::CAPTION))
+        .text_color(t.secondary)
+        .tip(format!("{} · {} {}–{}{place}", m.code, title, s.start, s.end))
+        .child(div().size(px(cal::DOT)).flex_none().rounded_full().bg(t.palette(&m.color).opacity(0.6)))
+        .child(div().flex_none().font_features(tabular()).child(s.start.clone()))
+        .child(div().min_w_0().truncate().child(title))
 }
 
 fn session_chip(m: &Module, s: &Session, t: &Theme) -> Stateful<Div> {

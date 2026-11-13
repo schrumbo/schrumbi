@@ -2319,5 +2319,17 @@
   "Trennlinie einfügen": "Insert divider",
   "Fußnote einfügen": "Insert footnote",
   "Karteikarte einfügen": "Insert flashcard",
-  "Lückentext einfügen": "Insert cloze"
+  "Lückentext einfügen": "Insert cloze",
+  "Früher als geplant, weil gerade nichts anderes dran ist.": "Early, because nothing else is due right now.",
+  "Formel einfügen": "Insert formula",
+  "Neue Leinwand": "New canvas",
+  "Neue Tabelle (Base)": "New table (base)",
+  "Seitenleiste ein-/ausklappen": "Toggle sidebar",
+  "Aus früheren Wochen (%lld)": "From earlier weeks (%lld)",
+  "Dateiname oder Ordner …": "File name or folder …",
+  "Aus Kalenderdatei…": "From calendar file…",
+  "Fällt eine Abgabe auf einen Feiertag, rückt sie auf den nächsten Tag. Feiertagskalender für dein Land oder deine Hochschule gibt es als Kalenderdatei zum Download.": "If a deadline falls on a holiday, it moves to the next day. Holiday calendars for your country or university are available as calendar files to download.",
+  "Vorlesungswoche %lld von %lld": "Lecture week %lld of %lld",
+  "Noch keine Pflichtabgaben": "No required submissions yet",
+  "In Pausen zählen keine Vorlesungswochen und es gibt keine Abgaben.": "Breaks don’t count as lecture weeks and have no submissions."
 }

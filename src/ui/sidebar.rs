@@ -339,7 +339,7 @@ pub fn render(lib: &Library, update: Option<String>, window_width: f32, t: &Them
             menu.separator().item(keyed_item(tr("Anderen Ordner öffnen…"), Some(ShortcutAction::OpenOtherWorkspace)).on_click(|_, window, cx| window.dispatch_action(Box::new(super::app::OpenOtherWorkspace), cx)))
         }))))
         .child(tab("tab-settings".into(), false, true, icon("settings", iconsize::L, fg).into_any_element(), tr("Einstellungen"), None, format!("{} ({})", tr("Einstellungen"), shortcut_label(",")), t).on_click(|_, _, cx| super::settings::open(cx)))
-        .when(can_toggle, |d| d.child(tab("tab-sidebar-toggle".into(), false, true, icon(if wide { "panel-left-close" } else { "panel-left-open" }, iconsize::L, fg).into_any_element(), toggle_label.clone(), None, toggle_label, t).on_click(|_, _, cx| toggle_compact(cx))));
+        .when(can_toggle, |d| d.child(tab("tab-sidebar-toggle".into(), false, true, icon(if wide { "panel-left-close" } else { "panel-left-open" }, iconsize::L, fg).into_any_element(), toggle_label.clone(), None, format!("{toggle_label}{}", crate::core::shortcuts::ShortcutAction::ToggleSidebar.hint()), t).on_click(|_, _, cx| toggle_compact(cx))));
     let scroll = MODULES_SCROLL.with(Clone::clone);
     super::coach::scrolls("modules", &scroll);
     let (offset, reach) = (scroll.offset().y, scroll.max_offset().y);

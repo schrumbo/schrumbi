@@ -9,6 +9,8 @@ Notizen sind Markdown-Dateien in deinem Ordner. Obsidian liest sie genauso.
 
 Ist in Obsidian ein fester Ordner für neue Notizen eingestellt, landet sie dort. {key:escape} lässt den Namen `Unbenannt.md`. Auf einer Modulseite öffnet {key:newFile} ein Fenster, in dem du Art und Ort wählst.
 
+{ui:Neue Leinwand} und {ui:Neue Tabelle (Base)} stehen im Menü {ui:Mehr} über der Dateiliste und in der Befehlspalette. Beide Dateien öffnet auch Obsidian.
+
 ## Dateien
 
 | Taste | Wirkung |

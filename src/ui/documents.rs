@@ -1895,7 +1895,16 @@ impl NoteView {
     }
 
     /// Scrolls the note so the caret of the open field stands at least one line away from the top and the bottom edge.
-    fn keep_caret_in_view(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn keep_caret_in_view(&mut self, reveal: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(row) = self.live.as_ref().map(|l| l.index + 1).filter(|row| reveal && *row < self.reader_list.item_count())
+            && (self.reader_list.item_is_below_viewport(row) != Some(false) || self.reader_list.item_is_above_viewport(row) == Some(true))
+        {
+            self.reader_list.scroll_to_reveal_item(row);
+            cx.notify();
+            let me = cx.entity();
+            window.on_next_frame(move |window, cx| me.update(cx, |n, cx| n.keep_caret_in_view(false, window, cx)));
+            return;
+        }
         let Some((caret, line)) = self.block.read(cx).cursor_layout() else { return };
         let view = self.reader_list.viewport_bounds();
         if view.size.height <= line * 3. {
@@ -1943,7 +1952,7 @@ impl NoteView {
         );
         if std::mem::take(&mut self.follow_caret) {
             let me = cx.entity();
-            window.on_next_frame(move |window, cx| me.update(cx, |n, cx| n.keep_caret_in_view(window, cx)));
+            window.on_next_frame(move |window, cx| me.update(cx, |n, cx| n.keep_caret_in_view(true, window, cx)));
         }
         if self.live.is_some_and(|l| l.selecting) && self.block.read(cx).selected_range().is_empty() {
             let me = cx.entity();

@@ -40,6 +40,8 @@ pub enum ShortcutAction {
     Refresh,
     Sync,
     DailyNote,
+    NewCard,
+    ToggleSidebar,
     OpenInObsidian,
     Bold,
     Italic,
@@ -124,7 +126,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 84] = [
+    pub const ALL: [ShortcutAction; 86] = [
         Self::GoToday,
         Self::GoGrid,
         Self::GoRecord,
@@ -159,6 +161,8 @@ impl ShortcutAction {
         Self::Refresh,
         Self::Sync,
         Self::DailyNote,
+        Self::NewCard,
+        Self::ToggleSidebar,
         Self::OpenInObsidian,
         Self::Bold,
         Self::Italic,
@@ -248,6 +252,8 @@ impl ShortcutAction {
             Self::Refresh => "refresh",
             Self::Sync => "syncNow",
             Self::DailyNote => "dailyNote",
+            Self::NewCard => "newCard",
+            Self::ToggleSidebar => "toggleSidebar",
             Self::OpenInObsidian => "openInObsidian",
             Self::Bold => "bold",
             Self::Italic => "italic",
@@ -313,7 +319,7 @@ impl ShortcutAction {
         match self {
             Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::GoModule1 | Self::GoModule2 | Self::GoModule3 | Self::GoBack => Group::Navigation,
             Self::ShowGraph | Self::ToggleFullscreen => Group::View,
-            Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::OpenOtherWorkspace | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::ToggleAi | Self::Refresh => Group::General,
+            Self::Sync | Self::DailyNote | Self::NewCard | Self::ToggleSidebar | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::OpenOtherWorkspace | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::ToggleAi | Self::Refresh => Group::General,
             Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::OpenBeside | Self::SwitchSide | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote | Self::ToggleLive | Self::MarkText | Self::RotatePagesLeft | Self::RotatePagesRight | Self::MovePagesUp | Self::MovePagesDown | Self::DeletePages | Self::InsertPdf | Self::PenTool | Self::EraserTool | Self::NoteTool | Self::ExportMarkedPdf | Self::PageList | Self::NoteOnSelection | Self::SelectTool | Self::MarkList | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick => Group::Documents,
             _ => Group::Editor,
         }
@@ -358,6 +364,8 @@ impl ShortcutAction {
             Self::Refresh => "Aktualisieren",
             Self::Sync => "Jetzt synchronisieren",
             Self::DailyNote => "Tagesnotiz öffnen",
+            Self::NewCard => "Neue Karte",
+            Self::ToggleSidebar => "Seitenleiste ein-/ausklappen",
             Self::OpenInObsidian => "In Obsidian öffnen",
             Self::CloseTab => "Tab schließen",
             Self::NextTab => "Nächster Tab",
@@ -473,6 +481,8 @@ impl ShortcutAction {
             Self::Refresh => s("r", true, false, false, false),
             Self::Sync => s("s", true, true, false, false),
             Self::DailyNote => s("t", true, false, true, false),
+            Self::NewCard => s("k", true, false, true, false),
+            Self::ToggleSidebar => s("b", true, false, true, false),
             Self::OpenInObsidian => s("o", true, false, true, false),
             Self::CloseTab => s("w", true, false, false, false),
             Self::NextTab => s("tab", false, false, false, true),

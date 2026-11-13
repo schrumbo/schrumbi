@@ -28,7 +28,7 @@ The {{c1::variance}} is the square of the {{c2::standard deviation}}.
 - In notes with `#cards` or `#flashcards`, `{{gap}}` and `==highlighted==` also become gaps.
 - `cards: false` in the properties excludes a note. Code and formula blocks never make a card.
 
-Without typing: select text and {ui:Karte aus Auswahl…}, or {ui:Neue Karte} with {key:n}.
+Without typing: select text and {ui:Karte aus Auswahl…}, or {ui:Neue Karte} with {key:n}. From anywhere, {key:newCard} opens a new card.
 
 While there are no cards, the page shows only the two simplest ways to write one; {ui:Mehr Schreibweisen} unfolds the rest.
 

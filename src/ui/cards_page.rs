@@ -102,11 +102,12 @@ struct Session {
     crammed: Vec<(Card, bool)>,
     /// A reveal does not count as an answer when a key bounces.
     shown_at: std::time::Instant,
+    early: bool,
 }
 
 impl Session {
     fn new(deck: String, cram: Option<Vec<Card>>) -> Self {
-        Self { deck, current: None, front: parsed(""), back: parsed(""), shown: false, answered: Vec::new(), undone: Vec::new(), ratings: [0; 4], started: cards::now(), left: Counts::default(), cram, crammed: Vec::new(), shown_at: std::time::Instant::now() }
+        Self { deck, current: None, front: parsed(""), back: parsed(""), shown: false, answered: Vec::new(), undone: Vec::new(), ratings: [0; 4], started: cards::now(), left: Counts::default(), cram, crammed: Vec::new(), shown_at: std::time::Instant::now(), early: false }
     }
 
     fn show(&mut self, card: Card, answered: bool) {
@@ -114,6 +115,7 @@ impl Session {
         self.back = parsed(&card.raw.back);
         self.current = Some(card);
         self.shown = answered;
+        self.early = false;
         self.shown_at = std::time::Instant::now();
     }
 }
@@ -417,9 +419,14 @@ impl CardsPage {
         let queue = cards::queue(&session.deck, now);
         session.left = cards::counts(&session.deck, now);
         let due_now = queue.iter().find(|c| Some(c.id()) != last && c.state.as_ref().is_none_or(|s| s.due <= now || c.phase() == Phase::Review));
+        let early = due_now.is_none();
         let next = due_now.or_else(|| queue.iter().find(|c| Some(c.id()) != last)).or_else(|| queue.first()).cloned();
         match next {
-            Some(card) => session.show(card, false),
+            Some(card) => {
+                let ahead = early && card.state.as_ref().is_some_and(|s| s.due > now);
+                session.show(card, false);
+                session.early = ahead;
+            }
             None => session.current = None,
         }
     }
@@ -1031,7 +1038,7 @@ impl CardsPage {
                                 deck_pause_all(&deck_resume, false, cx);
                                 resume.update(cx, |_, cx| cx.notify());
                             }))
-                            .item(PopupMenuItem::new(tr("Neue Karte…")).icon(menu_icon("plus")).on_click(move |_, window, cx| {
+                            .item(keyed_item(tr("Neue Karte…"), Some(crate::core::shortcuts::ShortcutAction::NewCard)).icon(menu_icon("plus")).on_click(move |_, window, cx| {
                                 let deck = deck_new.clone();
                                 new.update(cx, |p, cx| {
                                     p.deck = deck;
@@ -1542,8 +1549,9 @@ impl CardsPage {
         let now = cards::now();
         let base = card.note.parent().map(Path::to_path_buf);
         let front = super::theme::with_note_scale(STUDY_SCALE, || markdown_view::render(&s.front, base.as_deref(), None, t));
-        let back = s.shown.then(|| super::theme::with_note_scale(STUDY_SCALE, || markdown_view::render(&s.back, base.as_deref(), None, t)));
+        let back = super::theme::with_note_scale(STUDY_SCALE, || markdown_view::render(&s.back, base.as_deref(), None, t));
         let shown = s.shown;
+        let early = div().flex().items_center().when(!s.early, |d| d.invisible()).gap(px(space::XS)).child(icon("clock", iconsize::S, t.secondary)).child(caption(tr("Früher als geplant, weil gerade nichts anderes dran ist."), t));
         let can_undo = !s.answered.is_empty() || !s.crammed.is_empty();
         let cramming = s.cram.is_some();
         let count_piece = |n: usize, color: Hsla, on: bool, label: String| div().px(px(space::S)).h(px(control::S)).flex().items_center().rounded(px(radius::INNER)).when(on, |d| d.bg(color.opacity(0.12))).text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).font_features(tabular()).text_color(if n == 0 { t.secondary } else { t.readable_on(color, t.content) }).child(format!("{n} {label}"));
@@ -1599,9 +1607,10 @@ impl CardsPage {
                         .flex_col()
                         .gap(px(space::L))
                         .children(leech)
+                        .child(early)
                         .child(crumbs)
                         .child(front)
-                        .when_some(back, |d, back| d.child(div().h(px(1.)).bg(t.separator)).child(back)),
+                        .child(div().flex().flex_col().gap(px(space::L)).when(!shown, |d| d.invisible()).child(div().h(px(1.)).bg(t.separator)).child(back)),
                 ),
             );
         let footer: AnyElement = if shown {

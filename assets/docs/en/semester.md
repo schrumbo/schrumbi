@@ -15,6 +15,7 @@ A semester has lecture weeks, a module has a folder. Schrumbi needs nothing more
 Clicking a module in the sidebar opens its page. On the left are all {ui:Abgaben} with their files, {ui:Zuletzt geschrieben} and {ui:Dateien}, on the right cards, sessions, grade and links.
 
 - What is still open comes first, under {ui:Noch offen}. The grey number next to {ui:Abgaben} counts exactly these entries, like the sidebar.
+- If something is already past due, only the newest entry shows. The older ones are collapsed below it, with their count.
 - Then the next two weeks. Later and finished submissions are collapsed and show the first five.
 - Finished entries slide out of the list, {ui:Erledigt} lights up briefly.
 - {ui:Neuer Eintrag…} next to {ui:Abgaben} adds a submission.

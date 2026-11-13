@@ -114,7 +114,7 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&go, S::GoInbox.label(), "inbox", keys(S::GoInbox), Run::Action(Box::new(app::GoInbox)));
         add(&go, S::GoNotes.label(), "book-open", keys(S::GoNotes), Run::Action(Box::new(app::GoNotes)));
         add(&go, S::GoCards.label(), "layers", keys(S::GoCards), Run::Action(Box::new(app::GoCards)));
-        add(&cards, tr("Neue Karte…"), "plus", None, Run::InWindow(super::cards_page::new_card));
+        add(&cards, tr("Neue Karte…"), "plus", keys(S::NewCard), Run::InWindow(super::cards_page::new_card));
         add(&cards, tr("Karten lernen"), "graduation-cap", None, Run::Call(Rc::new(|cx| {
             act(cx, |l| {
                 l.cards_request = Some(crate::core::prefs::get().card_deck);
@@ -151,7 +151,7 @@ fn commands(cx: &App) -> Vec<Command> {
     if state::read(cx, |l| l.inspector_kind().is_some()) {
         add(&view, S::ToggleInspector.label(), "panel-right", keys(S::ToggleInspector), Run::Action(Box::new(app::ToggleInspector)));
     }
-    add(&view, if super::sidebar::compact() { tr("Seitenleiste ausklappen") } else { tr("Seitenleiste einklappen") }, if super::sidebar::compact() { "panel-left-open" } else { "panel-left-close" }, None, Run::Call(Rc::new(super::sidebar::toggle_compact)));
+    add(&view, if super::sidebar::compact() { tr("Seitenleiste ausklappen") } else { tr("Seitenleiste einklappen") }, if super::sidebar::compact() { "panel-left-open" } else { "panel-left-close" }, keys(S::ToggleSidebar), Run::Call(Rc::new(super::sidebar::toggle_compact)));
     add(&view, S::Refresh.label(), "refresh-cw", keys(S::Refresh), Run::Action(Box::new(app::Refresh)));
     add(&view, S::ToggleFullscreen.label(), "maximize", keys(S::ToggleFullscreen), Run::Action(Box::new(app::ToggleFullscreen)));
     if active.is_some() {
@@ -203,7 +203,7 @@ fn commands(cx: &App) -> Vec<Command> {
         let fixed: [(&str, &'static str, String, Box<dyn Action>); 9] = [
             ("Durchgestrichen", "strikethrough", chord("x", true, false), Box::new(d::Strike)),
             ("Markiert", "highlighter", chord("h", true, false), Box::new(d::Mark)),
-            ("Formel", "sigma", chord("m", true, false), Box::new(d::InlineMath)),
+            ("Formel einfügen", "sigma", chord("m", true, false), Box::new(d::InlineMath)),
             ("Zitat", "quote", chord(".", true, false), Box::new(d::Quote)),
             ("Liste", "list", chord("8", true, false), Box::new(d::BulletList)),
             ("Nummerierte Liste", "list-ordered", chord("7", true, false), Box::new(d::NumberedList)),
@@ -291,6 +291,17 @@ fn commands(cx: &App) -> Vec<Command> {
     let notes = tr("Notizen");
     let obsidian = state::read(cx, |l| l.is_vault);
     add(&notes, tr("Tagesnotiz öffnen"), "calendar", keys(S::DailyNote), Run::Action(Box::new(app::DailyNote)));
+    for (label, icon_name, ext) in [(tr("Neue Leinwand"), "presentation", "canvas"), (tr("Neue Tabelle (Base)"), "table", "base")] {
+        add(&notes, label, icon_name, None, Run::Call(Rc::new(move |cx| {
+            act(cx, |l| {
+                if let Some(made) = l.new_untitled_file(None, ext) {
+                    l.rename_request = Some(made);
+                    l.quiet_open = true;
+                }
+            });
+            state::reindex(cx);
+        })));
+    }
     add(&notes, tr("Eindeutige Notiz anlegen"), "file-plus", None, Run::Call(Rc::new(|cx| {
         act(cx, |l| l.open_unique_note());
         state::reindex(cx);
@@ -352,7 +363,7 @@ fn commands(cx: &App) -> Vec<Command> {
     add(&general, tr("Tastenkürzel anzeigen"), "keyboard", Some(fixed_keys("/")), Run::Action(Box::new(app::ShowShortcuts)));
     add(&general, tr("Nach Updates suchen…"), "download", None, Run::Action(Box::new(app::CheckForUpdates)));
     add(&general, tr("Über Schrumbi"), "info", None, Run::Action(Box::new(app::About)));
-    add(&general, tr("KI-Assistent einrichten"), "bot", None, Run::Call(Rc::new(super::settings::open_ai)));
+    add(&general, tr("KI-Assistent einrichten"), "bot", if super::ai::active() { None } else { keys(S::ToggleAi) }, Run::Call(Rc::new(super::settings::open_ai)));
     if super::ai::active() {
         let ki = tr("KI");
         add(&ki, tr("Frag die KI…"), "bot", keys(S::ToggleAi), Run::Call(Rc::new(super::ai::open_column)));

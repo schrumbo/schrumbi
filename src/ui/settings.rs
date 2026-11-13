@@ -304,6 +304,8 @@ pub struct Settings {
     rejected: Option<Rejected>,
     key_buttons: HashMap<&'static str, FocusHandle>,
     shortcut_scroll: UniformListScrollHandle,
+    shortcut_list: FocusHandle,
+    walk_from: Option<ShortcutAction>,
     last_changed: Option<ShortcutAction>,
     notice: Option<Notice>,
     notices: u64,
@@ -894,7 +896,13 @@ impl Settings {
                 .detach();
             }
         });
-        let subs = vec![recorder, activation, cx.observe(&lib, |_, _, cx| cx.notify()), cx.subscribe_in(&search, window, |s, _, e: &InputEvent, window, cx| {
+        let hidden_row = cx.on_focus_lost(window, |s, window, cx| {
+            if let Some(a) = ShortcutAction::ALL.into_iter().find(|a| s.key_buttons.get(a.id()).is_some_and(|h| h.is_focused(window))) {
+                s.walk_from = Some(a);
+                window.focus(&s.shortcut_list, cx);
+            }
+        });
+        let subs = vec![recorder, activation, hidden_row, cx.observe(&lib, |_, _, cx| cx.notify()), cx.subscribe_in(&search, window, |s, _, e: &InputEvent, window, cx| {
             match e {
                 InputEvent::PressEnter { .. } if s.tab != Tab::Shortcuts => {
                     let found = s.matches(cx);
@@ -923,6 +931,8 @@ impl Settings {
             rejected: None,
             key_buttons: HashMap::new(),
             shortcut_scroll: UniformListScrollHandle::new(),
+            shortcut_list: cx.focus_handle(),
+            walk_from: None,
             last_changed: None,
             notice: None,
             notices: 0,
@@ -1628,7 +1638,7 @@ impl Settings {
             "hol-add",
             tr("Feiertag hinzufügen"),
             Some(
-                Button::new("hol-ics").ghost().small().icon(menu_icon("calendar-plus")).label(tr("Aus Kalenderdatei (.ics)…")).on_click(move |_, _, cx| {
+                Button::new("hol-ics").ghost().small().icon(menu_icon("calendar-plus")).label(tr("Aus Kalenderdatei…")).on_click(move |_, _, cx| {
                     let (e, s, _) = (e2.clone(), s2.clone(), sid.clone());
                     super::platform::pick(PathPromptOptions { files: true, directories: false, multiple: false, prompt: None }, cx, move |paths, cx| {
                         let Some(text) = paths.first().and_then(|p| std::fs::read_to_string(p).ok()) else { return };
@@ -1674,8 +1684,8 @@ impl Settings {
                 ],
                 t,
             ))
-            .child(section(Some(tr("Pausen")), Some(tr("In Pausen werden keine Vorlesungswochen gezählt und keine Deadlines erzeugt.")), breaks, t))
-            .child(section(Some(tr("Feiertage")), Some(tr("Fällt eine Deadline auf einen Feiertag, rückt sie auf den nächsten Tag. Feiertagskalender für dein Land oder deine Hochschule gibt es als .ics zum Download.")), holidays, t))
+            .child(section(Some(tr("Pausen")), Some(tr("In Pausen zählen keine Vorlesungswochen und es gibt keine Abgaben.")), breaks, t))
+            .child(section(Some(tr("Feiertage")), Some(tr("Fällt eine Abgabe auf einen Feiertag, rückt sie auf den nächsten Tag. Feiertagskalender für dein Land oder deine Hochschule gibt es als Kalenderdatei zum Download.")), holidays, t))
     }
 }
 
@@ -2573,7 +2583,7 @@ impl Settings {
             }),
             vec![
                 if nothing {
-                    row(tr("KI-Assistent verwenden"), Switch::new("ai-on").checked(false).disabled(true).tooltip(tr("Erst ein KI-Programm installieren")), t)
+                    row(tr("KI-Assistent verwenden"), div().flex().items_center().gap(px(space::S)).child(caption(tr("Erst ein KI-Programm installieren"), t)).child(Switch::new("ai-on").checked(false).disabled(true)), t)
                 } else {
                     switch_row("ai-on", tr("KI-Assistent verwenden"), prefs.enabled, false, |v, _, cx| ai::set_enabled(v, cx), t)
                 },
@@ -2997,7 +3007,7 @@ impl Settings {
             escape,
             delete,
         });
-        let stops: Vec<(usize, FocusHandle)> = lines.iter().enumerate().filter_map(|(at, l)| if let ShortcutLine::Row(a, ..) = l { ctx.handles.get(a.id()).map(|h| (at, h.clone())) } else { None }).collect();
+        let stops: Vec<(usize, ShortcutAction, FocusHandle)> = lines.iter().enumerate().filter_map(|(at, l)| if let ShortcutLine::Row(a, ..) = l { ctx.handles.get(a.id()).map(|h| (at, *a, h.clone())) } else { None }).collect();
         let lines = Rc::new(lines);
         let count = lines.len();
         let list = uniform_list("sc-list", count, move |range, _, cx| {
@@ -3008,13 +3018,14 @@ impl Settings {
         .size_full();
         let scroll = self.shortcut_scroll.clone();
         let walk = move |s: &mut Self, back: bool, window: &mut Window, cx: &mut Context<Self>| {
-            let here = stops.iter().position(|(_, h)| h.is_focused(window));
+            let from = s.walk_from.take();
+            let here = stops.iter().position(|(_, _, h)| h.is_focused(window)).or_else(|| from.and_then(|a| stops.iter().position(|(_, b, _)| *b == a)));
             let next = here.filter(|_| s.recording.is_none()).and_then(|here| if back { here.checked_sub(1) } else { Some(here + 1).filter(|n| *n < stops.len()) });
             let Some(next) = next else {
                 cx.propagate();
                 return;
             };
-            let (at, handle) = &stops[next];
+            let (at, _, handle) = &stops[next];
             scroll.scroll_to_item(if back { at.saturating_sub(1) } else { *at }, ScrollStrategy::Nearest);
             window.focus(handle, cx);
             cx.notify();
@@ -3034,6 +3045,7 @@ impl Settings {
                     .pt(px(space::M))
                     .pb(px(space::XL))
                     .key_context("WalkItems")
+                    .track_focus(&self.shortcut_list)
                     .on_action(cx.listener(move |s, _: &super::canvas_view::NextItem, window, cx| walk(s, false, window, cx)))
                     .on_action(cx.listener(move |s, _: &super::canvas_view::PreviousItem, window, cx| back(s, true, window, cx)))
                     .child(list),
