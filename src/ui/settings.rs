@@ -204,7 +204,7 @@ const SEARCHABLE: &[(&str, Tab)] = &[
     ("Beispiel", Tab::Modules),
     ("Modul", Tab::Modules),
     ("Links", Tab::Modules),
-    ("Wiederkehrende Deadlines", Tab::Modules),
+    ("Wiederkehrende Abgaben", Tab::Modules),
     ("Stundenplan", Tab::Modules),
     ("Sync", Tab::Sync),
     ("Jetzt synchronisieren", Tab::Sync),
@@ -2006,7 +2006,7 @@ impl Settings {
             .child(section(Some(tr("Modul")), None, module_rows, t))
             .child(section(Some(tr("Links")), Some(tr("Der Upload-Link öffnet sich beim Hochladen einer Abgabe, daneben erscheinen die Dateien zum Hineinziehen.")), links, t))
             .child(section(Some(tr("Namensmuster")), (!c.naming_convention()).then(|| tr("Gilt für alle Module. Eingeschaltet erscheint hier das Muster dieses Moduls.")), naming_rows, t))
-            .child(section(Some(tr("Wiederkehrende Deadlines")), Some(tr("Wird für jede Vorlesungswoche erzeugt. Eine Datei gehört dazu, wenn du sie dort ablegst, dafür eine Notiz anlegst oder sie zuordnest.")), rules, t))
+            .child(section(Some(tr("Wiederkehrende Abgaben")), Some(tr("Wird für jede Vorlesungswoche erzeugt. Eine Datei gehört dazu, wenn du sie dort ablegst, dafür eine Notiz anlegst oder sie zuordnest.")), rules, t))
             .child(section(Some(tr("Stundenplan")), Some(tr("Erscheint im 7-Tage-Ausblick der Übersicht, nicht in Pausen.")), sessions, t))
     }
 

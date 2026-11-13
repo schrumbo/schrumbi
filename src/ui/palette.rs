@@ -291,7 +291,7 @@ fn commands(cx: &App) -> Vec<Command> {
     let notes = tr("Notizen");
     let obsidian = state::read(cx, |l| l.is_vault);
     add(&notes, tr("Tagesnotiz öffnen"), "calendar", keys(S::DailyNote), Run::Action(Box::new(app::DailyNote)));
-    for (label, icon_name, ext) in [(tr("Neue Leinwand"), "presentation", "canvas"), (tr("Neue Tabelle (Base)"), "table", "base")] {
+    for (label, icon_name, ext) in [(tr("Neue Leinwand"), "presentation", "canvas"), (tr("Neue Tabellenansicht"), "table", "base")] {
         add(&notes, label, icon_name, None, Run::Call(Rc::new(move |cx| {
             act(cx, |l| {
                 if let Some(made) = l.new_untitled_file(None, ext) {

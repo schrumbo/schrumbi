@@ -1264,7 +1264,7 @@ impl Render for NotesPage {
                     let (canvas, base) = (me.clone(), me.clone());
                     menu.item(PopupMenuItem::new(tr("Neuer Ordner")).icon(menu_icon("folder-plus")).on_click(move |_, window, cx| a.update(cx, |s, cx| s.new_folder(None, window, cx))))
                         .item(PopupMenuItem::new(tr("Neue Leinwand")).icon(menu_icon("presentation")).on_click(move |_, window, cx| canvas.update(cx, |s, cx| s.new_file("canvas", window, cx))))
-                        .item(PopupMenuItem::new(tr("Neue Tabelle (Base)")).icon(menu_icon("table")).on_click(move |_, window, cx| base.update(cx, |s, cx| s.new_file("base", window, cx))))
+                        .item(PopupMenuItem::new(tr("Neue Tabellenansicht")).icon(menu_icon("table")).on_click(move |_, window, cx| base.update(cx, |s, cx| s.new_file("base", window, cx))))
                         .item(keyed_item(tr("Tagesnotiz öffnen"), Some(crate::core::shortcuts::ShortcutAction::DailyNote)).icon(menu_icon("calendar")).on_click(|_, _, cx| {
                             act(cx, |l| l.open_daily_note());
                             state::reindex(cx);

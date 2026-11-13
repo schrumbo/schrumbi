@@ -6,7 +6,7 @@
 |---|---|
 | {ui:Allgemein} | Erscheinungsbild, eigene Designs, Sprache, Erinnerungen, Namensmuster, Seitenleiste |
 | {ui:Semester} | Vorlesungszeit, Pausen, Feiertage |
-| {ui:Module} | Kürzel, Ordner, Links, wiederkehrende Deadlines, Stundenplan |
+| {ui:Module} | Kürzel, Ordner, Links, wiederkehrende Abgaben, Stundenplan |
 | {ui:Notizen} | Editor, Schriftgröße, eigenes Wörterbuch, Sichern, PDF-Export, Obsidian |
 | {ui:Karten} | Erinnerungsziel, neue Karten und Wiederholungen pro Tag |
 | {ui:Sync} | Online-Speicher, Automatik, Ausschalten |

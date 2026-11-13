@@ -1,6 +1,6 @@
 # Erste Schritte
 
-Schrumbi plant dein Studium in einem normalen Ordner: Deadlines, Dateien, Notizen und Karten an einem Ort. Alles bleibt eine Datei, die du auch ohne Schrumbi öffnen kannst.
+Schrumbi plant dein Studium in einem normalen Ordner: Abgaben, Dateien, Notizen und Karten an einem Ort. Alles bleibt eine Datei, die du auch ohne Schrumbi öffnen kannst.
 
 ## Ordner wählen
 
