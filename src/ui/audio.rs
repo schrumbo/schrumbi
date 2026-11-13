@@ -76,9 +76,9 @@ pub fn is_playing(path: &Path) -> bool {
     PLAYER.with(|p| p.borrow().as_ref().is_some_and(|x| x.path == path && !x.sink.is_paused() && !x.sink.empty()))
 }
 
-/// Where a file is and how long it runs; a file that played to its end is back at the start.
+/// Where a file is and how long it runs.
 pub fn progress(path: &Path) -> (Duration, Option<Duration>) {
-    PLAYER.with(|p| p.borrow().as_ref().filter(|x| x.path == path).map_or((Duration::ZERO, None), |x| (if x.sink.empty() { Duration::ZERO } else { x.sink.get_pos() }, x.total)))
+    PLAYER.with(|p| p.borrow().as_ref().filter(|x| x.path == path).map_or((Duration::ZERO, None), |x| (x.sink.get_pos(), x.total)))
 }
 
 /// Jumps to a share of the file.

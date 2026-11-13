@@ -14,8 +14,7 @@ Tasks, submissions and exams are entries with a date. They get into the app in t
 
 1. Choose a type: {ui:Aufgabe}, {ui:Abgabe} or {ui:Prüfung}.
 2. Type a title. A date at the end is recognized.
-3. Change {ui:Erinnern} only if this entry should remind differently: as in Settings, none, 1 or 3 hours or 1 day before.
-4. {ui:Hinzufügen}.
+3. {ui:Hinzufügen}.
 
 Without a time: task 18:00, submission 23:59, exam 10:00.
 

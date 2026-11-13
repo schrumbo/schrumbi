@@ -103,7 +103,7 @@ impl Render for RenameSheet {
         }
         let t = Theme::get(cx);
         let field = Input::new(&self.input).when(!self.ext.is_empty(), |i| i.suffix(div().text_color(t.secondary).child(format!(".{}", self.ext))));
-        let status = div().min_h(px(2. * font::CAPTION * font::LINE)).flex().items_start().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red_text).children(self.error.clone().map(|e| div().flex().items_start().gap(px(space::XS)).min_w_0().child(div().pt(px(space::XXS)).child(icon("triangle-alert", iconsize::XS, t.red))).child(div().min_w_0().line_clamp(2).child(e))));
+        let status = div().min_h(px(2. * font::CAPTION * font::LINE)).flex().items_start().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red).children(self.error.clone().map(|e| div().flex().items_start().gap(px(space::XS)).min_w_0().child(div().pt(px(space::XXS)).child(icon("triangle-alert", iconsize::XS, t.red))).child(div().min_w_0().line_clamp(2).child(e))));
         div()
             .w_full()
             .flex()

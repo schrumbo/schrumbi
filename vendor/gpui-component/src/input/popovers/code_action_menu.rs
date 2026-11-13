@@ -215,6 +215,7 @@ impl CodeActionMenu {
             return false;
         }
 
+        cx.propagate();
         if input::Enter::is_primary(&*action) {
             self.on_action_enter(window, cx);
         } else if action.partial_eq(&input::Escape) {
@@ -301,7 +302,7 @@ impl Render for CodeActionMenu {
 
         deferred(CaretAnchoredPopup::new(
             self.state.clone(),
-            move |anchor, _, window, cx| {
+            move |anchor, window, cx| {
                 let max_width = MAX_MENU_WIDTH.min(window.bounds().size.width - anchor.x);
 
                 // A flex root measures to its contents; a block root would

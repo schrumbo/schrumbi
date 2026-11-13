@@ -7,26 +7,18 @@ Sync backs up your folder with Git and syncs it with other devices. Every versio
 You need Git version 2.38 or newer.
 
 1. {key:CommandPalette} → {ui:Sync einrichten…}
-2. {ui:Aufräumen}: Schrumbi leaves out temporary files, {ui:Details} shows which.
-3. {ui:Verbinden}: {ui:Privat auf GitHub anlegen} or your own {ui:Adresse des Online-Speichers}. Without an address, go on with {ui:Ohne Online-Speicher weiter}.
-4. {ui:Sicherung}: {ui:Automatisch} or {ui:Manuell}.
+2. {ui:Aufräumen}: Schrumbi suggests a `.gitignore`.
+3. {ui:Verbinden}: {ui:Privat auf GitHub anlegen} or your own {ui:Adresse des Online-Speichers}.
+4. {ui:Wann soll gesichert werden?} {ui:Automatisch} or {ui:Manuell}.
 
-Without an address, everything stays local, the history still works. The line in the sidebar then says {ui:Lokal gesichert}.
-
-{key:escape} or the X at the top right closes like {ui:Später einrichten}.
-
-## App Data
-
-Tasks, cards and settings (`schrumbi.json`, `.schrumbi-state.json`, `.schrumbi-cards.json`) travel along. If they were changed on two devices, Schrumbi merges them by itself.
-
-{ui:App-Daten mitnehmen} at the bottom of the sync window turns that off. The files stay on disk, on the other device too.
+Without an address, everything stays local, the history still works.
 
 ## Day to Day
 
 | Mode | What happens |
 |---|---|
 | {ui:Automatisch} | Backs up after 5 minutes of rest (adjustable), on open and on quit |
-| {ui:Manuell} | You back up with {key:syncNow}, then a message says how many files were saved, or {ui:Nichts Neues} |
+| {ui:Manuell} | You back up with {key:syncNow} |
 
 The line at the bottom of the sidebar shows the state, a click opens details.
 

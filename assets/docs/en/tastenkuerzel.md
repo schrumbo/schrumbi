@@ -15,8 +15,6 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Neuer Eintrag} | {key:newEntry} |
 | {ui:Neue Notiz, Datei oder Ordner} | {key:newFile} |
 | {ui:Tagesnotiz öffnen} | {key:dailyNote} |
-| {ui:Neue Karte} | {key:newCard} |
-| {ui:Seitenleiste ein-/ausklappen} | {key:toggleSidebar} |
 | {ui:Jetzt synchronisieren} | {key:syncNow} |
 | {ui:Aktualisieren} | {key:refresh} |
 | {ui:In Obsidian öffnen} | {key:openInObsidian} |
@@ -59,8 +57,6 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Vorheriger Tab} | {key:previousTab} |
 | {ui:Lesen / Bearbeiten wechseln} | {key:togglePreview} |
 | {ui:Geteilte Ansicht} | {key:splitPreview} |
-| {ui:Daneben öffnen} | {key:openBeside} |
-| {ui:Zur anderen Seite wechseln} | {key:switchSide} |
 | {ui:Live-Ansicht ein-/ausschalten} | {key:toggleLive} |
 | {ui:Als PDF exportieren} | {key:exportPDF} |
 | {ui:In Notiz suchen} | {key:findInNote} |
@@ -98,15 +94,6 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Code} | {key:inlineCode} |
 | {ui:Aufgabe abhaken} | {key:toggleTask} |
 | {ui:Auskommentieren} | {key:toggleComment} |
-| {ui:Überschrift 4} | {key:heading4} |
-| {ui:Tabelle einfügen} | {key:insertTable} |
-| {ui:Codeblock einfügen} | {key:insertCodeBlock} |
-| {ui:Hinweisbox einfügen} | {key:insertCallout} |
-| {ui:Trennlinie einfügen} | {key:insertDivider} |
-| {ui:Notiz einbetten} | {key:embedNote} |
-| {ui:Fußnote einfügen} | {key:insertFootnote} |
-| {ui:Karteikarte einfügen} | {key:insertCard} |
-| {ui:Lückentext einfügen} | {key:insertCloze} |
 | {ui:Zeile nach oben} | {key:moveLineUp} |
 | {ui:Zeile nach unten} | {key:moveLineDown} |
 | {ui:Zeile oben duplizieren} | {key:copyLineUp} |

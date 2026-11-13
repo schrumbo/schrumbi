@@ -1,6 +1,6 @@
 use crate::input::InputModeKind;
 use crate::input::{
-    Enter, Indent, IndentInline, InputBaseState, Outdent, OutdentInline, RopeExt, cursor::CursorSelection,
+    Indent, IndentInline, InputBaseState, Outdent, OutdentInline, RopeExt, cursor::CursorSelection,
     element::TextElement, layout::LastLayout, mode::LayoutMode,
 };
 use gpui::{
@@ -207,15 +207,6 @@ impl<M: InputModeKind> InputBaseState<M> {
     ) {
         // First, try to accept inline completion if present
         if M::accept_inline_completion(self, window, cx) {
-            return;
-        }
-        let accept = Enter {
-            secondary: false,
-            shift: false,
-        };
-        if M::is_context_menu_open(self, cx)
-            && M::handle_context_menu_action(self, Box::new(accept), window, cx)
-        {
             return;
         }
         self.indent(false, window, cx);

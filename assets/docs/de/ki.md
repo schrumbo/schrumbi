@@ -22,7 +22,7 @@ Der erste Start kann eine Minute dauern; {ui:Abbrechen} hält ihn an, {ui:Noch e
 2. {key:toggleAi}
 3. Klick auf {ui:Karten aus dieser Seite} oder schreib selbst und drück {key:return}.
 
-Unten stehen Kärtchen mit dem, was die KI mitbekommt: offene Notiz, PDF-Seite, Auswahl, Modul. Das × nimmt eins raus, {ui:Kontext} holt es oder einen anderen Tab dazu. Die leere Spalte bietet bis zu drei Aufträge an; klappt das Senden nicht, bleibt dein Text im Eingabefeld.
+Unten stehen Kärtchen mit dem, was die KI mitbekommt: offene Notiz, PDF-Seite, Auswahl, Modul. Das × nimmt eins raus, {ui:Kontext} holt es oder einen anderen Tab dazu.
 
 | Knopf | Was passiert |
 |---|---|
@@ -71,7 +71,7 @@ Die Abläufe der Spalte gibt es dort als Befehle:
 
 ## Änderungen
 
-Vor jeder Änderung fragt Schrumbi in der Spalte, bei geschlossener Spalte unten rechts im Fenster. {key:escape} lehnt ab. Unten rechts wechselst du mit {key:tab} zwischen den Knöpfen, {key:return} drückt den gewählten.
+Vor jeder Änderung fragt Schrumbi in der Spalte, bei geschlossener Spalte unten rechts im Fenster.
 
 | Knopf | Was passiert |
 |---|---|

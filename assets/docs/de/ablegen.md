@@ -4,8 +4,8 @@ Ziehe eine Datei auf Schrumbi, und sie landet im richtigen Ordner mit dem richti
 
 ## Datei ablegen
 
-1. Datei auf einen Eintrag, ein Modul, die {ui:Inbox} oder eine freie Stelle in {ui:Übersicht}, {ui:Semester} und {ui:Leistungen} ziehen.
-2. Schrumbi schlägt Ziel und Namen vor. Darunter steht, woran es das Ziel erkannt hat: Entweder nennt es das passende Wort aus dem Dateinamen, oder es sagt, dass es geraten ist.
+1. Datei auf einen Eintrag, ein Modul oder die {ui:Inbox} ziehen.
+2. Schrumbi schlägt Ziel und Namen vor.
 3. {key:return} legt ab.
 
 Auf einen Eintrag abgelegt, landet die Datei im {ui:Abgabeordner} des Moduls und gehört zur Abgabe. Aus den {ui:Notizen} auf einen Eintrag gezogen, bleibt sie, wo sie ist, und gehört nur dazu.

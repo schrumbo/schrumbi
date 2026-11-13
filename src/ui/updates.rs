@@ -11,7 +11,7 @@ use super::markdown_view;
 use super::quick::Dismissed;
 use super::state::act;
 use super::motion::Soft;
-use super::theme::{Theme, control, font, hover, iconsize, radius, space};
+use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::prefs;
@@ -219,10 +219,10 @@ impl Render for UpdateSheet {
             .mx(px(-space::S))
             .cursor_pointer()
             .key_nav()
-            .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
+            .soft(t.ink.opacity(0.05), radius::INNER)
             .text_size(px(font::CALLOUT))
             .text_color(t.accent_text)
-            .tip(tr("Öffnet sich im Browser"))
+            .tooltip(tip(tr("Öffnet sich im Browser")))
             .on_click(move |_, _, _| crate::core::library::open_path(notes_page.as_str()))
             .child(tr("Alle Änderungen auf der Release-Seite"))
             .child(icon("arrow-up-right", iconsize::XS, t.accent_text));

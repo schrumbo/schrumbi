@@ -7,9 +7,7 @@ Notes are Markdown files in your folder. Obsidian reads them the same way.
 1. {key:newFile} or {ui:Neue Notiz}. Schrumbi creates `Unbenannt.md`.
 2. Type a name, {key:return}.
 
-If Obsidian is set to a fixed folder for new notes, it goes there. {key:escape} keeps the name `Unbenannt.md`. On a module page, {key:newFile} opens a window where you choose type and place.
-
-{ui:Neue Leinwand} and {ui:Neue Tabellenansicht} are in the {ui:Mehr} menu above the file list and in the command palette. Obsidian opens both files too.
+{key:escape} keeps the name `Unbenannt.md`. On a module page, {key:newFile} opens a window where you choose type and place.
 
 ## Files
 
@@ -24,9 +22,6 @@ If Obsidian is set to a fixed folder for new notes, it goes there. {key:escape} 
 - {key:renameNote} also renames the open note, as does a click on its title at the top.
 - A click opens the file in its own tab. If it is already open, its tab comes to the front.
 - Dragging a file onto a folder moves it.
-- {key:escape} first empties the filter field, a second {key:escape} leaves it.
-- Below 800 pixels of window width the file list folds away so the note has room. The button at the left of the bar brings it back until you quit the app.
-- If the study folder is missing when saving, the message says so: it was moved or deleted. {ui:Ordner neu anlegen} creates it again in the same place, {ui:Anderen Ordner wählen} opens another one. If only the folder of an open note is gone, {ui:Ordner neu anlegen} in its notice creates it again and saves the text.
 - Right-click → {ui:Abgabe zuordnen} makes the file count for a submission. The pill at the top of the note shows what it belongs to.
 - {ui:In den Papierkorb} does not ask. {key:Undo} brings the file back.
 - Very large files then live only in the system trash and come back from there. If the drive has no trash, they stay where they are.
@@ -160,11 +155,9 @@ On the left in {ui:Seiten}, the page list. {key:pageList} shows and hides it. A 
 | {ui:Lesen} / {ui:Bearbeiten} | {key:togglePreview} |
 | {ui:Geteilte Ansicht}, source only | {key:splitPreview} |
 
-Notes open in the Live view, in a column of comfortable reading width. You choose the editor in {key:OpenSettings} → {ui:Notizen}: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} or {ui:Quelltext: Text mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} in the {ui:Darstellung} menu or the {key:CommandPalette} switches at once. {ui:Text in voller Breite} in the note's {ui:Mehr} menu uses the whole area.
+You choose the editor in {key:OpenSettings} → {ui:Notizen}: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} or {ui:Quelltext: Text mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} in the {ui:Darstellung} menu or the {key:CommandPalette} switches at once.
 
-Switching keeps the cursor at its place in the text, and {key:Undo} also takes back changes made before the switch. The buttons stay where they are; {ui:Geteilte Ansicht} is greyed out in the live editor.
-
-`/` at the start of a line opens a list to insert from: headings, lists, tasks, table, {ui:Formelblock}, {ui:Hinweisbox}, {ui:Notiz einbetten} and more. Typing filters; what starts with the letters comes first. The shortcut shows on the right where there is one. {key:return} or {key:tab} inserts. Without `/`: right-click → {ui:Hinzufügen}, or {ui:Tabelle einfügen} and the like in the {key:CommandPalette}. Give one its own shortcut in {key:OpenSettings} → {ui:Tastenkürzel}.
+Switching keeps your place in the text, and {key:Undo} also takes back changes made before the switch. The buttons stay where they are; {ui:Geteilte Ansicht} is greyed out in the live editor.
 
 ## Find in a Note
 
@@ -183,7 +176,7 @@ All matches are marked, the current one stronger. Case and umlauts do not matter
 
 ## Spelling
 
-Mac only; on Windows and Linux the setting and the command are hidden until checking is available there. Unknown words are underlined. Point at one, then {ui:Zum Wörterbuch hinzufügen}, also in the right-click menu. Without a mouse: {ui:Zum Wörterbuch hinzufügen} in the {key:CommandPalette} adds the word at the caret.
+Unknown words are underlined. Point at one, then {ui:Zum Wörterbuch hinzufügen}, also in the right-click menu. Without a mouse: {ui:Zum Wörterbuch hinzufügen} in the {key:CommandPalette} adds the word at the caret.
 
 The words are listed in the settings under {ui:Eigenes Wörterbuch}; the cross removes one. All open notes pick it up at once.
 
@@ -195,7 +188,7 @@ A single line over about 250 KB opens in the source instead of the Live view. Th
 
 The Live view shows only the start of a line over about 32 KB; {ui:Lesen} shows all of it, and a click on the note under it opens the line in the source.
 
-On the Mac, from about 80 KB spelling checks only the text around the caret. The bar below says {ui:Rechtschreibung nur um die Schreibmarke}.
+From about 80 KB spelling checks only the text around the caret. The bar below says {ui:Rechtschreibung nur um die Schreibmarke}.
 
 ## Saving
 
@@ -211,7 +204,7 @@ If another app changed the file, you see a notice. Nothing is lost until you cho
 
 ## Linking
 
-- Type `[[` and choose a note. Press {key:escape} right after `[[` to remove the empty brackets.
+- Type `[[` and choose a note.
 - {key:toggleInspector} shows {ui:Rückverweise}, {ui:Ausgehend} and {ui:Erwähnungen ohne Link}.
 - {key:showGraph} shows all notes as a graph.
 
@@ -226,13 +219,12 @@ If another app changed the file, you see a notice. Nothing is lost until you cho
 - A tab only closes when you close it: ×, middle click or {key:closeTab}.
 - Every file gets its own tab. An open file is never opened twice: its tab comes to the front.
 - A link opens its target in a new tab; the note with the link stays open.
-- Right-click a tab: {ui:Andere Tabs schließen}, {ui:Tabs rechts schließen}, {ui:Alle Tabs schließen}. The shortcut is shown at the right of each item.
+- Right-click a tab: {ui:Andere Tabs schließen}, {ui:Tabs rechts schließen}, {ui:Alle Tabs schließen}.
 - Drag a tab to change the order. {key:reopenTab} brings a tab back to its old place.
 
 ### Side by side
 
 - Right-click a tab → {ui:Daneben öffnen}, or drag a tab or a file from the list into the right half. It says {ui:Rechts öffnen} there.
-- {key:openBeside} opens the note you are in on the right, {key:switchSide} switches between the sides.
 - The tab of the right note shows a window with a filled right half as its icon. Clicking it jumps into the right note.
 - A coloured line under the bar shows which note you are in.
 - Links in the right note open on the right.

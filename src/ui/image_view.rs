@@ -7,18 +7,15 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::motion::Soft;
-use super::theme::{Theme, control, font, hover, iconsize, radius, space};
+use super::theme::{Theme, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::tr;
-use crate::core::shortcuts::ShortcutAction;
 use crate::core::vault::render;
 
 const MIN_ZOOM: f32 = 0.05;
 const MAX_ZOOM: f32 = 32.;
 /// Room left around an image that is fitted into its view.
 const FIT_MARGIN: f32 = 16.;
-/// Room kept free at the bottom of a fitted image for the zoom bar.
-const BAR_ROOM: f32 = 56.;
 
 /// One image, to look at closely: zooms around the pointer and moves by dragging.
 pub struct ImageView {
@@ -33,7 +30,6 @@ pub struct ImageView {
     /// A sharp drawing of a vector image for the current zoom.
     vector: Option<(f32, Arc<Image>)>,
     drawing: Option<(f32, Task<()>)>,
-    size: String,
     /// The decoded picture, let go of when the view closes.
     images: Entity<RetainAllImageCache>,
 }
@@ -76,7 +72,7 @@ fn is_vector(path: &Path) -> bool {
 
 impl ImageView {
     pub fn new(path: PathBuf, cx: &mut Context<Self>) -> Self {
-        Self { size: super::upload::size_label(&path), path, zoom: None, origin: (0., 0.), view: Bounds::default(), grab: None, focus: cx.focus_handle(), vector: None, drawing: None, images: RetainAllImageCache::new(cx) }
+        Self { path, zoom: None, origin: (0., 0.), view: Bounds::default(), grab: None, focus: cx.focus_handle(), vector: None, drawing: None, images: RetainAllImageCache::new(cx) }
     }
 
     /// Takes the keyboard, so ⌘+, ⌘- and ⌘0 work right away.
@@ -90,7 +86,7 @@ impl ImageView {
 
     fn fit(&self, natural: (f32, f32)) -> f32 {
         let (w, h) = self.view_size();
-        (((w - FIT_MARGIN * 2.).max(1.) / natural.0).min((h - FIT_MARGIN * 2. - BAR_ROOM).max(1.) / natural.1)).min(1.)
+        (((w - FIT_MARGIN * 2.).max(1.) / natural.0).min((h - FIT_MARGIN * 2.).max(1.) / natural.1)).min(1.)
     }
 
     fn scale(&self, natural: (f32, f32)) -> f32 {
@@ -101,8 +97,7 @@ impl ImageView {
     fn place(&self, natural: (f32, f32), scale: f32, origin: (f32, f32)) -> (f32, f32) {
         let (vw, vh) = self.view_size();
         let axis = |view: f32, size: f32, at: f32| if size <= view { (view - size) / 2. } else { at.clamp(view - size, 0.) };
-        let room = if self.zoom.is_none() { BAR_ROOM } else { 0. };
-        (axis(vw, natural.0 * scale, origin.0), axis((vh - room).max(1.), natural.1 * scale, origin.1))
+        (axis(vw, natural.0 * scale, origin.0), axis(vh, natural.1 * scale, origin.1))
     }
 
     fn zoom_to(&mut self, next: f32, around: Option<Point<Pixels>>, natural: (f32, f32), cx: &mut Context<Self>) {
@@ -112,8 +107,8 @@ impl ImageView {
         let at = around.map_or((vw / 2., vh / 2.), |p| (f32::from(p.x - self.view.origin.x), f32::from(p.y - self.view.origin.y)));
         let now = self.place(natural, scale, self.origin);
         let image_point = ((at.0 - now.0) / scale, (at.1 - now.1) / scale);
-        self.zoom = Some(next);
         self.origin = self.place(natural, next, (at.0 - image_point.0 * next, at.1 - image_point.1 * next));
+        self.zoom = Some(next);
         cx.notify();
     }
 
@@ -205,8 +200,6 @@ impl Render for ImageView {
             None => image_cache(self.images.clone()).size_full().child(img(self.path.clone()).w_full().h_full()).into_any_element(),
         };
         let (m1, m2, m3, m4, m5) = (me.clone(), me.clone(), me.clone(), me.clone(), me.clone());
-        let fitted = self.zoom.is_none();
-        let info = format!("{}{}", if is_vector(&self.path) { String::new() } else { format!("{} × {} · ", (natural.0 * window.scale_factor()).round(), (natural.1 * window.scale_factor()).round()) }, self.size);
         let bar = div()
             .absolute()
             .bottom(px(space::M))
@@ -225,11 +218,10 @@ impl Render for ImageView {
                     .border_1()
                     .border_color(t.separator)
                     .shadow_md()
-                    .child(Button::new("image-out").ghost().small().icon(menu_icon("zoom-out")).tooltip(format!("{}{}", tr("Verkleinern"), ShortcutAction::ZoomOut.hint())).on_click(move |_, _, cx| m1.update(cx, |v, cx| v.zoom_to(scale * 0.8, None, natural, cx))))
-                    .child(div().id("image-percent").w(px(52.)).h(px(control::S)).flex().items_center().justify_center().text_size(px(font::CALLOUT)).font_features(tabular()).rounded(px(radius::INNER)).cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::INNER).tip(if fitted { tr("Auf 100 % (⌘1)") } else { format!("{}{}", tr("Einpassen"), ShortcutAction::ZoomReset.hint()) }).child(format!("{:.0} %", scale * 100.)).on_click(move |_, _, cx| m2.update(cx, |v, cx| if fitted { v.zoom_to(1., None, natural, cx) } else { v.reset(cx) })))
-                    .child(Button::new("image-in").ghost().small().icon(menu_icon("zoom-in")).tooltip(format!("{}{}", tr("Vergrößern"), ShortcutAction::ZoomIn.hint())).on_click(move |_, _, cx| m3.update(cx, |v, cx| v.zoom_to(scale * 1.25, None, natural, cx))))
-                    .child(div().px(px(space::S)).text_size(px(font::CAPTION)).text_color(t.secondary).font_features(tabular()).child(info))
-                    .child(Button::new("image-fit").ghost().small().icon(menu_icon("maximize")).tooltip(format!("{}{}", tr("Einpassen"), ShortcutAction::ZoomReset.hint())).on_click(move |_, _, cx| m4.update(cx, |v, cx| v.reset(cx)))),
+                    .child(Button::new("image-out").ghost().small().icon(menu_icon("zoom-out")).tooltip(tr("Verkleinern")).on_click(move |_, _, cx| m1.update(cx, |v, cx| v.zoom_to(scale * 0.8, None, natural, cx))))
+                    .child(div().id("image-percent").w(px(52.)).text_center().text_size(px(font::CALLOUT)).font_features(tabular()).rounded(px(radius::INNER)).cursor_pointer().soft(t.ink.opacity(0.06), radius::INNER).tooltip(tip(tr("Einpassen"))).child(format!("{:.0} %", scale * 100.)).on_click(move |_, _, cx| m2.update(cx, |v, cx| v.reset(cx))))
+                    .child(Button::new("image-in").ghost().small().icon(menu_icon("zoom-in")).tooltip(tr("Vergrößern")).on_click(move |_, _, cx| m3.update(cx, |v, cx| v.zoom_to(scale * 1.25, None, natural, cx))))
+                    .child(Button::new("image-fit").ghost().small().icon(menu_icon("maximize")).tooltip(tr("Einpassen")).on_click(move |_, _, cx| m4.update(cx, |v, cx| v.reset(cx)))),
             );
         div()
             .id("image-view")

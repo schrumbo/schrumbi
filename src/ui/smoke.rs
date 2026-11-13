@@ -46,16 +46,6 @@ pub fn run(cx: &mut App) {
             cx.update(|cx| cx.quit());
             return;
         }
-        cx.update(|cx| super::notes_page::open_from_tree(&note, cx));
-        cx.background_executor().timer(pause).await;
-        let editing = cx.update(|cx| {
-            cx.windows().into_iter().find(|h| super::main_window::is_main(h.window_id(), cx)).and_then(|h| h.update(cx, |_, window, _| window.context_stack().iter().any(|c| c.contains("NoteEditor") || c.contains("LiveBlock"))).ok()).unwrap_or(false)
-        });
-        if !editing {
-            println!("smoke failed: a note opened from the explorer did not take the keyboard");
-            cx.update(|cx| cx.quit());
-            return;
-        }
         let steps: Vec<Box<dyn FnOnce(&mut App)>> = {
             let (a, b, c) = (note.clone(), note.clone(), note.clone());
             vec![

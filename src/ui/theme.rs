@@ -40,8 +40,6 @@ pub mod control {
     pub const TRAFFIC_INSET: f32 = 14.;
     pub const S: f32 = 24.;
     pub const M: f32 = 28.;
-    /// The widest a page's content grows before it is centred.
-    pub const CONTENT_MAX: f32 = 1120.;
     /// The toolbar band.
     pub const BAR: f32 = 52.;
     /// The band under the toolbar. Every pane uses it, so the lines below them meet.
@@ -62,6 +60,8 @@ pub mod control {
     pub const KEYS: f32 = 216.;
     /// The most a row of the shortcut list gives to naming what else uses its keys.
     pub const CLASH: f32 = 240.;
+    /// A small icon button, like the reset button at the end of a shortcut row.
+    pub const ICON_BUTTON: f32 = M;
     /// Below this toolbar width the empty search field folds to its icon.
     pub const SEARCH_FOLD: f32 = 700.;
     /// The height of a one-line save notice, used until the real one is measured; toasts stand above it.
@@ -157,16 +157,9 @@ pub mod explorer {
     pub const NOTE_MIN: f32 = 360.;
 }
 
-/// How strongly the pointer lights up what it rests on, as ink opacity; every hover takes one of these and fades in over `motion::FAST`.
+/// The ink opacity the small controls floating over a note light up with under the pointer.
 pub mod hover {
-    /// Rows, list entries, tabs, menu entries and fields.
-    pub const ROW: f32 = 0.06;
-    /// Icon and text buttons in bars, chips, links and small controls floating over a note.
-    pub const CONTROL: f32 = 0.1;
-    /// Controls on a surface that is tinted itself, such as a code block or a grouped bar.
-    pub const RAISED: f32 = 0.14;
-    /// How far a row hover and a row selection stay from the edges of their list.
-    pub const INSET: f32 = super::space::XS;
+    pub const FLOAT: f32 = 0.1;
 }
 
 /// The orange tints of the notice about a note that did not save.
@@ -183,6 +176,12 @@ pub mod tint {
     pub const DISABLED: f32 = 0.4;
     /// The opacity of a page while it is being dragged.
     pub const DRAGGED: f32 = 0.4;
+    /// What the pointer adds over a small control.
+    pub const HOVER: f32 = 0.08;
+    /// What the pointer adds over a row of a list.
+    pub const HOVER_ROW: f32 = 0.05;
+    /// What the pointer adds over a field that shows a value.
+    pub const HOVER_FIELD: f32 = 0.06;
     /// The selected button of a segmented control in the dark theme.
     pub const NAV_DARK: f32 = 0.16;
     /// The ground the pages of a document lie on.
@@ -257,17 +256,6 @@ pub mod coach {
     pub const LABEL_ROOM: f32 = 96.;
 }
 
-pub mod table {
-    /// The width of a column with no text yet, so a new table has room to click into.
-    pub const EMPTY_COLUMN: f32 = 72.;
-}
-
-/// The suggestion list under the caret.
-pub mod suggestions {
-    /// The widest the list gets; longer names end in an ellipsis.
-    pub const WIDTH: f32 = 400.;
-}
-
 /// The tip of the day and the setup list.
 pub mod hints {
     pub const TIP_WIDTH: f32 = 340.;
@@ -300,7 +288,7 @@ pub mod ring {
     use gpui_kit::Hsla;
     use std::sync::RwLock;
 
-    const OPACITY: f32 = 0.14;
+    const OPACITY: f32 = 0.28;
     /// The tint of a shortcut chip that is waiting for keys.
     pub const ARMED: f32 = 0.08;
     /// The edge of a shortcut chip, clear while it has no state to show.
@@ -321,14 +309,6 @@ pub mod ring {
     pub fn fill() -> Hsla {
         of(*ACCENT.read().unwrap_or_else(|e| e.into_inner()))
     }
-
-    /// The solid line drawn just inside the edge of a keyboard-focused element.
-    pub fn line() -> Hsla {
-        *ACCENT.read().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Width of the line around a keyboard-focused element.
-    pub const WIDTH: f32 = 2.;
 }
 
 /// macOS text styles in points.
@@ -403,10 +383,6 @@ pub struct Theme {
     /// Orange that is readable as text on the content background.
     pub orange_text: Hsla,
     pub red: Hsla,
-    /// Red that is readable as text on the surfaces and on its own tinted fill.
-    pub red_text: Hsla,
-    /// Blue that is readable as text on the surfaces and on its own tinted fill.
-    pub blue_text: Hsla,
     pub gray: Hsla,
     pub ink: Hsla,
     pub material: Hsla,
@@ -435,7 +411,7 @@ impl Theme {
             column: if dark { c(0x262626) } else { c(0xF7F7F9) },
             primary: ink.opacity(0.88),
             secondary: ink.opacity(if dark { 0.6 } else { 0.62 }),
-            tertiary: ink.opacity(if dark { 0.55 } else { 0.6 }),
+            tertiary: ink.opacity(if dark { 0.47 } else { 0.56 }),
             separator: ink.opacity(if dark { 0.12 } else { 0.1 }),
             accent: if dark { c(0x0A84FF) } else { c(0x007AFF) },
             accent_text: if dark { c(0x6CB3FF) } else { c(0x0053B4) },
@@ -445,17 +421,14 @@ impl Theme {
             green: if dark { c(0x30D158) } else { c(0x34C759) },
             blue: if dark { c(0x0A84FF) } else { c(0x007AFF) },
             orange: if dark { c(0xFF9F0A) } else { c(0xFF9500) },
-            orange_text: if dark { c(0xFF9F0A) } else { c(0xB45309) },
+            orange_text: if dark { c(0xFF9F0A) } else { c(0x824800) },
             red: if dark { c(0xFF453A) } else { c(0xFF3B30) },
-            red_text: if dark { c(0xFF6961) } else { c(0xB3261E) },
-            blue_text: if dark { c(0x6CB3FF) } else { c(0x0050B3) },
             gray: c(0x8E8E93),
             ink,
             material: if dark { c(0x303030) } else { c(0xFBFBFC) },
             modules: None,
             syntax: SyntaxPalette::from_keys(if dark { &themes::SYNTAX_DARK } else { &themes::SYNTAX_LIGHT }),
         }
-        .hardened()
     }
 
     /// The theme of a checked design; `id` tells it apart from the others.
@@ -486,42 +459,12 @@ impl Theme {
             orange: col(p.orange),
             orange_text: col(p.orange_text),
             red: col(p.red),
-            red_text: col(p.red),
-            blue_text: col(p.blue),
             gray: col(p.gray),
             ink: col(p.ink),
             material: col(p.material),
             modules: Some(std::array::from_fn(|i| p.modules[i] >> 8)),
             syntax: SyntaxPalette::from_keys(&std::array::from_fn::<u32, 6, _>(|i| p.syntax[i] >> 8)),
         }
-        .hardened()
-    }
-
-    fn surfaces(&self) -> [Hsla; 4] {
-        [self.content, self.secondary_bg, self.column, self.sidebar]
-    }
-
-    fn hardened(mut self) -> Self {
-        let surfaces = self.surfaces();
-        let ink = self.ink;
-        self.accent_text = deepen(self.accent_text, self.accent, self.accent, ink, surfaces);
-        self.green_text = deepen(self.green_text, self.green, self.accent, ink, surfaces);
-        self.orange_text = deepen(self.orange_text, self.orange, self.accent, ink, surfaces);
-        self.red_text = deepen(self.red_text, self.red, self.accent, ink, surfaces);
-        self.blue_text = deepen(self.blue_text, self.blue, self.accent, ink, surfaces);
-        self.tertiary = firm(self.tertiary, ink, surfaces);
-        self
-    }
-
-    /// The border of an input or checkbox, at 3:1 on the content and the card colour.
-    pub fn control_border(&self) -> Hsla {
-        for step in 10..=100 {
-            let border = self.ink.opacity(step as f32 * 0.01);
-            if contrast(border, self.content) >= 3. && contrast(border, self.secondary_bg) >= 3. {
-                return border;
-            }
-        }
-        self.ink
     }
 
     pub fn get(cx: &App) -> Self {
@@ -530,14 +473,9 @@ impl Theme {
 
     /// A color moved towards the text color until it reads as text on this theme's backgrounds.
     pub fn readable(&self, color: Hsla) -> Hsla {
-        self.readable_on(color, self.column)
-    }
-
-    /// `color` deepened until it reads at 4.5:1 on `background` tinted with itself.
-    pub fn readable_on(&self, color: Hsla, background: Hsla) -> Hsla {
         let mut text = color;
         for step in 1..=10 {
-            if contrast(text, background.blend(color.opacity(0.12))) >= 4.5 {
+            if contrast(text, self.column.blend(color.opacity(0.12))) >= 4.5 {
                 break;
             }
             text = color.blend(self.ink.opacity(step as f32 * 0.1));
@@ -747,80 +685,39 @@ pub fn choose(choice: ThemeChoice, window: &mut Window, cx: &mut App) {
     cx.refresh_windows();
 }
 
-fn select_file(p: &mut prefs::Prefs, id: &str) {
-    p.theme_file = id.to_string();
-}
-
-/// Switches to a loaded design by its id. The built-in choice from before stays, so it shows again if the file goes.
+/// Switches to a loaded design by its id.
 pub fn choose_file(id: &str, window: &mut Window, cx: &mut App) {
-    prefs::update(|p| select_file(p, id));
+    prefs::update(|p| {
+        p.theme = ThemeChoice::System;
+        p.theme_file = id.to_string();
+    });
     super::platform::set_window_appearance(native_appearance());
     refresh(window, cx);
     cx.refresh_windows();
 }
 
-/// A design that was loaded: its id, its name, the earlier copy it took the place of and the design chosen before.
-pub struct Loaded {
-    pub id: String,
-    pub name: String,
-    pub replaced: Option<Vec<u8>>,
-    pub previous: String,
-}
-
-static REVERTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Takes back a design that replaced an earlier copy: the old file returns and the design chosen before is chosen again.
-/// Windows follow on their next frame through `follow_undo`.
-pub fn undo_load(id: &str, bytes: &[u8], previous: &str) -> Result<(), String> {
-    themes::revert(id, bytes).map_err(|e| trf("Design konnte nicht gespeichert werden: %@", &[&e]))?;
-    prefs::update(|p| select_file(p, previous));
-    REVERTED.store(true, std::sync::atomic::Ordering::Relaxed);
-    Ok(())
-}
-
-/// Draws in the design chosen again by `undo_load`.
-pub fn follow_undo(window: &mut Window, cx: &mut App) {
-    if REVERTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
-        super::platform::set_window_appearance(native_appearance());
-        refresh(window, cx);
-        cx.refresh_windows();
-    }
-}
-
-fn load(path: &std::path::Path) -> Result<Loaded, String> {
+fn load(path: &std::path::Path) -> Result<String, String> {
     use std::io::Read;
     let mut bytes = Vec::new();
     std::fs::File::open(path).and_then(|f| f.take(65 * 1024).read_to_end(&mut bytes)).map_err(|_| crate::core::i18n::tr("Die Datei ließ sich nicht lesen."))?;
     let design = themes::parse(&bytes)?;
     if let Some(id) = themes::id_of(path) {
         themes::rescan();
-        return Ok(Loaded { id, name: design.name, replaced: None, previous: String::new() });
+        return Ok(id);
     }
-    let placed = themes::install(&bytes, &design).map_err(|e| trf("Design konnte nicht gespeichert werden: %@", &[&e]))?;
-    Ok(Loaded { id: placed.id, name: design.name, replaced: placed.replaced, previous: String::new() })
+    themes::install(&bytes, &design).map(|placed| placed.id).map_err(|e| trf("Design konnte nicht gespeichert werden: %@", &[&e]))
 }
 
-/// Asks for a design file, checks it, keeps a copy and switches to it. `done` gets what was loaded or the German reason; a copy it replaced is announced in the main window as well.
-pub fn pick_and_load(handle: AnyWindowHandle, cx: &mut App, done: impl FnOnce(Result<Loaded, String>, &mut App) + 'static) {
+/// Asks for a design file, checks it, keeps a copy and switches to it. `done` gets the id or the German reason.
+pub fn pick_and_load(handle: AnyWindowHandle, cx: &mut App, done: impl FnOnce(Result<String, String>, &mut App) + 'static) {
     super::platform::choose_file(cx, move |path, cx| {
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let task = cx.background_spawn(async move { load(&path) });
         cx.spawn(async move |cx| {
-            let mut result = task.await.map_err(|m| trf("%@ wurde nicht geladen: %@", &[&name, &m]));
+            let result = task.await.map_err(|m| trf("%@ wurde nicht geladen: %@", &[&name, &m]));
             cx.update(|cx| {
-                if let Ok(loaded) = &mut result {
-                    loaded.previous = prefs::with(|p| p.theme_file.clone());
-                    let _ = handle.update(cx, |_, window, cx| choose_file(&loaded.id, window, cx));
-                    if let Some(bytes) = loaded.replaced.clone() {
-                        let text = trf("Design „%@“ ersetzt", &[&loaded.name]);
-                        let (id, previous) = (loaded.id.clone(), loaded.previous.clone());
-                        let undo: crate::core::library::Undo = Box::new(move |l| {
-                            if let Err(m) = undo_load(&id, &bytes, &previous) {
-                                l.notify(m, "circle-alert", None, None);
-                            }
-                        });
-                        super::state::act(cx, |l| l.notify(text, "check", Some(crate::core::i18n::tr("Rückgängig")), Some(undo)));
-                    }
+                if let Ok(id) = &result {
+                    let _ = handle.update(cx, |_, window, cx| choose_file(id, window, cx));
                 }
                 done(result, cx);
             });
@@ -829,11 +726,11 @@ pub fn pick_and_load(handle: AnyWindowHandle, cx: &mut App, done: impl FnOnce(Re
     });
 }
 
-/// Deletes a loaded design and returns its bytes for undo; if it was in use the app goes back to the built-in choice from before.
+/// Deletes a loaded design and returns its bytes for undo; if it was in use the app falls back to the system theme.
 pub fn remove_file(id: &str, window: &mut Window, cx: &mut App) -> Result<Vec<u8>, String> {
     let bytes = themes::remove(id).map_err(|e| trf("Design konnte nicht entfernt werden: %@", &[&e]))?;
     if prefs::with(|p| p.theme_file == id) {
-        choose(prefs::with(|p| p.theme), window, cx);
+        choose(ThemeChoice::System, window, cx);
     }
     Ok(bytes)
 }
@@ -882,7 +779,7 @@ pub fn apply(t: Theme, window: Option<&mut Window>, cx: &mut App) {
     k.background = t.content;
     k.foreground = t.primary;
     k.border = t.separator;
-    k.input = t.control_border();
+    k.input = t.ink.opacity(if dark { 0.14 } else { 0.16 });
     k.ring = t.accent.opacity(0.5);
     k.primary = t.accent;
     k.primary_hover = t.accent.opacity(0.9);
@@ -913,7 +810,7 @@ pub fn apply(t: Theme, window: Option<&mut Window>, cx: &mut App) {
     k.link = t.accent;
     k.link_hover = t.accent.opacity(0.85);
     k.link_active = t.accent.opacity(0.7);
-    k.switch = if dark { t.ink.opacity(0.22) } else { t.control_border() };
+    k.switch = t.ink.opacity(if dark { 0.22 } else { 0.15 });
     k.switch_thumb = gpui_kit::white();
     k.list_active = t.accent.opacity(0.15);
     k.list_hover = t.ink.opacity(0.06);
@@ -931,43 +828,6 @@ pub fn apply(t: Theme, window: Option<&mut Window>, cx: &mut App) {
     k.title_bar_border = t.separator;
     k.window_border = t.separator;
     ct.tokens = ct.colors.into();
-}
-
-fn reads(text: Hsla, base: Hsla, accent: Hsla, surfaces: [Hsla; 4]) -> bool {
-    surfaces.iter().all(|&bg| {
-        contrast(text, bg) >= 4.5
-            && [0.12, 0.18].iter().all(|&a| contrast(text, bg.blend(base.opacity(a))) >= 4.5)
-            && contrast(text, bg.blend(ring::of(accent))) >= 4.5
-            && contrast(text, bg.blend(accent.opacity(ring::ARMED))) >= 4.5
-    })
-}
-
-fn deepen(text: Hsla, base: Hsla, accent: Hsla, ink: Hsla, surfaces: [Hsla; 4]) -> Hsla {
-    for step in 0..=20 {
-        let x = text.blend(ink.opacity(step as f32 * 0.05));
-        if reads(x, base, accent, surfaces) {
-            return x;
-        }
-    }
-    ink
-}
-
-fn firm(text: Hsla, ink: Hsla, surfaces: [Hsla; 4]) -> Hsla {
-    let reads = |x: Hsla| surfaces.iter().all(|&bg| contrast(x, bg) >= 4.8);
-    for step in 0..=25 {
-        let x = Hsla { a: (text.a + step as f32 * 0.02).min(1.), ..text };
-        if reads(x) {
-            return x;
-        }
-    }
-    let solid = Hsla { a: 1., ..text };
-    for step in 1..=20 {
-        let x = solid.blend(ink.opacity(step as f32 * 0.05));
-        if reads(x) {
-            return x;
-        }
-    }
-    ink
 }
 
 fn over(top: Hsla, bottom: Hsla) -> Rgba {
@@ -1032,18 +892,6 @@ mod tests {
     }
 
     #[test]
-    fn a_design_that_goes_leaves_the_choice_from_before() {
-        for before in [ThemeChoice::Light, ThemeChoice::Dark, ThemeChoice::Nord, ThemeChoice::Dracula, ThemeChoice::System] {
-            let mut p = prefs::Prefs { theme: before, ..prefs::Prefs::default() };
-            select_file(&mut p, "no-such-design");
-            assert_eq!(p.theme, before);
-            assert_eq!(p.theme_file, "no-such-design");
-            assert_eq!(resolve(p.theme, &p.theme_file, true).id, resolve(before, "", true).id);
-            assert_eq!(resolve(p.theme, &p.theme_file, false).id, resolve(before, "", false).id);
-        }
-    }
-
-    #[test]
     fn a_missing_file_falls_back_to_the_system() {
         assert_eq!(resolve(ThemeChoice::System, "no-such-design", true).id, Theme::plain(true).id);
         assert_eq!(resolve(ThemeChoice::System, "no-such-design", false).id, Theme::plain(false).id);
@@ -1073,52 +921,10 @@ mod tests {
     }
 
     #[test]
-    fn study_counts_read_on_the_study_header() {
-        for (kind, t) in all() {
-            for color in [t.blue, t.orange, t.green] {
-                let chip = t.content.blend(color.opacity(0.12));
-                assert!(contrast(t.readable_on(color, t.content), chip) >= 4.5, "count on its chip, {kind:?}: {}", contrast(t.readable_on(color, t.content), chip));
-                assert!(contrast(t.readable_on(color, t.content), t.content) >= 4.5, "count on the header, {kind:?}: {}", contrast(t.readable_on(color, t.content), t.content));
-            }
-            assert!(contrast(t.secondary, t.content) >= 4.5, "zero count, {kind:?}");
-        }
-    }
-
-    #[test]
     fn selected_highlight_underline_shows_on_white_paper() {
         for (kind, t) in all() {
             for name in ["yellow", "green", "blue", "pink"] {
                 assert!(contrast(t.mark_underline(name), white()) >= 3., "{name}, {kind:?}: {}", contrast(t.mark_underline(name), white()));
-            }
-        }
-    }
-
-    #[test]
-    fn every_text_tint_reads_on_every_surface() {
-        for (name, t) in all() {
-            let tints = [("primary", t.primary), ("secondary", t.secondary), ("tertiary", t.tertiary), ("accent_text", t.accent_text), ("green_text", t.green_text), ("orange_text", t.orange_text), ("red_text", t.red_text), ("blue_text", t.blue_text)];
-            let surfaces = [("content", t.content), ("secondary_bg", t.secondary_bg), ("column", t.column), ("sidebar", t.sidebar)];
-            for (tint, color) in tints {
-                for (surface, background) in surfaces {
-                    assert!(contrast(color, background) >= 4.5, "{tint} on {surface}, {name}: {}", contrast(color, background));
-                }
-            }
-            for (tint, color, fill) in [("accent_text", t.accent_text, t.accent), ("green_text", t.green_text, t.green), ("orange_text", t.orange_text, t.orange), ("red_text", t.red_text, t.red), ("blue_text", t.blue_text, t.blue)] {
-                for (surface, background) in surfaces {
-                    for alpha in [0.12, 0.18] {
-                        let badge = background.blend(fill.opacity(alpha));
-                        assert!(contrast(color, badge) >= 4.5, "{tint} on its {alpha} badge over {surface}, {name}: {}", contrast(color, badge));
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn control_borders_show_on_the_surfaces_they_sit_on() {
-        for (name, t) in all() {
-            for (surface, background) in [("content", t.content), ("secondary_bg", t.secondary_bg)] {
-                assert!(contrast(t.control_border(), background) >= 3., "border on {surface}, {name}: {}", contrast(t.control_border(), background));
             }
         }
     }
@@ -1135,7 +941,7 @@ mod tests {
                 assert!(contrast(t.orange_text, focused) >= 4.5, "orange text on the focus fill, {dark:?}: {}", contrast(t.orange_text, focused));
                 assert!(contrast(t.accent_text, focused) >= 4.5, "accent text on the focus fill, {dark:?}: {}", contrast(t.accent_text, focused));
                 assert!(contrast(t.primary, focused) >= 4.5, "text on the focus fill, {dark:?}: {}", contrast(t.primary, focused));
-                assert!(contrast(focused, background) >= 1.1, "the focus fill shows on the background, {dark:?}: {}", contrast(focused, background));
+                assert!(contrast(focused, background) >= 1.25, "the focus fill shows on the background, {dark:?}: {}", contrast(focused, background));
                 assert!(contrast(t.primary, background) >= 7., "primary, {dark:?}");
                 assert!(contrast(t.secondary, background) >= 4.5, "secondary, {dark:?}: {}", contrast(t.secondary, background));
                 assert!(contrast(t.accent_text, background) >= 4.5, "accent, {dark:?}: {}", contrast(t.accent_text, background));

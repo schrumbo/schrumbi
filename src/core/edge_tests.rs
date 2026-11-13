@@ -993,22 +993,6 @@ fn a_file_filed_into_a_fallback_folder_still_counts_and_undo_takes_both_back() {
 }
 
 #[test]
-fn notes_open_live_in_the_reading_column_until_the_user_chooses() {
-    use super::prefs::{settle_unchosen, NoteEditor, Prefs};
-    let fresh = Prefs::default();
-    assert_eq!(fresh.note_editor, NoteEditor::Live);
-    assert!(!fresh.reader_full_width);
-    let mut old: Prefs = serde_json::from_value(json!({ "noteEditorMode": "code", "readerFullWidth": true })).unwrap();
-    settle_unchosen(&mut old);
-    assert_eq!(old.note_editor, NoteEditor::Live);
-    assert!(!old.reader_full_width);
-    let mut chosen: Prefs = serde_json::from_value(json!({ "noteEditorMode": "code", "noteEditorChosen": true, "readerFullWidth": true, "readerWidthChosen": true })).unwrap();
-    settle_unchosen(&mut chosen);
-    assert_eq!(chosen.note_editor, NoteEditor::Code);
-    assert!(chosen.reader_full_width);
-}
-
-#[test]
 fn details_follow_the_page_and_the_selection() {
     let (root, mut lib) = workspace("inspector", &config(2, 1));
     let a = lib.assignments.iter().find(|a| a.module_id == "m0").unwrap().id.clone();

@@ -10,7 +10,7 @@ use super::motion::{Soft, loading};
 use super::preview::FilePreview;
 use super::state::{self, act};
 use super::sync;
-use super::theme::{Theme, font, hover, iconsize, space};
+use super::theme::{Theme, font, iconsize, space};
 use super::widgets::*;
 use crate::core::git::history::Version;
 use crate::core::i18n::{tr, trf};
@@ -237,10 +237,7 @@ impl Render for VersionList {
         self.sync_path(cx);
         let t = Theme::get(cx);
         if sync::get(cx).git.is_none() {
-            let has_root = state::read(cx, |l| l.root.is_some());
-            return unavailable("history", tr("Noch kein Verlauf"), tr("Frühere Fassungen deiner Notizen erscheinen hier, sobald Sync eingerichtet ist."), &t)
-                .when(has_root, |d| d.child(div().pt(px(space::S)).child(Button::new("history-setup").small().label(tr("Sync einrichten…")).on_click(|_, _, cx| act(cx, |l| l.show_sync_setup = true)))))
-                .into_any_element();
+            return unavailable("history", tr("Noch kein Verlauf"), tr("Er beginnt, sobald der Sync eingerichtet ist."), &t).into_any_element();
         }
         if self.versions.is_empty() {
             if self.loading {
@@ -252,7 +249,7 @@ impl Render for VersionList {
             return unavailable("history", tr("Noch kein Verlauf"), tr("Er beginnt mit dem ersten Sichern."), &t).into_any_element();
         }
         let today = chrono::Local::now().date_naive();
-        let hover = t.ink.opacity(hover::ROW);
+        let hover = t.ink.opacity(0.05);
         let mut list = div().flex().flex_col().py(px(space::S));
         let current_selected = self.selected.is_none();
         list = list.child(
@@ -265,8 +262,8 @@ impl Render for VersionList {
                 .gap(px(space::M))
                 .cursor_pointer()
                 .key_nav()
-                .when(current_selected, |d| d.relative().child(super::motion::row_fill(t.ink.opacity(0.08))))
-                .when(!current_selected, |d| d.soft_row(hover))
+                .when(current_selected, |d| d.bg(t.ink.opacity(0.08)))
+                .when(!current_selected, |d| d.soft(hover, 0.))
                 .child(div().size(px(space::S)).rounded_full().bg(t.accent))
                 .child(div().font_weight(FontWeight::MEDIUM).child(tr("Aktuell")))
                 .on_click(cx.listener(|s, _, _, cx| s.select(None, cx))),
@@ -292,11 +289,11 @@ impl Render for VersionList {
                     .gap(px(space::M))
                     .cursor_pointer()
                     .key_nav()
-                    .when(selected, |d| d.relative().child(super::motion::row_fill(t.ink.opacity(0.08))))
-                    .when(!selected, |d| d.soft_row(hover))
+                    .when(selected, |d| d.bg(t.ink.opacity(0.08)))
+                    .when(!selected, |d| d.soft(hover, 0.))
                     .child(div().mt(px(space::XS)).size(px(space::S)).rounded_full().border_1().border_color(t.tertiary))
                     .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(v.subject.clone())).child(caption(time, &t).font_features(tabular())))
-                    .tip(v.subject.clone())
+                    .tooltip(tip(v.subject.clone()))
                     .on_click(cx.listener(move |s, _, _, cx| s.select(Some(i), cx))),
             );
         }

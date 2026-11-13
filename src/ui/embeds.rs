@@ -10,7 +10,7 @@ use gpui_kit::*;
 
 use super::motion::{Soft, loading};
 use super::state::act;
-use super::theme::{Theme, font, hover, iconsize, radius, space};
+use super::theme::{Theme, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::vault::{bases, canvas, index, query, render};
@@ -201,13 +201,13 @@ fn open_large(image: Arc<Image>, w: f32, h: f32, window: &mut Window, cx: &mut A
 }
 
 /// Code blocks that are really something else. `None` means ordinary code.
-pub fn special_block(lang: Option<&str>, code: &str, base: Option<&Path>, note: Option<&Path>, id: u64, t: &Theme) -> Option<AnyElement> {
+pub fn special_block(lang: Option<&str>, code: &str, base: Option<&Path>, id: u64, t: &Theme) -> Option<AnyElement> {
     let lang = lang?.to_lowercase();
     let sample = super::markdown_view::is_sample_base(base);
     match lang.as_str() {
         "mermaid" => Some(Diagram { code: code.to_string(), id, sample }.into_any_element()),
         "math" | "latex" if false => None,
-        "query" => Some(QueryBlock { query: code.trim().to_string(), note: note.map(Path::to_path_buf), id, sample }.into_any_element()),
+        "query" => Some(QueryBlock { query: code.trim().to_string(), id, sample }.into_any_element()),
         "base" => Some(BaseBlock { source: code.to_string(), this: base.map(|b| b.join(".")), id, sample }.into_any_element()),
         "dataview" | "dataviewjs" | "tasks" | "excalidraw" | "kanban" | "tracker" | "chart" | "ad-note" => Some(plugin_block(&lang, code, id, t)),
         _ => None,
@@ -242,8 +242,6 @@ pub fn note_plugin(path: &Path, text: &str) -> Option<&'static str> {
 #[derive(IntoElement)]
 struct QueryBlock {
     query: String,
-    /// The note the block sits in; it never lists itself.
-    note: Option<PathBuf>,
     id: u64,
     sample: bool,
 }
@@ -272,37 +270,21 @@ impl RenderOnce for QueryBlock {
             Ok(Vec::new())
         });
         let head = div().px(px(space::M)).py(px(space::XS)).flex().items_center().gap(px(space::XS)).bg(t.secondary_bg).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("search", iconsize::XS, t.tertiary)).child(div().truncate().child(self.query.clone()));
-        let result = result.map(|files| match &self.note {
-            Some(note) => {
-                let settled = dunce::canonicalize(note).unwrap_or_else(|_| note.clone());
-                files.into_iter().filter(|f| f != note && *f != settled).collect()
-            }
-            None => files,
-        });
         let body: AnyElement = match result {
             Err(e) => div().p(px(space::S)).child(caption(e, &t)).into_any_element(),
             Ok(files) if files.is_empty() => div().p(px(space::M)).child(caption(tr("Keine Treffer"), &t)).into_any_element(),
-            Ok(files) => {
-                let stem = |f: &Path| f.file_stem().unwrap_or_default().to_string_lossy().to_string();
-                let mut seen: HashMap<String, usize> = HashMap::new();
-                for f in files.iter().take(50) {
-                    *seen.entry(stem(f)).or_default() += 1;
-                }
-                let root = vault.root.clone();
-                div()
+            Ok(files) => div()
                 .flex()
                 .flex_col()
                 .py(px(space::XS))
                 .children(files.into_iter().take(50).enumerate().map(|(i, f)| {
                     let open = f.clone();
-                    let name = stem(&f);
-                    let folder = (seen.get(&name).copied().unwrap_or(0) > 1).then(|| f.parent().and_then(|p| p.strip_prefix(&root).ok()).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default()).filter(|p| !p.is_empty());
-                    let hover = t.ink.opacity(hover::ROW);
+                    let name = f.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                    let hover = t.ink.opacity(0.05);
                     let sample = self.sample;
-                    div().id(("query-hit", (self.id as usize) * 1000 + i)).px(px(space::M)).py(px(space::XS)).flex().items_center().gap(px(space::S)).when(!sample, |d| d.cursor_pointer().soft_row(hover)).on_click(move |_, _, cx| if !sample { act(cx, |l| l.open_file(&open)) }).child(file_icon(&f, iconsize::S)).child(div().flex_none().max_w_1_2().truncate().child(name)).children(folder.map(|p| div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.tertiary).child(p)))
+                    div().id(("query-hit", (self.id as usize) * 1000 + i)).px(px(space::M)).py(px(space::XS)).flex().items_center().gap(px(space::S)).when(!sample, |d| d.cursor_pointer().soft(hover, 0.)).on_click(move |_, _, cx| if !sample { act(cx, |l| l.open_file(&open)) }).child(file_icon(&f, iconsize::S)).child(div().truncate().child(name))
                 }))
-                .into_any_element()
-            }
+                .into_any_element(),
         };
         grouped(&t).child(head).child(body)
     }
@@ -373,9 +355,9 @@ impl RenderOnce for BaseBlock {
                 let head = div().flex().bg(t.secondary_bg).font_weight(FontWeight::SEMIBOLD).text_size(px(font::CALLOUT)).children(columns.iter().map(|c| div().flex_1().min_w_0().truncate().px(px(space::S)).py(px(space::XS)).child(c.clone())));
                 let lines = rows.iter().take(100).enumerate().map(|(i, row)| {
                     let open = row.path.clone();
-                    let hover = t.ink.opacity(hover::ROW);
+                    let hover = t.ink.opacity(0.05);
                     let sample = self.sample;
-                    div().id(("base-row", (self.id as usize) * 1000 + i)).flex().border_t_1().border_color(t.separator).when(!sample, |d| d.cursor_pointer().soft_row(hover)).on_click(move |_, _, cx| if !sample { act(cx, |l| l.open_file(&open)) }).children(row.cells.iter().map(|(_, v)| div().flex_1().min_w_0().truncate().px(px(space::S)).py(px(space::XS)).text_size(px(font::CALLOUT)).child(v.display())))
+                    div().id(("base-row", (self.id as usize) * 1000 + i)).flex().border_t_1().border_color(t.separator).when(!sample, |d| d.cursor_pointer().soft(hover, 0.)).on_click(move |_, _, cx| if !sample { act(cx, |l| l.open_file(&open)) }).children(row.cells.iter().map(|(_, v)| div().flex_1().min_w_0().truncate().px(px(space::S)).py(px(space::XS)).text_size(px(font::CALLOUT)).child(v.display())))
                 });
                 div().id(("base-scroll", self.id)).max_h(px(400.)).overflow_y_scroll().child(head).children(lines).into_any_element()
             }
@@ -575,10 +557,10 @@ impl RenderOnce for AudioLine {
                     .justify_center()
                     .bg(t.ink.opacity(0.08))
                     .cursor_pointer()
-                    .soft(t.ink.opacity(hover::RAISED), radius::FULL)
+                    .soft(t.ink.opacity(0.06), radius::FULL)
                     .key_nav()
                     .child(icon(if playing { "pause" } else { "play" }, iconsize::S, t.primary))
-                    .tip(if playing { tr("Pause") } else { tr("Abspielen") })
+                    .tooltip(tip(if playing { tr("Pause") } else { tr("Abspielen") }))
                     .on_click(move |_, _, cx| {
                         let error = super::audio::toggle(&toggle).err();
                         if let Some(e) = error {

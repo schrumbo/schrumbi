@@ -4,7 +4,7 @@ Was jetzt dran ist, auf einen Blick. {key:goToday} öffnet sie.
 
 ## Jetzt dran
 
-Die große Karte oben ({ui:Jetzt}) zeigt das Dringendste, in dieser Reihenfolge:
+Die große Karte oben zeigt das Dringendste, in dieser Reihenfolge:
 
 1. Überfälliges
 2. Fertig, aber Upload nicht bestätigt
@@ -18,7 +18,7 @@ Die große Karte oben ({ui:Jetzt}) zeigt das Dringendste, in dieser Reihenfolge:
 | Upload nicht bestätigt | {ui:Als hochgeladen markieren} |
 | Dateien in der Inbox | {ui:Jetzt ablegen} |
 
-Ist nichts offen, steht dort {ui:Nichts offen}. Daneben zeigt {ui:Diese Woche}, wie viel von dieser Woche erledigt ist. {ui:Pünktlich in Folge} erscheint, sobald du eine Serie pünktlicher Abgaben hast.
+Ist nichts offen, steht dort {ui:Nichts offen}. Daneben zeigt {ui:Diese Woche}, wie viel von dieser Woche erledigt ist, und {ui:Pünktlich in Folge} deine Serie pünktlicher Abgaben.
 
 ## Status setzen
 
@@ -69,7 +69,7 @@ Eine Datei zählt für eine Abgabe, wenn sie dazugehört. Datum und Ordner allei
 
 ## Weiter unten
 
-- Eine Zeile {ui:Offen}: alles Weitere, das noch offen ist. Ein Klick klappt die Einträge auf, {ui:Alle erledigt} setzt alle auf einmal.
+- Gesammelt: {ui:Überfällig} und {ui:Fertig, aber Upload nicht bestätigt}, mit {ui:Alle als hochgeladen markieren}.
 - Der Kalender, {ui:Prüfungen} und {ui:Zuletzt geschrieben}.
 - Warten Karten, erscheint ein Hinweis mit {ui:Lernen}.
 
@@ -86,7 +86,6 @@ Die Woche beginnt heute und zeigt die nächsten sieben Tage. ‹ und › blätte
 | {key:w} und {key:m} | Woche oder Monat |
 
 - Im Monat steht jeder Eintrag als Chip in der Modulfarbe, Prüfungen mit Hut. Passen nicht alle in den Tag, öffnet die letzte Zeile die ganze Liste.
-- Vorlesungen und Übungen stehen darunter als schmale Zeile mit Uhrzeit, solange der Tag noch Platz hat.
 - Klick auf die Tageszahl öffnet diese Woche. Chips lassen sich auf einen anderen Tag ziehen.
 - Wochenenden und vorlesungsfreie Zeit aus dem Semester sind leicht getönt, in Woche und Monat.
 - Oben steht der Zeitraum, daneben klein die Vorlesungswoche oder die Pause. Die Kalenderwoche zeigt der Tooltip über dem Zeitraum.

@@ -4,8 +4,7 @@ use gpui_kit::component::input::TextDecorationCollection;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use super::motion::Soft;
-use super::theme::{Theme, font, hover, iconsize, radius, space};
+use super::theme::{Theme, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::dictionary;
 use crate::core::i18n::tr;
@@ -109,7 +108,10 @@ pub fn card(hover: &SpellHover, on_add: impl Fn(&mut Window, &mut App) + 'static
                         .key_nav()
                         .text_size(px(font::CALLOUT))
                         .text_color(t.primary)
-                        .soft(t.ink.opacity(hover::ROW), radius::SMALL)
+                        .hover({
+                            let hover_fill = t.ink.opacity(0.08);
+                            move |s| s.bg(hover_fill)
+                        })
                         .on_click(move |_, window, cx| on_add(window, cx))
                         .child(icon("plus", iconsize::S, t.accent))
                         .child(tr("Zum Wörterbuch hinzufügen")),

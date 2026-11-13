@@ -11,7 +11,7 @@ use super::fields::{Fields, format_grade, format_number, parse_number};
 use super::pages::Pages;
 use super::state::edit_config;
 use super::motion::{self, Soft};
-use super::theme::{Theme, control, font, hover, space, radius};
+use super::theme::{Theme, font, space, radius};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::model::{GradeComponent, GradingSystem, StudyConfig};
@@ -37,7 +37,6 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
     let weight = sum(graded.iter().filter_map(|m| m.ects));
     let average = (weight > 0.).then(|| graded.iter().map(|m| m.effective_grade().unwrap_or(0.) * m.ects.unwrap_or(0.)).sum::<f64>() / weight);
     let passed = c.modules.iter().filter(|m| m.passed).count();
-    let started = planned > 0. || !graded.is_empty() || passed > 0;
 
     let tiles = div()
         .flex()
@@ -60,14 +59,7 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
                 .child(caption(tr("bestanden"), t)),
         );
 
-    let mut col = div().w_full().max_w(px(control::CONTENT_MAX)).mx_auto().p(px(space::XL)).flex().flex_col().gap(px(space::XL));
-    col = if started {
-        col.child(tiles)
-    } else if c.modules.is_empty() {
-        col.child(caption(tr("Noch keine Module. Du legst sie unter Einstellungen → Module an."), t))
-    } else {
-        col.child(caption(tr("Trag bei einem Modul Punkte oder eine Note ein, dann siehst du hier deinen Stand."), t))
-    };
+    let mut col = div().w_full().max_w(px(980.)).px(px(space::XXL)).py(px(space::XL)).flex().flex_col().gap(px(space::XL)).child(tiles);
 
     for s in &semesters {
         let ms: Vec<_> = c.modules.iter().filter(|m| m.semester == s.id).collect();
@@ -78,7 +70,6 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
             div()
                 .flex()
                 .items_center()
-                .gap(px(space::S))
                 .px(px(space::L))
                 .py(px(space::S))
                 .text_size(px(font::CAPTION))
@@ -103,7 +94,7 @@ pub fn render(c: &StudyConfig, st: &RecordState, fields: &mut Fields, window: &m
     }
     let grade_keys: Vec<String> = semesters.iter().flat_map(|s| c.modules.iter().filter(|m| m.semester == s.id).map(|m| format!("grade-{}", m.id))).collect();
     fields.chain(&grade_keys, window, cx);
-    if started && graded.is_empty() {
+    if graded.is_empty() {
         col = col.child(caption(tr("Notensystem und Bezeichnung der Punkte änderst du unter Einstellungen → Allgemein. Teilleistungen (z. B. Klausur 60 %, Projekt 40 %) ergeben die Modulnote automatisch."), t));
     }
     div().w_full().flex().justify_center().child(col)
@@ -153,13 +144,13 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
                 .flex()
                 .items_center()
                 .gap(px(space::S))
-                .min_h(px(control::S))
+                .py(px(space::XS))
                 .px(px(space::S))
                 .ml(px(-space::S))
                 .rounded(px(radius::INNER))
                 .cursor_pointer().key_nav()
-                .soft(t.ink.opacity(hover::ROW), radius::INNER)
-                .tip(if expanded { tr("Teilleistungen ausblenden") } else { tr("Teilleistungen anzeigen") })
+                .soft(t.ink.opacity(0.06), radius::INNER)
+                .tooltip(tip(tr("Teilleistungen anzeigen")))
                 .on_click({
                     let id = id.clone();
                     move |_, _, cx| view.update(cx, |p, cx| {
@@ -178,33 +169,18 @@ fn module_row(c: &StudyConfig, id: &str, expanded: bool, system: GradingSystem, 
         .child(div().w(px(80.)).child(Input::new(&ects).small().text_right()))
         .when(system.uses_grades(), |d| {
             d.child(match grade {
-                Some(g) => div().w(px(90.)).child(Input::new(&g).small().text_right()).when(failing, |d| d.text_color(t.secondary)).into_any_element(),
-                None => div().id(SharedString::from(format!("computed-{id}"))).w(px(90.)).text_right().child(m.effective_grade().map_or("–".into(), |g| format_grade(g, system))).tip(tr("Aus Teilleistungen berechnet")).into_any_element(),
+                Some(g) => div().w(px(90.)).child(Input::new(&g).small().text_right()).when(failing, |d| d.text_color(t.red)).into_any_element(),
+                None => div().id(SharedString::from(format!("computed-{id}"))).w(px(90.)).text_right().child(m.effective_grade().map_or("–".into(), |g| format_grade(g, system))).tooltip(tip(tr("Aus Teilleistungen berechnet"))).into_any_element(),
             })
         })
-        .child({
-            let passed = m.passed;
-            div()
-                .id(SharedString::from(format!("passed-row-{id}")))
-                .w(px(90.))
-                .min_h(px(control::S))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(radius::INNER))
-                .cursor_pointer()
-                .key_nav()
-                .soft(t.ink.opacity(hover::ROW), radius::INNER)
-                .on_click(move |_, _, cx| {
-                    let id = i3.clone();
-                    edit_config(cx, |c| {
-                        if let Some(m) = c.module_mut(&id) {
-                            m.passed = !passed;
-                        }
-                    });
-                })
-                .child(Checkbox::new(SharedString::from(format!("passed-{id}"))).checked(passed).tab_stop(false))
-        });
+        .child(div().w(px(90.)).flex().justify_center().child(Checkbox::new(SharedString::from(format!("passed-{id}"))).checked(m.passed).on_click(move |v, _, cx| {
+            let (id, v) = (i3.clone(), *v);
+            edit_config(cx, |c| {
+                if let Some(m) = c.module_mut(&id) {
+                    m.passed = v;
+                }
+            });
+        })));
     div().flex().flex_col().gap(px(space::S)).px(px(space::L)).py(px(space::S)).child(header).child(motion::reveal(SharedString::from(format!("parts-{}", m.id)), expanded, if expanded { div().pl(px(space::XXL)).child(components_editor(m, system, fields, window, cx, t)) } else { div() }))
 }
 
@@ -222,21 +198,6 @@ fn edit_components(id: &str, cx: &mut App, f: impl FnOnce(&mut Vec<GradeComponen
 
 fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fields: &mut Fields, window: &mut Window, cx: &mut Context<Pages>, t: &Theme) -> Div {
     let mut col = div().flex().flex_col().gap(px(space::S));
-    if !m.components.is_empty() {
-        col = col.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(space::S))
-                .text_size(px(font::CAPTION))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(t.secondary)
-                .child(div().flex_1().child(tr("Teilleistung")))
-                .child(div().w(px(70.)).text_right().child(tr("Gewicht")))
-                .when(system.uses_grades(), |r| r.child(div().w(px(80.)).text_right().child(tr("Note"))))
-                .child(div().w(px(control::S)).flex_none()),
-        );
-    }
     for (j, comp) in m.components.iter().enumerate() {
         let id = m.id.clone();
         let (a, b, cc, d) = (id.clone(), id.clone(), id.clone(), id.clone());
@@ -257,7 +218,7 @@ fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fiel
                 .items_center()
                 .gap(px(space::S))
                 .child(div().flex_1().child(Input::new(&name).small()))
-                .child(div().id(SharedString::from(format!("w-{id}-{j}"))).w(px(70.)).tip(tr("Gewicht, z. B. 60 für 60 %")).child(Input::new(&weight).small().text_right()))
+                .child(div().id(SharedString::from(format!("w-{id}-{j}"))).w(px(70.)).tooltip(tip(tr("Gewicht, z. B. 60 für 60 %"))).child(Input::new(&weight).small().text_right()))
                 .when(system.uses_grades(), |r| r.child(div().w(px(80.)).child(Input::new(&grade).small().text_right())))
                 .child(Button::new(SharedString::from(format!("rm-{id}-{j}"))).ghost().small().icon(menu_icon("circle-minus")).tooltip(tr("Teilleistung entfernen")).on_click(move |_, _, cx| {
                     edit_components(&d, cx, |cs| {
@@ -288,12 +249,12 @@ fn components_editor(m: &crate::core::model::Module, system: GradingSystem, fiel
                 }
             })
         });
-        footer = footer.child(div().flex_1()).child(div().id("target-wrap").w(px(80.)).tip(tr("Wunschnote für das Modul")).child(Input::new(&target).small()));
+        footer = footer.child(div().flex_1()).child(div().id("target-wrap").w(px(80.)).tooltip(tip(tr("Wunschnote für das Modul"))).child(Input::new(&target).small()));
         if let Some(need) = m.required_for_target() {
             let (lo, hi) = system.range();
             let (too_good, too_easy) = if system.higher_is_better() { (need > hi, need < lo) } else { (need < lo, need > hi) };
             let (text, color) = if too_good {
-                (tr("Ziel nicht mehr erreichbar"), t.secondary)
+                (tr("Ziel nicht mehr erreichbar"), t.red)
             } else if too_easy {
                 (tr("Ziel schon sicher"), t.secondary)
             } else {

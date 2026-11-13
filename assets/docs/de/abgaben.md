@@ -14,8 +14,7 @@ Aufgaben, Abgaben und Prüfungen sind Einträge mit Termin. Sie kommen auf drei 
 
 1. Art wählen: {ui:Aufgabe}, {ui:Abgabe} oder {ui:Prüfung}.
 2. Titel tippen. Ein Datum am Ende wird erkannt.
-3. {ui:Erinnern} nur ändern, wenn dieser Eintrag anders erinnern soll: wie in den Einstellungen, keine, 1 oder 3 Stunden oder 1 Tag vorher.
-4. {ui:Hinzufügen}.
+3. {ui:Hinzufügen}.
 
 Ohne Uhrzeit gilt: Aufgabe 18:00, Abgabe 23:59, Prüfung 10:00.
 

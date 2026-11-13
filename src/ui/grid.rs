@@ -7,7 +7,7 @@ use gpui_kit::*;
 
 use super::state::act;
 use super::motion::{self, Soft};
-use super::theme::{Theme, control, font, hover, radius, space, iconsize};
+use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::{tr, trf};
@@ -15,8 +15,7 @@ use crate::core::library::{Library, Route};
 use crate::core::model::{Assignment, LectureWeek, Status};
 use crate::core::schedule;
 
-/// The space above and below a strip segment that makes its hit area as tall as a control.
-const STRIP_PAD: f32 = 5.;
+const STRIP_HEIGHT: f32 = 14.;
 
 /// View state of the semester page.
 #[derive(Default)]
@@ -123,8 +122,9 @@ pub fn render(lib: &Library, st: &GridState, width: f32, view: Entity<super::pag
     div().w_full().flex().justify_center().child(
         div()
             .w_full()
-            .max_w(px(control::CONTENT_MAX))
-            .p(px(space::XL))
+            .max_w(px(980.))
+            .px(px(space::XXL))
+            .py(px(space::XL))
             .flex()
             .flex_col()
             .gap(px(space::XXL))
@@ -154,8 +154,6 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
     let (done, _, total) = lib.progress();
     let weeks = strip.iter().filter(|s| s.0.lecture.is_some()).count();
     let summary = match lib.current_week() {
-        Some(w) if total == 0 => trf("Vorlesungswoche %lld von %lld", &[&w.index, &weeks]),
-        None if total == 0 => tr("Noch keine Pflichtabgaben"),
         Some(w) => trf("Vorlesungswoche %lld von %lld · %lld von %lld Pflichtabgaben erledigt", &[&w.index, &weeks, &done, &total]),
         None => trf("%lld von %lld Pflichtabgaben erledigt", &[&done, &total]),
     };
@@ -170,7 +168,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                 .flex()
                 .items_center()
                 .gap(px(space::XL))
-                .when(total > 0, |d| d.child(progress_ring(done as f32 / total as f32, 56., t)))
+                .child(progress_ring(if total > 0 { done as f32 / total as f32 } else { 0. }, 56., t))
                 .child(
                     div()
                         .flex_1()
@@ -190,7 +188,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                 .flex()
                 .flex_col()
                 .gap(px(space::S))
-                .child(div().flex().items_end().gap(px(space::XS)).h(px(control::S)).my(px(-STRIP_PAD)).children(strip.iter().map(|(s, p)| {
+                .child(div().flex().items_end().gap(px(space::XS)).h(px(STRIP_HEIGHT)).children(strip.iter().map(|(s, p)| {
                     let is_current = s.monday == current;
                     let is_past = s.monday < current;
                     let color = if s.lecture.is_none() {
@@ -198,7 +196,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                     } else if is_current {
                         t.accent
                     } else if let (true, Some(p)) = (is_past, p) {
-                        if *p >= 1. { t.green.opacity(0.7) } else { t.ink.opacity(0.3) }
+                        if *p >= 1. { t.green.opacity(0.7) } else { t.red.opacity(0.7) }
                     } else {
                         t.ink.opacity(0.12)
                     };
@@ -208,18 +206,16 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                     div()
                         .id(SharedString::from(format!("strip-{}", s.monday)))
                         .flex_1()
-                        .h_full()
-                        .flex()
-                        .items_end()
-                        .pb(px(STRIP_PAD))
-                        .tip(help)
+                        .h(px(if is_current { 14. } else { 8. }))
+                        .rounded(px(radius::SMALL))
+                        .bg(color)
+                        .tooltip(tip(help))
                         .when(s.lecture.is_some(), |d| {
-                            d.cursor_pointer().key_nav().soft(t.ink.opacity(hover::CONTROL), radius::SMALL).on_click(move |_, window, cx| view.update(cx, |p, cx| {
+                            d.cursor_pointer().hover(|s| s.opacity(0.7)).on_click(move |_, window, cx| view.update(cx, |p, cx| {
                                 p.grid.jump_to(monday, current, window);
                                 cx.notify();
                             }))
                         })
-                        .child(div().w_full().h(px(if is_current { 14. } else { 8. })).rounded(px(radius::SMALL)).bg(color))
                 })))
                 .child(
                     div()
@@ -238,9 +234,6 @@ const BAR_MIN_PAGE: f32 = 720.;
 
 fn module_list(lib: &Library, bars: bool, t: &Theme) -> Div {
     let mut list = grouped(t);
-    if lib.semester_modules().is_empty() {
-        return list.child(div().flex().flex_col().gap(px(space::XS)).p(px(space::L)).child(div().font_weight(FontWeight::MEDIUM).child(tr("Noch keine Module in diesem Semester"))).child(caption(tr("Module legst du unter Einstellungen → Module an."), t)));
-    }
     for (i, m) in lib.semester_modules().into_iter().enumerate() {
         if i > 0 {
             list = list.child(divider(t));
@@ -269,7 +262,7 @@ fn module_list(lib: &Library, bars: bool, t: &Theme) -> Div {
                         .child(div().font_weight(FontWeight::MEDIUM).child(m.display_name()))
                         .child(caption(next.map_or_else(|| tr("Nichts offen"), |a| trf("Nächste: %@, %@", &[&a.title, &day::due(a.due, lib.now)])), t).truncate()),
                 )
-                .when(overdue > 0, |d| d.child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.secondary).child(trf("%lld offen", &[&overdue]))))
+                .when(overdue > 0, |d| d.child(div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).font_weight(FontWeight::MEDIUM).text_color(t.red).child(icon("circle-alert", iconsize::XS, t.red)).child(trf("%lld offen", &[&overdue]))))
                 .when(total > 0, |d| {
                     d.when(bars, |d| d.child(div().w(px(120.)).child(progress_bar(done as f32 / total as f32, color, t)))).child(div().font_features(tabular()).w(px(44.)).text_right().text_size(px(font::CALLOUT)).text_color(t.secondary).child(format!("{done}/{total}")))
                 })
@@ -312,7 +305,8 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
         .px(px(space::L))
         .py(px(space::M))
         .when(!force_open, |d| {
-            d.cursor_pointer().key_nav().soft_row(t.ink.opacity(hover::ROW)).on_click(move |_, _, cx| v1.update(cx, |p, cx| {
+            let hover = t.ink.opacity(0.06);
+            d.cursor_pointer().key_nav().soft(hover, 0.).on_click(move |_, _, cx| v1.update(cx, |p, cx| {
                 if !p.grid.expanded.remove(&monday) {
                     p.grid.expanded.insert(monday);
                 }
@@ -330,7 +324,7 @@ fn week_row(lib: &Library, st: &GridState, slot: &Slot, current: NaiveDate, forc
             })))
         })
         .when(attention > 0, |d| {
-            d.child(div().id(SharedString::from(format!("att-{}", slot.monday))).flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(trf("%lld offen", &[&attention])).tip(trf("%lld sind noch offen", &[&attention])))
+            d.child(div().id(SharedString::from(format!("att-{}", slot.monday))).flex().items_center().gap(px(space::XS)).text_size(px(font::CALLOUT)).text_color(t.red).child(icon("circle-alert", iconsize::XS, t.red)).child(attention.to_string()).tooltip(tip(trf("%lld brauchen Aufmerksamkeit", &[&attention]))))
         })
         .child(if mandatory.is_empty() {
             div().text_size(px(font::CALLOUT)).text_color(t.tertiary).child(if entries.is_empty() { tr("frei") } else { tr("nur optional") })
@@ -379,7 +373,7 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
     let attention = lib.needs_action(a);
     let when = day::due(a.due, lib.now);
     let subtitle = if attention {
-        format!("{code} · {}", if e.status == Status::Ready { tr("Upload bestätigen") } else { tr("Noch offen") })
+        format!("{code} · {}", if e.status == Status::Ready { tr("Upload bestätigen") } else { tr("Überfällig") })
     } else if e.status.is_closed() {
         format!("{code} · {}", e.status.label())
     } else if a.optional {
@@ -388,7 +382,7 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         format!("{code} · {when}")
     };
     let (sel, menu_id, drop_id) = (a.id.clone(), a.id.clone(), a.id.clone());
-    let (fill, selected_fill, accent) = (t.ink.opacity(0.05), t.ink.opacity(0.1), t.accent);
+    let (fill, hover, accent) = (t.ink.opacity(0.05), t.ink.opacity(0.1), t.accent);
     let tracks = a.tracks_files();
     let title = div().text_size(px(font::CALLOUT)).font_weight(FontWeight::MEDIUM).truncate().text_color(if e.status.is_closed() { t.secondary } else { t.primary }).child(a.title.clone());
     let chip = div()
@@ -401,11 +395,11 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .pr(px(space::M))
         .py(px(space::S))
         .rounded(px(radius::CONTROL))
-        .bg(if selected { selected_fill } else { fill })
-        .soft(t.ink.opacity(hover::CONTROL), radius::CONTROL)
+        .bg(if selected { hover } else { fill })
+        .soft(hover, radius::CONTROL)
         .when(selected, |d| d.border(px(2.)).border_color(accent))
         .cursor_pointer().key_nav()
-        .tip(format!("{} · {} · {}", a.title, when, e.status.label()))
+        .tooltip(tip(format!("{} · {} · {}", a.title, when, e.status.label())))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(sel.clone()))))
         .child(super::board::edge_bar(tint.opacity(if e.status.is_closed() { 0.35 } else { 1. })))
         .child(status_toggle(a, lib, iconsize::M, t))
@@ -416,7 +410,7 @@ fn deadline_chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
                 .gap(px(space::XXS))
                 .max_w(px(260.))
                 .child(if e.status == Status::Skipped { title.line_through() } else { title })
-                .child(div().text_size(px(font::CAPTION)).truncate().text_color(if attention && e.status == Status::Ready { t.blue } else { t.secondary }).child(subtitle)),
+                .child(div().text_size(px(font::CAPTION)).truncate().text_color(if attention { if e.status == Status::Ready { t.blue } else { t.red } } else { t.secondary }).child(subtitle)),
         )
         .when(tracks, |c| file_target(c, a, t))
         .context_menu(move |menu, window, cx| super::ai::deadline_submenu(status_menu(menu, &menu_id, cx), &menu_id, window, cx));

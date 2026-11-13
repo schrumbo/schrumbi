@@ -239,7 +239,7 @@ impl Render for TrayPopup {
         if l.root.is_none() {
             body = body.child(div().p(px(space::L)).text_color(t.secondary).child(tr("Kein Ordner gewählt")));
         } else {
-            body = body.children(super::sync::tray_warning(cx).map(|w| div().px(px(space::L)).pt(px(space::M)).flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.orange_text).child(icon("cloud-alert", iconsize::S, t.orange)).child(w)));
+            body = body.children(super::sync::tray_warning(cx).map(|w| div().px(px(space::L)).pt(px(space::M)).flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.orange).child(icon("cloud-alert", iconsize::S, t.orange)).child(w)));
             if let Some(a) = l.next_deadline() {
                 body = body
                     .child(
@@ -309,7 +309,7 @@ impl Render for TrayPopup {
                         close_popup(window, cx);
                         cx.defer(super::main_window::show);
                     }))
-                    .when(inbox > 0, |d| d.child(div().id("tray-inbox").flex().items_center().gap(px(space::XS)).text_color(t.secondary).tip(tr("Dateien in der Inbox")).child(icon("inbox", iconsize::S, t.secondary)).child(trf("%lld", &[&inbox]))))
+                    .when(inbox > 0, |d| d.child(div().id("tray-inbox").flex().items_center().gap(px(space::XS)).text_color(t.secondary).tooltip(tip(tr("Dateien in der Inbox"))).child(icon("inbox", iconsize::S, t.secondary)).child(trf("%lld", &[&inbox]))))
                     .child(div().flex_1())
                     .child(Button::new("tray-quit").ghost().small().label(tr("Beenden")).on_click(|_, _, cx| super::app::quit(cx))),
             )

@@ -8,7 +8,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::motion::{Soft, chevron};
-use super::theme::{Theme, control, font, hover, iconsize, radius, space};
+use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::folders;
 use crate::core::i18n::tr;
@@ -183,8 +183,8 @@ impl Render for FolderPicker {
                             .gap(px(space::XS))
                             .cursor_pointer()
                             .text_size(px(font::CALLOUT))
-                            .when(cursor == Some(i), |d| d.relative().child(super::motion::row_fill(t.ink.opacity(0.08))))
-                            .when(cursor != Some(i), |d| d.soft_row(t.ink.opacity(hover::ROW)))
+                            .when(cursor == Some(i), |d| d.bg(t.ink.opacity(0.08)))
+                            .when(cursor != Some(i), |d| d.soft(t.ink.opacity(0.05), 0.))
                             .child(if line.has_children {
                                 div()
                                     .id(("folder-fold", i))
@@ -195,7 +195,7 @@ impl Render for FolderPicker {
                                     .justify_center()
                                     .rounded(px(radius::SMALL))
                                     .cursor_pointer()
-                                    .soft(t.ink.opacity(hover::CONTROL), radius::SMALL)
+                                    .soft(t.ink.opacity(0.08), radius::SMALL)
                                     .child(chevron(("folder-chevron", i), line.open, t.secondary))
                                     .on_click(move |_, _, cx| {
                                         cx.stop_propagation();
@@ -232,7 +232,7 @@ impl Render for FolderPicker {
                     cx.notify();
                 }
             }))
-            .child(div().flex_none().p(px(space::S)).capture_action(clear_on_escape(&self.filter)).child(Input::new(&self.filter).small().prefix(icon("search", iconsize::XS, t.secondary))))
+            .child(div().flex_none().p(px(space::S)).child(Input::new(&self.filter).small().prefix(icon("search", iconsize::XS, t.secondary))))
             .child(div().flex_1().min_h_0().child(body))
     }
 }

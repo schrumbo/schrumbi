@@ -253,8 +253,7 @@ impl InputBaseState<EditorMode> {
             return;
         };
 
-        let deleting_back = new_text.is_empty() && self.menu_open_before_edit;
-        if !deleting_back && !provider.is_completion_trigger(start, new_text, cx) {
+        if !provider.is_completion_trigger(start, new_text, cx) {
             return;
         }
 

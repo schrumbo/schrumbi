@@ -28,9 +28,7 @@ The {{c1::variance}} is the square of the {{c2::standard deviation}}.
 - In notes with `#cards` or `#flashcards`, `{{gap}}` and `==highlighted==` also become gaps.
 - `cards: false` in the properties excludes a note. Code and formula blocks never make a card.
 
-Without typing: select text and {ui:Karte aus Auswahl…}, or {ui:Neue Karte} with {key:n}. From anywhere, {key:newCard} opens a new card.
-
-While there are no cards, the page shows only the two simplest ways to write one; {ui:Mehr Schreibweisen} unfolds the rest.
+Without typing: select text and {ui:Karte aus Auswahl…}, or {ui:Neue Karte} with {key:n}.
 
 ## Study
 
@@ -46,10 +44,9 @@ While there are no cards, the page shows only the two simplest ways to write one
 | {key:e} | Edit card |
 | {key:o} | Show in the note |
 | {key:cmd-z} | Undo last answer |
-| {key:Redo} | Give an undone answer again |
 | {key:escape} | Quit |
 
-Scheduling uses FSRS-6, like Anki. A higher target means more reviews: above 95 % costs a lot of time for little gain. A new day starts at 4 am.
+Scheduling uses FSRS-6, like Anki. A new day starts at 4 am.
 
 ## Before the Exam
 

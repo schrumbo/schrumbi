@@ -1,5 +1,5 @@
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
+use gpui_kit::component::menu::ContextMenuExt;
 use gpui_kit::component::Sizable;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -7,12 +7,12 @@ use gpui_kit::*;
 use super::board;
 use super::state::act;
 use super::motion::Soft;
-use super::theme::{Theme, control, font, hover, space, iconsize, radius};
+use super::theme::{Theme, control, font, space, iconsize, radius};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::{Library, Route};
-use crate::core::model::{Assignment, Kind};
+use crate::core::model::{Assignment, Kind, Status};
 use crate::core::next_action::NextAction;
 
 /// The overview: date header, the setup list while something is open, the next action with two tiles, bundled attention rows, the calendar and upcoming exams.
@@ -20,25 +20,21 @@ use crate::core::next_action::NextAction;
 /// `moodle` asks for the calendar address inside the empty state.
 pub fn render(lib: &Library, width: f32, setup: Option<AnyElement>, covers_calendar: bool, moodle: AnyElement, t: &Theme) -> Div {
     let empty = lib.semester_assignments().is_empty();
-    div().w_full().flex().justify_center().child(
-        div()
-            .w_full()
-            .max_w(px(control::CONTENT_MAX))
-            .flex()
-            .flex_col()
-            .gap(px(space::XL))
-            .p(px(space::XL))
-            .child(header(lib, t))
-            .children(setup)
-            .when(!empty, |d| d.child(top_row(lib, width < 860., t)))
-            .when(empty && !covers_calendar, |d| d.child(getting_started(lib, moodle, t)))
-            .children(open_row(lib, t))
-            .child(board::render(width < 7. * 100. + 36. + 48.))
-            .children(inbox_hint(lib, t))
-            .children(cards_hint(t))
-            .children(exams(lib, t))
-            .children(recent_notes(t)),
-    )
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(space::XL))
+        .p(px(space::XL))
+        .child(header(lib, t))
+        .children(setup)
+        .when(!empty, |d| d.child(top_row(lib, width < 860., t)))
+        .when(empty && !covers_calendar, |d| d.child(getting_started(lib, moodle, t)))
+        .children(attention(lib, t))
+        .children(inbox_hint(lib, t))
+        .children(cards_hint(t))
+        .child(board::render(width < 7. * 100. + 36. + 48.))
+        .children(exams(lib, t))
+        .children(recent_notes(t))
 }
 
 /// Notes newest first, optionally only below `within`; computed once per vault scan and folder.
@@ -62,37 +58,6 @@ pub(super) fn recent_notes_in(within: Option<&std::path::Path>, limit: usize) ->
                 notes.sort_by(|a, b| b.1.total_cmp(&a.1));
                 notes.truncate(limit);
                 notes
-            })
-            .clone()
-    })
-}
-
-/// Files that are not notes, newest first, below `within`, from the scan's own dates; cached per vault generation and folder.
-pub(super) fn recent_files_in(within: &std::path::Path, limit: usize) -> Vec<(std::path::PathBuf, f64)> {
-    type Recent = std::collections::HashMap<(std::path::PathBuf, usize), Vec<(std::path::PathBuf, f64)>>;
-    thread_local! {
-        static CACHE: std::cell::RefCell<((u64, u64), std::path::PathBuf, Recent)> = std::cell::RefCell::new(Default::default());
-    }
-    let vault = crate::core::vault::index::current();
-    let hidden = crate::core::vault::index::hidden();
-    CACHE.with_borrow_mut(|(generation, root, recent)| {
-        if *generation != (vault.generation, hidden.generation) || *root != vault.root {
-            (*generation, *root) = ((vault.generation, hidden.generation), vault.root.clone());
-            recent.clear();
-        }
-        recent
-            .entry((within.to_path_buf(), limit))
-            .or_insert_with(|| {
-                let hidden = crate::core::vault::index::hidden();
-                let mut files: Vec<(std::path::PathBuf, f64)> = vault
-                    .files
-                    .iter()
-                    .filter(|p| p.starts_with(&within) && !crate::core::markdown::is_markdown(p) && !hidden.hides(p))
-                    .filter_map(|p| Some((p.clone(), *vault.file_times.get(p)?)))
-                    .collect();
-                files.sort_by(|a, b| b.1.total_cmp(&a.1));
-                files.truncate(limit);
-                files
             })
             .clone()
     })
@@ -146,25 +111,25 @@ fn select(id: String) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
 
 fn top_row(lib: &Library, narrow: bool, t: &Theme) -> Div {
     let hero = next_action(lib, t);
-    let streak = lib.streak() > 0;
-    let tiles = div().flex().gap(px(space::M)).child(week_tile(lib, t)).when(streak, |d| d.child(streak_tile(lib, t)));
+    let tiles = div().flex().gap(px(space::M)).child(week_tile(lib, t)).child(streak_tile(lib, t));
     if narrow {
         div().flex().flex_col().gap(px(space::M)).child(hero).child(tiles)
     } else {
-        div().flex().items_stretch().gap(px(space::M)).child(hero.flex_1().min_w_0()).child(tiles.flex_none().w(px(if streak { 380. } else { 190. })))
+        div().flex().items_stretch().gap(px(space::M)).child(hero.flex_1().min_w_0()).child(tiles.flex_none().w(px(380.)))
     }
 }
 
-/// The card for the one thing to do now: neutral, the urgency is the order in which things are offered.
 fn next_action(lib: &Library, t: &Theme) -> Stateful<Div> {
-    let card = || div().id("next-card").p(px(space::L)).rounded(px(radius::CARD)).bg(t.secondary_bg).border_1().border_color(t.ink.opacity(0.1)).flex().items_center().gap(px(space::L)).min_h(px(112.));
-    let open = |a: &Assignment| card().soft(t.ink.opacity(hover::ROW), radius::CARD).cursor_pointer().on_click(select(a.id.clone()));
-    let label = || div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.accent_text).child(tr("Jetzt"));
-    let assignment = |a: &Assignment, when: String| {
+    let card = |tint: Hsla| banner(tint).id("next-card").flex().items_center().gap(px(space::L)).min_h(px(112.));
+    let hover = t.ink.opacity(0.05);
+    let open = |tint: Hsla, a: &Assignment| card(tint).soft(hover, radius::CARD).cursor_pointer().on_click(select(a.id.clone()));
+    let label = |tint: Hsla| div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(tint).child(tr("Jetzt dran"));
+    let assignment = |a: &Assignment, tint: Hsla, when: String| {
         let m = lib.module(a);
         let module_tint = t.palette(m.map_or("blue", |m| m.color.as_str()));
         div()
             .id("next-action")
+            .flex_1()
             .min_w_0()
             .flex()
             .flex_col()
@@ -178,49 +143,47 @@ fn next_action(lib: &Library, t: &Theme) -> Stateful<Div> {
                     act(cx, |l| l.select(Some(id.clone())));
                 }
             })
-            .child(label())
+            .child(label(tint))
             .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).truncate().child(a.title.clone()))
             .child(div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(div().font_weight(FontWeight::SEMIBOLD).child(module_tag(&m.map_or("?".to_string(), |m| m.badge()), module_tint))).child(when))
     };
-    let own = |id: &'static str, button: Button| div().id(id).flex_none().block_mouse_except_scroll().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).on_click(|_, _, cx| cx.stop_propagation()).child(button);
     let file_button = |a: &Assignment| {
         let id = a.id.clone();
         let has_files = !lib.evaluation(a).files.is_empty();
         (a.kind == Kind::Submission).then(|| {
             let button = Button::new("next-file").primary();
-            own("next-file-wrap", if has_files {
+            if has_files {
                 button.label(tr("Hochladen")).on_click(move |_, _, cx| super::upload::begin(&id, cx))
             } else {
                 button.label(tr("Datei ablegen…")).on_click(move |_, _, cx| super::platform::pick_files_for_filing(Some(id.clone()), cx))
-            })
+            }
         })
     };
     match lib.next_action() {
-        NextAction::Overdue(a) => open(a).child(status_toggle(a, lib, iconsize::L, t)).child(assignment(a, day::due(a.due, lib.now))).children(file_button(a)).child(div().flex_1()),
-        NextAction::Due(a) => open(a).child(status_toggle(a, lib, iconsize::L, t)).child(assignment(a, format!("{} · {}", day::countdown(a.due, lib.now), day::due(a.due, lib.now)))).children(file_button(a)).child(div().flex_1()),
+        NextAction::Overdue(a) => open(t.red, a).child(status_toggle(a, lib, iconsize::L, t)).child(assignment(a, t.red, day::due(a.due, lib.now))).children(file_button(a).map(|b| div().id("next-file-wrap").on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).on_click(|_, _, cx| cx.stop_propagation()).child(b))),
+        NextAction::Due(a) => open(t.accent, a).child(status_toggle(a, lib, iconsize::L, t)).child(assignment(a, t.accent_text, format!("{} · {}", day::countdown(a.due, lib.now), day::due(a.due, lib.now)))).children(file_button(a).map(|b| div().id("next-file-wrap").on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).on_click(|_, _, cx| cx.stop_propagation()).child(b))),
         NextAction::Unconfirmed(a) => {
             let id = a.id.clone();
-            open(a)
+            open(t.blue, a)
                 .child(status_toggle(a, lib, iconsize::L, t))
-                .child(assignment(a, tr("Fertig, aber Upload nicht bestätigt")))
-                .child(own("next-confirm-wrap", Button::new("next-confirm").primary().label(tr("Als hochgeladen markieren")).on_click(move |_, _, cx| act(cx, |l| l.confirm_all(std::slice::from_ref(&id))))))
-                .child(div().flex_1())
+                .child(assignment(a, t.blue, tr("Fertig, aber Upload nicht bestätigt")))
+                .child(div().id("next-confirm-wrap").on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).on_click(|_, _, cx| cx.stop_propagation()).child(Button::new("next-confirm").primary().label(tr("Als hochgeladen markieren")).on_click(move |_, _, cx| act(cx, |l| l.confirm_all(std::slice::from_ref(&id))))))
         }
-        NextAction::Inbox(count) => card()
+        NextAction::Inbox(count) => card(t.accent)
             .child(icon("inbox", iconsize::L, t.accent))
             .child(
                 div()
+                    .flex_1()
                     .min_w_0()
                     .flex()
                     .flex_col()
                     .gap(px(space::XS))
-                    .child(label())
+                    .child(label(t.accent_text))
                     .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).child(inbox_text(count)))
                     .child(div().text_size(px(font::CALLOUT)).text_color(t.secondary).child(tr("Abgabe, Titel und Name werden vorgeschlagen."))),
             )
-            .child(Button::new("file-now").primary().label(tr("Jetzt ablegen")).on_click(|_, _, cx| act(cx, |l| l.set_route(Route::Inbox))))
-            .child(div().flex_1()),
-        NextAction::Clear => card().child(icon("circle-check", iconsize::L, t.green)).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).child(tr("Nichts offen"))),
+            .child(Button::new("file-now").primary().label(tr("Jetzt ablegen")).on_click(|_, _, cx| act(cx, |l| l.set_route(Route::Inbox)))),
+        NextAction::Clear => card(t.green).child(icon("circle-check", iconsize::L, t.green)).child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).child(tr("Nichts offen"))),
     }
 }
 
@@ -240,7 +203,14 @@ fn week_tile(lib: &Library, t: &Theme) -> Stateful<Div> {
 fn streak_tile(lib: &Library, t: &Theme) -> Stateful<Div> {
     let streak = lib.streak();
     tile("streak", tr("Pünktlich in Folge"), "flame", t.orange, false, t).child(
-        div().flex().flex_col().gap(px(space::XS)).child(div().text_size(px(font::TITLE)).font_weight(FontWeight::BOLD).child(streak.to_string())).child(caption(if streak == 1 { tr("Abgabe") } else { tr("Abgaben") }, t)),
+        div().flex().flex_col().gap(px(space::XS)).child(div().text_size(px(font::TITLE)).font_weight(FontWeight::BOLD).child(streak.to_string())).child(caption(
+            match streak {
+                0 => tr("Nächste Abgabe startet die Serie"),
+                1 => tr("Abgabe"),
+                _ => tr("Abgaben"),
+            },
+            t,
+        )),
     )
 }
 
@@ -249,7 +219,7 @@ fn chips(lib: &Library, items: &[&Assignment], t: &Theme) -> Div {
         let m = lib.module(a);
         let tint = t.palette(m.map_or("blue", |m| m.color.as_str()));
         let selected = lib.is_selected(&a.id);
-        let (over, menu_id) = (t.content.blend(t.ink.opacity(hover::CONTROL)), a.id.clone());
+        let (hover, menu_id) = (t.content.blend(t.ink.opacity(0.1)), a.id.clone());
         let chip = div()
             .id(SharedString::from(format!("chip-{}", a.id)))
             .flex()
@@ -259,7 +229,7 @@ fn chips(lib: &Library, items: &[&Assignment], t: &Theme) -> Div {
             .py(px(space::S))
             .rounded_full()
             .bg(t.content)
-            .soft(over, radius::FULL)
+            .soft(hover, radius::FULL)
             .cursor_pointer().key_nav()
             .when(selected, |c| c.border(px(2.)).border_color(t.accent))
             .on_click(select(a.id.clone()))
@@ -290,20 +260,15 @@ fn per_module(lib: &Library, items: &[&Assignment]) -> String {
 }
 
 /// A one-line sum of entries that unfolds into their chips; short groups stay open.
-fn bundle(id: &'static str, title: String, open: bool, toggle: fn(&mut Library), accessory: Option<AnyElement>, lib: &Library, items: &[&Assignment], t: &Theme) -> Div {
+fn bundle(id: &'static str, title: String, icon_name: &str, tint: Hsla, open: bool, toggle: fn(&mut Library), accessory: Option<AnyElement>, lib: &Library, items: &[&Assignment], t: &Theme) -> Div {
     let fixed = items.len() <= 3;
     let open = open || fixed;
     let summary = per_module(lib, items);
     let hidden = items.len().saturating_sub(CHIP_LIMIT);
     let shown = &items[..items.len().min(CHIP_LIMIT)];
     let body = div().flex().flex_col().gap(px(space::S)).pt(px(space::S)).child(chips(lib, shown, t)).when(hidden > 0, |d| d.child(caption(trf("und %lld weitere", &[&hidden]), t)));
-    div()
-        .px(px(space::L))
+    banner(tint)
         .py(px(space::S))
-        .rounded(px(radius::CARD))
-        .bg(t.secondary_bg)
-        .border_1()
-        .border_color(t.ink.opacity(0.1))
         .flex()
         .flex_col()
         .child(
@@ -319,18 +284,18 @@ fn bundle(id: &'static str, title: String, open: bool, toggle: fn(&mut Library),
                         .flex()
                         .items_center()
                         .gap(px(space::S))
-                        .when(!fixed, |d| d.mx(px(-space::S)).px(px(space::S)).my(px(-space::XS)).py(px(space::XS)).min_h(px(control::S)).rounded(px(radius::CONTROL)))
+                        .when(!fixed, |d| d.mx(px(-space::S)).px(px(space::S)).my(px(-space::XS)).py(px(space::XS)).rounded(px(radius::CONTROL)))
                         .when(!fixed, |d| {
-                            d.soft(t.ink.opacity(hover::ROW), radius::CONTROL).cursor_pointer().key_nav().on_click(move |_, _, cx| {
+                            d.soft(t.ink.opacity(0.05), radius::CONTROL).cursor_pointer().key_nav().on_click(move |_, _, cx| {
                                 super::state::lib(cx).update(cx, |l, cx| {
                                     toggle(l);
                                     cx.notify();
                                 })
                             })
                         })
-                        .when(!fixed, |d| d.child(super::motion::chevron(SharedString::from(format!("{id}-chevron")), open, t.secondary)))
-                        .child(icon("list-todo", iconsize::S, t.secondary))
-                        .child(div().flex_none().font_weight(FontWeight::BOLD).child(title))
+                        .when(!fixed, |d| d.child(super::motion::chevron(SharedString::from(format!("{id}-chevron")), open, tint)))
+                        .child(icon(icon_name, iconsize::S, tint))
+                        .child(div().flex_none().font_weight(FontWeight::BOLD).text_color(t.readable(tint)).child(title))
                         .child(div().min_w_0().truncate().text_size(px(font::CALLOUT)).text_color(t.secondary).child(summary)),
                 )
                 .children(accessory),
@@ -338,27 +303,22 @@ fn bundle(id: &'static str, title: String, open: bool, toggle: fn(&mut Library),
         .child(super::motion::reveal(SharedString::from(format!("{id}-body")), open, body))
 }
 
-/// Everything still open besides the card above, folded to one row with a way to settle it all at once.
-fn open_row(lib: &Library, t: &Theme) -> Option<Div> {
-    let hero = match lib.next_action() {
-        NextAction::Overdue(a) | NextAction::Unconfirmed(a) => Some(a.id.as_str()),
-        _ => None,
-    };
-    let items: Vec<&Assignment> = lib.action_items().iter().filter(|a| Some(a.id.as_str()) != hero).collect();
-    if items.is_empty() {
+fn attention(lib: &Library, t: &Theme) -> Option<Div> {
+    let unconfirmed = lib.unconfirmed();
+    let overdue: Vec<&Assignment> = lib.action_items().iter().filter(|a| lib.status(a) != Status::Ready).collect();
+    if unconfirmed.is_empty() && overdue.is_empty() {
         return None;
     }
-    let ids: Vec<String> = items.iter().map(|a| a.id.clone()).collect();
-    let today = day::local_date(lib.now);
-    let (tomorrow, next_week) = (today + chrono::Days::new(1), day::monday(today) + chrono::Days::new(7));
-    let moving = ids.clone();
-    let shift = Button::new("move-all").small().ghost().label(tr("Alle verschieben")).dropdown_caret(true).dropdown_menu(move |menu, _, _| {
-        let (a, b) = (moving.clone(), moving.clone());
-        menu.item(PopupMenuItem::new(tr("Auf morgen")).on_click(move |_, _, cx| act(cx, |l| l.move_all(&a, tomorrow))))
-            .item(PopupMenuItem::new(tr("Auf nächsten Montag")).on_click(move |_, _, cx| act(cx, |l| l.move_all(&b, next_week))))
-    });
-    let settle = div().flex().items_center().gap(px(space::XS)).child(shift).child(Button::new("complete-all").small().label(tr("Alle erledigt")).on_click(move |_, _, cx| act(cx, |l| l.complete_all(&ids)))).into_any_element();
-    Some(bundle("overdue", format!("{} ({})", tr("Offen"), items.len()), lib.show_overdue, |l| l.show_overdue = !l.show_overdue, Some(settle), lib, &items, t))
+    let mut col = div().flex().flex_col().gap(px(space::S));
+    if !overdue.is_empty() {
+        col = col.child(bundle("overdue", format!("{} ({})", tr("Überfällig"), overdue.len()), "circle-alert", t.red, lib.show_overdue, |l| l.show_overdue = !l.show_overdue, None, lib, &overdue, t));
+    }
+    if !unconfirmed.is_empty() {
+        let ids: Vec<String> = unconfirmed.iter().map(|a| a.id.clone()).collect();
+        let button = Button::new("confirm-all").small().label(tr("Alle als hochgeladen markieren")).on_click(move |_, _, cx| act(cx, |l| l.confirm_all(&ids))).into_any_element();
+        col = col.child(bundle("unconfirmed", format!("{} ({})", tr("Fertig, aber Upload nicht bestätigt"), unconfirmed.len()), "circle-check", t.blue, lib.show_unconfirmed, |l| l.show_unconfirmed = !l.show_unconfirmed, Some(button), lib, &unconfirmed, t));
+    }
+    Some(col)
 }
 
 fn inbox_text(count: usize) -> String {
@@ -366,7 +326,7 @@ fn inbox_text(count: usize) -> String {
 }
 
 fn hint_banner(id: &'static str, t: &Theme, go: impl Fn(&mut App) + 'static) -> Stateful<Div> {
-    banner(t.accent).id(id).py(px(space::S)).flex().items_center().gap(px(space::S)).soft(t.ink.opacity(hover::ROW), radius::CARD).cursor_pointer().on_click(move |_, _, cx| go(cx))
+    banner(t.accent).id(id).py(px(space::S)).flex().items_center().gap(px(space::S)).soft(t.ink.opacity(0.05), radius::CARD).cursor_pointer().on_click(move |_, _, cx| go(cx))
 }
 
 fn hint_button(id: &'static str, label: String, go: impl Fn(&mut App) + 'static) -> Button {
@@ -435,7 +395,7 @@ fn getting_started(lib: &Library, moodle: AnyElement, t: &Theme) -> Div {
         .flex()
         .flex_col()
         .gap(px(space::M))
-        .child(div().font_weight(FontWeight::BOLD).child(tr("So kommen deine Abgaben in die App")))
+        .child(div().font_weight(FontWeight::BOLD).child(tr("So kommen deine Deadlines in die App")))
         .child(
             div()
                 .flex()

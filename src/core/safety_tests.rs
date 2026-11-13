@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use super::edge_tests::VAULT_TESTS;
 use super::library::Library;
-use super::library::Route;
 
 fn folder(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("schrumbi-safety-{}", std::process::id())).join(name);
@@ -296,20 +295,4 @@ fn saving_after_the_study_folder_disappeared_names_the_missing_folder() {
     let say = crate::core::i18n::tr("Der Studienordner fehlt. Wurde er verschoben oder gelöscht?");
     assert_eq!(lib.last_error.as_deref(), Some(say.as_str()));
     assert!(!root.exists(), "no folder is created behind the user's back");
-}
-
-#[test]
-fn a_search_does_not_follow_the_user_to_other_pages() {
-    let root = folder("search-stays-home");
-    let mut lib = open(&root);
-    lib.set_route(Route::Module("a".into()));
-    lib.module_query = "alt".into();
-    lib.set_route(Route::Module("b".into()));
-    assert!(lib.module_query.is_empty(), "another module starts without the old filter");
-    lib.search_query = "alt".into();
-    lib.set_route(Route::Search);
-    lib.set_route(Route::Doc(root.join("a.md")));
-    assert_eq!(lib.search_query, "alt", "going into a result keeps the query for the way back");
-    lib.set_route(Route::Today);
-    assert!(lib.search_query.is_empty(), "another page starts without it");
 }

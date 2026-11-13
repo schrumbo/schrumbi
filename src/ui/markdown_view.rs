@@ -11,13 +11,14 @@ use gpui_kit::*;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
 use super::motion::Soft;
-use super::widgets::{KeyNav, Tip};
 use super::selectable::{InlineKind, InlineSlot, LinkAction, selectable};
-use super::theme::{Theme, control, font, hover, note_size, radius, space, iconsize};
+use super::theme::{Theme, control, font, note_size, radius, space, iconsize};
 use crate::core::i18n::{tr, trf};
 use crate::core::markdown::{self, Run, TokenKind};
 use crate::core::vault::syntax::{self, CalloutHead, MarkColor};
 use crate::core::vault::{frontmatter, index, links};
+
+const CHECKBOX: f32 = 18.;
 
 /// Called with the 0-based source line of a clicked task box.
 pub type OnToggle = Rc<dyn Fn(usize, &mut App)>;
@@ -1389,39 +1390,6 @@ pub fn press_control() {
     CONTROL_PRESSED.with(|c| c.set(true));
 }
 
-const RING_STRENGTH: f32 = 0.4;
-
-/// A border in `color` that fades in over the element it ends while the pointer is on it, with `help` as its tooltip.
-pub fn hover_ring(color: Hsla, radius: f32, help: impl Into<SharedString>) -> HoverRing {
-    HoverRing { color, radius, help: help.into() }
-}
-
-#[derive(IntoElement)]
-pub struct HoverRing {
-    color: Hsla,
-    radius: f32,
-    help: SharedString,
-}
-
-impl RenderOnce for HoverRing {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = window.use_keyed_state("ring-state", cx, |_, _| false);
-        let level = super::motion::follow("ring-level", if *state.read(cx) { 1. } else { 0. }, super::motion::FAST, window, cx);
-        div()
-            .id("ring")
-            .absolute()
-            .inset_0()
-            .rounded(px(self.radius))
-            .border_1()
-            .border_color(Hsla { a: self.color.a * RING_STRENGTH * level, ..self.color })
-            .on_hover(move |hovered, _, cx| state.update(cx, |s, cx| {
-                *s = *hovered;
-                cx.notify();
-            }))
-            .tip(self.help)
-    }
-}
-
 /// Whether the press now ending landed on a control; asking ends it.
 pub fn take_control_press() -> bool {
     CONTROL_PRESSED.with(Cell::take)
@@ -1517,8 +1485,7 @@ fn linked_image(src: &str, alt: &str, target: Option<&str>, cx: &Ctx) -> AnyElem
     let order = cx.order.get();
     cx.order.set(order + 1);
     let action = link_action(target, cx.base);
-    let sample = is_sample_base(cx.base);
-    div().id(("md-image-link", order)).relative().when(!sample, |d| d.cursor_pointer().key_nav()).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| action(cx)).child(shown).when(!sample, |d| d.child(hover_ring(cx.t.accent, radius::CONTROL, tr("Öffnen")))).into_any_element()
+    div().id(("md-image-link", order)).when(!is_sample_base(cx.base), |d| d.cursor_pointer().soft(cx.t.ink.opacity(0.04), radius::CONTROL)).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| action(cx)).child(shown).into_any_element()
 }
 
 /// What a plain click on text in this block should do.
@@ -1732,9 +1699,6 @@ fn column_widths(cells: &[Vec<(f32, f32)>], columns: usize, longest_word: f32) -
             least[c] = least[c].max((word.min(longest_word) + pad).ceil());
         }
     }
-    for w in natural.iter_mut().chain(least.iter_mut()).filter(|w| **w <= pad) {
-        *w = super::theme::table::EMPTY_COLUMN;
-    }
     (natural, least)
 }
 
@@ -1897,13 +1861,13 @@ impl RenderOnce for Table {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let widths = self.widths(window, cx);
         let (natural, least) = (&widths.0, &widths.1);
-        let border = self.border;
         let column = |c: usize, cell: Div| {
             let (basis, narrowest) = (natural.get(c).copied().unwrap_or(0.), least.get(c).copied().unwrap_or(0.));
-            let mut d = cell.flex_basis(px(narrowest)).flex_shrink_0().min_w(px(narrowest)).max_w(px(basis.max(narrowest))).when(c > 0, |d| d.border_l_1().border_color(border));
+            let mut d = cell.flex_basis(px(narrowest)).flex_shrink_0().min_w(px(narrowest)).max_w(px(basis.max(narrowest)));
             d.style().flex_grow = Some((basis - narrowest).max(0.));
             d
         };
+        let border = self.border;
         let (with_head, (top, bottom)) = (self.with_head, self.ends);
         let (first, block, scope) = (self.first, self.block, self.scope);
         let mut rows = self.cells.into_iter().enumerate().map(|(r, row)| {
@@ -2077,7 +2041,7 @@ fn file_card(path: PathBuf, detail: Option<String>, action: String, cx: &Ctx) ->
         .rounded(px(radius::CONTROL))
         .border_1()
         .border_color(t.separator)
-        .when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(hover::ROW), radius::CONTROL))
+        .when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(0.04), radius::CONTROL))
         .on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) })
         .child(super::widgets::file_icon(&path, iconsize::L))
         .child(div().flex_1().min_w_0().flex().flex_col().child(div().truncate().child(name)).when_some(detail, |d, text| d.child(super::widgets::caption(text, t))))
@@ -2135,7 +2099,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
     let open = path.clone();
     let sample = is_sample_base(cx.base);
     if cx.chain.len() >= 3 {
-        return div().id(("md-embed-link", order)).text_color(t.accent_text).when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(hover::CONTROL), radius::SMALL)).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) }).child(name).into_any_element();
+        return div().id(("md-embed-link", order)).text_color(t.accent_text).when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(0.04), radius::SMALL)).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) }).child(name).into_any_element();
     }
     let note = embedded_note(&path, target);
     let mut chain = cx.chain.clone();
@@ -2158,7 +2122,7 @@ fn embed_note(path: PathBuf, target: &links::LinkTarget, cx: &Ctx) -> AnyElement
                 .items_center()
                 .gap(px(space::XS))
                 .bg(t.secondary_bg)
-                .when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(hover::RAISED), 0.))
+                .when(!sample, |d| d.cursor_pointer().soft(t.ink.opacity(0.04), 0.))
                 .text_size(px(font::CAPTION))
                 .text_color(t.secondary)
                 .on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::state::act(cx, |l| l.open_file(&open)) })
@@ -2191,16 +2155,7 @@ fn image_at(p: PathBuf, alt: &str, source_written: &str, cx: &Ctx) -> AnyElement
         cx.order.set(order + 1);
         let open = p.clone();
         let sample = is_sample_base(cx.base);
-        let natural = (width.is_none() && height.is_none()).then(|| pixel_size(&p)).flatten();
-        let picture = img(p).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL));
-        let ring = (!sample).then(|| hover_ring(cx.t.accent, radius::CONTROL, tr("Vergrößern")));
-        let drawn = div().id(("md-image", order)).relative().when(!sample, |d| d.cursor_pointer()).capture_any_mouse_down(|_, _, _| press_control());
-        let drawn = match natural {
-            Some((w, h)) => drawn.w_full().max_w(px(w)).aspect_ratio(w / h).max_h(px(560.)).child(image_cache(super::image_cache::Notes).size_full().child(picture.size_full())),
-            None => drawn.max_w_full().child(image_cache(super::image_cache::Notes).child(picture.when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.)))),
-        }
-        .children(ring)
-        .on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::preview::show(&open, cx) });
+        let drawn = div().id(("md-image", order)).when(!sample, |d| d.cursor_pointer().soft(cx.t.ink.opacity(0.04), radius::CONTROL)).capture_any_mouse_down(|_, _, _| press_control()).on_click(move |_, _, cx| if !super::help::is_sample(&open) { super::preview::show(&open, cx) }).child(image_cache(super::image_cache::Notes).child(img(p).when_some(width, |d, w| d.w(px(w))).when_some(height, |d, h| d.h(px(h))).max_w_full().max_h(px(560.)).object_fit(ObjectFit::Contain).rounded(px(radius::CONTROL))));
         let source_name = source_written.to_string();
         match (cx.focus.and_then(|f| f.edit_item.clone()), cx.block) {
             (Some(edit), item) => drawn
@@ -2218,77 +2173,6 @@ fn image_at(p: PathBuf, alt: &str, source_written: &str, cx: &Ctx) -> AnyElement
             _ => drawn.into_any_element(),
         }
     }
-}
-
-thread_local! {
-    static PIXEL_SIZES: RefCell<HashMap<PathBuf, Option<(f32, f32)>>> = RefCell::new(HashMap::new());
-}
-
-/// The pixel size an image file states in its header, read once per file; `None` for kinds without one, like SVG.
-fn pixel_size(path: &Path) -> Option<(f32, f32)> {
-    if let Some(known) = PIXEL_SIZES.with(|s| s.borrow().get(path).copied()) {
-        return known;
-    }
-    let found = header_size(path);
-    PIXEL_SIZES.with(|s| {
-        let mut sizes = s.borrow_mut();
-        if sizes.len() > 512 {
-            sizes.clear();
-        }
-        sizes.insert(path.to_path_buf(), found);
-    });
-    found
-}
-
-fn header_size(path: &Path) -> Option<(f32, f32)> {
-    use std::io::Read;
-    let mut head = Vec::new();
-    std::fs::File::open(path).ok()?.take(256 * 1024).read_to_end(&mut head).ok()?;
-    image_header_size(&head)
-}
-
-fn image_header_size(head: &[u8]) -> Option<(f32, f32)> {
-    let at = |i: usize, n: usize| head.get(i..i + n);
-    let be16 = |i| at(i, 2).map(|b| u16::from_be_bytes([b[0], b[1]]) as u32);
-    let le16 = |i| at(i, 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as u32);
-    let be32 = |i| at(i, 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
-    let le32 = |i| at(i, 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
-    let le24 = |i| at(i, 3).map(|b| u32::from_le_bytes([b[0], b[1], b[2], 0]));
-    let size = if head.starts_with(b"\x89PNG") {
-        (be32(16)?, be32(20)?)
-    } else if head.starts_with(b"GIF8") {
-        (le16(6)?, le16(8)?)
-    } else if head.starts_with(b"BM") {
-        ((le32(18)? as i32).unsigned_abs(), (le32(22)? as i32).unsigned_abs())
-    } else if head.starts_with(b"RIFF") && at(8, 4) == Some(&b"WEBP"[..]) {
-        match at(12, 4)? {
-            b"VP8 " => (le16(26)? & 0x3fff, le16(28)? & 0x3fff),
-            b"VP8L" => {
-                let bits = le32(21)?;
-                ((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1)
-            }
-            b"VP8X" => (le24(24)? + 1, le24(27)? + 1),
-            _ => return None,
-        }
-    } else if head.starts_with(&[0xff, 0xd8]) {
-        let mut i = 2;
-        loop {
-            if *head.get(i)? != 0xff {
-                i += 1;
-                continue;
-            }
-            let marker = *head.get(i + 1)?;
-            match marker {
-                0xff => i += 1,
-                0x01 | 0xd0..=0xd8 => i += 2,
-                0xc0..=0xcf if !matches!(marker, 0xc4 | 0xc8 | 0xcc) => break (be16(i + 7)?, be16(i + 5)?),
-                _ => i += 2 + be16(i + 2)? as usize,
-            }
-        }
-    } else {
-        return None;
-    };
-    (size.0 > 0 && size.1 > 0).then_some((size.0 as f32, size.1 as f32))
 }
 
 thread_local! {
@@ -2361,13 +2245,13 @@ fn code_block(lang: Option<&str>, code: &str, cx: &Ctx) -> AnyElement {
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(radius::INNER))
+                .rounded(px(radius::SMALL))
                 .bg(t.secondary_bg)
                 .cursor_pointer()
-                .soft(t.ink.opacity(hover::RAISED), radius::INNER)
+                .soft(t.ink.opacity(0.06), radius::SMALL)
                 .invisible()
                 .group_hover(group, |s| s.visible())
-                .tip(tr("Code kopieren"))
+                .tooltip(super::widgets::tip(tr("Code kopieren")))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     super::drive::copy(copied.to_string(), cx);
@@ -2405,33 +2289,23 @@ fn list_items(start: &Option<u64>, items: &[Item], first: usize, cx: &Ctx) -> Di
                     let special = !done && mark != ' ';
                     let line = item.line;
                     let toggle = cx.on_toggle.clone();
-                    let reach = (control::S - iconsize::S) / 2.;
-                    let shown = div()
+                    div()
+                        .id(SharedString::from(format!("task-{line}")))
+        .capture_any_mouse_down(|_, _, _| press_control())
+                        .mt(px(space::XS))
+                        .ml(px(space::XXS))
                         .size(px(iconsize::S))
+                        .flex_none()
                         .rounded(px(radius::SMALL))
+                        .soft(if done { t.on_accent.opacity(0.2) } else { t.ink.opacity(0.1) }, radius::SMALL)
                         .flex()
                         .items_center()
                         .justify_center()
                         .when(done, |d| d.bg(t.accent))
                         .when(!done, |d| d.border_1().border_color(if special { t.accent } else { t.secondary }))
                         .when(special, |d| d.text_size(px(font::CAPTION2)).text_color(t.accent).child(mark.to_string()))
-                        .when(done, |d| d.child(super::widgets::icon("check", iconsize::XS, t.on_accent)));
-                    div()
-                        .id(SharedString::from(format!("task-{line}")))
-                        .capture_any_mouse_down(|_, _, _| press_control())
-                        .mt(px(space::XS - reach))
-                        .ml(px(space::XXS - reach))
-                        .mr(px(-reach))
-                        .mb(px(-reach))
-                        .size(px(control::S))
-                        .flex_none()
-                        .rounded(px(radius::INNER))
-                        .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(shown)
-                        .when(toggle.is_some(), |d| d.cursor_pointer().tip(if done { tr("Als offen markieren") } else { tr("Als erledigt markieren") }))
+                        .when(toggle.is_some(), |d| d.cursor_pointer().tooltip(super::widgets::tip(if done { tr("Als offen markieren") } else { tr("Als erledigt markieren") })))
+                        .when(done, |d| d.child(super::widgets::icon("check", iconsize::XS, t.on_accent)))
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();
                             if let Some(f) = &toggle {
@@ -2478,8 +2352,8 @@ fn list_items(start: &Option<u64>, items: &[Item], first: usize, cx: &Ctx) -> Di
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
-                    .tip(tr(if folded { "Ausklappen" } else { "Einklappen" }))
+                    .soft(t.ink.opacity(0.06), radius::SMALL)
+                    .tooltip(super::widgets::tip(tr(if folded { "Ausklappen" } else { "Einklappen" })))
                     .on_click(move |_, _, cx| {
                         cx.stop_propagation();
                         if let Some(f) = &folds {
@@ -2611,7 +2485,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                 .child(div().w(px(3.)).flex_none().rounded_full().bg(t.accent.opacity(0.6)))
                 .child(div().flex_1().flex().flex_col().gap(px(space::S)).text_color(t.secondary).children(render_blocks(inner, cx)))
                 .into_any_element(),
-            Block::Code(lang, code) => match super::embeds::special_block(lang.as_deref(), code, cx.base, cx.focus.and_then(|f| f.note.as_deref()), cx.order.get(), t) {
+            Block::Code(lang, code) => match super::embeds::special_block(lang.as_deref(), code, cx.base, cx.order.get(), t) {
                 Some(element) => element,
                 None => code_block(lang.as_deref(), code, cx),
             },
@@ -2653,7 +2527,7 @@ fn render_blocks(blocks: &[Block], cx: &Ctx) -> Vec<AnyElement> {
                             .items_center()
                             .gap(px(space::XS))
                             .cursor_pointer()
-                            .soft(t.ink.opacity(hover::ROW), radius::INNER)
+                            .soft(t.ink.opacity(0.04), radius::INNER)
                             .capture_any_mouse_down(|_, _, _| press_control())
                             .font_weight(FontWeight::MEDIUM)
                             .child(super::motion::chevron(("md-details-chevron", order), is_open, t.secondary))
@@ -2938,7 +2812,7 @@ fn properties_row(props: &[frontmatter::Property], cx: &Ctx) -> AnyElement {
     }
     let order = cx.order.get();
     cx.order.set(order + 1);
-    Properties { id: ElementId::from(("md-properties", order)), items: visible.into_iter().map(|p| (p.name.clone(), p.values.clone())).collect(), base: cx.base.map(Path::to_path_buf), secondary: cx.t.secondary, ink: cx.t.ink, separator: cx.t.separator, accent: cx.t.accent_text }.into_any_element()
+    Properties { id: ElementId::from(("md-properties", order)), items: visible.into_iter().map(|p| (p.name.clone(), p.values.clone())).collect(), base: cx.base.map(Path::to_path_buf), secondary: cx.t.secondary, separator: cx.t.separator, accent: cx.t.accent_text }.into_any_element()
 }
 
 #[derive(IntoElement)]
@@ -2947,34 +2821,31 @@ struct Properties {
     items: Vec<(String, Vec<String>)>,
     base: Option<PathBuf>,
     secondary: Hsla,
-    ink: Hsla,
     separator: Hsla,
     accent: Hsla,
 }
 
 impl RenderOnce for Properties {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let (secondary, ink, separator, accent) = (self.secondary, self.ink, self.separator, self.accent);
+        let (secondary, separator, accent) = (self.secondary, self.separator, self.accent);
         let base = self.base.clone();
         let sample = is_sample_base(base.as_deref());
         let id = self.id.clone();
         div().flex().flex_col().pb(px(space::S)).border_b_1().border_color(separator).text_size(px(note_size(font::CALLOUT))).children(self.items.into_iter().enumerate().map(move |(i, (name, values))| {
             let base = base.clone();
             let row = ElementId::NamedChild(std::sync::Arc::new(id.clone()), SharedString::from(format!("row-{i}")));
-            let tags = matches!(name.as_str(), "tags" | "tag");
             div()
                 .id(row)
                 .flex()
-                .items_center()
-                .min_h(px(control::S))
+                .items_start()
                 .gap(px(space::M))
                 .py(px(space::XXS))
                 .mx(px(-space::S))
                 .px(px(space::S))
                 .when(!sample, |d| {
                     d.cursor_pointer()
-                        .soft(ink.opacity(hover::ROW), radius::INNER)
-                        .tip(tr("In den Details bearbeiten"))
+                        .soft(secondary.opacity(0.1), radius::INNER)
+                        .tooltip(super::widgets::tip(tr("In den Details bearbeiten")))
                         .on_click(|_, _, cx| super::state::act(cx, |l| {
                             l.show_properties = true;
                             l.peek_inspector();
@@ -2990,28 +2861,10 @@ impl RenderOnce for Properties {
                             div()
                                 .id(SharedString::from(format!("md-prop-link-{i}-{n}")))
                                 .text_color(accent)
-                                .when(!sample, |d| d.cursor_pointer().key_nav().soft(accent.opacity(hover::CONTROL), radius::SMALL))
+                                .when(!sample, Styled::cursor_pointer)
                                 .on_click(move |_, _, cx| {
                                     cx.stop_propagation();
                                     action(cx);
-                                })
-                                .child(shown)
-                                .into_any_element()
-                        }
-                        None if tags => {
-                            let tag = value.trim_start_matches('#').to_string();
-                            let shown = format!("#{tag}");
-                            div()
-                                .id(SharedString::from(format!("md-prop-tag-{i}-{n}")))
-                                .px(px(space::XS))
-                                .rounded(px(radius::SMALL))
-                                .bg(accent.opacity(0.14))
-                                .text_color(accent)
-                                .when(!sample, |d| {
-                                    d.cursor_pointer().key_nav().soft(accent.opacity(hover::RAISED), radius::SMALL).tip(trf("Notizen mit %@ zeigen", &[&shown])).on_click(move |_, _, cx| {
-                                        cx.stop_propagation();
-                                        super::state::act(cx, |l| l.show_tag(&tag));
-                                    })
                                 })
                                 .child(shown)
                                 .into_any_element()
@@ -3206,14 +3059,14 @@ pub fn render_live(note: &ParsedNote, i: usize, base: Option<&Path>, on_toggle: 
                         .id(("md-fold", i))
                 .capture_any_mouse_down(|_, _, _| press_control())
                         .absolute()
-                        .top(px(note.first_line_middle(i).map_or(space::S, |middle| middle - control::S / 2.)))
-                        .left(px(-space::XXS))
-                        .size(px(control::S))
+                        .top(px(note.first_line_middle(i).map_or(space::S, |middle| middle - 9.)))
+                        .left(px(0.))
+                        .size(px(CHECKBOX))
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
-                        .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
+                        .soft(t.ink.opacity(0.06), radius::SMALL)
                         .when(is_open, |d| d.invisible().group_hover(group, |s| s.visible()))
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();
@@ -3360,7 +3213,7 @@ pub fn render_footnotes(note: &ParsedNote, list: Option<(ListState, Rc<dyn Fn(us
                     .flex_none()
                     .cursor_pointer()
                     .text_color(t.accent_text)
-                    .tip(tr("Zurück zum Text"))
+                    .tooltip(super::widgets::tip(tr("Zurück zum Text")))
                     .on_click(move |_, _, _| {
                         if let Some((l, item_of_line)) = &list {
                             reveal_item(l, item_of_line(home));
@@ -3487,26 +3340,6 @@ mod reader_tests {
                 Block::Nothing => "nothing",
             })
             .collect()
-    }
-
-    #[test]
-    fn image_headers_tell_their_size() {
-        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
-        png.extend_from_slice(&2400u32.to_be_bytes());
-        png.extend_from_slice(&400u32.to_be_bytes());
-        assert_eq!(super::image_header_size(&png), Some((2400., 400.)));
-        let gif = b"GIF89a\x58\x02\x2c\x01";
-        assert_eq!(super::image_header_size(gif), Some((600., 300.)));
-        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 17, 8, 0x01, 0x90, 0x09, 0x60];
-        assert_eq!(super::image_header_size(&jpeg), Some((2400., 400.)));
-        assert_eq!(super::image_header_size(b"<svg"), None);
-        assert_eq!(super::image_header_size(&[0xff, 0xd8, 0xff]), None);
-    }
-
-    #[test]
-    fn a_note_with_a_byte_order_mark_shows_its_properties() {
-        assert_eq!(kinds("\u{feff}---\ntitle: BOM\ntags: [bom]\n---\nText\n"), ["properties", "paragraph"]);
-        assert_eq!(kinds("\u{feff}---\r\ntitle: BOM\r\n---\r\nText\r\n"), ["properties", "paragraph"]);
     }
 
     #[test]

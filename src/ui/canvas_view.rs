@@ -13,13 +13,14 @@ use gpui_kit::*;
 use super::browser::DraggedFile;
 use super::motion::Soft;
 use super::state::act;
-use super::markdown_view::hover_ring;
-use super::theme::{Theme, font, hover, radius, space};
+use super::theme::{Theme, font, radius, space};
 use super::widgets::*;
 use crate::core::i18n::tr;
 use crate::core::note_buffer::write_atomic;
 use crate::core::vault::canvas::{Canvas, Edge, Node, NodeKind};
 use crate::core::vault::index;
+
+const GRIP: f32 = 8.;
 
 const HANDLE: f32 = 16.;
 const CONNECTOR: f32 = 12.;
@@ -981,10 +982,8 @@ impl Render for CanvasView {
             let label = if let NodeKind::Group { label: Some(l), .. } = &node.kind { Some(l.clone()) } else { None };
             let editing = self.editing.as_ref().filter(|(id, _)| *id == node.id).map(|(_, field)| field.clone());
             let content = if editing.is_none() { Some(self.node_content(node, zoom, &t, cx)) } else { None };
-            let is_file = matches!(node.kind, NodeKind::File { .. }) && editing.is_none();
             nodes.push(
                 div()
-                    .id(SharedString::from(format!("canvas-node-{}", node.id)))
                     .absolute()
                     .left(px(x))
                     .top(px(y))
@@ -998,7 +997,6 @@ impl Render for CanvasView {
                     .when(is_group, |d| d.bg(tint.map_or(t.ink.opacity(0.04), |c| c.opacity(0.08))))
                     .when_some(label, |d, l| d.child(div().absolute().left(px(0.)).top(px(-(font::CALLOUT * zoom + space::S))).text_size(px(font::CALLOUT * zoom.max(0.5))).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(l)))
                     .children(content)
-                    .when(is_file, |d| d.child(hover_ring(accent, radius::CARD * zoom, tr("Doppelklick zum Öffnen"))))
                     .when_some(editing, |d, input| d.child(div().size_full().p(px(space::XS)).child(match input {
                         Field::Line(i) => Input::new(&i).small().into_any_element(),
                         Field::Text(a) => Textarea::new(&a).h_full().into_any_element(),
@@ -1014,7 +1012,7 @@ impl Render for CanvasView {
                 let mut out: Vec<AnyElement> = Vec::new();
                 for (hx, hy) in [(-1, -1), (1, -1), (-1, 1), (1, 1)] {
                     let (x, y) = self.to_view(n.x + n.width * (hx as f64 + 1.) / 2., n.y + n.height * (hy as f64 + 1.) / 2.);
-                    out.push(div().absolute().left(px(x - space::XS)).top(px(y - space::XS)).size(px(space::S)).rounded(px(space::XXS)).bg(t.content).border_1().border_color(accent).into_any_element());
+                    out.push(div().absolute().left(px(x - 4.)).top(px(y - 4.)).size(px(GRIP)).rounded(px(2.)).bg(t.content).border_1().border_color(accent).into_any_element());
                 }
                 for side in ["top", "right", "bottom", "left"] {
                     let (sx, sy) = Canvas::side_point(n, side);
@@ -1025,7 +1023,7 @@ impl Render for CanvasView {
                         "left" => x -= 14.,
                         _ => x += 14.,
                     }
-                    out.push(div().absolute().left(px(x - space::XS)).top(px(y - space::XS)).size(px(space::S)).rounded_full().bg(accent).into_any_element());
+                    out.push(div().absolute().left(px(x - 4.)).top(px(y - 4.)).size(px(GRIP)).rounded_full().bg(accent).into_any_element());
                 }
                 out
             })
@@ -1143,7 +1141,7 @@ impl Render for CanvasView {
         let colors = has_selection.then(|| {
             let ring = t.primary;
             let secondary = t.secondary;
-            let hover = t.ink.opacity(hover::CONTROL);
+            let hover = t.ink.opacity(0.05);
             let current = self.shared_color();
             let bar_w = DOT_HIT * (PRESETS.len() + 1) as f32 + space::XS * 2. + 2.;
             let bar_h = DOT_HIT + space::XS * 2. + 2.;
@@ -1174,33 +1172,36 @@ impl Render for CanvasView {
                 .child(
                     div()
                         .id("canvas-color-none")
+                        .group("canvas-color-none")
                         .size(px(DOT_HIT))
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
                         .key_nav()
-                        .tip(tr("Standardfarbe"))
+                        .tooltip(tip(tr("Standardfarbe")))
                         .soft(hover, radius::FULL)
                         .on_click(cx.listener(|v, _, _, cx| v.set_color(None, cx)))
-                        .child(div().size(px(DOT_SHOWN)).rounded_full().border_1().border_color(secondary).when(current == Some(None), |s| s.border_2().border_color(ring))),
+                        .child(div().size(px(DOT_SHOWN)).rounded_full().border_1().border_color(secondary).when(current == Some(None), |s| s.border_2().border_color(ring)).group_hover("canvas-color-none", move |s| s.border_color(ring))),
                 )
                 .children(PRESETS.iter().enumerate().map(|(i, (key, _))| {
                     let shown = color_of(Some(&key.to_string())).unwrap_or(secondary);
                     let on = current.as_ref().is_some_and(|c| c.as_deref() == Some(*key));
                     let key = key.to_string();
+                    let group = SharedString::from(format!("canvas-color-{i}"));
                     div()
                         .id(("canvas-color", i))
+                        .group(group.clone())
                         .size(px(DOT_HIT))
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
                         .key_nav()
-                        .tip(tr(COLOR_NAMES[i]))
+                        .tooltip(tip(tr(COLOR_NAMES[i])))
                         .soft(hover, radius::FULL)
                         .on_click(cx.listener(move |v, _, _, cx| v.set_color(Some(key.clone()), cx)))
-                        .child(div().size(px(DOT_SHOWN)).rounded_full().bg(shown).when(on, |s| s.border_2().border_color(ring)))
+                        .child(div().size(px(DOT_SHOWN)).rounded_full().bg(shown).when(on, |s| s.border_2().border_color(ring)).group_hover(group, move |s| s.border_2().border_color(ring)))
                 }))
         });
         let zoom_label = format!("{}%", (zoom * 100.).round());
@@ -1318,7 +1319,7 @@ impl Render for CanvasView {
                         menu = menu.item(PopupMenuItem::new(tr(COLOR_NAMES[i])).checked(on).icon(menu_icon("circle-dot").text_color(shown)).on_click(move |_, _, cx| me.update(cx, |v, cx| v.set_color(Some(key.clone()), cx))));
                     }
                     let delete = me.clone();
-                    menu.separator().item(keyed_text(tr("Löschen"), Some(if cfg!(target_os = "macos") { "⌫".to_string() } else { tr("Entf") })).icon(menu_icon("trash-2")).on_click(move |_, _, cx| delete.update(cx, |v, cx| v.delete_selection(cx))))
+                    menu.separator().item(PopupMenuItem::new(format!("{} ({})", tr("Löschen"), if cfg!(target_os = "macos") { "⌫".to_string() } else { tr("Entf") })).icon(menu_icon("trash-2")).on_click(move |_, _, cx| delete.update(cx, |v, cx| v.delete_selection(cx))))
                 }
             });
         div().size_full().flex().flex_col().child(bar).child(surface).into_any_element()

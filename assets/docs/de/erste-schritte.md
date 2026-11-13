@@ -1,6 +1,6 @@
 # Erste Schritte
 
-Schrumbi plant dein Studium in einem normalen Ordner: Abgaben, Dateien, Notizen und Karten an einem Ort. Alles bleibt eine Datei, die du auch ohne Schrumbi öffnen kannst.
+Schrumbi plant dein Studium in einem normalen Ordner: Deadlines, Dateien, Notizen und Karten an einem Ort. Alles bleibt eine Datei, die du auch ohne Schrumbi öffnen kannst.
 
 ## Ordner wählen
 
@@ -44,11 +44,11 @@ Ab dem zweiten Start erscheint einmal am Tag unten rechts ein Tipp, nur zu Dinge
 
 ## Geführt einrichten
 
-Ein paar kurze Schritte, {key:return} geht weiter. {key:escape} oder das X oben rechts schließt wie {ui:Später einrichten}.
+Vier kurze Schritte, {key:return} geht weiter.
 
 | Schritt | Du legst fest |
 |---|---|
-| {ui:Willkommen} | Ob Schrumbi Abgabeordner anlegt |
+| {ui:Willkommen} | Studiengang, Namensmuster und ob Schrumbi Abgabeordner anlegt |
 | {ui:Semester} | Name, Vorlesungsbeginn, Vorlesungsende |
 | {ui:Module} | Welche Ordner Module sind, mit Kürzel und Name |
 | {ui:Abgaben} | Moodle-Kalender und eine Abgabe jede Woche, beides freiwillig |
@@ -68,7 +68,7 @@ Bei {ui:Module} sind passende Ordner schon angehakt: alles direkt in einem Semes
 | {ui:Notizen} | {key:goNotes} | Notizen, Suche, Tags, Aufgaben |
 | {ui:Karten} | {key:goCards} | Karteikarten zum Lernen |
 
-- Die Seitenleiste zeigt Symbole mit Namen. {ui:Seitenleiste einklappen} unten links macht sie schmal, dann nennt der Zeiger Bereich und Kürzel. Unter 820 px Fensterbreite bleibt sie schmal.
+- Die Seitenleiste zeigt nur Symbole. Der Zeiger darauf nennt Bereich und Kürzel.
 - Rechtsklick auf einen Bereich außer {ui:Übersicht}: {ui:Aus der Seitenleiste ausblenden}.
 
 ## Was im Ordner liegt

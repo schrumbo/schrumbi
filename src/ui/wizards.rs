@@ -9,6 +9,7 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -17,13 +18,15 @@ use super::inspector::{datetime_picker, picked};
 use super::motion::Soft;
 use super::quick::Dismissed;
 use super::state::{self, act};
-use super::theme::{Theme, control, font, hover, iconsize, radius, space};
+use super::theme::{Theme, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::ics::{self, CalendarEvent};
-use crate::core::model::{Kind, Module, StudyConfig};
-use crate::core::shortcuts::ShortcutAction;
+use crate::core::model::{CoauthorStyle, Kind, Module, StudyConfig};
+use crate::core::naming::Naming;
 use crate::core::{day, schedule};
+
+const TIP_ICON: f32 = 36.;
 
 /// Moves a single generated deadline, e.g. for a holiday or an announced extension.
 pub struct Reschedule {
@@ -240,6 +243,7 @@ pub struct Setup {
     step: usize,
     folders: Entity<super::folder_picker::FolderPicker>,
     is_vault: bool,
+    focused: bool,
     draft: StudyConfig,
     fields: Fields,
     start: Entity<DatePickerState>,
@@ -309,7 +313,7 @@ impl Setup {
                 cx.notify();
             }),
         ];
-        Self { step: 0, folders, is_vault, draft, fields: Fields::default(), start, end, weekly: Default::default(), calendar: String::new(), new_module: String::new(), focus: cx.focus_handle(), focused_step: None, only: None, _subs: subs }
+        Self { step: 0, folders, is_vault, focused: false, draft, fields: Fields::default(), start, end, weekly: Default::default(), calendar: String::new(), new_module: String::new(), focus: cx.focus_handle(), focused_step: None, only: None, _subs: subs }
     }
 
     /// Shows one page alone; Übernehmen saves it.
@@ -393,11 +397,6 @@ impl Setup {
         }
     }
 
-    /// What the close button and Esc do: the same as "Später einrichten", and on the last page the same as going on.
-    pub(super) fn leave(&mut self, cx: &mut Context<Self>) {
-        self.finish(self.step == SETUP_DONE && self.only.is_none(), cx);
-    }
-
     fn finish(&mut self, save: bool, cx: &mut Context<Self>) {
         if save {
             for module in &mut self.draft.modules {
@@ -427,7 +426,7 @@ impl Setup {
 
 /// A card to pick one of two ways, as the setup offers them.
 pub(super) fn order_choice(id: &'static str, icon_name: &'static str, title: String, detail: String, selected: bool, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, t: &Theme) -> Stateful<Div> {
-    let (fill, hover) = if selected { (t.accent.opacity(0.1), t.accent.opacity(hover::RAISED)) } else { (t.ink.opacity(0.03), t.ink.opacity(hover::RAISED)) };
+    let (fill, hover) = if selected { (t.accent.opacity(0.1), t.accent.opacity(0.16)) } else { (t.ink.opacity(0.03), t.ink.opacity(0.07)) };
     div()
         .id(id)
         .flex_1()
@@ -458,11 +457,11 @@ impl Render for Setup {
         let t = Theme::get(cx);
         let me = cx.entity();
         let mut fields = std::mem::take(&mut self.fields);
+        let (e1, e2) = (me.clone(), me.clone());
         if self.step == SETUP_MODULES && self.focused_step != Some(self.step) {
             let folders = self.folders.clone();
             window.on_next_frame(move |window, cx| folders.update(cx, |f, cx| f.focus_filter(window, cx)));
-        } else if self.focused_step != Some(self.step) {
-            window.focus(&self.focus, cx);
+        } else if self.step != 0 && self.focused_step != Some(self.step) {
             let focus = self.focus.clone();
             window.on_next_frame(move |window, cx| window.focus(&focus, cx));
         }
@@ -470,8 +469,23 @@ impl Render for Setup {
         let body: Div = {
             match self.step {
             0 => {
+                let first_field = std::mem::replace(&mut self.focused, true);
+                let name = fields.input("setup-name", &self.draft.name, &tr("z. B. Informatik"), window, cx, move |v, cx| e1.update(cx, |s, cx| {
+                    s.draft.name = v;
+                    cx.notify();
+                }));
+                if !first_field {
+                    name.update(cx, |n, cx| n.focus(window, cx));
+                }
+                let author = fields.input("setup-author", &self.draft.author, &tr("Nachname-V, z. B. Muster-M"), window, cx, move |v, cx| e2.update(cx, |s, cx| {
+                    s.draft.author = v;
+                    cx.notify();
+                }));
+                let sample_module = Module { code: self.draft.modules.first().map_or("ABC".into(), |m| m.code.clone()), ..Default::default() };
+                let author_text = if self.draft.author.is_empty() { tr("Nachname-V") } else { self.draft.author.clone() };
                 let folders = self.draft.create_folders;
-                let (help, own) = (me.clone(), me.clone());
+                let naming = self.draft.naming_convention();
+                let (help, own, named) = (me.clone(), me.clone(), me.clone());
                 let help = move |_: &ClickEvent, _: &mut Window, cx: &mut App| help.update(cx, |s, cx| {
                     s.draft.create_folders = true;
                     cx.notify();
@@ -480,12 +494,45 @@ impl Render for Setup {
                     s.draft.create_folders = false;
                     cx.notify();
                 });
+                let vault = state::read(cx, |l| l.is_vault);
+                let naming_switch = Switch::new("setup-naming").checked(naming).on_click(move |v, _, cx| {
+                    let v = *v;
+                    named.update(cx, |s, cx| {
+                        s.draft.set_naming_convention(v);
+                        cx.notify();
+                    });
+                });
+                let example = Naming::with_author(&sample_module, self.draft.semesters.first(), &author_text, "", CoauthorStyle::Initial).render(&tr("Titel"), Local::now().date_naive(), "pdf", &[], None, None, None);
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(space::L))
                     .child(div().flex().items_center().gap(px(space::M)).child(super::onboarding::snail(54., &t)).child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Willkommen"))))
-                    .child(div().text_color(t.secondary).child(if self.is_vault { tr("Deine Notizen bleiben normale Dateien. Du kannst sie hier schreiben und in Obsidian, auch gleichzeitig.") } else { tr("Ein paar kurze Schritte, danach kennt die App deine Module und Abgaben.") }))
+                    .child(div().text_color(t.secondary).child(if self.is_vault { tr("Deine Notizen bleiben normale Dateien. Du kannst sie hier schreiben und in Obsidian, auch gleichzeitig.") } else { tr("Vier kurze Schritte, danach kennt die App deine Module und Abgaben.") }))
+                    .child(grouped(&t).child(form_row(tr("Studiengang"), Input::new(&name), &t)))
+                    .when(!vault, |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(space::S))
+                                .child(section_title(tr("Namensmuster")))
+                                .child(
+                                    grouped(&t)
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(space::M))
+                                                .px(px(space::L))
+                                                .py(px(space::S))
+                                                .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().font_weight(FontWeight::SEMIBOLD).child(tr("Nach einem Muster benennen"))).child(caption(super::settings::naming_detail(naming), &t)))
+                                                .child(naming_switch),
+                                        )
+                                        .when(naming, |d| d.child(divider(&t)).child(form_row(tr("Kürzel in Dateinamen"), Input::new(&author), &t)).child(divider(&t)).child(form_row(tr("Beispiel"), div().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).text_color(t.secondary).child(example), &t))),
+                                ),
+                        )
+                    })
                     .child(
                         div()
                             .flex()
@@ -576,11 +623,10 @@ impl Render for Setup {
                     .child(div().flex().flex_col().gap(px(space::S)).child(section_title(tr("Jede Woche"))).child(caption(tr("Hat ein Modul jede Woche eine Abgabe? Trage ihren Namen ein, sie ist dann jede Vorlesungswoche um 23:59 fällig."), &t)).when(!self.draft.modules.is_empty(), |d| d.child(grouped(&t).child(rows))).when(self.draft.modules.is_empty(), |d| d.child(caption(tr("Noch kein Modul gewählt."), &t))))
             }
             SETUP_DONE => {
-                let new_note = ShortcutAction::NewFile.active_shortcut().map(|k| k.display());
-                let palette = crate::core::prefs::Shortcut { key: "p".into(), command: true, shift: false, option: false, control: false }.display();
+                let command = if cfg!(target_os = "macos") { "⌘" } else { "Strg+" };
                 let weekly = self.weekly.values().filter(|(title, _)| !title.trim().is_empty()).count();
                 let modules = self.draft.modules.len();
-                let hint = |name: &'static str, title: String, detail: String| div().flex().items_start().gap(px(space::M)).child(div().size(px(control::ROW)).flex_none().rounded(px(radius::INNER)).bg(t.accent.opacity(0.14)).flex().items_center().justify_center().child(icon(name, iconsize::M, t.accent_text))).child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().font_weight(FontWeight::SEMIBOLD).child(title)).child(caption(detail, &t)));
+                let hint = |name: &'static str, title: String, detail: String| div().flex().items_start().gap(px(space::M)).child(div().size(px(TIP_ICON)).flex_none().rounded(px(radius::INNER)).bg(t.accent.opacity(0.14)).flex().items_center().justify_center().child(icon(name, iconsize::M, t.accent_text))).child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().font_weight(FontWeight::SEMIBOLD).child(title)).child(caption(detail, &t)));
                 div()
                     .flex()
                     .flex_col()
@@ -588,9 +634,9 @@ impl Render for Setup {
                     .child(div().text_size(px(font::LARGE_TITLE)).font_weight(FontWeight::BOLD).child(tr("Alles bereit")))
                     .child(div().text_color(t.secondary).child(trf("%@ Module, %@ wöchentliche Abgaben. Das meiste geht von hier aus so:", &[&modules.to_string(), &weekly.to_string()])))
                     .child(hint("inbox", tr("Dateien ablegen"), if self.draft.rename_on_filing { tr("Ziehe Dateien ins Fenster. Die App schlägt Modul, Abgabe und Namen vor, Enter legt ab.") } else { tr("Ziehe Dateien ins Fenster. Die App schlägt Modul und Abgabe vor, Enter legt ab.") }))
-                    .child(hint("square-pen", tr("Notizen schreiben"), match &new_note { Some(k) => trf("%@ legt eine an, ihr Dateiname folgt der ersten Überschrift.", &[k]), None => tr("Der Befehl „Neue Notiz“ legt eine an, ihr Dateiname folgt der ersten Überschrift.") }))
+                    .child(hint("square-pen", tr("Notizen schreiben"), trf("%@N legt eine an, ihr Dateiname folgt der ersten Überschrift.", &[&command])))
                     .child(hint("layers", tr("Karten lernen"), tr("Schreibe „Frage :: Antwort“ in eine Notiz, die Karte erscheint im Tab Karten.")))
-                    .child(hint("search", tr("Alles finden"), trf("%@ zeigt jeden Befehl, / sucht in Dateien und Notizen.", &[&palette])))
+                    .child(hint("search", tr("Alles finden"), trf("%@K zeigt jeden Befehl, / sucht in Dateien und Notizen.", &[&command])))
             }
             _ => {
                 let mut list = div().flex().flex_col();
@@ -648,7 +694,6 @@ impl Render for Setup {
                 let adder = me.clone();
                 let can_add = !self.new_module.trim().is_empty();
                 let creates = self.draft.create_folders;
-                let narrow = f32::from(window.viewport_size().width) < 760.;
                 div()
                     .h_full()
                     .flex()
@@ -662,10 +707,10 @@ impl Render for Setup {
                             .min_h_0()
                             .flex()
                             .gap(px(space::M))
-                            .child(div().flex_1().min_w_0().h_full().flex().flex_col().gap(px(space::S)).child(div().flex_1().min_h_0().rounded(px(radius::CARD)).border_1().border_color(t.separator).overflow_hidden().child(self.folders.clone())).when(creates, |d| d.child(div().flex_none().flex().gap(px(space::S)).child(div().flex_1().min_w_0().child(Input::new(&add_field).small())).child(Button::new("setup-add").small().icon(menu_icon("plus")).when(!narrow, |b| b.label(tr("Anlegen"))).tooltip(tr("Anlegen")).disabled(!can_add).on_click(move |_, window, cx| adder.update(cx, |s, cx| s.add_module(window, cx)))))))
+                            .child(div().flex_1().min_w_0().h_full().flex().flex_col().gap(px(space::S)).child(div().flex_1().min_h_0().rounded(px(radius::CARD)).border_1().border_color(t.separator).overflow_hidden().child(self.folders.clone())).when(creates, |d| d.child(div().flex_none().flex().gap(px(space::S)).child(div().flex_1().min_w_0().child(Input::new(&add_field).small())).child(Button::new("setup-add").small().icon(menu_icon("plus")).label(tr("Anlegen")).disabled(!can_add).on_click(move |_, window, cx| adder.update(cx, |s, cx| s.add_module(window, cx)))))))
                             .child(
                                 div()
-                                    .w(px(if narrow { 240. } else { 320. }))
+                                    .w(px(320.))
                                     .flex_none()
                                     .h_full()
                                     .flex()
@@ -691,34 +736,18 @@ impl Render for Setup {
         let alone = self.only.is_some();
         let problem = self.problem();
         let blocked = problem.is_some();
-        let (leave, back, next) = (me.clone(), me.clone(), me.clone());
-        let leave_tip = if alone { tr("Abbrechen") } else if step == SETUP_DONE { tr("Schließen") } else { tr("Später einrichten") };
-        let foot = div()
+        let (later, back, next) = (me.clone(), me.clone(), me.clone());
+        div()
             .w_full()
+            .h(px(600.))
             .flex()
-            .items_center()
-            .gap(px(space::S))
-            .when(step < SETUP_DONE, |d| {
-                let later = me.clone();
-                d.child(Button::new("setup-later").ghost().label(if alone { tr("Abbrechen") } else { tr("Später einrichten") }).on_click(move |_, _, cx| later.update(cx, |s, cx| s.leave(cx))))
-            })
-            .child(div().flex_1().min_w_0())
-            .children(problem.map(|text| div().min_w_0().text_size(px(font::CALLOUT)).text_color(t.orange_text).child(text)))
-            .when(step > 0 && !alone, |d| {
-                d.child(Button::new("setup-back").label(tr("Zurück")).on_click(move |_, _, cx| back.update(cx, |s, cx| {
-                    s.step -= 1;
-                    cx.notify();
-                })))
-            })
-            .child(Button::new("setup-next").primary().disabled(blocked).label(if alone { tr("Übernehmen") } else if step == SETUP_DONE { tr("Los geht's") } else { tr("Weiter") }).on_click(move |_, _, cx| next.update(cx, |s, cx| s.go_on(cx))));
-        wizard_frame(&t, window, (!alone).then_some((step, SETUP_DONE + 1)), leave_tip, move |_, _, cx| leave.update(cx, |s, cx| s.leave(cx)), body.into_any_element(), step != SETUP_MODULES, foot, SETUP_HEIGHT)
+            .flex_col()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|s, e: &KeyDownEvent, window, cx| {
                 if e.keystroke.key == "enter" && s.focus.is_focused(window) {
                     s.go_on(cx);
                 }
             }))
-            .on_action(cx.listener(|s, _: &gpui_kit::base::actions::Cancel, _, cx| s.leave(cx)))
             .capture_action(cx.listener(|s, a: &gpui_kit::component::input::Enter, window, cx| {
                 if !a.secondary {
                     if s.step == 2 && s.draft.create_folders && !s.new_module.trim().is_empty() {
@@ -729,47 +758,27 @@ impl Render for Setup {
                     cx.stop_propagation();
                 }
             }))
+            .when(!alone, |d| d.child(div().flex().gap(px(space::S)).px(px(space::XL)).pt(px(space::XL)).children((0..=SETUP_DONE).map(|i| div().flex_1().h(px(space::XS)).rounded_full().bg(if i <= step { t.accent } else { t.secondary.opacity(0.25) })))))
+            .child(if step == SETUP_MODULES { div().id("setup-body").flex_1().min_h_0().p(px(space::XL)).child(body).into_any_element() } else { div().id("setup-body").flex_1().min_h_0().overflow_y_scrollbar().p(px(space::XL)).child(body).into_any_element() })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(space::S))
+                    .p(px(space::L))
+                    .border_t_1()
+                    .border_color(t.separator)
+                    .when(step < SETUP_DONE, |d| d.child(Button::new("setup-later").ghost().label(if alone { tr("Abbrechen") } else { tr("Später einrichten") }).on_click(move |_, _, cx| later.update(cx, |s, cx| s.finish(false, cx)))))
+                    .child(div().flex_1())
+                    .children(problem.map(|text| div().text_size(px(font::CALLOUT)).text_color(t.orange_text).child(text)))
+                    .when(step > 0 && !alone, |d| {
+                        d.child(Button::new("setup-back").label(tr("Zurück")).on_click(move |_, _, cx| back.update(cx, |s, cx| {
+                            s.step -= 1;
+                            cx.notify();
+                        })))
+                    })
+                    .child(Button::new("setup-next").primary().disabled(blocked).label(if alone { tr("Übernehmen") } else if step == SETUP_DONE { tr("Los geht's") } else { tr("Weiter") }).on_click(move |_, _, cx| next.update(cx, |s, cx| s.go_on(cx)))),
+            )
+            .rounded(px(radius::CARD))
     }
-}
-
-/// The height the guided setup asks for; a small window gets less, see `wizard_height`.
-const SETUP_HEIGHT: f32 = 560.;
-
-/// The height a wizard may take: below the title bar, with the footer inside the window.
-pub(super) fn wizard_height(window: &Window, wanted: f32) -> f32 {
-    let room = f32::from(window.viewport_size().height) - control::BAR - space::L;
-    wanted.min(room.max(control::BAR * 4.))
-}
-
-/// The frame both wizards share: progress segments and a close button on top, a body that scrolls, and a footer that stays in view.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn wizard_frame(t: &Theme, window: &Window, progress: Option<(usize, usize)>, leave_tip: String, on_leave: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, body: AnyElement, scrolls: bool, foot: impl IntoElement, wanted: f32) -> Div {
-    let segments = match progress {
-        Some((at, count)) => div().flex_1().flex().gap(px(space::S)).children((0..count).map(|i| div().flex_1().h(px(space::XS)).rounded_full().bg(if i <= at { t.accent } else { t.secondary.opacity(0.25) }))),
-        None => div().flex_1(),
-    };
-    let close = div()
-        .id("wizard-close")
-        .flex_none()
-        .size(px(control::S))
-        .rounded(px(radius::INNER))
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .key_nav()
-        .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
-        .tip(leave_tip)
-        .on_click(on_leave)
-        .child(icon("x", iconsize::XS, t.secondary));
-    let body = if scrolls { div().id("wizard-body").flex_1().min_h_0().overflow_y_scrollbar().p(px(space::XL)).child(body).into_any_element() } else { div().id("wizard-body").flex_1().min_h_0().p(px(space::XL)).child(body).into_any_element() };
-    div()
-        .w_full()
-        .h(px(wizard_height(window, wanted)))
-        .flex()
-        .flex_col()
-        .rounded(px(radius::CARD))
-        .child(div().flex_none().flex().items_center().gap(px(space::M)).px(px(space::XL)).pt(px(space::L)).child(segments).child(close))
-        .child(body)
-        .child(div().flex_none().p(px(space::L)).border_t_1().border_color(t.separator).child(foot))
 }

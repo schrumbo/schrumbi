@@ -16,8 +16,8 @@ use std::rc::Rc;
 
 use crate::core::vault::index;
 use super::state::{self, act};
-use super::motion::{Soft, row_fill};
-use super::theme::{Theme, control, font, hover, iconsize, radius, space};
+use super::motion::Soft;
+use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::natural_date;
 use crate::core::catalog::{self, CatalogFile, FileKind};
@@ -38,7 +38,6 @@ pub struct QuickAdd {
     clean_title: Option<String>,
     due: Entity<DatePickerState>,
     optional: bool,
-    remind: Option<i64>,
     focused: bool,
     _subs: Vec<Subscription>,
 }
@@ -78,7 +77,7 @@ impl QuickAdd {
             }),
             cx.subscribe(&due, |_, _, _: &DatePickerEvent, cx| cx.notify()),
         ];
-        let mut sheet = Self { module, kind: Kind::Task, title, clean_title: None, due, optional: false, remind: None, focused: false, _subs: subs };
+        let mut sheet = Self { module, kind: Kind::Task, title, clean_title: None, due, optional: false, focused: false, _subs: subs };
         if let Some(kind) = kind {
             sheet.set_kind(kind, window, cx);
         }
@@ -126,7 +125,6 @@ impl QuickAdd {
             kind: self.kind,
             optional: self.kind == Kind::Submission && self.optional,
             upload: self.kind == Kind::Submission,
-            remind_hours: self.remind,
             ..Default::default()
         };
         act(cx, |l| l.add_manual(m));
@@ -134,11 +132,8 @@ impl QuickAdd {
     }
 }
 
-const MENU_MAX: f32 = 380.;
-const MENU_CHARS: usize = 44;
-
 fn row(label: String, content: impl IntoElement, t: &Theme) -> Div {
-    div().flex().items_start().gap(px(space::M)).child(div().w(px(70.)).flex_none().pt(px(space::XS)).text_color(t.secondary).child(label)).child(div().flex_1().min_w_0().child(content))
+    div().flex().items_start().gap(px(space::M)).child(div().w(px(70.)).pt(px(space::XS)).text_color(t.secondary).child(label)).child(div().flex_1().child(content))
 }
 
 impl Render for QuickAdd {
@@ -151,7 +146,7 @@ impl Render for QuickAdd {
         let me = cx.entity();
         let modules: Vec<(String, String)> = state::read(cx, |l| l.semester_modules().iter().map(|m| (m.id.clone(), m.display_name())).collect());
         let current = modules.iter().find(|m| m.0 == self.module).map(|m| m.1.clone()).unwrap_or_default();
-        let mut kinds = div().flex_1().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(hover::ROW)).p(px(space::XXS));
+        let mut kinds = div().flex().rounded(px(radius::INNER)).bg(t.ink.opacity(0.06)).p(px(space::XXS));
         for k in Kind::ALL {
             let active = k == self.kind;
             let e = me.clone();
@@ -167,7 +162,7 @@ impl Render for QuickAdd {
                     .rounded(px(radius::SMALL))
                     .cursor_pointer().key_nav()
                     .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
-                    .when(!active, |d| d.soft(t.ink.opacity(hover::ROW), radius::SMALL))
+                    .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
                     .child(icon(k.icon(), iconsize::S, if active { t.primary } else { t.secondary }))
                     .child(k.label())
                     .on_click(move |_, window, cx| e.update(cx, |q, cx| {
@@ -177,12 +172,10 @@ impl Render for QuickAdd {
             );
         }
         let e = me.clone();
-        let module_menu = Button::new("qa-module").w_full().label(current).dropdown_caret(true).dropdown_menu(move |menu, _, _| {
-            let mut menu = menu.max_w(px(MENU_MAX));
+        let module_menu = Button::new("qa-module").label(current).dropdown_caret(true).dropdown_menu(move |mut menu, _, _| {
             for (id, name) in &modules {
                 let (e, id) = (e.clone(), id.clone());
-                let name = if name.chars().count() > MENU_CHARS { format!("{}…", name.chars().take(MENU_CHARS - 1).collect::<String>().trim_end()) } else { name.clone() };
-                menu = menu.item(PopupMenuItem::new(name).on_click(move |_, _, cx| e.update(cx, |q, cx| {
+                menu = menu.item(PopupMenuItem::new(name.clone()).on_click(move |_, _, cx| e.update(cx, |q, cx| {
                     q.module = id.clone();
                     cx.notify();
                 })));
@@ -192,60 +185,22 @@ impl Render for QuickAdd {
         let today = Local::now().date_naive();
         let next_monday = day::monday(today) + Days::new(7);
         let quick: Vec<(String, chrono::NaiveDate)> = vec![(tr("Heute"), today), (tr("Morgen"), today + Days::new(1)), (tr("Nächster Mo"), next_monday), (tr("In 1 Woche"), today + Days::new(7))];
-        let mut chips = div().flex().flex_wrap().gap(px(space::S));
+        let mut chips = div().flex().gap(px(space::S));
         for (i, (label, d)) in quick.into_iter().enumerate() {
             let e = me.clone();
-            chips = chips.child(
-                div()
-                    .id(("qa-date", i))
-                    .h(px(control::S))
-                    .px(px(space::M))
-                    .flex()
-                    .items_center()
-                    .rounded(px(radius::INNER))
-                    .bg(t.ink.opacity(hover::ROW))
-                    .text_size(px(font::CALLOUT))
-                    .cursor_pointer()
-                    .key_nav()
-                    .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
-                    .child(label)
-                    .on_click(move |_, window, cx| e.update(cx, |q, cx| {
-                        let t = start_time(q.kind, d);
-                        q.due.update(cx, |s, cx| s.set_date_time(d.and_time(t), window, cx));
-                        cx.notify();
-                    })),
-            );
+            chips = chips.child(Button::new(("qa-date", i)).small().label(label).on_click(move |_, window, cx| e.update(cx, |q, cx| {
+                let t = start_time(q.kind, d);
+                q.due.update(cx, |s, cx| s.set_date_time(d.and_time(t), window, cx));
+                cx.notify();
+            })));
         }
-        let (enabled, hours) = crate::core::prefs::with(|p| (p.reminders_enabled, p.reminder_hours));
-        let reminder_choices: [(Option<i64>, String); 5] = [
-            (None, if enabled && hours > 0 { trf("Wie in den Einstellungen (%lld Std. vorher)", &[&hours]) } else { tr("Wie in den Einstellungen (aus)") }),
-            (Some(0), tr("Keine")),
-            (Some(1), tr("1 Std. vorher")),
-            (Some(3), tr("3 Std. vorher")),
-            (Some(24), tr("1 Tag vorher")),
-        ];
-        let reminder_now = reminder_choices.iter().find(|(h, _)| *h == self.remind).map(|(_, l)| l.clone()).unwrap_or_default();
-        let remind_menu = {
-            let e = me.clone();
-            Button::new("qa-remind").w_full().label(reminder_now).dropdown_caret(true).dropdown_menu(move |mut menu, _, _| {
-                for (hours, label) in &reminder_choices {
-                    let (e, hours) = (e.clone(), *hours);
-                    menu = menu.item(PopupMenuItem::new(label.clone()).on_click(move |_, _, cx| e.update(cx, |q, cx| {
-                        q.remind = hours;
-                        cx.notify();
-                    })));
-                }
-                menu
-            })
-        };
         let countdown = picked(&self.due, cx).map(|d| day::countdown(d.with_timezone(&Local), Local::now())).unwrap_or_default();
         let mut grid = div()
             .flex()
             .flex_col()
             .gap(px(space::M))
             .child(row(tr("Modul"), module_menu, &t))
-            .child(row(if self.kind == Kind::Exam { tr("Termin") } else { tr("Fällig") }, div().flex().flex_col().gap(px(space::S)).child(div().w(px(240.)).child(DatePicker::new(&self.due))).child(chips).child(caption(countdown, &t)), &t))
-            .child(row(tr("Erinnern"), remind_menu, &t));
+            .child(row(if self.kind == Kind::Exam { tr("Termin") } else { tr("Fällig") }, div().flex().flex_col().gap(px(space::S)).child(div().w(px(240.)).child(DatePicker::new(&self.due))).child(chips).child(caption(countdown, &t)), &t));
         let e2 = me.clone();
         let submission = self.kind == Kind::Submission;
         grid = grid.child(row(String::new(), Switch::new("qa-optional").label(tr("Optional")).checked(self.optional).disabled(!submission).on_click(move |v, _, cx| {
@@ -261,31 +216,14 @@ impl Render for QuickAdd {
             Kind::Submission => tr("Dateien gehören dazu, sobald du sie ablegst oder zuordnest."),
         };
         let can_add = !self.title.read(cx).value().trim().is_empty() && !self.module.is_empty();
-        let (cancel, add, close) = (me.clone(), me.clone(), me.clone());
+        let (cancel, add) = (me.clone(), me.clone());
         div()
             .w(px(520.))
             .flex()
             .flex_col()
             .gap(px(space::L))
             .p(px(space::XL))
-            .child(
-                div().flex().items_center().gap(px(space::S)).child(kinds).child(
-                    div()
-                        .id("qa-close")
-                        .flex_none()
-                        .size(px(control::S))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(radius::INNER))
-                        .cursor_pointer()
-                        .key_nav()
-                        .soft(t.ink.opacity(hover::CONTROL), radius::INNER)
-                        .tip(format!("{}{}", tr("Schließen"), key_hint("escape")))
-                        .on_click(move |_, _, cx| close.update(cx, |_, cx| cx.emit(Dismissed)))
-                        .child(icon("x", iconsize::S, t.secondary)),
-                ),
-            )
+            .child(kinds)
             .child(Input::new(&self.title))
             .child(grid)
             .child(
@@ -307,11 +245,9 @@ pub struct QuickOpen {
     focused: bool,
     link_to: Option<String>,
     cache: Option<(String, u64, usize, u64, Rc<Vec<(CatalogFile, bool)>>, Rc<Vec<VaultHit>>)>,
-    pool: Option<(String, u64, u64, usize, Rc<Vec<usize>>)>,
     _subs: Vec<Subscription>,
 }
 
-/// What a query found, kept until the query, the catalog or the open tabs change.
 impl EventEmitter<Dismissed> for QuickOpen {}
 
 /// A hit only a vault knows: alias, tag, heading, block or a note yet to be created.
@@ -321,7 +257,6 @@ struct VaultHit {
     icon: &'static str,
     open: Option<(PathBuf, String)>,
     create: Option<String>,
-    search: Option<String>,
 }
 
 fn vault_hits(query: &str) -> Vec<VaultHit> {
@@ -336,7 +271,7 @@ fn vault_hits(query: &str) -> Vec<VaultHit> {
         let tag = tag.to_lowercase();
         for (name, _) in vault.tag_tree().into_iter().filter(|(n, _)| n.starts_with(&tag)) {
             for path in vault.notes_with_tag(&name).into_iter().take(20) {
-                hits.push(VaultHit { label: path.file_stem().unwrap_or_default().to_string_lossy().to_string(), detail: format!("#{name}"), icon: "tag", open: Some((path, String::new())), create: None, search: None });
+                hits.push(VaultHit { label: path.file_stem().unwrap_or_default().to_string_lossy().to_string(), detail: format!("#{name}"), icon: "tag", open: Some((path, String::new())), create: None });
             }
         }
         hits.truncate(40);
@@ -348,74 +283,31 @@ fn vault_hits(query: &str) -> Vec<VaultHit> {
         let Some(facts) = vault.notes.get(&path) else { return hits };
         let sub = sub.to_lowercase();
         if block {
-            hits.extend(facts.blocks.iter().filter(|(id, _)| id.to_lowercase().contains(&sub)).map(|(id, _)| VaultHit { label: format!("^{id}"), detail: relative(&path), icon: "pilcrow", open: Some((path.clone(), format!("#^{id}"))), create: None, search: None }));
+            hits.extend(facts.blocks.iter().filter(|(id, _)| id.to_lowercase().contains(&sub)).map(|(id, _)| VaultHit { label: format!("^{id}"), detail: relative(&path), icon: "pilcrow", open: Some((path.clone(), format!("#^{id}"))), create: None }));
         } else {
-            hits.extend(facts.headings.iter().filter(|(_, h, _)| h.to_lowercase().contains(&sub)).map(|(_, h, _)| VaultHit { label: h.clone(), detail: relative(&path), icon: "heading", open: Some((path.clone(), format!("#{h}"))), create: None, search: None }));
+            hits.extend(facts.headings.iter().filter(|(_, h, _)| h.to_lowercase().contains(&sub)).map(|(_, h, _)| VaultHit { label: h.clone(), detail: relative(&path), icon: "heading", open: Some((path.clone(), format!("#{h}"))), create: None }));
         }
         return hits;
     }
     let lower = query.to_lowercase();
     for (path, facts) in &vault.notes {
         if let Some(alias) = facts.aliases.iter().find(|a| a.to_lowercase().contains(&lower)) {
-            hits.push(VaultHit { label: alias.clone(), detail: relative(path), icon: "corner-down-right", open: Some((path.clone(), String::new())), create: None, search: None });
+            hits.push(VaultHit { label: alias.clone(), detail: relative(path), icon: "corner-down-right", open: Some((path.clone(), String::new())), create: None });
         }
     }
-    let needle = fold(query).split_whitespace().collect::<Vec<_>>().join(" ");
-    hits.sort_by(|a, b| {
-        let (x, y) = (fit(&fold(&a.label), &needle), fit(&fold(&b.label), &needle));
-        y.0.cmp(&x.0).then_with(|| if x.0 > 0 { x.1.cmp(&y.1) } else { std::cmp::Ordering::Equal }).then_with(|| a.label.cmp(&b.label))
-    });
+    hits.sort_by(|a, b| a.label.cmp(&b.label));
     hits.truncate(20);
     if vault.resolve(query, None).is_none() && !query.contains(['|', '#', '^', '[', ']', '\\', ':', '*', '?', '"', '<', '>']) {
-        hits.push(VaultHit { label: trf("Neue Notiz „%@“ anlegen", &[&query.to_string()]), detail: String::new(), icon: "file-plus", open: None, create: Some(query.to_string()), search: None });
+        hits.push(VaultHit { label: trf("Neue Notiz „%@“ anlegen", &[&query.to_string()]), detail: String::new(), icon: "file-plus", open: None, create: Some(query.to_string()) });
     }
     hits
-}
-
-/// Where the search dialogs start: a tenth of the window, and never closer than `space::XL` to the title bar.
-pub fn dialog_top(window_height: f32) -> f32 {
-    (window_height / 10.).max(control::BAR + space::XL)
-}
-
-/// The height a dialog's list may take: `want`, or what is left of the window below the dialog's top and its own `chrome`.
-pub fn list_room(window_height: f32, chrome: f32, want: f32) -> f32 {
-    want.min(window_height - dialog_top(window_height) - space::L - chrome).max(control::S * 3.)
-}
-
-const QUICK_CHROME: f32 = 100.;
-const QUICK_LIST: f32 = 360.;
-
-/// How a folded name fits the whole query: 2 for the exact name, 1 for a name starting with it, else 0; with the name's length for ties.
-fn fit(folded: &str, needle: &str) -> (u8, usize) {
-    let tier = if needle.is_empty() { 0 } else if folded == needle { 2 } else if folded.starts_with(needle) { 1 } else { 0 };
-    (tier, folded.chars().count())
-}
-
-type Ranked<'a> = (u8, usize, f64, NaiveDate, usize, (&'a CatalogFile, f64));
-
-fn order<'a>(scored: Vec<(&'a CatalogFile, f64)>, terms: &[String], keep: usize) -> Vec<(&'a CatalogFile, f64)> {
-    let needle = terms.join(" ");
-    let mut ranked: Vec<Ranked> = scored
-        .into_iter()
-        .map(|s| {
-            let (tier, len) = fit(&s.0.folded_stem, &needle);
-            (tier, if tier > 0 { len } else { 0 }, s.1, s.0.date, s.0 as *const CatalogFile as usize, s)
-        })
-        .collect();
-    let before = |a: &Ranked, b: &Ranked| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then_with(|| b.2.total_cmp(&a.2)).then(b.3.cmp(&a.3)).then(a.4.cmp(&b.4));
-    if ranked.len() > keep && keep > 0 {
-        ranked.select_nth_unstable_by(keep - 1, before);
-        ranked.truncate(keep);
-    }
-    ranked.sort_by(before);
-    ranked.into_iter().map(|r| r.5).collect()
 }
 
 actions!(schrumbi_quick, [QuickUp, QuickDown]);
 
 impl QuickOpen {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::with(tr("Dateiname oder Ordner …"), None, window, cx)
+        Self::with(tr("Dateiname, Ordner, „w3“ …"), None, window, cx)
     }
 
     /// Finds a file to link to a deadline: its suggestions and the unlinked files in its folder first.
@@ -435,7 +327,7 @@ impl QuickOpen {
             InputEvent::PressEnter { .. } => this.open(cx),
             _ => {}
         })];
-        Self { query, index: 0, focused: false, link_to, cache: None, pool: None, _subs: subs }
+        Self { query, index: 0, focused: false, link_to, cache: None, _subs: subs }
     }
 
     fn results(&mut self, cx: &App) -> (Rc<Vec<(CatalogFile, bool)>>, Rc<Vec<VaultHit>>) {
@@ -449,23 +341,16 @@ impl QuickOpen {
         }
         let files = Rc::new(match &self.link_to {
             Some(id) => self.link_results(id, cx),
-            None => self.file_results(&q, revision, generation, cx),
+            None => self.file_results(&q, cx),
         });
-        let mut hits = if self.link_to.is_some() { Vec::new() } else { vault_hits(&q) };
-        let typed = q.trim();
-        if self.link_to.is_none() && files.is_empty() && !typed.is_empty() {
-            hits.insert(0, VaultHit { label: trf("In allen Dateien suchen: „%@“", &[&typed.to_string()]), detail: String::new(), icon: "search", open: None, create: None, search: Some(typed.to_string()) });
-        }
-        let hits = Rc::new(hits);
+        let hits = Rc::new(if self.link_to.is_some() { Vec::new() } else { vault_hits(&q) });
         self.cache = Some((q, revision, tabs, generation, files.clone(), hits.clone()));
         (files, hits)
     }
 
-    fn file_results(&mut self, q: &str, revision: u64, generation: u64, cx: &App) -> Vec<(CatalogFile, bool)> {
-        let folded = fold(q);
-        let narrow = self.pool.take().filter(|(pq, pr, pg, ..)| *pr == revision && *pg == generation && !pq.trim().is_empty() && folded.starts_with(pq.as_str())).map(|(.., n, p)| (n, p));
-        let (files, pool) = state::read(cx, |l| {
-            let terms: Vec<String> = folded.split(' ').filter(|t| !t.is_empty()).map(String::from).collect();
+    fn file_results(&self, q: &str, cx: &App) -> Vec<(CatalogFile, bool)> {
+        state::read(cx, |l| {
+            let terms: Vec<String> = fold(q).split(' ').filter(|t| !t.is_empty()).map(String::from).collect();
             let current = l.current_week().map(|w| w.index);
             let open: HashSet<&FilePath> = l.open_documents.iter().map(|p| p.as_path()).collect();
             let files: Vec<&CatalogFile> = l.catalog.iter().filter(|f| !f.in_project || !terms.is_empty()).collect();
@@ -474,25 +359,12 @@ impl QuickOpen {
                 let tabs = l.open_documents.iter().filter_map(|p| by_path.get(p.as_path()).map(|f| ((*f).clone(), true)));
                 let mut recent: Vec<&CatalogFile> = files.iter().filter(|f| !open.contains(f.file.path.as_path()) && FileKind::Documents.matches(f.name())).copied().collect();
                 recent.sort_by(|a, b| b.date.cmp(&a.date));
-                return (tabs.chain(recent.into_iter().map(|f| (f.clone(), false))).take(12).collect(), None);
+                return tabs.chain(recent.into_iter().map(|f| (f.clone(), false))).take(12).collect();
             }
-            let candidates: Vec<usize> = match narrow.as_ref().filter(|(n, _)| *n == l.catalog.len()) {
-                Some((_, p)) => p.to_vec(),
-                None => (0..l.catalog.len()).collect(),
-            };
-            let mut kept = Vec::new();
-            let mut scored: Vec<(&CatalogFile, f64)> = Vec::new();
-            for i in candidates {
-                let f = &l.catalog[i];
-                if let Some(s) = catalog::score(f, &terms, current) {
-                    kept.push(i);
-                    scored.push((f, s + if open.contains(f.file.path.as_path()) { 3. } else { 0. }));
-                }
-            }
-            (order(scored, &terms, 40).into_iter().map(|(f, _)| (f.clone(), open.contains(f.file.path.as_path()))).collect(), Some((l.catalog.len(), Rc::new(kept))))
-        });
-        self.pool = pool.map(|(n, p)| (folded, revision, generation, n, p));
-        files
+            let mut scored: Vec<(&CatalogFile, f64)> = files.iter().filter_map(|f| catalog::score(f, &terms, current).map(|s| (*f, s + if open.contains(f.file.path.as_path()) { 3. } else { 0. }))).collect();
+            scored.sort_by(|a, b| if a.1 == b.1 { b.0.date.cmp(&a.0.date) } else { b.1.total_cmp(&a.1) });
+            scored.into_iter().take(40).map(|(f, _)| (f.clone(), open.contains(f.file.path.as_path()))).collect()
+        })
     }
 
     /// Files for a deadline; the flag says the file already belongs to it.
@@ -506,7 +378,7 @@ impl QuickOpen {
             let mine = |f: &CatalogFile| f.module_id.as_deref() == Some(a.module_id.as_str());
             let linked = |f: &CatalogFile| e.files.contains(&f.file.path) || e.briefs.contains(&f.file.path);
             let files: Vec<&CatalogFile> = l.catalog.iter().filter(|f| !f.in_project || !terms.is_empty()).collect();
-            let scored: Vec<(&CatalogFile, f64)> = if terms.is_empty() {
+            let mut scored: Vec<(&CatalogFile, f64)> = if terms.is_empty() {
                 files
                     .iter()
                     .filter(|f| mine(f))
@@ -518,7 +390,8 @@ impl QuickOpen {
             } else {
                 files.iter().filter_map(|f| catalog::score(f, &terms, current).map(|s| (*f, s + if mine(f) { 2. } else { 0. }))).collect()
             };
-            order(scored, &terms, 40).into_iter().map(|(f, _)| (f.clone(), linked(f))).collect()
+            scored.sort_by(|a, b| if a.1 == b.1 { b.0.date.cmp(&a.0.date) } else { b.1.total_cmp(&a.1) });
+            scored.into_iter().take(40).map(|(f, _)| (f.clone(), linked(f))).collect()
         })
     }
 
@@ -563,11 +436,6 @@ impl QuickOpen {
         } else if let Some(name) = &hit.create {
             act(cx, |l| l.create_link_target(name, None));
             state::reindex(cx);
-        } else if let Some(q) = hit.search.clone() {
-            act(cx, |l| {
-                l.search_query = q;
-                l.set_route(crate::core::library::Route::Search);
-            });
         }
     }
 }
@@ -579,12 +447,11 @@ impl Render for QuickOpen {
             self.query.update(cx, |s, cx| s.focus(window, cx));
         }
         let t = Theme::get(cx);
-        let room = list_room(f32::from(window.viewport_size().height), QUICK_CHROME, QUICK_LIST);
         let (items, extra) = self.results(cx);
         let linking = self.link_to.is_some();
         self.index = self.index.min((items.len() + extra.len()).saturating_sub(1));
         let me = cx.entity();
-        let mut list = div().flex().flex_col().gap(px(space::XXS)).px(px(space::XS)).py(px(space::S));
+        let mut list = div().flex().flex_col().gap(px(space::XXS)).p(px(space::S));
         for (i, (f, is_open)) in items.iter().enumerate() {
             let selected = i == self.index;
             let fg = if selected { white() } else { t.primary };
@@ -599,10 +466,11 @@ impl Render for QuickOpen {
                     .gap(px(space::S))
                     .px(px(space::M))
                     .py(px(space::S))
+                    .rounded(px(radius::INNER))
                     .cursor_pointer().key_nav()
                     .text_color(fg)
-                    .when(selected, |d| d.relative().child(row_fill(t.accent)))
-                    .when(!selected, |d| d.soft_row(t.ink.opacity(hover::ROW)))
+                    .when(selected, |d| d.bg(t.accent))
+                    .when(!selected, |d| d.soft(t.ink.opacity(0.05), radius::INNER))
                     .child(div().flex_none().size(px(iconsize::M + space::XS)).mx(px(-space::XXS)).flex().items_center().justify_center().rounded(px(radius::SMALL)).when(selected, |d| d.bg(white().opacity(0.92))).child(file_icon(f.path(), iconsize::M)))
                     .child(
                         div()
@@ -611,7 +479,7 @@ impl Render for QuickOpen {
                             .flex()
                             .flex_col()
                             .gap(px(space::XXS))
-                            .child(div().truncate().child(if crate::core::markdown::is_markdown(f.path()) { f.path().file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default() } else { f.name().to_string() }))
+                            .child(div().truncate().child(f.name().to_string()))
                             .child(
                                 div()
                                     .flex()
@@ -642,10 +510,11 @@ impl Render for QuickOpen {
                     .gap(px(space::S))
                     .px(px(space::M))
                     .py(px(space::S))
+                    .rounded(px(radius::INNER))
                     .cursor_pointer().key_nav()
                     .text_color(if selected { white() } else { t.primary })
-                    .when(selected, |d| d.relative().child(row_fill(t.accent)))
-                    .when(!selected, |d| d.soft_row(t.ink.opacity(hover::ROW)))
+                    .when(selected, |d| d.bg(t.accent))
+                    .when(!selected, |d| d.soft(t.ink.opacity(0.05), radius::INNER))
                     .child(icon(hit.icon, iconsize::M, if selected { white() } else { t.secondary }))
                     .child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().truncate().child(hit.label.clone())).when(!hit.detail.is_empty(), |d| d.child(div().truncate().text_size(px(font::CAPTION)).text_color(if selected { white().opacity(0.85) } else { t.secondary }).child(hit.detail.clone()))))
                     .on_click(move |_, _, cx| e.update(cx, |q, cx| {
@@ -672,9 +541,9 @@ impl Render for QuickOpen {
             .child(div().flex().items_center().gap(px(space::S)).p(px(space::L)).child(icon("search", iconsize::M, t.secondary)).child(div().flex_1().child(Input::new(&self.query).appearance(false).large())))
             .child(div().h(px(1.)).bg(t.separator))
             .child(if !any {
-                unavailable("search", tr("Keine Treffer"), if linking { tr("Tippe einen Namen; gesucht wird im ganzen Studienordner.") } else { String::new() }, &t).h(px(room)).into_any_element()
+                unavailable("search", tr("Keine Treffer"), if linking { tr("Tippe einen Namen; gesucht wird im ganzen Studienordner.") } else { String::new() }, &t).h(px(360.)).into_any_element()
             } else {
-                div().id("qo-list").h(px(room)).overflow_y_scrollbar().child(list).into_any_element()
+                div().id("qo-list").h(px(360.)).overflow_y_scrollbar().child(list).into_any_element()
             })
             .child(div().h(px(1.)).bg(t.separator))
             .child(
@@ -912,74 +781,5 @@ impl Render for SaveLayout {
             self.name.update(cx, |s, cx| s.focus(window, cx));
         }
         div().flex().flex_col().gap(px(space::S)).p(px(space::L)).child(div().font_weight(FontWeight::SEMIBOLD).child(tr("Arbeitsbereich sichern"))).child(Input::new(&self.name))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{fit, order};
-    use crate::core::catalog::{self, CatalogFile};
-    use crate::core::text::fold;
-    use chrono::{Local, NaiveDate};
-    use std::path::PathBuf;
-    use crate::core::search_index::IndexedFile;
-
-    fn file(name: &str) -> CatalogFile {
-        CatalogFile {
-            file: IndexedFile { path: PathBuf::from(name), name: name.into(), modified: Local::now() },
-            module_id: None,
-            week: None,
-            place: Vec::new(),
-            date: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-            is_brief: false,
-            in_project: false,
-            haystack: fold(name),
-            folded_name: fold(name),
-            folded_stem: fold(crate::core::naming::stem(name)),
-            title: None,
-        }
-    }
-
-    fn ranked(names: &[&str], query: &str) -> Vec<String> {
-        let files: Vec<CatalogFile> = names.iter().map(|n| file(n)).collect();
-        let terms: Vec<String> = fold(query).split(' ').filter(|t| !t.is_empty()).map(String::from).collect();
-        let scored: Vec<(&CatalogFile, f64)> = files.iter().filter_map(|f| catalog::score(f, &terms, None).map(|s| (f, s))).collect();
-        order(scored, &terms, usize::MAX).into_iter().map(|(f, _)| f.name().to_string()).collect()
-    }
-
-    #[test]
-    fn exact_name_ranks_first() {
-        let found = ranked(&["Messung 17348.md", "Messung 73480.md", "Messung 7348.md"], "Messung 7348");
-        assert_eq!(found, ["Messung 7348.md", "Messung 73480.md", "Messung 17348.md"]);
-    }
-
-    #[test]
-    fn keeping_the_top_few_matches_the_full_order() {
-        let names: Vec<String> = (0..200).map(|i| format!("Messung {}.md", (i * 7919) % 1000)).collect();
-        let files: Vec<CatalogFile> = names.iter().map(|n| file(n)).collect();
-        let terms = vec![fold("messung 7")];
-        let scored = || files.iter().filter_map(|f| catalog::score(f, &terms, None).map(|s| (f, s))).collect::<Vec<_>>();
-        let all: Vec<&str> = order(scored(), &terms, usize::MAX).into_iter().map(|(f, _)| f.name()).collect();
-        let top: Vec<&str> = order(scored(), &terms, 5).into_iter().map(|(f, _)| f.name()).collect();
-        assert_eq!(top, all[..5]);
-    }
-
-    #[test]
-    fn exact_ignores_case_and_extension_and_beats_prefix() {
-        let found = ranked(&["Radar Notizen.md", "radar.pdf", "Radar.md"], "RADAR");
-        assert_eq!(found[0].to_lowercase().split('.').next(), Some("radar"));
-        assert_eq!(found.last().map(String::as_str), Some("Radar Notizen.md"));
-    }
-
-    #[test]
-    fn shorter_prefix_first() {
-        let found = ranked(&["Radar Skript lang.md", "Radar Skript.md", "Mein Radar Skript.md"], "radar sk");
-        assert_eq!(found, ["Radar Skript.md", "Radar Skript lang.md", "Mein Radar Skript.md"]);
-    }
-
-    #[test]
-    fn aliases_rank_by_the_same_rule() {
-        assert!(fit("radar", "radar") > fit("radar 2", "radar"));
-        assert!(fit("radar 2", "radar").0 > fit("mein radar", "radar").0);
     }
 }

@@ -12,14 +12,12 @@ Ein Semester hat Vorlesungswochen, ein Modul hat einen Ordner. Mehr braucht Schr
 
 ## Modulseite
 
-Klick auf ein Modul in der Seitenleiste öffnet seine Seite. Links stehen alle {ui:Abgaben} mit ihren Dateien, {ui:Zuletzt geschrieben} und {ui:Dateien}, rechts Karten, Termine, Note und Links.
+Klick auf ein Modul in der Seitenleiste öffnet seine Seite. Links stehen alle {ui:Abgaben} mit ihren Dateien und {ui:Zuletzt geschrieben}, rechts Karten, Termine, Note und Links.
 
-- Was noch offen ist, steht oben unter {ui:Noch offen}. Die graue Zahl neben {ui:Abgaben} zählt genau diese Einträge, wie in der Seitenleiste.
-- Ist schon etwas überfällig, steht nur der jüngste Eintrag da. Die älteren sind darunter eingeklappt, mit ihrer Anzahl.
+- Was überfällig ist, steht oben unter {ui:Braucht Aufmerksamkeit}. Die rote Zahl neben {ui:Abgaben} zählt genau diese Einträge, wie in der Seitenleiste.
 - Danach kommen die nächsten zwei Wochen. Spätere und erledigte Abgaben sind eingeklappt und zeigen die ersten fünf.
 - Erledigtes gleitet aus der Liste, {ui:Erledigt} leuchtet kurz auf.
 - {ui:Neuer Eintrag…} neben {ui:Abgaben} legt eine Abgabe an.
-- {ui:Dateien} zeigt die zuletzt geänderten Dateien des Modulordners, die keine Notizen sind, z. B. PDFs. Ein Klick öffnet sie. Ohne solche Dateien fehlt der Abschnitt.
 - {ui:Alle Dateien} zeigt den Modulordner im Dateibaum.
 - Das Suchfeld oben durchsucht auf der Modulseite nur dieses Modul. Ein Klick auf das Kürzel daneben sucht überall.
 
@@ -58,7 +56,7 @@ Aus `W{w}_KW{kw}` wird `W03_KW44`. Fristen in einer Pause fallen weg, Fristen an
 
 ## Leistungen
 
-{key:goRecord} zeigt Punkte und Noten. {ui:Leistungen} erscheint in der Seitenleiste, sobald ein Modul Punkte oder eine Note hat; die Tastenkürzel und die Befehlspalette öffnen die Seite auch vorher.
+{key:goRecord} zeigt Punkte und Noten.
 
 - Eine {ui:Note} setzt {ui:Bestanden} passend zum Notensystem.
 - Klick auf einen Modulnamen öffnet die Teilleistungen, etwa Klausur 60 % und Projekt 40 %.

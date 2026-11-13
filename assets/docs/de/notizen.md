@@ -7,9 +7,7 @@ Notizen sind Markdown-Dateien in deinem Ordner. Obsidian liest sie genauso.
 1. {key:newFile} oder {ui:Neue Notiz}. Schrumbi legt `Unbenannt.md` an.
 2. Namen tippen, {key:return}.
 
-Ist in Obsidian ein fester Ordner für neue Notizen eingestellt, landet sie dort. {key:escape} lässt den Namen `Unbenannt.md`. Auf einer Modulseite öffnet {key:newFile} ein Fenster, in dem du Art und Ort wählst.
-
-{ui:Neue Leinwand} und {ui:Neue Tabellenansicht} stehen im Menü {ui:Mehr} über der Dateiliste und in der Befehlspalette. Beide Dateien öffnet auch Obsidian.
+{key:escape} lässt den Namen `Unbenannt.md`. Auf einer Modulseite öffnet {key:newFile} ein Fenster, in dem du Art und Ort wählst.
 
 ## Dateien
 
@@ -24,9 +22,6 @@ Ist in Obsidian ein fester Ordner für neue Notizen eingestellt, landet sie dort
 - {key:renameNote} benennt auch die offene Notiz um, ebenso ein Klick auf ihren Titel oben.
 - Ein Klick öffnet die Datei in einem eigenen Tab. Ist sie schon offen, kommt ihr Tab nach vorn.
 - Datei auf einen Ordner ziehen verschiebt sie.
-- {key:escape} leert zuerst das Filterfeld, ein zweites {key:escape} verlässt es.
-- Unter 800 Pixel Fensterbreite klappt die Dateiliste zu, damit die Notiz Platz hat. Der Knopf links in der Leiste holt sie zurück, bis du die App schließt.
-- Fehlt der Studienordner beim Sichern, sagt die Meldung das: er wurde verschoben oder gelöscht. {ui:Ordner neu anlegen} legt ihn an derselben Stelle neu an, {ui:Anderen Ordner wählen} öffnet einen anderen. Fehlt nur der Ordner einer offenen Notiz, legt {ui:Ordner neu anlegen} in ihrer Meldung ihn wieder an und sichert den Text.
 - Rechtsklick → {ui:Abgabe zuordnen} zählt die Datei für eine Abgabe. Die Pille oben in der Notiz zeigt, wozu sie gehört.
 - {ui:In den Papierkorb} fragt nicht nach. {key:Undo} holt die Datei zurück.
 - Sehr große Dateien liegen danach nur im Papierkorb des Systems und kommen von dort zurück. Hat das Laufwerk keinen Papierkorb, bleiben sie, wo sie sind.
@@ -160,11 +155,9 @@ Links in {ui:Seiten}, der Seitenliste. {key:pageList} blendet sie ein und aus. E
 | {ui:Lesen} / {ui:Bearbeiten} | {key:togglePreview} |
 | {ui:Geteilte Ansicht}, nur im Quelltext | {key:splitPreview} |
 
-Notizen öffnen in der Live-Ansicht, in einer Spalte gut lesbarer Breite. Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} oder {ui:Quelltext: Text mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} im Menü {ui:Darstellung} oder die {key:CommandPalette} wechselt sofort. {ui:Text in voller Breite} im Menü {ui:Mehr} der Notiz nutzt die ganze Fläche.
+Welcher Editor, legst du in {key:OpenSettings} → {ui:Notizen} fest: {ui:Live-Ansicht: Formatierung beim Schreiben sichtbar} oder {ui:Quelltext: Text mit Zeilennummern}. {key:toggleLive}, {ui:Live-Ansicht} im Menü {ui:Darstellung} oder die {key:CommandPalette} wechselt sofort.
 
-Beim Wechsel bleibt der Cursor an seiner Stelle im Text, und {key:Undo} nimmt auch Änderungen vor dem Wechsel zurück. Die Knöpfe bleiben an ihrem Platz; die {ui:Geteilte Ansicht} ist im Live-Editor ausgegraut.
-
-`/` am Zeilenanfang öffnet eine Liste zum Einfügen: Überschriften, Listen, Aufgaben, Tabelle, {ui:Formelblock}, {ui:Hinweisbox}, {ui:Notiz einbetten} und mehr. Tippen filtert, was mit den Buchstaben beginnt, steht oben. Rechts steht das Kürzel, wo es eins gibt. {key:return} oder {key:tab} fügt ein. Ohne `/`: Rechtsklick → {ui:Hinzufügen}, oder {ui:Tabelle einfügen} und Co. in der {key:CommandPalette}. Ein eigenes Kürzel legst du in {key:OpenSettings} → {ui:Tastenkürzel} fest.
+Beim Wechsel bleibt die Stelle im Text, und {key:Undo} nimmt auch Änderungen vor dem Wechsel zurück. Die Knöpfe bleiben an ihrem Platz; die {ui:Geteilte Ansicht} ist im Live-Editor ausgegraut.
 
 ## In der Notiz suchen
 
@@ -183,7 +176,7 @@ Alle Treffer sind markiert, der aktuelle kräftiger. Groß- und Kleinschreibung 
 
 ## Rechtschreibung
 
-Nur auf dem Mac; unter Windows und Linux fehlen die Einstellung und der Befehl, bis die Prüfung dort angebunden ist. Unbekannte Wörter sind unterstrichen. Zeige auf eins, dann {ui:Zum Wörterbuch hinzufügen}, auch im Rechtsklick-Menü. Ohne Maus: {ui:Zum Wörterbuch hinzufügen} in der {key:CommandPalette} nimmt das Wort an der Schreibmarke auf.
+Unbekannte Wörter sind unterstrichen. Zeige auf eins, dann {ui:Zum Wörterbuch hinzufügen}, auch im Rechtsklick-Menü. Ohne Maus: {ui:Zum Wörterbuch hinzufügen} in der {key:CommandPalette} nimmt das Wort an der Schreibmarke auf.
 
 Die Wörter stehen in den Einstellungen unter {ui:Eigenes Wörterbuch}; das Kreuz nimmt eins wieder heraus. Alle offenen Notizen übernehmen das sofort.
 
@@ -195,7 +188,7 @@ Eine einzelne Zeile über etwa 250 KB öffnet Schrumbi im Quelltext statt in der
 
 Die Live-Ansicht zeigt eine Zeile über etwa 32 KB nur mit ihrem Anfang; {ui:Lesen} zeigt sie ganz, und ein Klick auf den Hinweis darunter öffnet die Zeile im Quelltext.
 
-Auf dem Mac prüft die Rechtschreibung ab etwa 80 KB nur den Text um die Schreibmarke. Das steht unten als {ui:Rechtschreibung nur um die Schreibmarke}.
+Ab etwa 80 KB prüft die Rechtschreibung nur den Text um die Schreibmarke. Das steht unten als {ui:Rechtschreibung nur um die Schreibmarke}.
 
 ## Sichern
 
@@ -211,7 +204,7 @@ Hat eine andere App die Datei geändert, siehst du einen Hinweis. Nichts geht ve
 
 ## Verknüpfen
 
-- `[[` tippen und eine Notiz wählen. {key:escape} gleich danach nimmt die leeren Klammern wieder weg.
+- `[[` tippen und eine Notiz wählen.
 - {key:toggleInspector} zeigt {ui:Rückverweise}, {ui:Ausgehend} und {ui:Erwähnungen ohne Link}.
 - {key:showGraph} zeigt alle Notizen als Graph.
 
@@ -226,13 +219,12 @@ Hat eine andere App die Datei geändert, siehst du einen Hinweis. Nichts geht ve
 - Ein Tab geht nur zu, wenn du ihn schließt: ×, Mittelklick oder {key:closeTab}.
 - Jede Datei bekommt ihren eigenen Tab. Eine offene Datei wird nie doppelt geöffnet: ihr Tab kommt nach vorn.
 - Ein Link öffnet sein Ziel in einem neuen Tab, die Notiz mit dem Link bleibt offen.
-- Rechtsklick auf einen Tab: {ui:Andere Tabs schließen}, {ui:Tabs rechts schließen}, {ui:Alle Tabs schließen}. Rechts im Menü steht jeweils das Kürzel.
+- Rechtsklick auf einen Tab: {ui:Andere Tabs schließen}, {ui:Tabs rechts schließen}, {ui:Alle Tabs schließen}.
 - Tab ziehen ändert die Reihenfolge. {key:reopenTab} bringt den Tab an seinen alten Platz zurück.
 
 ### Nebeneinander
 
 - Rechtsklick auf einen Tab → {ui:Daneben öffnen}, oder einen Tab oder eine Datei aus der Liste in die rechte Hälfte ziehen. Dort steht {ui:Rechts öffnen}.
-- {key:openBeside} öffnet die Notiz, in der du bist, rechts daneben, {key:switchSide} wechselt zwischen den Seiten.
 - Der Tab der rechten Notiz zeigt als Symbol ein Fenster mit gefüllter rechter Hälfte. Ein Klick darauf springt in die rechte Notiz.
 - Eine farbige Linie unter der Leiste zeigt, in welcher Notiz du gerade bist.
 - Links in der rechten Notiz öffnen rechts.

@@ -44,11 +44,11 @@ From the second start on, a tip shows once a day at the bottom right, only about
 
 ## Guided Setup
 
-A few short steps, {key:return} moves on. {key:escape} or the X at the top right closes like {ui:Später einrichten}.
+Four short steps, {key:return} moves on.
 
 | Step | You set |
 |---|---|
-| {ui:Willkommen} | Whether Schrumbi creates submission folders |
+| {ui:Willkommen} | Degree program, naming pattern and whether Schrumbi creates submission folders |
 | {ui:Semester} | Name, lecture start, lecture end |
 | {ui:Module} | Which folders are modules, with code and name |
 | {ui:Abgaben} | Moodle calendar and a weekly submission, both optional |
@@ -68,7 +68,7 @@ In {ui:Module}, matching folders are already ticked: everything directly inside 
 | {ui:Notizen} | {key:goNotes} | Notes, search, tags, tasks |
 | {ui:Karten} | {key:goCards} | Flashcards to study |
 
-- The sidebar shows icons with names. {ui:Seitenleiste einklappen} at the bottom left makes it narrow, then hovering names the area and its shortcut. Below 820 px window width it stays narrow.
+- The sidebar shows icons only. Hovering one names the area and its shortcut.
 - Right-click an area except {ui:Übersicht}: {ui:Aus der Seitenleiste ausblenden}.
 
 ## What Is in the Folder

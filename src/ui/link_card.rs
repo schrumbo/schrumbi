@@ -81,8 +81,8 @@ fn show_after(wanted: Option<(String, Option<PathBuf>)>, delay: Duration, cx: &m
     let task = cx.background_spawn(async move {
         let text = std::fs::read_to_string(&source).unwrap_or_default();
         let part = links::section(&text, &target);
-        let stem = source.file_stem().unwrap_or_default().to_string_lossy().to_string();
-        without_title(part.split('\n').take(24).collect::<Vec<_>>().join("\n"), &stem)
+        let lines: Vec<&str> = part.split('\n').take(24).collect();
+        lines.join("\n")
     });
     let wait = cx.spawn(async move |cx| {
         cx.background_executor().timer(delay).await;
@@ -95,12 +95,6 @@ fn show_after(wanted: Option<(String, Option<PathBuf>)>, delay: Duration, cx: &m
         });
     });
     cx.global_mut::<LinkCard>().wait = Some(wait);
-}
-
-fn without_title(text: String, name: &str) -> String {
-    let rest = text.trim_start();
-    let (first, after) = rest.split_once('\n').unwrap_or((rest, ""));
-    if first.trim_end().strip_prefix("# ").is_some_and(|h| h.trim() == name) { after.to_string() } else { text }
 }
 
 /// The card, drawn above the page; `None` while nothing is shown.
@@ -136,13 +130,6 @@ pub fn overlay(cx: &App) -> Option<AnyElement> {
 #[cfg(test)]
 mod tests {
     use super::resolve;
-
-    #[test]
-    fn the_card_does_not_repeat_the_name_as_its_first_heading() {
-        assert_eq!(super::without_title("# Home\nText".into(), "Home"), "Text");
-        assert_eq!(super::without_title("# Anders\nText".into(), "Home"), "# Anders\nText");
-        assert_eq!(super::without_title("Text".into(), "Home"), "Text");
-    }
 
     #[test]
     fn a_link_in_a_guide_example_resolves_to_nothing() {

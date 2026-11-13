@@ -4,9 +4,9 @@
 
 | Seite | Hier stellst du ein |
 |---|---|
-| {ui:Allgemein} | Erscheinungsbild, eigene Designs, Sprache, Erinnerungen, Namensmuster, Seitenleiste |
+| {ui:Allgemein} | Erscheinungsbild, eigene Designs, Sprache, Namensmuster, Seitenleiste, Erinnerungen |
 | {ui:Semester} | Vorlesungszeit, Pausen, Feiertage |
-| {ui:Module} | Kürzel, Ordner, Links, wiederkehrende Abgaben, Stundenplan |
+| {ui:Module} | Kürzel, Ordner, Links, wiederkehrende Deadlines, Stundenplan |
 | {ui:Notizen} | Editor, Schriftgröße, eigenes Wörterbuch, Sichern, PDF-Export, Obsidian |
 | {ui:Karten} | Erinnerungsziel, neue Karten und Wiederholungen pro Tag |
 | {ui:Sync} | Online-Speicher, Automatik, Ausschalten |
@@ -28,7 +28,7 @@ Die Suche kennt auch andere Wörter: `dark` findet das Erscheinungsbild, `git` d
 2. Neue Tasten drücken. Dabei sein muss eine Sondertaste, F-Tasten gehen allein. Fehlt die Sondertaste, steht ein Hinweis da. Nicht setzen lassen sich Kopieren, Einsetzen, Ausschneiden, Alles auswählen, Rückgängig, Wiederholen, Tab schließen, Beenden, {key:tab} und die Tasten der Textbearbeitung (Umschalt mit Pfeilen und {key:return}, Wort- und Zeilensprünge, Wörter löschen); der Grund steht an der Zeile. Alle anderen Tasten von Schrumbi lassen sich neu belegen.
 3. {key:escape} bricht ab, {key:delete} entfernt das Kürzel.
 
-Ein Klick ins Suchfeld oder woandershin beendet das Aufnehmen. Steht etwas im Suchfeld, leert {key:escape} es. Ist ein Kürzel doppelt belegt, steht {ui:Doppelt} und der andere Befehl an der Zeile. Beim Aufnehmen löst die Taste nichts aus, so lässt sich auch ein belegtes Kürzel setzen. {ui:Alle zurücksetzen} stellt die Standards wieder her. Nach jeder Änderung steht oben auf der Seite ein Hinweis, der den Befehl und seine Tasten nennt, mit {ui:Rückgängig}, der den letzten Stand zurückholt. Er bleibt beim Scrollen stehen und verschwindet nach wenigen Sekunden, mit dem Schließen-Knopf oder mit {key:escape}. Auf der Seite {ui:Tastenkürzel} filtert die Suche oben rechts die Liste der Kürzel.
+Ein Klick ins Suchfeld oder woandershin beendet das Aufnehmen. Steht etwas im Suchfeld, leert {key:escape} es. Ist ein Kürzel doppelt belegt, steht {ui:Doppelt} und der andere Befehl an der Zeile. Beim Aufnehmen löst die Taste nichts aus, so lässt sich auch ein belegtes Kürzel setzen. {ui:Alle zurücksetzen} stellt die Standards wieder her. Nach jeder Änderung steht unter dem Suchfeld ein Hinweis, der den Befehl und seine Tasten nennt, mit {ui:Rückgängig}, der den letzten Stand zurückholt. Er bleibt beim Scrollen stehen und verschwindet nach wenigen Sekunden, mit dem Schließen-Knopf oder mit {key:escape}. In {ui:Tastenkürzel} springt {key:cmd-f} ins Filterfeld.
 
 ## Folgesemester
 
@@ -36,7 +36,7 @@ Semester in der Liste wählen, dann das Kopier-Symbol unter der Liste: {ui:Folge
 
 ## Eigene Designs
 
-{ui:Design laden…} neben {ui:Erscheinungsbild} öffnet eine JSON-Datei. Schrumbi prüft sie, behält eine Kopie und wechselt sofort. {ui:Entfernen} unter {ui:Eigene Designs} löscht die Kopie, {ui:Rückgängig} bringt sie zurück. Hat ein geladenes Design den Namen eines vorhandenen, ersetzt es dieses, und {ui:Rückgängig} bringt das alte zurück. Fällt die Datei des gewählten Designs weg, gilt wieder das Erscheinungsbild von vorher. {key:CommandPalette} nennt jedes Design beim Namen und bietet {ui:Design laden…} an.
+{ui:Design laden…} neben {ui:Erscheinungsbild} öffnet eine JSON-Datei. Schrumbi prüft sie, behält eine Kopie und wechselt sofort. {ui:Entfernen} unter {ui:Eigene Designs} löscht die Kopie, {ui:Rückgängig} bringt sie zurück. {key:CommandPalette} nennt jedes Design beim Namen und bietet {ui:Design laden…} an.
 
 ```json
 {

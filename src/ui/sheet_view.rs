@@ -14,7 +14,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::motion::{self, Soft};
-use super::theme::{Theme, control, font, hover, iconsize, radius, space};
+use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::crash;
 use crate::core::i18n::{tr, trf};
@@ -861,8 +861,8 @@ impl SheetView {
                     .cursor_pointer()
                     .key_nav()
                     .max_w(px(TAB_WIDTH))
-                    .when(!on, |d| d.soft(t.ink.opacity(hover::ROW), radius::INNER))
-                    .tip(name.clone())
+                    .when(!on, |d| d.soft(t.ink.opacity(0.06), radius::INNER))
+                    .tooltip(tip(name.clone()))
                     .when(on, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm())
                     .text_size(px(font::CALLOUT))
                     .text_color(if on { t.primary } else { t.secondary })

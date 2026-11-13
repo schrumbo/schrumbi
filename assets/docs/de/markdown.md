@@ -134,12 +134,6 @@ fn main() {
 
 ## Formeln
 
-- {ui:Formelblock} im Kontextmenü oder {ui:Formelblock einfügen} in der {key:CommandPalette} legt die `$$`-Zeilen an.
-- In einer Formel schlägt `\` Befehle vor, etwa `\frac` oder `\sum`. {key:return} oder {key:tab} übernimmt den Vorschlag.
-- Steht das schließende `$$` schon da, springt das Tippen von `$$` darüber hinweg.
-- Kennt Schrumbi einen Befehl nicht, bleibt die Formel als Text in Orange stehen; unter einer abgesetzten Formel steht der Befehl.
-- `\tag{1}` setzt eine Nummer hinter die Formel.
-
 ````example Im Text und abgesetzt
 Inline $a^2 + b^2 = c^2$, abgesetzt:
 

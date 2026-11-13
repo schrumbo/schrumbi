@@ -134,12 +134,6 @@ fn main() {
 
 ## Formulas
 
-- {ui:Formelblock} in the context menu or {ui:Formelblock einfügen} in the {key:CommandPalette} adds the `$$` lines.
-- Inside a formula, `\` suggests commands such as `\frac` or `\sum`. {key:return} or {key:tab} takes the suggestion.
-- When the closing `$$` is already there, typing `$$` steps over it.
-- If Schrumbi does not know a command, the formula stays as text in orange; below a display formula the command is named.
-- `\tag{1}` puts a number behind the formula.
-
 ````example Inline and display
 Inline $a^2 + b^2 = c^2$, display:
 

@@ -5,14 +5,14 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{Selectable, Sizable};
+use gpui_kit::component::{Disableable, Selectable, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use super::state::{self, act};
 use super::motion::{self, Soft};
-use super::theme::{Theme, calendar as cal, control, font, hover, radius, space, iconsize};
-use super::widgets::{KeyNav, file_target, icon, key_hint, menu_icon, section_title, status_menu, status_toggle, tabular, ButtonTip, Tip};
+use super::theme::{Theme, calendar as cal, control, font, radius, space, iconsize};
+use super::widgets::{KeyNav, file_target, icon, menu_icon, section_title, status_menu, status_toggle, tabular, tip};
 use crate::core::calendar::{self, CalendarView};
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Library;
@@ -111,9 +111,9 @@ fn header(l: &Library, view: CalendarView, segment: f32, t: &Theme) -> Div {
                 .flex_none()
                 .items_center()
                 .gap(px(space::XXS))
-                .child(Button::new("board-prev").ghost().small().icon(menu_icon("chevron-left")).tooltip(format!("{back}{}", key_hint("left"))).on_click(|_, _, cx| act(cx, |l| l.turn_calendar(-1))))
-                .child(Button::new("board-next").ghost().small().icon(menu_icon("chevron-right")).tooltip(format!("{forward}{}", key_hint("right"))).on_click(|_, _, cx| act(cx, |l| l.turn_calendar(1))))
-                .child(Button::new("board-today").small().label(tr("Heute")).when(at_today, |b| b.ghost()).tip(format!("{}{}", tr("Zu heute springen"), key_hint("t"))).on_click(|_, _, cx| act(cx, Library::calendar_today))),
+                .child(Button::new("board-prev").ghost().small().icon(menu_icon("chevron-left")).tooltip(format!("{back} (←)")).on_click(|_, _, cx| act(cx, |l| l.turn_calendar(-1))))
+                .child(Button::new("board-next").ghost().small().icon(menu_icon("chevron-right")).tooltip(format!("{forward} (→)")).on_click(|_, _, cx| act(cx, |l| l.turn_calendar(1))))
+                .child(Button::new("board-today").small().label(tr("Heute")).disabled(at_today).tooltip(format!("{} (T)", tr("Zu heute springen"))).on_click(|_, _, cx| act(cx, Library::calendar_today))),
         )
         .child(
             div()
@@ -122,7 +122,7 @@ fn header(l: &Library, view: CalendarView, segment: f32, t: &Theme) -> Div {
                 .flex()
                 .items_baseline()
                 .gap(px(space::S))
-                .child(div().id("board-title").flex_none().tip(hint).child(section_title(title)))
+                .child(div().id("board-title").flex_none().tooltip(tip(hint)).child(section_title(title)))
                 .children(caption.map(|c| div().min_w_0().truncate().text_size(px(font::CAPTION)).text_color(t.tertiary).child(c))),
         )
         .child(segmented(view, segment, t))
@@ -153,10 +153,10 @@ fn segment_button(id: &'static str, label: String, key: &str, on: bool, view: Ca
         .items_center()
         .justify_center()
         .rounded(px(radius::INNER))
-        .soft(t.ink.opacity(hover::RAISED), radius::INNER)
+        .soft(t.ink.opacity(0.05), radius::INNER)
         .cursor_pointer()
         .key_nav()
-        .tip(help)
+        .tooltip(tip(help))
         .on_click(move |_, _, cx| act(cx, |l| l.set_calendar_view(view)))
         .child(div().text_size(px(font::CAPTION)).font_weight(if on { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }).text_color(if on { t.primary } else { t.secondary }).child(label))
 }
@@ -231,9 +231,7 @@ fn cell(lib: &Library, d: NaiveDate, month: u32, items: &[&Assignment], first: N
         total
     };
     let hidden = total - shown;
-    let sessions = if narrow { Vec::new() } else { lib.sessions_on(d) };
-    let classes = sessions.len().min(capacity.saturating_sub(shown + usize::from(hidden > 0)));
-    let used = if narrow { usize::from(total > 0) } else { shown + usize::from(hidden > 0) + classes };
+    let used = if narrow { usize::from(total > 0) } else { shown + usize::from(hidden > 0) };
     let free_height = row_height - 2. * cal::CELL_PAD - cal::DAY - (used as f32 + 1.) * space::XXS - used as f32 * cal::CHIP;
     let number = div()
         .id(("board-cell-day", ce))
@@ -244,10 +242,10 @@ fn cell(lib: &Library, d: NaiveDate, month: u32, items: &[&Assignment], first: N
         .justify_center()
         .rounded_full()
         .when(is_today, |n| n.bg(accent))
-        .soft(if is_today { t.on_accent.opacity(hover::RAISED) } else { t.ink.opacity(hover::CONTROL) }, radius::FULL)
+        .soft(if is_today { t.on_accent.opacity(0.2) } else { t.ink.opacity(0.08) }, radius::FULL)
         .cursor_pointer()
         .key_nav()
-        .tip(tr("Woche öffnen"))
+        .tooltip(tip(tr("Woche öffnen")))
         .on_click(move |_, _, cx| act(cx, |l| l.show_week_of(d)))
         .child(div().text_size(px(font::CAPTION)).font_weight(if is_today { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM }).text_color(if is_today { t.on_accent } else if in_month { t.primary } else { t.tertiary }).font_features(tabular()).child(d.day().to_string()));
     div()
@@ -279,7 +277,6 @@ fn cell(lib: &Library, d: NaiveDate, month: u32, items: &[&Assignment], first: N
         .when(narrow && total > 0, |c| c.child(dots(lib, d, items, t)))
         .children(items.iter().take(shown).map(|a| chip(lib, a, t)))
         .when(!narrow && hidden > 0, |c| c.child(more_button(d, hidden)))
-        .children(sessions.iter().take(classes).map(|(m, s)| session_line(m, s, t)))
         .when(free_height >= cal::DOT, |c| c.child(DayArea(empty_area(d, free_height, t)).dropdown_menu(move |menu, _, _| day_menu(menu, d))))
         .into_any_element()
 }
@@ -291,11 +288,11 @@ fn empty_area(d: NaiveDate, height: f32, t: &Theme) -> Stateful<Div> {
         .w_full()
         .h(px(height))
         .rounded(px(radius::INNER))
-        .soft(t.ink.opacity(hover::ROW), radius::INNER)
+        .soft(t.ink.opacity(0.04), radius::INNER)
         .cursor_pointer()
         .key_nav()
         .on_click(move |e, _, cx| {
-            if e.click_count() == 2 || e.is_keyboard() {
+            if e.click_count() == 2 {
                 act(cx, |l| l.show_week_of(d));
             }
         })
@@ -420,7 +417,7 @@ fn chip(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .cursor_pointer()
         .key_nav()
         .when(selected, |c| c.border(px(1.5)).border_color(t.accent))
-        .tip(help)
+        .tooltip(tip(help))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(select_id.clone()))))
         .when(!closed, |c| c.on_drag(DraggedCard { id: a.id.clone(), title: a.title.clone(), tint }, |d, _, _, cx| cx.new(|_| d.clone())))
         .child(div().absolute().top(px(space::XS)).bottom(px(space::XS)).left(px(space::XS)).w(px(cal::EDGE)).rounded_full().bg(edge))
@@ -605,26 +602,6 @@ fn agenda_row(lib: &Library, d: NaiveDate, t: &Theme) -> AnyElement {
         .into_any_element()
 }
 
-fn session_line(m: &Module, s: &Session, t: &Theme) -> Stateful<Div> {
-    let title = if s.title.is_empty() { m.code.clone() } else { s.title.clone() };
-    let place = if s.location.is_empty() { String::new() } else { format!(" · {}", s.location) };
-    div()
-        .id(SharedString::from(format!("mclass-{}", s.id)))
-        .flex_none()
-        .w_full()
-        .h(px(cal::CHIP))
-        .pl(px(space::XS))
-        .flex()
-        .items_center()
-        .gap(px(space::XS))
-        .text_size(px(font::CAPTION))
-        .text_color(t.secondary)
-        .tip(format!("{} · {} {}–{}{place}", m.code, title, s.start, s.end))
-        .child(div().size(px(cal::DOT)).flex_none().rounded_full().bg(t.palette(&m.color).opacity(0.6)))
-        .child(div().flex_none().font_features(tabular()).child(s.start.clone()))
-        .child(div().min_w_0().truncate().child(title))
-}
-
 fn session_chip(m: &Module, s: &Session, t: &Theme) -> Stateful<Div> {
     let title = if s.title.is_empty() { m.code.clone() } else { s.title.clone() };
     let place = if s.location.is_empty() { String::new() } else { format!(" · {}", s.location) };
@@ -633,7 +610,7 @@ fn session_chip(m: &Module, s: &Session, t: &Theme) -> Stateful<Div> {
         .flex()
         .gap(px(space::S))
         .py(px(space::XXS))
-        .tip(format!("{} · {} {}–{}", m.code, s.title, s.start, s.end))
+        .tooltip(tip(format!("{} · {} {}–{}", m.code, s.title, s.start, s.end)))
         .child(div().w(px(cal::EDGE)).flex_none().rounded_full().bg(t.palette(&m.color).opacity(0.6)))
         .child(
             div()
@@ -660,7 +637,7 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
     let border = if selected {
         Some(t.accent)
     } else if attention {
-        Some(if e.status == Status::Ready { t.blue.opacity(0.7) } else { t.secondary.opacity(0.6) })
+        Some(if e.status == Status::Ready { t.blue.opacity(0.7) } else { t.red.opacity(0.7) })
     } else if a.optional && !closed {
         Some(t.secondary.opacity(0.5))
     } else {
@@ -687,7 +664,7 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
         .bg(if selected { hover_fill } else { fill })
         .soft(hover_fill, radius::CONTROL)
         .cursor_pointer().key_nav()
-        .tip(help)
+        .tooltip(tip(help))
         .on_click(move |_, _, cx| act(cx, |l| l.select(Some(select_id.clone()))))
         .when(!closed, |c| c.on_drag(DraggedCard { id: a.id.clone(), title: a.title.clone(), tint }, |d, _, _, cx| cx.new(|_| d.clone())))
         .child(edge_bar(tint.opacity(if closed { 0.35 } else { 1. })))
@@ -707,7 +684,7 @@ pub fn deadline_card(lib: &Library, a: &Assignment, t: &Theme) -> AnyElement {
             if e.status == Status::Skipped { title.line_through() } else { title }
         })
         .when(attention, |c| {
-            let (label, color) = if e.status == Status::Ready { (tr("Upload bestätigen"), t.blue) } else { (tr("Noch offen"), t.secondary) };
+            let (label, color) = if e.status == Status::Ready { (tr("Upload bestätigen"), t.blue) } else { (tr("Überfällig"), t.red) };
             c.child(div().text_size(px(font::CAPTION2)).font_weight(FontWeight::SEMIBOLD).text_color(color).child(label))
         });
     if let Some(color) = border {

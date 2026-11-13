@@ -28,8 +28,6 @@ pub enum ShortcutAction {
     CloseTab,
     NextTab,
     PreviousTab,
-    OpenBeside,
-    SwitchSide,
     TogglePreview,
     SplitPreview,
     ExportPdf,
@@ -40,8 +38,6 @@ pub enum ShortcutAction {
     Refresh,
     Sync,
     DailyNote,
-    NewCard,
-    ToggleSidebar,
     OpenInObsidian,
     Bold,
     Italic,
@@ -61,15 +57,6 @@ pub enum ShortcutAction {
     ZoomOut,
     ZoomReset,
     ToggleWrap,
-    Heading4,
-    InsertTable,
-    InsertCodeBlock,
-    InsertCallout,
-    InsertDivider,
-    EmbedNote,
-    InsertFootnote,
-    InsertCard,
-    InsertCloze,
     ToggleLive,
     MarkText,
     RotatePagesLeft,
@@ -126,7 +113,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 86] = [
+    pub const ALL: [ShortcutAction; 73] = [
         Self::GoToday,
         Self::GoGrid,
         Self::GoRecord,
@@ -149,8 +136,6 @@ impl ShortcutAction {
         Self::CloseTab,
         Self::NextTab,
         Self::PreviousTab,
-        Self::OpenBeside,
-        Self::SwitchSide,
         Self::TogglePreview,
         Self::SplitPreview,
         Self::ExportPdf,
@@ -161,8 +146,6 @@ impl ShortcutAction {
         Self::Refresh,
         Self::Sync,
         Self::DailyNote,
-        Self::NewCard,
-        Self::ToggleSidebar,
         Self::OpenInObsidian,
         Self::Bold,
         Self::Italic,
@@ -182,15 +165,6 @@ impl ShortcutAction {
         Self::ZoomOut,
         Self::ZoomReset,
         Self::ToggleWrap,
-        Self::Heading4,
-        Self::InsertTable,
-        Self::InsertCodeBlock,
-        Self::InsertCallout,
-        Self::InsertDivider,
-        Self::EmbedNote,
-        Self::InsertFootnote,
-        Self::InsertCard,
-        Self::InsertCloze,
         Self::ToggleLive,
         Self::MarkText,
         Self::RotatePagesLeft,
@@ -240,8 +214,6 @@ impl ShortcutAction {
             Self::CloseTab => "closeTab",
             Self::NextTab => "nextTab",
             Self::PreviousTab => "previousTab",
-            Self::OpenBeside => "openBeside",
-            Self::SwitchSide => "switchSide",
             Self::TogglePreview => "togglePreview",
             Self::SplitPreview => "splitPreview",
             Self::ExportPdf => "exportPDF",
@@ -252,8 +224,6 @@ impl ShortcutAction {
             Self::Refresh => "refresh",
             Self::Sync => "syncNow",
             Self::DailyNote => "dailyNote",
-            Self::NewCard => "newCard",
-            Self::ToggleSidebar => "toggleSidebar",
             Self::OpenInObsidian => "openInObsidian",
             Self::Bold => "bold",
             Self::Italic => "italic",
@@ -273,15 +243,6 @@ impl ShortcutAction {
             Self::ZoomOut => "zoomOut",
             Self::ZoomReset => "zoomReset",
             Self::ToggleWrap => "toggleWrap",
-            Self::Heading4 => "heading4",
-            Self::InsertTable => "insertTable",
-            Self::InsertCodeBlock => "insertCodeBlock",
-            Self::InsertCallout => "insertCallout",
-            Self::InsertDivider => "insertDivider",
-            Self::EmbedNote => "embedNote",
-            Self::InsertFootnote => "insertFootnote",
-            Self::InsertCard => "insertCard",
-            Self::InsertCloze => "insertCloze",
             Self::ToggleLive => "toggleLive",
             Self::MarkText => "markText",
             Self::RotatePagesLeft => "rotatePagesLeft",
@@ -319,8 +280,8 @@ impl ShortcutAction {
         match self {
             Self::GoToday | Self::GoGrid | Self::GoRecord | Self::GoInbox | Self::GoNotes | Self::GoCards | Self::GoForward | Self::GoModule1 | Self::GoModule2 | Self::GoModule3 | Self::GoBack => Group::Navigation,
             Self::ShowGraph | Self::ToggleFullscreen => Group::View,
-            Self::Sync | Self::DailyNote | Self::NewCard | Self::ToggleSidebar | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::OpenOtherWorkspace | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::ToggleAi | Self::Refresh => Group::General,
-            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::OpenBeside | Self::SwitchSide | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote | Self::ToggleLive | Self::MarkText | Self::RotatePagesLeft | Self::RotatePagesRight | Self::MovePagesUp | Self::MovePagesDown | Self::DeletePages | Self::InsertPdf | Self::PenTool | Self::EraserTool | Self::NoteTool | Self::ExportMarkedPdf | Self::PageList | Self::NoteOnSelection | Self::SelectTool | Self::MarkList | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick => Group::Documents,
+            Self::Sync | Self::DailyNote | Self::OpenInObsidian | Self::QuickOpen | Self::SearchFiles | Self::OpenOtherWorkspace | Self::NewEntry | Self::NewFile | Self::ToggleInspector | Self::ToggleAi | Self::Refresh => Group::General,
+            Self::CloseTab | Self::ReopenTab | Self::NextTab | Self::PreviousTab | Self::TogglePreview | Self::SplitPreview | Self::ExportPdf | Self::FindInNote | Self::RenameNote | Self::ToggleLive | Self::MarkText | Self::RotatePagesLeft | Self::RotatePagesRight | Self::MovePagesUp | Self::MovePagesDown | Self::DeletePages | Self::InsertPdf | Self::PenTool | Self::EraserTool | Self::NoteTool | Self::ExportMarkedPdf | Self::PageList | Self::NoteOnSelection | Self::SelectTool | Self::MarkList | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick => Group::Documents,
             _ => Group::Editor,
         }
     }
@@ -364,14 +325,10 @@ impl ShortcutAction {
             Self::Refresh => "Aktualisieren",
             Self::Sync => "Jetzt synchronisieren",
             Self::DailyNote => "Tagesnotiz öffnen",
-            Self::NewCard => "Neue Karte",
-            Self::ToggleSidebar => "Seitenleiste ein-/ausklappen",
             Self::OpenInObsidian => "In Obsidian öffnen",
             Self::CloseTab => "Tab schließen",
             Self::NextTab => "Nächster Tab",
             Self::PreviousTab => "Vorheriger Tab",
-            Self::OpenBeside => "Daneben öffnen",
-            Self::SwitchSide => "Zur anderen Seite wechseln",
             Self::TogglePreview => "Lesen / Bearbeiten wechseln",
             Self::SplitPreview => "Geteilte Ansicht",
             Self::ExportPdf => "Als PDF exportieren",
@@ -395,15 +352,6 @@ impl ShortcutAction {
             Self::ZoomOut => "Schrift kleiner",
             Self::ZoomReset => "Schriftgröße zurücksetzen",
             Self::ToggleWrap => "Zeilenumbruch ein-/ausschalten",
-            Self::Heading4 => "Überschrift 4",
-            Self::InsertTable => "Tabelle einfügen",
-            Self::InsertCodeBlock => "Codeblock einfügen",
-            Self::InsertCallout => "Hinweisbox einfügen",
-            Self::InsertDivider => "Trennlinie einfügen",
-            Self::EmbedNote => "Notiz einbetten",
-            Self::InsertFootnote => "Fußnote einfügen",
-            Self::InsertCard => "Karteikarte einfügen",
-            Self::InsertCloze => "Lückentext einfügen",
             Self::ToggleLive => "Live-Ansicht ein-/ausschalten",
             Self::MarkText => "Markieren",
             Self::RotatePagesLeft => "Seiten links drehen",
@@ -435,7 +383,7 @@ impl ShortcutAction {
     }
 
     fn default_on(self, os: Os) -> Option<Shortcut> {
-        if matches!(self, Self::ToggleComment | Self::Heading4 | Self::InsertTable | Self::InsertCodeBlock | Self::InsertCallout | Self::InsertDivider | Self::EmbedNote | Self::InsertFootnote | Self::InsertCard | Self::InsertCloze | Self::SelectTool | Self::MarkList | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick) {
+        if matches!(self, Self::ToggleComment | Self::SelectTool | Self::MarkList | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick) {
             return None;
         }
         if os != Os::Mac {
@@ -452,7 +400,6 @@ impl ShortcutAction {
             match self {
                 Self::Indent => return Some(s("right", true, false, true, false)),
                 Self::Outdent => return Some(s("left", true, false, true, false)),
-                Self::OpenBeside => return Some(s("right", true, true, true, false)),
                 _ => {}
             }
         }
@@ -481,14 +428,10 @@ impl ShortcutAction {
             Self::Refresh => s("r", true, false, false, false),
             Self::Sync => s("s", true, true, false, false),
             Self::DailyNote => s("t", true, false, true, false),
-            Self::NewCard => s("k", true, false, true, false),
-            Self::ToggleSidebar => s("b", true, false, true, false),
             Self::OpenInObsidian => s("o", true, false, true, false),
             Self::CloseTab => s("w", true, false, false, false),
             Self::NextTab => s("tab", false, false, false, true),
             Self::PreviousTab => s("tab", false, true, false, true),
-            Self::OpenBeside => s("right", true, false, true, false),
-            Self::SwitchSide => s("f6", false, false, false, false),
             Self::TogglePreview => s("v", true, true, false, false),
             Self::SplitPreview => s("v", true, false, true, false),
             Self::ExportPdf => s("e", true, true, false, false),
@@ -512,7 +455,6 @@ impl ShortcutAction {
             Self::ZoomOut => s("-", true, false, false, false),
             Self::ZoomReset => s("0", true, false, false, false),
             Self::ToggleWrap => s("z", true, false, true, false),
-            Self::Heading4 | Self::InsertTable | Self::InsertCodeBlock | Self::InsertCallout | Self::InsertDivider | Self::EmbedNote | Self::InsertFootnote | Self::InsertCard | Self::InsertCloze => return None,
             Self::ToggleLive => s("l", true, false, true, false),
             Self::MarkText => s("h", false, false, false, false),
             Self::RotatePagesLeft => s("r", false, true, false, false),
@@ -1198,20 +1140,6 @@ mod tests {
         ShortcutAction::ToggleComment.set(None);
         assert_eq!(ShortcutAction::ToggleComment.shortcut(), None);
         assert!(!ShortcutAction::ToggleComment.is_customized());
-    }
-
-    #[test]
-    fn the_split_actions_have_keys_no_other_action_has() {
-        for os in [Os::Mac, Os::Windows, Os::Linux] {
-            for mine in [ShortcutAction::OpenBeside, ShortcutAction::SwitchSide] {
-                let keys = mine.default_on(os).expect("ships with keys");
-                assert!(mine.reserved_on(&keys, os).is_none(), "{} {}", mine.label(), keys.display());
-                for other in ShortcutAction::ALL.into_iter().filter(|a| *a != mine) {
-                    assert!(other.default_on(os).as_ref() != Some(&keys), "{} shares keys with {}", mine.label(), other.label());
-                }
-            }
-        }
-        assert_eq!(ShortcutAction::SwitchSide.default_on(Os::Windows), Some(s("f6", false, false, false, false)));
     }
 
     #[test]

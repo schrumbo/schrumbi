@@ -125,7 +125,7 @@ pub fn key_name(label: &str) -> String {
 
 /// `⇧⌘E` → `Ctrl+Shift+E`, `⌥⌘→` → `Ctrl+Alt+→`.
 fn portable_shortcuts(text: &str, ctrl: &str, shift: &str, backspace: &str) -> String {
-    static SHORTCUT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"([⌃⌥⇧⌘]+)(\S)?").unwrap());
+    static SHORTCUT: LazyLock<Regex> = LazyLock::new(|| Regex::new("([⌃⌥⇧⌘]+)(.)").unwrap());
     SHORTCUT
         .replace_all(text, |c: &regex::Captures| {
             let glyphs = &c[1];
@@ -139,14 +139,14 @@ fn portable_shortcuts(text: &str, ctrl: &str, shift: &str, backspace: &str) -> S
             if glyphs.contains('⇧') {
                 parts.push(shift);
             }
-            match c.get(2).map(|k| k.as_str()) {
-                Some("↩") => parts.push("Enter"),
-                Some("⇥") => parts.push("Tab"),
-                Some("⌫") => parts.push(backspace),
-                Some("⎋") => parts.push("Esc"),
-                Some(k) => parts.push(k),
-                None => {}
-            }
+            let key = match &c[2] {
+                "↩" => "Enter",
+                "⇥" => "Tab",
+                "⌫" => backspace,
+                "⎋" => "Esc",
+                k => k,
+            };
+            parts.push(key);
             parts.join("+")
         })
         .into_owned()
@@ -192,7 +192,6 @@ mod tests {
         assert_eq!(portable_shortcuts("Sichern (⇧⌘E im Fenster), ⌘S und ⌥⌘→", "Ctrl", "Shift", "Backspace"), "Sichern (Ctrl+Shift+E im Fenster), Ctrl+S und Ctrl+Alt+→");
         assert_eq!(portable_shortcuts("⌘↩ erledigt, ⇧⌘, öffnet", "Ctrl", "Shift", "Backspace"), "Ctrl+Enter erledigt, Ctrl+Shift+, öffnet");
         assert_eq!(portable_shortcuts("⇧⌘E", "Strg", "Umschalt", "Rücktaste"), "Strg+Umschalt+E");
-        assert_eq!(portable_shortcuts("Mit ⌘ angeklickt, mit ⇧ ein Bereich", "Strg", "Umschalt", "Rücktaste"), "Mit Strg angeklickt, mit Umschalt ein Bereich");
         assert_eq!(portable_shortcuts("⇧⌘⌫", "Strg", "Umschalt", "Rücktaste"), "Strg+Umschalt+Rücktaste");
         assert_eq!(portable_shortcuts("ohne Kürzel", "Ctrl", "Shift", "Backspace"), "ohne Kürzel");
     }

@@ -5,7 +5,6 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -14,9 +13,8 @@ use super::motion::{self, Soft, loading};
 use super::quick::Dismissed;
 use super::state::{self, act};
 use super::sync::{self, explain, step_label};
-use super::theme::{Theme, control, font, hover, iconsize, radius, space};
+use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
-use super::wizards::wizard_frame;
 use crate::core::git::cmd::{Git, GitError};
 use crate::core::git::conflict::{Choice, ConflictFile, ConflictKind};
 use crate::core::git::setup::{self, Inspection};
@@ -87,34 +85,20 @@ pub fn row(t: &Theme, cx: &App) -> Option<Row> {
         return Some(Row { icon: "cloud", tint: None, help: format!("{label}{keys}"), label, count: Some((changed, t.gray)), working: false, kind: RowKind::Panel, finished });
     }
     let help = format!("{}{keys}", last_sync_text(cx));
-    Some(Row { icon: "cloud", tint: None, label: if s.local_only { tr("Lokal gesichert") } else { tr("Gesichert") }, help, count: None, working: false, kind: RowKind::Panel, finished })
+    Some(Row { icon: "cloud", tint: None, label: tr("Gesichert"), help, count: None, working: false, kind: RowKind::Panel, finished })
 }
 
 static NO_GIT: Git = Git { exe: PathBuf::new(), root: PathBuf::new() };
 
-/// "Vor 3 Min. gesichert"; without an online storage or a finished sync, "Letzter lokaler Stand: vor 3 Min.".
+/// "Vor 3 Min. gesichert".
 pub fn last_sync_text(cx: &App) -> String {
-    let s = sync::get(cx);
-    let synced = sync::settings(cx).and_then(|g| g.last_sync).filter(|_| !s.local_only);
-    let Some(at) = synced else {
-        return s.last_commit.map_or_else(|| tr("Noch nicht gesichert"), |at| trf("Letzter lokaler Stand: %@", &[&ago(at)]));
-    };
+    let Some(at) = sync::settings(cx).and_then(|g| g.last_sync) else { return tr("Noch nicht gesichert") };
     let minutes = (chrono::Local::now().timestamp() - at).max(0) / 60;
     match minutes {
         0 => tr("Gerade eben gesichert"),
         1..=59 => trf("Vor %@ Min. gesichert", &[&minutes.to_string()]),
         60..=1439 => trf("Vor %@ Std. gesichert", &[&(minutes / 60).to_string()]),
         _ => trf("Vor %@ Tagen gesichert", &[&(minutes / 1440).to_string()]),
-    }
-}
-
-fn ago(at: i64) -> String {
-    let minutes = (chrono::Local::now().timestamp() - at).max(0) / 60;
-    match minutes {
-        0 => tr("gerade eben"),
-        1..=59 => trf("vor %@ Min.", &[&minutes.to_string()]),
-        60..=1439 => trf("vor %@ Std.", &[&(minutes / 60).to_string()]),
-        _ => trf("vor %@ Tagen", &[&(minutes / 1440).to_string()]),
     }
 }
 
@@ -181,7 +165,7 @@ fn file_row(file: &ChangedFile, root: Option<&PathBuf>, code: Option<String>, i:
     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
     let gone = file.kind == ChangeKind::Deleted;
     let open = path.clone();
-    let hover = t.ink.opacity(hover::ROW);
+    let hover = t.ink.opacity(0.06);
     div()
         .id(("sync-file", i))
         .h(px(control::M))
@@ -191,12 +175,12 @@ fn file_row(file: &ChangedFile, root: Option<&PathBuf>, code: Option<String>, i:
         .items_center()
         .gap(px(space::S))
         .when(!gone, |d| d.cursor_pointer().key_nav().on_click(move |_, _, cx| act(cx, |l| l.open_file(&open))))
-        .soft_row(hover)
+        .soft(hover, 0.)
         .child(file_icon(&path, iconsize::S))
         .child(div().flex_1().min_w_0().truncate().text_size(px(font::CALLOUT)).child(name))
         .when_some(code, |d, code| d.child(caption(code, t).flex_none()))
         .child(caption(kind_label(&file.kind), t).flex_none())
-        .tip(file.path.clone())
+        .tooltip(tip(file.path.clone()))
 }
 
 impl Render for SyncPanel {
@@ -320,15 +304,7 @@ impl Render for SyncPanel {
             })
             .child(div().relative().child(button).when(working, |d| d.child(div().absolute().left(px(space::S)).top(px(space::XS)).child(loading(iconsize::S, t.secondary)))))
             .when_some(keys, |d, k| d.child(div().flex().justify_center().child(caption(k, &t))));
-        let footer = div()
-            .px(px(space::M))
-            .py(px(space::S))
-            .flex()
-            .flex_col()
-            .gap(px(space::S))
-            .text_size(px(font::CALLOUT))
-            .child(div().flex().items_center().gap(px(space::S)).child(div().flex_1().text_color(t.secondary).child(tr("App-Daten mitnehmen"))).child(app_data_switch(cx)))
-            .child(link_button("sync-settings", tr("Einstellungen"), &t).on_click(|_, _, cx| super::settings::open_sync(cx)));
+        let footer = div().px(px(space::M)).py(px(space::S)).text_size(px(font::CALLOUT)).child(link_button("sync-settings", tr("Einstellungen"), &t).on_click(|_, _, cx| super::settings::open_sync(cx)));
         div()
             .w(px(340.))
             .max_h(px(480.))
@@ -364,7 +340,6 @@ pub struct SyncSetup {
     error: Option<String>,
     working: bool,
     clean_state: Option<String>,
-    show_details: bool,
     done: bool,
     focus: FocusHandle,
     needs_focus: bool,
@@ -421,7 +396,6 @@ impl SyncSetup {
             error: None,
             working: true,
             clean_state: None,
-            show_details: false,
             done: false,
             focus: cx.focus_handle(),
             needs_focus: true,
@@ -617,13 +591,13 @@ impl SyncSetup {
             .flex()
             .flex_col()
             .gap(px(space::M))
-            .child(div().text_color(t.secondary).child(tr("Sync sichert diesen Ordner und gleicht ihn über einen Online-Speicher mit deinen anderen Geräten ab, deine Dateien bleiben dabei, wo sie sind.")))
             .when_some(f.outer_root.clone(), |d, top| d.child(notice("triangle-alert", t.orange, tr("Dieser Ordner liegt in einem größeren Repository."), Some(trf("Sync geht nur, wenn das Repository genau hier beginnt. Es liegt bei %@.", &[&top.to_string_lossy()])), div(), t)))
             .when_some(f.cloud.clone(), |d, cloud| d.child(notice("triangle-alert", t.orange, trf("Dieser Ordner liegt in %@.", &[&cloud]), Some(tr("Git und Cloud-Ordner stören sich und können den Verlauf beschädigen. Besser liegt der Ordner außerhalb.")), div(), t)))
-            .when(!f.has_repo && f.outer_root.is_none(), |d| d.child(caption(tr("Hier beginnt ein neuer Verlauf. Deine Dateien bleiben, wie sie sind."), t)))
+            .when(!f.has_repo && f.outer_root.is_none(), |d| d.child(div().text_color(t.secondary).child(tr("Hier beginnt ein neuer Verlauf. Deine Dateien bleiben, wie sie sind."))))
     }
 
     fn option_row(id: &'static str, on: bool, title: String, detail: String, t: &Theme, click: impl Fn(&mut Self, &mut Context<Self>) + 'static, cx: &mut Context<Self>) -> Stateful<Div> {
+        let hover = t.ink.opacity(0.05);
         div()
             .id(id)
             .px(px(space::M))
@@ -633,7 +607,7 @@ impl SyncSetup {
             .gap(px(space::M))
             .cursor_pointer()
             .key_nav()
-            .soft_row(t.ink.opacity(hover::ROW))
+            .soft(hover, 0.)
             .child(div().size(px(iconsize::M)).flex_none().rounded(px(radius::SMALL)).border_1().border_color(if on { t.accent } else { t.separator }).when(on, |d| d.bg(t.accent)).flex().items_center().justify_center().when(on, |d| d.child(icon("check", iconsize::XS, t.on_accent))))
             .child(div().flex_1().min_w_0().child(title))
             .child(caption(detail, t).flex_none())
@@ -649,33 +623,18 @@ impl SyncSetup {
         let mut any = false;
         if !f.missing_ignores.is_empty() {
             any = true;
-            list = list.child(Self::option_row("su-ignore", self.use_ignore, tr("Zwischendateien ausnehmen"), tr("bleiben auf diesem Gerät"), t, |s, _| s.use_ignore = !s.use_ignore, cx));
+            list = list.child(Self::option_row("su-ignore", self.use_ignore, tr(".gitignore ergänzen"), trf("%@ Zeilen", &[&f.missing_ignores.len().to_string()]), t, |s, _| s.use_ignore = !s.use_ignore, cx));
         }
         if f.tracked_backups > 0 {
             any = true;
-            let title = if f.tracked_backups == 1 { tr("1 Sicherungsdatei nicht mitnehmen") } else { trf("%@ Sicherungsdateien nicht mitnehmen", &[&f.tracked_backups.to_string()]) };
+            let title = if f.tracked_backups == 1 { tr("1 Sicherung aus dem Verlauf nehmen") } else { trf("%@ Sicherungen aus dem Verlauf nehmen", &[&f.tracked_backups.to_string()]) };
             list = list.child(Self::option_row("su-untrack", self.use_untrack, title, tr("bleiben auf der Platte"), t, |s, _| s.use_untrack = !s.use_untrack, cx));
         }
         for folder in &f.nested {
             any = true;
-            list = list.child(Self::option_row("su-nested", self.use_nested, trf("%@ ausschließen", &[folder]), tr("verwaltet sich selbst"), t, |s, _| s.use_nested = !s.use_nested, cx));
+            list = list.child(Self::option_row("su-nested", self.use_nested, trf("%@ ausschließen", &[folder]), tr("eigenes Repository"), t, |s, _| s.use_nested = !s.use_nested, cx));
         }
-        let details = self.show_details;
-        let lines = f.missing_ignores.clone();
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(space::M))
-            .child(div().text_color(t.secondary).child(if any { tr("Das macht Schrumbi. Dateien auf der Platte bleiben unberührt.") } else { tr("Hier gibt es nichts aufzuräumen.") }))
-            .when(any, |d| d.child(list))
-            .when(!lines.is_empty(), |d| {
-                d.child(link_button("su-details", if details { tr("Details ausblenden") } else { tr("Details") }, t).text_size(px(font::CAPTION)).on_click(cx.listener(|s, _, _, cx| {
-                    s.show_details = !s.show_details;
-                    cx.notify();
-                })))
-                .when(details, |d| d.child(div().px(px(space::S)).text_size(px(font::CAPTION)).font_family(Theme::mono_family()).text_color(t.secondary).children(lines.iter().map(|l| div().child(l.clone())))))
-            })
-            .child(caption(tr("Deine Aufgaben, Karten und Einstellungen werden mitgenommen."), t))
+        div().flex().flex_col().gap(px(space::M)).child(div().text_color(t.secondary).child(if any { tr("Das macht Schrumbi. Dateien auf der Platte bleiben unberührt.") } else { tr("Hier gibt es nichts aufzuräumen.") })).when(any, |d| d.child(list))
     }
 
     fn connect_step(&self, t: &Theme, cx: &mut Context<Self>) -> Div {
@@ -708,7 +667,7 @@ impl SyncSetup {
                             RemoteState::Unchecked => caption(tr("Wird beim Verlassen des Felds geprüft. Ohne Adresse bleibt alles lokal."), t).into_any_element(),
                             RemoteState::Checking => div().flex().items_center().gap(px(space::XS)).child(loading(iconsize::XS, t.secondary)).child(caption(tr("Wird geprüft …"), t)).into_any_element(),
                             RemoteState::Good => div().flex().items_center().gap(px(space::XS)).child(icon("check", iconsize::XS, t.green)).child(caption(tr("Verbindung steht"), t)).into_any_element(),
-                            RemoteState::Bad(m) => div().flex().items_center().gap(px(space::XS)).child(icon("circle-alert", iconsize::XS, t.red)).child(div().text_size(px(font::CAPTION)).text_color(t.red_text).child(m)).into_any_element(),
+                            RemoteState::Bad(m) => div().flex().items_center().gap(px(space::XS)).child(icon("circle-alert", iconsize::XS, t.red)).child(div().text_size(px(font::CAPTION)).text_color(t.red).child(m)).into_any_element(),
                         }),
                 )
             })
@@ -762,6 +721,7 @@ impl SyncSetup {
 
 /// A selectable card, one of a set.
 pub fn choice_card(id: &'static str, selected: bool, disabled: bool, icon_name: &str, title: String, detail: String, t: &Theme) -> Stateful<Div> {
+    let hover = t.ink.opacity(0.04);
     let tint = if selected { t.accent } else { t.separator };
     let spoken = format!("{title}{}", if selected { format!(", {}", tr("ausgewählt")) } else { String::new() });
     let card = div()
@@ -776,12 +736,9 @@ pub fn choice_card(id: &'static str, selected: bool, disabled: bool, icon_name: 
         .border_color(tint)
         .when(selected, |d| d.bg(t.accent.opacity(0.08)))
         .when(disabled, |d| d.opacity(0.5));
-    let card = if disabled { card } else { card.cursor_pointer().key_nav().soft(t.ink.opacity(hover::ROW), radius::CONTROL) };
+    let card = if disabled { card } else { card.cursor_pointer().key_nav().soft(hover, radius::CONTROL) };
     card.child(icon(icon_name, iconsize::M, if selected { t.accent } else { t.secondary })).child(div().flex_1().min_w_0().flex().flex_col().gap(px(space::XXS)).child(div().font_weight(FontWeight::MEDIUM).child(title)).child(caption(detail, t)))
 }
-
-/// The height the sync wizard asks for; all steps share it so the buttons stay where they are.
-const SYNC_SETUP_HEIGHT: f32 = 360.;
 
 impl Render for SyncSetup {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -794,8 +751,8 @@ impl Render for SyncSetup {
             SetupStep::Check => tr("Sync einrichten"),
             SetupStep::CleanUp => tr("Aufräumen"),
             SetupStep::Connect => tr("Verbinden"),
-            SetupStep::Mode => tr("Sicherung"),
-            SetupStep::Finish => tr("Fertig"),
+            SetupStep::Mode => tr("Wann soll gesichert werden?"),
+            SetupStep::Finish => tr("Erster Abgleich"),
         };
         let steps = self.steps();
         let position = steps.iter().position(|s| *s == self.step);
@@ -819,17 +776,8 @@ impl Render for SyncSetup {
         let last = !finishing && self.next_after(self.step) == SetupStep::Finish;
         let blocked = self.blocked() || self.working;
         let previous = self.previous().filter(|_| !finishing);
-        let without_remote = self.step == SetupStep::Connect && self.found.as_ref().is_some_and(|f| f.remote.is_none()) && self.url.read(cx).value().trim().is_empty();
-        let next_label = if last {
-            tr("Einrichten")
-        } else if without_remote {
-            tr("Ohne Online-Speicher weiter")
-        } else {
-            tr("Weiter")
-        };
-        let (close, leave) = (me.clone(), me.clone());
+        let close = me.clone();
         let foot = div()
-            .w_full()
             .flex()
             .items_center()
             .gap(px(space::S))
@@ -837,14 +785,14 @@ impl Render for SyncSetup {
                 let later = me.clone();
                 d.child(Button::new("su-later").ghost().label(tr("Später einrichten")).on_click(move |_, _, cx| later.update(cx, |_, cx| cx.emit(Dismissed))))
             })
-            .child(div().flex_1().min_w_0())
+            .child(div().flex_1())
             .when_some(previous, |d, prev| d.child(Button::new("su-back").label(tr("Zurück")).on_click(cx.listener(move |s, _, _, cx| {
                 s.step = prev;
                 s.error = None;
                 cx.notify();
             }))))
             .when(!finishing, |d| {
-                d.child(Button::new("su-next").primary().label(next_label).disabled(blocked).on_click(cx.listener(move |s, _, _, cx| {
+                d.child(Button::new("su-next").primary().label(if last { tr("Einrichten") } else { tr("Weiter") }).disabled(blocked).on_click(cx.listener(move |s, _, _, cx| {
                     if s.next_after(s.step) == SetupStep::Finish {
                         s.apply(cx);
                     } else {
@@ -853,20 +801,16 @@ impl Render for SyncSetup {
                     }
                 })))
             })
-            .when(finishing, |d| d.child(Button::new("su-close").primary().label(tr("Schließen")).on_click(move |_, _, cx| close.update(cx, |_, cx| cx.emit(Dismissed)))));
+            .when(finishing, |d| d.child(Button::new("su-close").primary().label(tr("Fertig")).on_click(move |_, _, cx| close.update(cx, |_, cx| cx.emit(Dismissed)))));
         let error = self.error.clone().filter(|_| self.found.is_some());
-        let content = div()
+        div()
+            .id("sync-setup")
+            .track_focus(&self.focus)
+            .w(px(600.))
+            .p(px(space::XL))
             .flex()
             .flex_col()
             .gap(px(space::L))
-            .child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).child(title))
-            .child(body)
-            .when_some(error, |d, e| d.child(notice("cloud-alert", t.orange, e, None, div(), &t)));
-        let at = if finishing { steps.len() } else { position.unwrap_or(0) };
-        let leave_tip = if finishing { tr("Schließen") } else { tr("Später einrichten") };
-        wizard_frame(&t, window, Some((at, steps.len() + 1)), leave_tip, move |_, _, cx| leave.update(cx, |_, cx| cx.emit(Dismissed)), content.into_any_element(), true, foot, SYNC_SETUP_HEIGHT)
-            .id("sync-setup")
-            .track_focus(&self.focus)
             .on_action(cx.listener(|s, _: &gpui_kit::base::actions::Confirm, window, cx| {
                 if !s.focus.is_focused(window) && !super::sheets::typing(window) {
                     cx.propagate();
@@ -881,39 +825,18 @@ impl Render for SyncSetup {
                     }
                 }
             }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_size(px(font::TITLE3)).font_weight(FontWeight::SEMIBOLD).child(title))
+                    .when_some(position.filter(|_| steps.len() > 1), |d, i| d.child(caption(trf("Schritt %@ von %@", &[&(i + 1).to_string(), &steps.len().to_string()]), &t))),
+            )
+            .child(body)
+            .when_some(error, |d, e| d.child(notice("cloud-alert", t.orange, e, None, div(), &t)))
+            .child(foot)
     }
-}
-
-/// The switch for taking the app's own files (tasks, cards, settings) along; shown on the sync page of the settings.
-pub fn app_data_switch(cx: &App) -> Switch {
-    let s = sync::get(cx);
-    Switch::new("s-app-data").checked(!s.app_data_left_out).disabled(s.git.is_none() || s.step.is_some()).on_click(|v, _, cx| set_app_data(*v, cx))
-}
-
-/// Takes the app's own files in or out of sync; the files on disk are never touched.
-pub fn set_app_data(on: bool, cx: &mut App) {
-    if sync::get(cx).step.is_some() {
-        return;
-    }
-    let Some(git) = sync::get(cx).git.clone() else { return };
-    cx.global_mut::<sync::Sync>().app_data_left_out = !on;
-    let message = if on { tr("App-Daten wieder dabei") } else { tr("App-Daten bleiben hier") };
-    let task = cx.background_spawn(async move { git.set_app_data_synced(on, &message) });
-    cx.spawn(async move |cx| {
-        let result = task.await;
-        cx.update(|cx| {
-            match result {
-                Ok(_) => {
-                    let text = if on { tr("App-Daten werden mitgenommen") } else { tr("App-Daten bleiben auf diesem Gerät") };
-                    act(cx, |l| l.notify(text, "check", None, None));
-                }
-                Err(GitError::Other(m)) if m == ".gitignore" => act(cx, |l| l.last_error = Some(tr("Die Datei .gitignore ist kein lesbarer Text und bleibt, wie sie ist."))),
-                Err(e) => act(cx, |l| l.last_error = Some(explain(&e).0)),
-            }
-            sync::refresh(cx);
-        });
-    })
-    .detach();
 }
 
 // MARK: Conflicts
@@ -1111,7 +1034,7 @@ impl Render for ConflictSheet {
             let name = f.path.rsplit('/').next().unwrap_or(&f.path).to_string();
             let choice = self.choices.get(&f.path).copied().unwrap_or(Choice::Both);
             let selected = i == self.index;
-            let hover = t.ink.opacity(hover::ROW);
+            let hover = t.ink.opacity(0.05);
             list = list.child(
                 div()
                     .id(("conflict-row", i))
@@ -1121,11 +1044,11 @@ impl Render for ConflictSheet {
                     .flex_col()
                     .cursor_pointer()
                     .key_nav()
-                    .when(selected, |d| d.child(motion::row_fill(t.ink.opacity(0.08))))
-                    .soft_row(hover)
+                    .when(selected, |d| d.bg(t.ink.opacity(0.08)))
+                    .when(!selected, |d| d.soft(hover, 0.))
                     .child(div().truncate().child(name))
                     .child(caption(choice_label(choice), &t))
-                    .tip(f.path.clone())
+                    .tooltip(tip(f.path.clone()))
                     .on_click(cx.listener(move |s, _, _, cx| s.select(i, cx))),
             );
         }

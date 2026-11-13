@@ -4,7 +4,7 @@ What is due now, at a glance. {key:goToday} opens it.
 
 ## Due Now
 
-The big card at the top ({ui:Jetzt}) shows the most urgent item, in this order:
+The big card at the top shows the most urgent item, in this order:
 
 1. Overdue items
 2. Done, but upload not confirmed
@@ -18,7 +18,7 @@ The big card at the top ({ui:Jetzt}) shows the most urgent item, in this order:
 | Upload not confirmed | {ui:Als hochgeladen markieren} |
 | Files in the inbox | {ui:Jetzt ablegen} |
 
-If nothing is open, it says {ui:Nichts offen}. Next to it, {ui:Diese Woche} shows how much of this week is done. {ui:Pünktlich in Folge} appears once you have a streak of on-time submissions.
+If nothing is open, it says {ui:Nichts offen}. Next to it, {ui:Diese Woche} shows how much of this week is done, and {ui:Pünktlich in Folge} shows your streak of on-time submissions.
 
 ## Set Status
 
@@ -69,7 +69,7 @@ A file counts for a submission when it belongs to it. Date and folder alone are 
 
 ## Further Down
 
-- One {ui:Offen} row: everything else still open. A click unfolds the entries, {ui:Alle erledigt} marks them all at once.
+- Collected: {ui:Überfällig} and {ui:Fertig, aber Upload nicht bestätigt}, with {ui:Alle als hochgeladen markieren}.
 - The calendar, {ui:Prüfungen} and {ui:Zuletzt geschrieben}.
 - If cards are waiting, a hint with {ui:Lernen} appears.
 
@@ -86,7 +86,6 @@ The week starts today and shows the next seven days. From there ‹ and › page
 | {key:w} and {key:m} | Week or month |
 
 - In the month, every entry is a chip in its module colour, exams with a cap. If not all fit into a day, the last line opens the whole list.
-- Lectures and tutorials appear below as a thin line with their time while the day still has room.
 - Clicking the day number opens that week. Chips can be dragged to another day.
 - Weekends and lecture-free time from the semester are tinted lightly, in week and month.
 - The top shows the date range, beside it in small type the lecture week or the break. The calendar week is in the tooltip over the range.

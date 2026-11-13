@@ -45,8 +45,6 @@ actions!(
         Refresh,
         SyncNow,
         DailyNote,
-        NewCard,
-        ToggleSidebar,
         OpenInObsidian,
         SyncSetup,
         ResolveConflicts,
@@ -61,8 +59,6 @@ actions!(
         SearchFiles,
         NextTab,
         PreviousTab,
-        OpenBeside,
-        SwitchSide,
         Minimize,
         ToggleFullscreen,
         Zoom,
@@ -87,24 +83,6 @@ pub struct GoModuleAt(pub usize);
 #[derive(Clone, PartialEq, Debug, serde::Deserialize, schemars::JsonSchema, Action)]
 #[action(namespace = schrumbi)]
 pub struct GoModule(pub String);
-
-/// Opens the focused document in the other side of the split, like the tab menu.
-fn open_beside(l: &mut crate::core::library::Library) {
-    let shown = matches!(l.route(), Route::Doc(_));
-    let Some(doc) = l.focused_document().map(std::path::Path::to_path_buf).filter(|_| shown) else { return };
-    if l.split_document.is_none() && l.can_drop_document(&doc, crate::core::library::DocDrop::Beside, None) {
-        l.drop_document(&doc, crate::core::library::DocDrop::Beside, None);
-    }
-}
-
-/// Moves the keyboard to the other side of the split; does nothing without one.
-fn switch_side(l: &mut crate::core::library::Library) {
-    if l.split_document.is_none() || !matches!(l.route(), Route::Doc(_)) {
-        return;
-    }
-    l.beside_active = !l.beside_active;
-    if l.beside_active { l.focus_beside = true } else { l.focus_document = true }
-}
 
 fn route(r: Route) -> impl Fn(&mut App) {
     move |cx| act(cx, |l| l.set_route(r.clone()))
@@ -191,17 +169,6 @@ pub fn init(cx: &mut App) {
             }
         })
     });
-    cx.on_action(|_: &ToggleSidebar, cx| super::sidebar::toggle_compact(cx));
-    cx.on_action(|_: &NewCard, cx| {
-        if state::read(cx, |l| l.root.is_none()) {
-            return;
-        }
-        if let Some(w) = cx.active_window() {
-            cx.defer(move |cx| {
-                let _ = w.update(cx, |_, window, cx| super::cards_page::new_card(window, cx));
-            });
-        }
-    });
     cx.on_action(|_: &QuickOpen, cx| {
         prefs::mark_used("quick_open");
         act(cx, |l| if l.root.is_some() { l.show_quick_open = true })
@@ -235,7 +202,7 @@ pub fn init(cx: &mut App) {
         }
     });
     cx.on_action(|_: &ToggleInspector, cx| super::ai::toggle_details(cx));
-    cx.on_action(|_: &ToggleAi, cx| if super::ai::active() { super::ai::toggle_column(cx) } else { super::settings::open_ai(cx) });
+    cx.on_action(|_: &ToggleAi, cx| super::ai::toggle_column(cx));
     cx.on_action(|_: &Refresh, cx| {
         act(cx, |l| l.refresh());
         state::reindex(cx);
@@ -268,8 +235,6 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &CloseWindow, cx| close_active_window(cx));
     cx.on_action(|_: &NextTab, cx| act(cx, |l| l.cycle_document(1)));
     cx.on_action(|_: &PreviousTab, cx| act(cx, |l| l.cycle_document(-1)));
-    cx.on_action(|_: &OpenBeside, cx| act(cx, open_beside));
-    cx.on_action(|_: &SwitchSide, cx| act(cx, switch_side));
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
@@ -339,10 +304,7 @@ pub fn live_is_on() -> bool {
 
 /// Switches between the Live view and the source editor for notes; the menu follows.
 pub fn toggle_live(cx: &mut App) {
-    prefs::update(|p| {
-        p.note_editor = if p.note_editor == prefs::NoteEditor::Live { prefs::NoteEditor::Code } else { prefs::NoteEditor::Live };
-        p.note_editor_chosen = true;
-    });
+    prefs::update(|p| p.note_editor = if p.note_editor == prefs::NoteEditor::Live { prefs::NoteEditor::Code } else { prefs::NoteEditor::Live });
     rebuild_menus(cx);
     cx.refresh_windows();
 }
@@ -565,20 +527,16 @@ pub fn bind_keys(cx: &mut App) {
             binding(ShortcutAction::NewFile, NewFile, None),
             binding(ShortcutAction::GoBack, GoBack, None),
             binding(ShortcutAction::ToggleInspector, ToggleInspector, None),
-            binding(ShortcutAction::ToggleAi, ToggleAi, None),
+            super::ai::active().then(|| binding(ShortcutAction::ToggleAi, ToggleAi, None)).flatten(),
             binding(ShortcutAction::Refresh, Refresh, None),
             binding(ShortcutAction::Sync, SyncNow, None),
             binding(ShortcutAction::DailyNote, DailyNote, None),
-            binding(ShortcutAction::NewCard, NewCard, None),
-            binding(ShortcutAction::ToggleSidebar, ToggleSidebar, None),
             binding(ShortcutAction::OpenInObsidian, OpenInObsidian, None),
             Some(gpui_kit::KeyBinding::new("tab", super::canvas_view::NextItem, Some("WalkItems"))),
             Some(gpui_kit::KeyBinding::new("shift-tab", super::canvas_view::PreviousItem, Some("WalkItems"))),
             binding(ShortcutAction::CloseTab, CloseTab, None),
             binding(ShortcutAction::NextTab, NextTab, None),
             binding(ShortcutAction::PreviousTab, PreviousTab, None),
-            binding(ShortcutAction::OpenBeside, OpenBeside, None),
-            binding(ShortcutAction::SwitchSide, SwitchSide, None),
             binding(ShortcutAction::TogglePreview, TogglePreview, None),
             binding(ShortcutAction::SplitPreview, SplitPreview, None),
             binding(ShortcutAction::ToggleLive, ToggleLive, None),
@@ -693,7 +651,6 @@ pub fn rebuild_menus(cx: &mut App) {
             MenuItem::action(tr("Zeilenumbruch ein-/ausschalten"), super::documents::ToggleWrap).disabled(!wrap_is_available(cx)),
             MenuItem::action(tr("Notiz als PDF exportieren"), ExportPdf),
             MenuItem::separator(),
-            MenuItem::action(tr("Seitenleiste ein-/ausklappen"), ToggleSidebar),
             MenuItem::action(tr("Details ein-/ausblenden"), ToggleInspector),
             MenuItem::action(tr("Aktualisieren"), Refresh),
             MenuItem::separator(),

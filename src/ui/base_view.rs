@@ -12,7 +12,7 @@ use gpui_kit::*;
 
 use super::motion::{Soft, chevron};
 use super::state::{self, act};
-use super::theme::{Theme, control, font, hover, iconsize, radius, space};
+use super::theme::{Theme, control, font, iconsize, radius, space};
 use super::widgets::*;
 use crate::core::i18n::{tr, trf};
 use crate::core::library::Change;
@@ -44,10 +44,7 @@ pub struct BaseView {
     filter_error: Option<String>,
     cursor: (usize, usize),
     editing: Option<(usize, usize, Entity<InputState>)>,
-    /// The note, column and shown value the open cell editor belongs to; rows can move while it is open.
-    edit_target: Option<(PathBuf, String, String)>,
     closed_groups: std::collections::BTreeSet<String>,
-    pinned: std::collections::BTreeSet<PathBuf>,
     focus: FocusHandle,
     list: UniformListScrollHandle,
     version: u64,
@@ -79,15 +76,11 @@ impl BaseView {
         let source = std::fs::read_to_string(&path).unwrap_or_default();
         let parsed = Base::parse(&source);
         let sort = bases::view_sort(&source, 0);
-        Self { path, source, parsed, view: 0, table: None, built: None, sort, filters_open: false, filter_rows: Vec::new(), filter_error: None, cursor: (0, 0), editing: None, edit_target: None, closed_groups: Default::default(), pinned: Default::default(), focus: cx.focus_handle(), list: UniformListScrollHandle::new(), version: 0, seen_generation: index::current().generation, task: None, _subs: Vec::new() }
+        Self { path, source, parsed, view: 0, table: None, built: None, sort, filters_open: false, filter_rows: Vec::new(), filter_error: None, cursor: (0, 0), editing: None, closed_groups: Default::default(), focus: cx.focus_handle(), list: UniformListScrollHandle::new(), version: 0, seen_generation: index::current().generation, task: None, _subs: Vec::new() }
     }
 
     /// Gives the keyboard to the table.
     pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.pinned.is_empty() {
-            self.pinned.clear();
-            self.version += 1;
-        }
         window.focus(&self.focus, cx);
     }
 
@@ -103,7 +96,6 @@ impl BaseView {
             return;
         }
         self.parsed = Base::parse(&self.source);
-        self.pinned.clear();
         self.version += 1;
         let path = self.path.clone();
         act(cx, |l| l.record_edit("base", label, Change::Bytes { path, bytes: before.into_bytes() }));
@@ -137,7 +129,6 @@ impl BaseView {
             return;
         };
         let view_index = self.view;
-        let pinned = self.pinned.clone();
         let this_path = self.path.clone();
         let sort = self.sort.clone();
         let task = cx.background_spawn(async move {
@@ -147,16 +138,6 @@ impl BaseView {
             match base.rows(&view, &vault, Some(&this_path), now) {
                 Err(e) => Rendered { columns, rows: Arc::default(), groups: None, kind: view.kind.clone(), summaries: Vec::new(), error: Some(e) },
                 Ok(mut rows) => {
-                    if !pinned.is_empty() {
-                        let shown: std::collections::BTreeSet<PathBuf> = rows.iter().map(|r| r.path.clone()).collect();
-                        let mut wide = view.clone();
-                        wide.filter = None;
-                        wide.limit = None;
-                        let open = Base { filter: None, ..base.clone() };
-                        if let Ok(all) = open.rows(&wide, &vault, Some(&this_path), now) {
-                            rows = all.into_iter().filter(|r| shown.contains(&r.path) || pinned.contains(&r.path)).collect();
-                        }
-                    }
                     if let Some((column, ascending)) = &sort {
                         let at = |r: &ResultRow| r.cells.iter().find(|(c, _)| c == column).map(|(_, v)| v.clone()).unwrap_or(Value::Null);
                         rows.sort_by(|a, b| {
@@ -262,22 +243,19 @@ impl BaseView {
         if column.contains('.') && !column.starts_with("note.") {
             return;
         }
-        let Some(line) = table.rows.get(row) else { return };
-        let Some(cell) = line.cells.get(col) else { return };
+        let Some(cell) = table.rows.get(row).and_then(|r| r.cells.get(col)) else { return };
         let value = cell.1.display();
-        self.edit_target = Some((line.path.clone(), column.clone(), value.clone()));
         let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
         input.update(cx, |s, cx| {
             let end = s.value().len();
             s.focus(window, cx);
-            s.set_selected_range(end..end, cx);
+            s.set_selected_range(0..end, cx);
         });
         self._subs.retain(|_| false);
-        self._subs.push(cx.subscribe_in(&input, window, |this, input, e: &InputEvent, window, cx| match e {
+        self._subs.push(cx.subscribe(&input, |this, input, e: &InputEvent, cx| match e {
             InputEvent::PressEnter { .. } => {
                 let value = input.read(cx).value().to_string();
                 this.commit_edit(value, cx);
-                window.focus(&this.focus, cx);
             }
             InputEvent::Blur => {
                 this.editing = None;
@@ -290,25 +268,13 @@ impl BaseView {
     }
 
     fn commit_edit(&mut self, value: String, cx: &mut Context<Self>) {
-        if self.editing.take().is_none() {
-            return;
-        }
-        let Some((path, column, before)) = self.edit_target.take() else { return };
-        if before != value {
-            let kind = format!("cell:{}", path.display());
-            let changed = act(cx, |l| {
-                let changed = l.edit_note(&path, &kind, tr("Eigenschaft geändert"), |text| bases::write_cell(text, &column, &value).unwrap_or_else(|| text.to_string()));
-                if changed {
-                    let undo = l.undo_latest();
-                    l.notify(tr("Eigenschaft geändert"), "square-pen", None, Some(undo));
-                }
-                changed
-            });
-            if changed {
-                self.pinned.insert(path);
-                self.version += 1;
-            }
-        }
+        let Some((row, col, _)) = self.editing.take() else { return };
+        let Some(table) = &self.table else { return };
+        let (Some(row), Some((_, column))) = (table.rows.get(row), table.columns.get(col)) else { return };
+        let (path, column) = (row.path.clone(), column.clone());
+        act(cx, |l| {
+            l.edit_note(&path, "cell", tr("Eigenschaft geändert"), |text| bases::write_cell(text, &column, &value).unwrap_or_else(|| text.to_string()));
+        });
         state::reindex(cx);
         window_focus_after(self, cx);
         cx.notify();
@@ -406,7 +372,7 @@ impl BaseView {
         range
             .filter_map(|i| {
                 let row = table.rows.get(i)?;
-                let hover = t.ink.opacity(hover::ROW);
+                let hover = t.ink.opacity(0.05);
                 let cells: Vec<AnyElement> = row.cells.iter().enumerate().map(|(c, (_, v))| self.cell(i, c, v, &row.path, &me, t)).collect();
                 Some(
                     div()
@@ -415,7 +381,7 @@ impl BaseView {
                         .flex()
                         .border_b_1()
                         .border_color(t.separator)
-                        .soft_row(hover)
+                        .soft(hover, 0.)
                         .children(cells)
                         .into_any_element(),
                 )
@@ -463,7 +429,6 @@ impl Render for BaseView {
                             v.view = i;
                             v.sort = bases::view_sort(&v.source, i);
                             v.cursor = (0, 0);
-                            v.pinned.clear();
                             v.table = None;
                             cx.notify();
                         });
@@ -557,15 +522,6 @@ impl Render for BaseView {
             .size_full()
             .flex()
             .flex_col()
-            .key_context("BaseView")
-            .on_action(cx.listener(|_, _: &super::app::Undo, _, cx| {
-                act(cx, |l| l.undo());
-                cx.stop_propagation();
-            }))
-            .on_action(cx.listener(|_, _: &super::app::Redo, _, cx| {
-                act(cx, |l| l.redo());
-                cx.stop_propagation();
-            }))
             .on_key_down(cx.listener(Self::on_key))
             .child(tabs)
             .child(bar)
@@ -578,7 +534,7 @@ impl Render for BaseView {
 
 impl BaseView {
     fn head(&self, table: &Rendered, t: &Theme, cx: &mut Context<Self>) -> Div {
-        let hover = t.ink.opacity(hover::RAISED);
+        let hover = t.ink.opacity(0.05);
         div().flex().flex_none().h(px(ROW)).bg(t.secondary_bg).border_b_1().border_color(t.separator).children(table.columns.iter().enumerate().map(|(i, (label, column))| {
             let sorted = self.sort.as_ref().filter(|(c, _)| c == column).map(|(_, up)| *up);
             let (a, b, label2) = (column.clone(), column.clone(), label.clone());
@@ -592,7 +548,7 @@ impl BaseView {
                 .gap(px(space::XS))
                 .cursor_pointer()
                 .key_nav()
-                .soft_row(hover)
+                .soft(hover, 0.)
                 .text_size(px(font::CALLOUT))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(div().truncate().child(label.clone()))
@@ -609,7 +565,7 @@ impl BaseView {
         let me = cx.entity();
         match table.kind.as_str() {
             "cards" => {
-                let hover = t.ink.opacity(hover::ROW);
+                let hover = t.ink.opacity(0.05);
                 div()
                     .id("base-cards")
                     .size_full()
@@ -637,7 +593,7 @@ impl BaseView {
                     .into_any_element()
             }
             "list" => {
-                let hover = t.ink.opacity(hover::ROW);
+                let hover = t.ink.opacity(0.05);
                 div()
                     .id("base-list")
                     .size_full()
@@ -646,7 +602,7 @@ impl BaseView {
                         let open = row.path.clone();
                         let title = row.path.file_stem().unwrap_or_default().to_string_lossy().to_string();
                         let rest: Vec<String> = row.cells.iter().filter(|(_, v)| !matches!(v, Value::Null)).skip(1).map(|(_, v)| v.display()).collect();
-                        div().id(("base-line", i)).h(px(control::M)).px(px(space::L)).flex().items_center().gap(px(space::M)).cursor_pointer().key_nav().soft_row(hover).child(file_icon(&row.path, iconsize::S)).child(div().truncate().child(title)).child(caption(rest.join(" · "), &t).truncate()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
+                        div().id(("base-line", i)).h(px(control::M)).px(px(space::L)).flex().items_center().gap(px(space::M)).cursor_pointer().key_nav().soft(hover, 0.).child(file_icon(&row.path, iconsize::S)).child(div().truncate().child(title)).child(caption(rest.join(" · "), &t).truncate()).on_click(move |_, _, cx| act(cx, |l| l.open_file(&open)))
                     })))
                     .into_any_element()
             }
@@ -669,7 +625,7 @@ impl BaseView {
                                 .gap(px(space::XS))
                                 .cursor_pointer()
                                 .key_nav()
-                                .soft_row(t.ink.opacity(hover::RAISED))
+                                .soft(t.ink.opacity(0.045), 0.)
                                 .bg(t.secondary_bg)
                                 .text_size(px(font::CALLOUT))
                                 .font_weight(FontWeight::SEMIBOLD)

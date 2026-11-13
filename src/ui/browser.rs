@@ -15,7 +15,7 @@ use gpui_kit::*;
 use crate::core::vault::query as vault_query;
 use super::state::{self, act};
 use super::motion::{self, Soft};
-use super::theme::{Theme, calendar, control, font, hover, radius, space, iconsize};
+use super::theme::{Theme, control, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::catalog::{self, CatalogFile, FileKind, Query};
 use crate::core::day;
@@ -28,6 +28,8 @@ use crate::core::naming::extension;
 use crate::core::prefs::{self, FileGrouping};
 use crate::core::search_index::Spot;
 use crate::core::text::fold;
+
+const UNSAVED_DOT: f32 = 6.;
 
 #[derive(Clone, PartialEq)]
 pub struct Item {
@@ -551,11 +553,8 @@ impl FileBrowser {
         div().w_full().px(px(space::L)).child(content).into_any_element()
     }
 
-    fn on_key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key(&mut self, e: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let k = &e.keystroke;
-        if matches!(k.key.as_str(), "enter" | "space") && !self.focus.is_focused(window) {
-            return;
-        }
         let command = k.modifiers.platform || k.modifiers.control;
         if command && !k.modifiers.alt {
             match k.key.as_str() {
@@ -775,7 +774,7 @@ impl FileBrowser {
         if f.is_brief {
             meta = meta.child(div().flex().items_center().gap(px(space::XXS)).child(icon("clipboard-list", iconsize::XS, t.secondary)).child(tr("Aufgabe")));
         }
-        let hover = t.ink.opacity(hover::ROW);
+        let hover = t.ink.opacity(0.045);
         let first_spot = item.spots.first().cloned();
         div()
             .id(SharedString::from(format!("file-{}", path.display())))
@@ -788,7 +787,7 @@ impl FileBrowser {
             .rounded(px(radius::INNER))
             .when(selected, |d| d.bg(if self.list_focused { t.accent.opacity(0.32) } else { t.ink.opacity(0.09) }))
             .when(!selected, |d| d.soft(hover, radius::INNER))
-            .tip(lib.relative_path(&path))
+            .tooltip(tip(lib.relative_path(&path)))
             .on_click(move |e: &ClickEvent, window, cx| {
                 let (toggle, extend) = (e.modifiers().platform || e.modifiers().control, e.modifiers().shift);
                 let current = state::read(cx, current_week);
@@ -829,8 +828,8 @@ impl FileBrowser {
                                 .items_center()
                                 .gap(px(space::XS))
                                 .child(div().min_w_0().truncate().child(highlighted(&f.display_name(), &terms, t)))
-                                .when(dot, |d| d.child(div().id("unsaved-dot").flex_none().size(px(calendar::DOT)).rounded_full().bg(t.accent).tip(tr("Noch nicht gesichert"))))
-                                .when(is_copy, |d| d.child(div().flex_none().px(px(space::S)).rounded_full().bg(t.orange.opacity(0.18)).text_size(px(font::CAPTION)).text_color(t.orange_text).child(tr("Konflikt"))))
+                                .when(dot, |d| d.child(div().id("unsaved-dot").flex_none().size(px(UNSAVED_DOT)).rounded_full().bg(t.accent).tooltip(tip(tr("Noch nicht gesichert")))))
+                                .when(is_copy, |d| d.child(div().flex_none().px(px(space::S)).rounded_full().bg(t.orange.opacity(0.18)).text_size(px(font::CAPTION)).text_color(t.orange).child(tr("Konflikt"))))
                                 .into_any_element()
                         }
                     })
@@ -841,13 +840,12 @@ impl FileBrowser {
                             .id(("spot", i))
                             .px(px(space::XS))
                             .rounded(px(radius::SMALL))
-                            .soft(t.ink.opacity(hover::CONTROL), radius::SMALL)
+                            .soft(hover, radius::SMALL)
                             .cursor_pointer()
-                            .key_nav()
                             .truncate()
                             .text_size(px(font::CAPTION))
                             .text_color(t.secondary)
-                            .tip(tr("Zur Fundstelle springen"))
+                            .tooltip(tip(tr("Zur Fundstelle springen")))
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
                                 open_at(&file, Some(spot_at.clone()), cx);
@@ -874,12 +872,6 @@ impl FileBrowser {
             .context_menu(move |menu, window, cx| {
                 let p = menu_path.clone();
                 let (p1, p2, p3, p4) = (p.clone(), p.clone(), p.clone(), p.clone());
-                if !entity.read(cx).picked.contains(&p) && entity.read(cx).selected.as_ref() != Some(&p) {
-                    entity.update(cx, |b, cx| {
-                        b.pick_only(&p);
-                        cx.notify();
-                    });
-                }
                 let current = state::read(cx, current_week);
                 let group: Vec<PathBuf> = entity.read(cx).targets(current).into_iter().filter(|_| entity.read(cx).picked.contains(&p)).collect();
                 if group.len() > 1 {
@@ -923,7 +915,7 @@ impl FileBrowser {
                 let (rename, trash_path, e) = (p.clone(), p.clone(), entity.clone());
                 deadline_submenu(menu.separator(), &p, window, cx)
                     .separator()
-                    .item(keyed_item(tr("Umbenennen…"), Some(crate::core::shortcuts::ShortcutAction::RenameNote)).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
+                    .item(PopupMenuItem::new(format!("{}{}", tr("Umbenennen…"), crate::core::shortcuts::ShortcutAction::RenameNote.hint())).on_click(move |_, window, cx| e.update(cx, |b, cx| b.start_rename(rename.clone(), window, cx))))
                     .when_some(super::convention_rename::menu_item_or_hint(&p, cx), |m, item| m.item(item))
                     .item(PopupMenuItem::new(tr("In den Papierkorb")).on_click(move |_, _, cx| state::trash(vec![trash_path.clone()], cx)))
             })
@@ -956,7 +948,7 @@ impl FileBrowser {
             .mt(px(space::S))
             .rounded(px(radius::INNER))
             .cursor_pointer().key_nav()
-            .soft(t.ink.opacity(hover::ROW), radius::INNER)
+            .soft(t.ink.opacity(0.05), radius::INNER)
             .on_click(move |_, _, cx| {
                 entity.update(cx, |this, cx| {
                     if !this.toggled.remove(&id) {
@@ -984,7 +976,7 @@ impl FileBrowser {
                 .rounded(px(radius::SMALL))
                 .text_size(px(font::CALLOUT))
                 .cursor_pointer().key_nav()
-                .when(!active, |d| d.soft(t.ink.opacity(hover::RAISED), radius::SMALL))
+                .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
                 .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
                 .child(match k {
                     FileKind::Documents => tr("Dokumente"),
@@ -1045,8 +1037,8 @@ impl FileBrowser {
                     .text_color(t.accent_text)
                     .cursor_pointer()
                     .key_nav()
-                    .soft(t.accent.opacity(hover::RAISED), radius::FULL)
-                    .tip(tr("Überall suchen"))
+                    .soft(t.accent.opacity(0.12), radius::FULL)
+                    .tooltip(tip(tr("Überall suchen")))
                     .child(trf("In %@", &[&m.code]))
                     .child(icon("x", iconsize::XS, t.accent_text))
                     .on_click(|_, _, cx| act(cx, Library::widen_module_search)),
@@ -1133,7 +1125,7 @@ impl FileBrowser {
                 }
                 menu
             }))
-            .when(lib.is_indexing, |d| d.child(div().id("indexing").child(motion::spinner(iconsize::S, t.secondary)).tip(tr("Index wird aktualisiert"))))
+            .when(lib.is_indexing, |d| d.child(div().id("indexing").child(motion::spinner(iconsize::S, t.secondary)).tooltip(tip(tr("Index wird aktualisiert")))))
     }
 }
 
@@ -1185,7 +1177,7 @@ fn filter_menu(
             .font_weight(FontWeight::MEDIUM)
             .child(icon("search", iconsize::XS, t.accent))
             .child(title)
-            .tip(tr("Aus der Suche übernommen"))
+            .tooltip(tip(tr("Aus der Suche übernommen")))
             .into_any_element();
     }
     let e = entity.clone();
@@ -1216,7 +1208,7 @@ impl Render for FileBrowser {
         let l = lib.read(cx);
         let current = current_week(l);
         let bar = self.filter_bar(l, current, &t, &me);
-        let query_error = self.query_error.clone().map(|e| div().px(px(space::L)).py(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red_text).child(e));
+        let query_error = self.query_error.clone().map(|e| div().px(px(space::L)).py(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.red).child(e));
         let lines = self.line_list(current);
         if lines != self.lines {
             self.list.reset(lines.len());
@@ -1301,7 +1293,6 @@ mod tests {
             in_project: false,
             haystack: String::new(),
             folded_name: String::new(),
-            folded_stem: String::new(),
             title: None,
         }
     }

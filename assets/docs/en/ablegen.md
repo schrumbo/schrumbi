@@ -4,8 +4,8 @@ Drop a file on Schrumbi, and it lands in the right folder with the right name.
 
 ## File a File
 
-1. Drag a file onto an entry, a module, the {ui:Inbox} or a free spot in {ui:Übersicht}, {ui:Semester} and {ui:Leistungen}.
-2. Schrumbi suggests target and name. Below it says how it recognised the target: it either names the matching word from the file name or says it is a guess.
+1. Drag a file onto an entry, a module or the {ui:Inbox}.
+2. Schrumbi suggests target and name.
 3. {key:return} files it.
 
 Filed onto an entry, the file goes into the module's {ui:Abgabeordner} and belongs to the submission. Dragged from {ui:Notizen} onto an entry, it stays where it is and only comes to belong to it.

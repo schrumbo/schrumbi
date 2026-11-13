@@ -119,9 +119,9 @@ pub enum FileGrouping {
 #[serde(rename_all = "camelCase")]
 pub enum NoteEditor {
     /// The note stays drawn; only the line with the caret shows its marks.
-    #[default]
     Live,
     /// The whole note as source text with line numbers.
+    #[default]
     Code,
 }
 
@@ -222,7 +222,7 @@ pub struct Prefs {
     pub spell_words: Vec<String>,
     /// Notes use the whole pane width instead of a centered reading column.
     pub reader_full_width: bool,
-    /// How notes are written; a stored source editor that was never chosen moves to Live once.
+    /// How notes are written. Stored under a new name, so everyone starts on the code editor once.
     #[serde(rename = "noteEditorMode")]
     pub note_editor: NoteEditor,
     /// How the last note was shown.
@@ -285,8 +285,6 @@ pub struct Prefs {
     pub launches: u32,
     /// The user chose how notes are written; the setup list no longer asks.
     pub note_editor_chosen: bool,
-    /// The user switched full-width reading; until then notes read in the centered column.
-    pub reader_width_chosen: bool,
     pub ai: AiPrefs,
 }
 
@@ -333,7 +331,7 @@ impl Default for Prefs {
             notes_explorer_hidden: false,
             spell_check: true,
             spell_words: Vec::new(),
-            reader_full_width: false,
+            reader_full_width: true,
             note_editor: NoteEditor::default(),
             note_folds: HashMap::new(),
             note_wraps: BTreeMap::new(),
@@ -364,7 +362,6 @@ impl Default for Prefs {
             used_features: BTreeSet::new(),
             launches: 0,
             note_editor_chosen: false,
-            reader_width_chosen: false,
             ai: AiPrefs::default(),
         }
     }
@@ -466,8 +463,7 @@ fn spelled(path: &std::path::Path) -> String {
 fn load(file: Option<&std::path::Path>) -> Prefs {
     let Some(file) = file else { return Prefs::default() };
     let Ok(bytes) = std::fs::read(file) else { return settled(Prefs::default()) };
-    let (mut prefs, damaged) = parse(&bytes);
-    settle_unchosen(&mut prefs);
+    let (prefs, damaged) = parse(&bytes);
     let kept = file.with_extension("defekt.json");
     if damaged && !kept.exists() {
         let _ = std::fs::copy(file, kept);
@@ -484,16 +480,6 @@ static PREFS: LazyLock<RwLock<Prefs>> = LazyLock::new(|| {
 /// Size and time of the settings file as this process last read or wrote it.
 static LOADED: Mutex<Option<(u64, SystemTime)>> = Mutex::new(None);
 static WRITE: Mutex<()> = Mutex::new(());
-
-/// Settings that were only ever the old defaults take the current ones: Live and the reading column.
-pub fn settle_unchosen(prefs: &mut Prefs) {
-    if !prefs.note_editor_chosen {
-        prefs.note_editor = NoteEditor::Live;
-    }
-    if !prefs.reader_width_chosen {
-        prefs.reader_full_width = false;
-    }
-}
 
 /// A copy of the current settings.
 pub fn get() -> Prefs {

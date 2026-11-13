@@ -14,7 +14,7 @@ use gpui_kit::*;
 
 use super::state::{self, act};
 use super::motion::Soft;
-use super::theme::{Theme, control, font, hover, radius, space, iconsize};
+use super::theme::{Theme, font, radius, space, iconsize};
 use super::widgets::*;
 use crate::core::day;
 use crate::core::filing::{self, BRIEF_TAG, FileFacts, FileRole, Suggestion};
@@ -78,7 +78,6 @@ pub struct FilingForm {
     details: bool,
     /// Width of the form, measured while painting.
     width: f32,
-    height: f32,
     focus: FocusHandle,
     load: Option<Task<()>>,
     ai: Option<AiFill>,
@@ -101,10 +100,6 @@ pub fn byline_from(author: Option<&str>) -> String {
     format!("{} {}", words[words.len() - 1], words[0].chars().next().unwrap_or_default())
 }
 
-const CHOICE_MIN: f32 = 300.;
-const PICTURE_MIN: f32 = 140.;
-const TALL_ENOUGH: f32 = 640.;
-
 impl FilingForm {
     pub fn new(paths: Vec<PathBuf>, preset: Option<String>, grab_focus: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let title = cx.new(|cx| InputState::new(window, cx).placeholder(tr("z. B. Persona-Board")));
@@ -113,7 +108,6 @@ impl FilingForm {
         let author = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Nachname-V, z. B. Muster-M")));
         let date = cx.new(|cx| DatePickerState::new(window, cx).date_format(if crate::core::i18n::lang() == crate::core::i18n::Lang::En { "%m/%d/%Y" } else { "%d.%m.%Y" }));
         let subs = vec![
-            cx.observe_window_bounds(window, |_, _, cx| cx.notify()),
             cx.subscribe(&author, |_, s, e: &InputEvent, cx| {
                 if matches!(e, InputEvent::Change) {
                     let v = s.read(cx).value().trim().to_string();
@@ -169,7 +163,6 @@ impl FilingForm {
             grab_focus,
             details: false,
             width: 560.,
-            height: 800.,
             focus: cx.focus_handle(),
             load: None,
             ai: None,
@@ -279,7 +272,7 @@ impl FilingForm {
         }
         row = match marks {
             Some(_) => row.child(caption(tr("Von der KI ausgefüllt. Prüf es kurz, dann ablegen."), t).text_color(t.tertiary)),
-            None => row.child(link_button("filing-ai", tr("Mit KI ausfüllen"), t).self_start().text_size(px(font::CAPTION)).on_click(move |_, _, cx| me.update(cx, |f, cx| f.ask_ai(cx)))),
+            None => row.child(link_button("filing-ai", tr("Mit KI ausfüllen"), t).text_size(px(font::CAPTION)).on_click(move |_, _, cx| me.update(cx, |f, cx| f.ask_ai(cx)))),
         };
         Some(row)
     }
@@ -619,8 +612,9 @@ impl FilingForm {
     /// The suggestion as one decision: where the file goes and what it will be called.
     #[allow(clippy::too_many_arguments)]
     fn summary(&self, me: Entity<Self>, thumb: AnyElement, preview: PathBuf, final_name: &str, valid: bool, can_file: bool, l: &Library, cx: &App, t: &Theme) -> Div {
-        let stacked = self.stacked();
-        let room = self.room();
+        const CHOICE_MIN: f32 = 300.;
+        let room = self.width - 2. * space::XL - space::XL - CHOICE_MIN;
+        let stacked = room < 140.;
         let preview_w = if stacked { (self.width - 2. * space::XL).min(320.) } else { room.min(480.) };
         let preview_h = if stacked { 160. } else { preview_w * 1.375 };
         let source = self.path().map(|p| name_of(p)).unwrap_or_default();
@@ -633,14 +627,14 @@ impl FilingForm {
                 .bg(t.secondary_bg)
                 .border_1()
                 .border_color(t.separator)
-                .relative()
+                .hover({ let c = t.accent.opacity(0.5); move |s| s.border_color(c) })
                 .flex()
                 .items_center()
                 .justify_center()
                 .cursor_pointer().key_nav()
+                .tooltip(tip(tr("Vorschau (Klick)")))
                 .on_click(move |_, _, cx| super::preview::show(&preview, cx))
-                .child(thumb)
-                .child(super::markdown_view::hover_ring(t.accent, radius::CONTROL, tr("Vorschau (Klick)"))),
+                .child(thumb),
         )
         .child(caption(source, t));
 
@@ -650,12 +644,6 @@ impl FilingForm {
             FileRole::Material => (tr("Unterlagen"), "library"),
         };
         let described = self.target.as_ref().map(|target| self.describe(target, l, t));
-        let reason = match (&self.target, self.path()) {
-            (Some(Target::Assignment(id)), Some(path)) if self.facts.is_some() && self.preset.is_none() && self.ranked.first().is_some_and(|a| &a.id == id) => l.assignment(id).or_else(|| self.ranked.iter().find(|a| &a.id == id)).map(|a| {
-                crate::core::filing::name_match(&name_of(path), a, l.module(a)).map_or_else(|| tr("Ziel geraten, prüf es kurz"), |word| trf("Dateiname enthält %@", &[&word]))
-            }),
-            _ => None,
-        };
         let folder = self.folder(l);
         let ready = self.facts.is_some();
         let multi = self.paths.len() > 1;
@@ -676,7 +664,6 @@ impl FilingForm {
                     .child(div().text_size(px(font::TITLE2)).font_weight(FontWeight::BOLD).line_clamp(2).child(name))
                     .child(div().flex().items_center().gap(px(space::S)).text_size(px(font::CALLOUT)).text_color(t.secondary).child(div().size(px(space::S)).flex_none().rounded_full().bg(tint)).child(div().truncate().child(context)))
             }))
-            .children(reason.map(|r| caption(r, t)))
             .child(
                 div()
                     .flex()
@@ -686,18 +673,18 @@ impl FilingForm {
                     .rounded(px(radius::CONTROL))
                     .bg(t.secondary_bg)
                     .child(icon(if valid { "badge-check" } else { "triangle-alert" }, iconsize::S, if valid { t.green } else { t.orange }))
-                    .child(div().flex_1().min_w_0().text_size(px(font::BODY)).line_clamp(2).child(if ready { final_name.to_string() } else { "…".to_string() })),
+                    .child(div().flex_1().min_w_0().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).line_clamp(2).child(if ready { final_name.to_string() } else { "…".to_string() })),
             )
             .children(folder.map(|f| div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", iconsize::XS, t.secondary)).child(div().truncate().child(l.relative_path(&f)))))
-            .when(!self.compact(), |d| d.child(
+            .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(space::S))
-                    .child(div().flex_1().child(Button::new("file-commit").primary().w_full().h(px(control::M)).label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| commit.update(cx, |f, cx| f.commit(window, cx)))))
+                    .child(Button::new("file-commit").primary().label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| commit.update(cx, |f, cx| f.commit(window, cx))))
                     .child(kbd("↩", t))
                     .child(Button::new("filing-change").ghost().label(tr("Ändern")).on_click(move |_, window, cx| change.update(cx, |f, cx| f.set_details(true, window, cx)))),
-            ));
+            );
 
         let others = self.alternatives();
         if !others.is_empty() {
@@ -709,7 +696,7 @@ impl FilingForm {
                     div()
                         .id(SharedString::from(format!("filing-other-{i}")))
                         .w_full()
-                        .soft(t.ink.opacity(hover::ROW), radius::INNER)
+                        .soft(t.ink.opacity(0.06), radius::INNER)
                         .cursor_pointer().key_nav()
                         .flex()
                         .items_center()
@@ -729,25 +716,13 @@ impl FilingForm {
         div().flex().when(stacked, |d| d.flex_col()).items_start().gap(px(space::XL)).p(px(space::XL)).child(picture).child(choice.w_full().max_w(px(640.)))
     }
 
-    fn room(&self) -> f32 {
-        self.width - 3. * space::XL - CHOICE_MIN
-    }
-
-    fn stacked(&self) -> bool {
-        self.room() < PICTURE_MIN
-    }
-
-    fn compact(&self) -> bool {
-        self.stacked() || self.height < TALL_ENOUGH
-    }
-
     fn footer(&self, me: Entity<Self>, has_folder: bool, can_file: bool, primary: bool, t: &Theme) -> Option<Div> {
         let last = self.index + 1 >= self.paths.len();
         let multi = self.paths.len() > 1;
         if !multi && !primary {
             return None;
         }
-        let (e1, e2, e3, e4) = (me.clone(), me.clone(), me.clone(), me);
+        let (e1, e2, e3) = (me.clone(), me.clone(), me);
         Some(
             div()
                 .flex()
@@ -770,8 +745,7 @@ impl FilingForm {
                     })
                 })
                 .child(div().flex_1())
-                .when(primary && !self.details, |d| d.child(Button::new("filing-change").ghost().label(tr("Ändern")).on_click(move |_, window, cx| e4.update(cx, |f, cx| f.set_details(true, window, cx)))))
-                .when(primary, |d| d.child(Button::new("file-commit").primary().label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| e3.update(cx, |f, cx| f.commit(window, cx)))).when(self.compact(), |d| d.child(kbd("↩", t)))),
+                .when(primary, |d| d.child(Button::new("file-commit").primary().label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| e3.update(cx, |f, cx| f.commit(window, cx))))),
         )
     }
 
@@ -828,14 +802,13 @@ impl FilingForm {
             .key_context("FilingForm")
             .child({
                 let me = cx.entity();
-                let known = (self.width, self.height);
+                let known = self.width;
                 canvas(
                     move |bounds, _, cx| {
-                        let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-                        if (width - known.0).abs() > 1. || (height - known.1).abs() > 1. {
+                        let width = f32::from(bounds.size.width);
+                        if (width - known).abs() > 1. {
                             me.update(cx, |f, cx| {
                                 f.width = width;
-                                f.height = height;
                                 cx.notify();
                             });
                         }
@@ -856,7 +829,7 @@ fn section_label(s: String, t: &Theme) -> Div {
 }
 
 fn chip(id: SharedString, selected: bool, t: &Theme) -> Stateful<Div> {
-    let (fill, over) = if selected { (t.accent.opacity(0.15), t.accent.opacity(hover::RAISED)) } else { (t.ink.opacity(0.05), t.ink.opacity(hover::CONTROL)) };
+    let (fill, hover) = if selected { (t.accent.opacity(0.15), t.accent.opacity(0.2)) } else { (t.ink.opacity(0.05), t.ink.opacity(0.1)) };
     div()
         .id(id)
         .flex()
@@ -866,14 +839,14 @@ fn chip(id: SharedString, selected: bool, t: &Theme) -> Stateful<Div> {
         .py(px(space::S))
         .rounded(px(radius::CONTROL))
         .bg(fill)
-        .soft(over, radius::CONTROL)
+        .soft(hover, radius::CONTROL)
         .cursor_pointer().key_nav()
         .when(selected, |d| d.border(px(2.)).border_color(t.accent))
 }
 
 fn suggestion(id: SharedString, label: String, selected: bool, t: &Theme) -> Stateful<Div> {
-    let (fill, over) = if selected { (t.accent.opacity(0.2), t.accent.opacity(hover::RAISED)) } else { (t.ink.opacity(0.06), t.ink.opacity(hover::CONTROL)) };
-    div().id(id).min_h(px(control::S)).flex().items_center().px(px(space::M)).rounded_full().bg(fill).soft(over, radius::FULL).cursor_pointer().key_nav().text_size(px(font::CAPTION)).text_color(if selected { t.accent_text } else { t.primary }).child(label)
+    let (fill, hover) = if selected { (t.accent.opacity(0.2), t.accent.opacity(0.28)) } else { (t.ink.opacity(0.06), t.ink.opacity(0.1)) };
+    div().id(id).px(px(space::S)).py(px(space::XS)).rounded_full().bg(fill).soft(hover, radius::FULL).cursor_pointer().key_nav().text_size(px(font::CAPTION)).text_color(if selected { t.accent } else { t.primary }).child(label)
 }
 
 fn renames_by_default(cx: &App) -> bool {
@@ -907,12 +880,12 @@ impl Render for FilingForm {
         let preview_path = path.clone();
         let thumb: AnyElement = match &self.thumbnail {
             Some(i) => img(i.clone()).size_full().object_fit(ObjectFit::Contain).into_any_element(),
-            None if ["png", "jpg", "jpeg", "gif", "webp"].contains(&extension(&name_of(&path)).to_lowercase().as_str()) => img(path.clone()).size_full().object_fit(ObjectFit::Contain).into_any_element(),
+            None if ["png", "jpg", "jpeg", "gif", "webp"].contains(&extension(&name_of(&path)).to_lowercase().as_str()) => img(path.clone()).size_full().object_fit(ObjectFit::Cover).into_any_element(),
             None => file_icon(&path, iconsize::HERO).into_any_element(),
         };
         if !self.details {
             let body = self.summary(me.clone(), thumb, preview_path, &final_name, valid, can_file, l, cx, &t);
-            let footer = self.footer(me, folder.is_some(), can_file, self.compact(), &t);
+            let footer = self.footer(me, folder.is_some(), can_file, false, &t);
             return self.shell(body, footer, cx).into_any_element();
         }
         let p2 = path.clone();
@@ -932,14 +905,14 @@ impl Render for FilingForm {
                     .bg(t.secondary_bg)
                     .border_1()
                     .border_color(t.separator)
-                    .relative()
+                    .hover({ let c = t.accent.opacity(0.5); move |s| s.border_color(c) })
                     .flex()
                     .items_center()
                     .justify_center()
                     .cursor_pointer().key_nav()
+                    .tooltip(tip(tr("Vorschau (Klick)")))
                     .on_click(move |_, _, cx| super::preview::show(&preview_path, cx))
-                    .child(thumb)
-                    .child(super::markdown_view::hover_ring(t.accent, radius::CONTROL, tr("Vorschau (Klick)"))),
+                    .child(thumb),
             )
             .child(
                 div()
@@ -951,7 +924,7 @@ impl Render for FilingForm {
                     .when(self.paths.len() > 1, |d| d.child(div().text_size(px(font::CAPTION)).font_weight(FontWeight::SEMIBOLD).text_color(t.secondary).child(trf("%lld von %lld", &[&(self.index + 1), &self.paths.len()]))))
                     .child(div().font_weight(FontWeight::BOLD).line_clamp(2).child(name_of(&path)))
                     .when_some(self.facts.as_ref(), |d, f| d.child(caption(trf("Erstellt %@", &[&day::due(f.created, l.now)]), &t)))
-                    .child(link_button("filing-preview", tr("Vorschau"), &t).self_start().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).child(icon("eye", iconsize::XS, t.accent)).on_click(move |_, _, cx| super::preview::show(&p2, cx))),
+                    .child(link_button("filing-preview", tr("Vorschau"), &t).flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).child(icon("eye", iconsize::XS, t.accent)).on_click(move |_, _, cx| super::preview::show(&p2, cx))),
             )
             .when(folder.is_some(), |d| d.child(link_button("filing-less", tr("Weniger"), &t).text_size(px(font::CAPTION)).on_click(move |_, window, cx| less.update(cx, |f, cx| f.set_details(false, window, cx)))));
 
@@ -979,7 +952,7 @@ impl Render for FilingForm {
                     .px(px(space::M))
                     .py(px(space::XS))
                     .rounded(px(radius::SMALL))
-                    .when(!active, |d| d.soft(t.ink.opacity(hover::ROW), radius::SMALL))
+                    .when(!active, |d| d.soft(t.ink.opacity(0.06), radius::SMALL))
                     .cursor_pointer().key_nav()
                     .text_size(px(font::CALLOUT))
                     .when(active, |d| d.bg(if t.dark { t.ink.opacity(0.16) } else { t.content }).shadow_sm().font_weight(FontWeight::MEDIUM))
@@ -999,7 +972,7 @@ impl Render for FilingForm {
                     .gap(px(space::S))
                     .child(self.ai_label(tr("Was ist das?"), 0, cx, &t))
                     .children(self.ai_row(me.clone(), cx, &t))
-                    .when(self.guessed == Some(self.role), |d| d.child(div().id("guessed").flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("sparkles", iconsize::XS, t.secondary)).child(tr("erkannt")).tip(tr("Aus Dateiname und Inhalt geschätzt")))),
+                    .when(self.guessed == Some(self.role), |d| d.child(div().id("guessed").flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("sparkles", iconsize::XS, t.secondary)).child(tr("erkannt")).tooltip(tip(tr("Aus Dateiname und Inhalt geschätzt"))))),
             )
             .child(div().flex().min_w_0().child(roles))
             .child(caption(role_hint, &t));
@@ -1015,7 +988,7 @@ impl Render for FilingForm {
                 let ctx = p.context.clone();
                 chips = chips.child(
                     chip(SharedString::from(format!("place-{}", p.path.display())), selected, &t)
-                        .tip(l.relative_path(&p.path))
+                        .tooltip(tip(l.relative_path(&p.path)))
                         .child(div().size(px(space::S)).rounded_full().bg(t.palette(&p.module.color)))
                         .child(
                             div()
@@ -1109,7 +1082,7 @@ impl Render for FilingForm {
             .child(chips)
             .child(match &folder {
                 Some(f) => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", iconsize::XS, t.secondary)).child(div().truncate().child(l.relative_path(f))),
-                None if self.target_assignment(l).is_some() => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange_text).child(icon("folder-search", iconsize::XS, t.orange)).child(tr("Der Ordner dieser Abgabe fehlt. Wähle einen Ordner.")),
+                None if self.target_assignment(l).is_some() => div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.orange).child(icon("folder-search", iconsize::XS, t.orange)).child(tr("Der Ordner dieser Abgabe fehlt. Wähle einen Ordner.")),
                 None => caption(if material { tr("Wähle einen Ordner.") } else { tr("Wähle eine Abgabe oder einen Ordner.") }, &t),
             });
 
@@ -1134,14 +1107,14 @@ impl Render for FilingForm {
                                 cx.notify();
                             })
                         }))
-                        .tip(if module_id.is_none() { tr("Ordner gehört zu keinem Modul") } else { tr("Muster aus den Moduleinstellungen") }),
+                        .tooltip(tip(if module_id.is_none() { tr("Ordner gehört zu keinem Modul") } else { tr("Muster aus den Moduleinstellungen") })),
                 )),
             );
             if self.rename && module_id.is_some() {
                 let mut sugg = div().flex().flex_wrap().gap(px(space::S));
                 for (i, s) in self.titles.iter().enumerate() {
                     let (e, value) = (me.clone(), s.title.clone());
-                    sugg = sugg.child(suggestion(SharedString::from(format!("title-{i}")), s.title.clone(), title_value == s.title, &t).tip(tr(s.source)).on_click(move |_, window, cx| {
+                    sugg = sugg.child(suggestion(SharedString::from(format!("title-{i}")), s.title.clone(), title_value == s.title, &t).tooltip(tip(tr(s.source))).on_click(move |_, window, cx| {
                         let v = value.clone();
                         e.update(cx, |f, cx| f.title.update(cx, |s, cx| s.set_value(v, window, cx)))
                     }));
@@ -1175,7 +1148,7 @@ impl Render for FilingForm {
                                     .bg(t.accent.opacity(0.15))
                                     .text_size(px(font::CAPTION))
                                     .child(n.clone())
-                                    .child(div().id(("rm-co", i)).size(px(control::S)).my(px(-space::XS)).mr(px(-space::XS)).flex().items_center().justify_center().rounded_full().soft(t.ink.opacity(hover::CONTROL), radius::FULL).cursor_pointer().key_nav().child(icon("circle-x", iconsize::XS, t.secondary)).tip(trf("%@ entfernen", &[&n])).on_click(move |_, _, cx| e.update(cx, |f, cx| {
+                                    .child(div().id(("rm-co", i)).rounded_full().soft(t.ink.opacity(0.1), radius::FULL).cursor_pointer().key_nav().child(icon("circle-x", iconsize::XS, t.secondary)).tooltip(tip(trf("%@ entfernen", &[&n]))).on_click(move |_, _, cx| e.update(cx, |f, cx| {
                                         f.coauthors.retain(|c| *c != n2);
                                         cx.notify();
                                     }))),
@@ -1199,7 +1172,7 @@ impl Render for FilingForm {
                         for (i, b) in known.into_iter().take(4).enumerate() {
                             let selected = current == b || Naming::clean_author(&current, CoauthorStyle::Initial) == b;
                             let (e, v) = (me.clone(), b.clone());
-                            sugg = sugg.child(suggestion(SharedString::from(format!("byline-{i}")), b, selected, &t).tip(tr("So heißen andere Dateien in diesem Ordner")).on_click(move |_, window, cx| {
+                            sugg = sugg.child(suggestion(SharedString::from(format!("byline-{i}")), b, selected, &t).tooltip(tip(tr("So heißen andere Dateien in diesem Ordner"))).on_click(move |_, window, cx| {
                                 let v = v.clone();
                                 e.update(cx, |f, cx| f.byline.update(cx, |s, cx| s.set_value(v, window, cx)))
                             }));
@@ -1232,7 +1205,7 @@ impl Render for FilingForm {
                     .rounded(px(radius::CONTROL))
                     .bg(t.secondary_bg)
                     .child(icon(if valid { "badge-check" } else { "triangle-alert" }, iconsize::S, if valid { t.green } else { t.orange }))
-                    .child(div().flex_1().min_w_0().text_size(px(font::BODY)).line_clamp(2).child(final_name)),
+                    .child(div().flex_1().min_w_0().font_family(Theme::mono_family()).text_size(px(font::CALLOUT)).line_clamp(2).child(final_name)),
             );
             body = body.child(name);
         }

@@ -1146,12 +1146,6 @@ impl Library {
         }
     }
 
-    /// Writes the settings and the app state again, after the study folder came back.
-    pub fn save_again(&mut self) {
-        self.write_config();
-        self.save_state();
-    }
-
     fn save_state(&mut self) {
         let Some(path) = self.state_path() else { return };
         if self.read_only {
@@ -2036,13 +2030,6 @@ impl Library {
             return;
         }
         self.inspector_peek = false;
-        let into_note = matches!(self.route, Route::Doc(_));
-        if !into_note && !(matches!(from, Route::Doc(_)) && matches!(self.route, Route::Module(_))) {
-            self.module_query.clear();
-        }
-        if !into_note && self.route != Route::Search {
-            self.search_query.clear();
-        }
         let back = self.parked_selection.take_if(|(r, _)| *r == self.route).map(|(_, id)| id).filter(|id| self.assignment(id).is_some());
         if let Some(id) = self.selection.take() {
             self.parked_selection = Some((from.clone(), id));
