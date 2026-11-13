@@ -806,22 +806,76 @@ pub fn closing_mark(note: &str, line: usize) -> Option<String> {
 
 /// A display formula on lines of its own: around the selection, or empty with the caret inside.
 pub fn math_block(s: &str, sel: Range<usize>, nl: &str) -> Edit {
+    fenced_block(s, sel, nl, "$$")
+}
+
+/// A block between two `mark` lines: around the selection, or empty with the caret inside.
+pub fn fenced_block(s: &str, sel: Range<usize>, nl: &str, mark: &str) -> Edit {
     let line_start = s[..sel.start].rfind('\n').map_or(0, |i| i + 1);
     let line_end = before_cr(s, s[sel.end..].find('\n').map_or(s.len(), |i| sel.end + i));
     if sel.is_empty() && s[line_start..line_end].trim().is_empty() {
-        let inside = line_start + 2 + nl.len();
-        return Edit { range: line_start..line_end, text: format!("$${nl}{nl}$$"), select: inside..inside };
+        let inside = line_start + mark.len() + nl.len();
+        return Edit { range: line_start..line_end, text: format!("{mark}{nl}{nl}{mark}"), select: inside..inside };
     }
     if sel.is_empty() {
-        let inside = line_end + nl.len() + 2 + nl.len();
-        return Edit { range: line_end..line_end, text: format!("{nl}$${nl}{nl}$$"), select: inside..inside };
+        let inside = line_end + nl.len() + mark.len() + nl.len();
+        return Edit { range: line_end..line_end, text: format!("{nl}{mark}{nl}{nl}{mark}"), select: inside..inside };
     }
     let pre = if sel.start == line_start { "" } else { nl };
     let post = if sel.end == line_end { "" } else { nl };
     let inner = &s[sel.clone()];
-    let text = format!("{pre}$${nl}{inner}{nl}$${post}");
-    let from = sel.start + pre.len() + 2 + nl.len();
+    let text = format!("{pre}{mark}{nl}{inner}{nl}{mark}{post}");
+    let from = sel.start + pre.len() + mark.len() + nl.len();
     Edit { range: sel, text, select: from..from + inner.len() }
+}
+
+/// A block that must stand apart from text, like a table or a divider: on the caret's empty line or after its line, with an empty line wherever text would touch it. `outside` says whether text stands right above and below `s` when it is only part of the note. `caret` is an offset in `body`; `None` puts the caret on the line after the block.
+pub fn standalone_block(s: &str, at: usize, nl: &str, outside: (bool, bool), body: &str, caret: Option<usize>) -> Edit {
+    let start = s[..at].rfind('\n').map_or(0, |i| i + 1);
+    let end = before_cr(s, s[at..].find('\n').map_or(s.len(), |i| at + i));
+    let blank = s[start..end].trim().is_empty();
+    let above = if start == 0 { outside.0 } else { s[..start - 1].rsplit('\n').next().is_some_and(|l| !l.trim().is_empty()) };
+    let next = s[end..].split_once('\n').map(|(_, rest)| rest.split('\n').next().unwrap_or(""));
+    let below = next.map_or(outside.1, |l| !l.trim().is_empty());
+    let (range, pre) = if blank { (start..end, if above { nl.to_string() } else { String::new() }) } else { (end..end, format!("{nl}{nl}")) };
+    let post = if below || caret.is_none() && next.is_none() { nl } else { "" };
+    let from = range.start + pre.len();
+    let caret = from + caret.unwrap_or(body.len() + nl.len());
+    Edit { range, text: format!("{pre}{body}{post}"), select: caret..caret }
+}
+
+/// An empty table with three columns, a header and one row, the caret in the first cell.
+pub fn table(s: &str, at: usize, nl: &str, outside: (bool, bool)) -> Edit {
+    standalone_block(s, at, nl, outside, &format!("|  |  |  |{nl}|--|--|--|{nl}|  |  |  |"), Some(2))
+}
+
+/// A divider, the caret on the line after it; at the very start of the note it is `***`, since `---` there opens front matter.
+pub fn divider(s: &str, at: usize, nl: &str, outside: (bool, bool), note_start: bool) -> Edit {
+    let line_end = s[at..].find('\n').map_or(s.len(), |i| at + i);
+    let at_start = note_start && !outside.0 && !s[..at].contains('\n') && s[..line_end].trim().is_empty();
+    standalone_block(s, at, nl, outside, if at_start { "***" } else { "---" }, None)
+}
+
+/// Turns the selected lines into a callout box, or starts an empty one on an empty line.
+pub fn callout(s: &str, sel: Range<usize>, nl: &str) -> Edit {
+    let r = selected_lines(s, &sel);
+    let head = "> [!note]";
+    if s[r.clone()].trim().is_empty() {
+        let end = r.start + head.len() + 1;
+        return Edit { range: r, text: format!("{head} "), select: end..end };
+    }
+    let lines: Vec<String> = rows(&s[r.clone()]).map(|l| format!("> {l}")).collect();
+    let text = format!("{head}{nl}{}", lines.join(nl));
+    let end = r.start + text.len();
+    Edit { range: r, text, select: end..end }
+}
+
+/// A footnote reference after the selection, with the next number `note` does not use yet.
+pub fn footnote(note: &str, sel: Range<usize>) -> Edit {
+    let n = (1..).find(|n| !note.contains(&format!("[^{n}]"))).unwrap_or(1);
+    let text = format!("[^{n}]");
+    let end = sel.end + text.len();
+    Edit { range: sel.end..sel.end, text, select: end..end }
 }
 
 /// Typing the second `$` of a `$$` line inside a formula whose closing `$$` already waits on the next line steps onto that line instead of adding another.
@@ -1487,6 +1541,77 @@ world");
         assert_eq!(&apply(s, &e)[e.select.clone()], "x = y^2");
         assert_eq!(apply("a\r\n", &math_block("a\r\n", 3..3, "\r\n")), "a\r\n$$\r\n\r\n$$");
         assert_eq!(apply("Text\r", &math_block("Text\r", 2..2, "\r\n")), "Text\r\n$$\r\n\r\n$$\r");
+    }
+
+    #[test]
+    fn a_code_block_wraps_the_selection_or_waits_empty() {
+        let s = "a\n\nb";
+        let e = fenced_block(s, 2..2, "\n", "```");
+        assert_eq!(apply(s, &e), "a\n```\n\n```\nb");
+        assert_eq!(e.select, 6..6);
+        let s = "let x = 1;";
+        let e = fenced_block(s, 0..s.len(), "\n", "```");
+        assert_eq!(apply(s, &e), "```\nlet x = 1;\n```");
+        assert_eq!(&apply(s, &e)[e.select.clone()], s);
+    }
+
+    #[test]
+    fn a_table_never_touches_text() {
+        let table = "|  |  |  |\n|--|--|--|\n|  |  |  |";
+        let s = "Text\n\nNach";
+        let e = super::table(s, 5, "\n", (false, false));
+        assert_eq!(apply(s, &e), format!("Text\n\n{table}\n\nNach"));
+        assert_eq!(e.select, 8..8);
+        let s = "Text";
+        let e = super::table(s, 2, "\n", (false, false));
+        assert_eq!(apply(s, &e), format!("Text\n\n{table}"));
+        assert_eq!(e.select, 8..8);
+        let s = "Text\nNach";
+        assert_eq!(apply(s, &super::table(s, 1, "\n", (false, false))), format!("Text\n\n{table}\n\nNach"));
+        assert_eq!(apply("", &super::table("", 0, "\n", (true, true))), format!("\n{table}\n"));
+        let s = "a\r\n\r\nb";
+        assert_eq!(apply(s, &super::table(s, 3, "\r\n", (false, false))), "a\r\n\r\n|  |  |  |\r\n|--|--|--|\r\n|  |  |  |\r\n\r\nb");
+    }
+
+    #[test]
+    fn a_divider_leaves_the_caret_below_it() {
+        let s = "Text";
+        let e = divider(s, 4, "\n", (false, false), true);
+        assert_eq!(apply(s, &e), "Text\n\n---\n");
+        assert_eq!(e.select, 10..10);
+        let s = "Text\n\n\nNach";
+        let e = divider(s, 5, "\n", (false, false), true);
+        assert_eq!(apply(s, &e), "Text\n\n---\n\nNach");
+        assert_eq!(e.select, 10..10);
+        let s = "\n";
+        let e = divider(s, 0, "\n", (false, false), true);
+        assert_eq!(apply(s, &e), "***\n");
+        assert_eq!(e.select, 4..4);
+        assert_eq!(apply(s, &divider(s, 0, "\n", (true, false), false)), "\n---\n");
+    }
+
+    #[test]
+    fn a_callout_takes_the_lines_or_starts_empty() {
+        let s = "a\n\nb";
+        let e = callout(s, 2..2, "\n");
+        assert_eq!(apply(s, &e), "a\n> [!note] \nb");
+        assert_eq!(e.select, 12..12);
+        let s = "eins\nzwei";
+        assert_eq!(apply(s, &callout(s, 1..7, "\n")), "> [!note]\n> eins\n> zwei");
+    }
+
+    #[test]
+    fn inline_marks_keep_the_selection() {
+        let s = "Hauptstadt";
+        let e = surround(s, 0..10, "{{c1::", "}}");
+        assert_eq!(apply(s, &e), "{{c1::Hauptstadt}}");
+        assert_eq!(&apply(s, &e)[e.select.clone()], "Hauptstadt");
+        let e = surround("", 0..0, "![[", "]]");
+        assert_eq!((apply("", &e).as_str(), e.select), ("![[]]", 3..3));
+        let s = "a[^1] b";
+        let e = footnote(s, 7..7);
+        assert_eq!(apply(s, &e), "a[^1] b[^2]");
+        assert_eq!(apply("Wort", &footnote("Wort", 0..4)), "Wort[^1]");
     }
 
     #[test]

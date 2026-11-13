@@ -2311,5 +2311,13 @@
   "App-Daten bleiben hier": "App data stays here",
   "App-Daten werden mitgenommen": "App data syncs again",
   "App-Daten bleiben auf diesem Gerät": "App data stays on this device",
-  "Die Datei .gitignore ist kein lesbarer Text und bleibt, wie sie ist.": "The .gitignore file is not readable text and stays as it is."
+  "Die Datei .gitignore ist kein lesbarer Text und bleibt, wie sie ist.": "The .gitignore file is not readable text and stays as it is.",
+  "Codeblock": "Code block",
+  "Tabelle einfügen": "Insert table",
+  "Codeblock einfügen": "Insert code block",
+  "Hinweisbox einfügen": "Insert callout",
+  "Trennlinie einfügen": "Insert divider",
+  "Fußnote einfügen": "Insert footnote",
+  "Karteikarte einfügen": "Insert flashcard",
+  "Lückentext einfügen": "Insert cloze"
 }

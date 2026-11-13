@@ -1732,6 +1732,9 @@ fn column_widths(cells: &[Vec<(f32, f32)>], columns: usize, longest_word: f32) -
             least[c] = least[c].max((word.min(longest_word) + pad).ceil());
         }
     }
+    for w in natural.iter_mut().chain(least.iter_mut()).filter(|w| **w <= pad) {
+        *w = super::theme::table::EMPTY_COLUMN;
+    }
     (natural, least)
 }
 
@@ -1894,13 +1897,13 @@ impl RenderOnce for Table {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let widths = self.widths(window, cx);
         let (natural, least) = (&widths.0, &widths.1);
+        let border = self.border;
         let column = |c: usize, cell: Div| {
             let (basis, narrowest) = (natural.get(c).copied().unwrap_or(0.), least.get(c).copied().unwrap_or(0.));
-            let mut d = cell.flex_basis(px(narrowest)).flex_shrink_0().min_w(px(narrowest)).max_w(px(basis.max(narrowest)));
+            let mut d = cell.flex_basis(px(narrowest)).flex_shrink_0().min_w(px(narrowest)).max_w(px(basis.max(narrowest))).when(c > 0, |d| d.border_l_1().border_color(border));
             d.style().flex_grow = Some((basis - narrowest).max(0.));
             d
         };
-        let border = self.border;
         let (with_head, (top, bottom)) = (self.with_head, self.ends);
         let (first, block, scope) = (self.first, self.block, self.scope);
         let mut rows = self.cells.into_iter().enumerate().map(|(r, row)| {

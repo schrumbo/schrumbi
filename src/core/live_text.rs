@@ -423,18 +423,45 @@ pub fn table_with_column(lines: &[&str]) -> Vec<String> {
         .collect()
 }
 
+/// Whether a line stands between a `$$` line and the one that closes it.
+pub fn inside_formula(lines: &[impl AsRef<str>], line: usize) -> bool {
+    let is_mark = |l: &str| l.trim() == "$$";
+    if lines.get(line).is_none_or(|l| is_mark(l.as_ref())) {
+        return false;
+    }
+    let (mut fence, mut open) = (None, false);
+    for l in &lines[..line] {
+        let bare = l.as_ref().trim_start();
+        match fence {
+            Some(mark) if bare.starts_with(mark) => fence = None,
+            Some(_) => {}
+            None if !open && (bare.starts_with("```") || bare.starts_with("~~~")) => fence = Some(&bare[..3]),
+            None if is_mark(bare) => open = !open,
+            None => {}
+        }
+    }
+    open
+}
+
 /// The whole `$$` block a line stands in, while it is being written line by line; `written` is that line as it stands now.
 pub fn open_formula(lines: &[String], line: usize, written: &str) -> Option<String> {
     let is_mark = |l: &str| l.trim() == "$$";
     let mark_at = |i: usize| lines.get(i).is_some_and(|l| is_mark(l));
     let above = (0..line).filter(|i| mark_at(*i)).count();
-    if above % 2 == 0 || is_mark(written) {
+    let around = |range: std::ops::Range<usize>| lines.get(range).unwrap_or_default().iter().map(String::as_str);
+    let body: Vec<&str> = match (above % 2 == 1, is_mark(written)) {
+        (false, false) => return None,
+        (false, true) => around(line + 1..(line + 1..lines.len()).find(|i| mark_at(*i))?).collect(),
+        (true, true) => around((0..line).rev().find(|i| mark_at(*i))? + 1..line).collect(),
+        (true, false) => {
+            let first = (0..line).rev().find(|i| mark_at(*i))?;
+            let last = (line + 1..lines.len()).find(|i| mark_at(*i)).unwrap_or(lines.len().max(line + 1));
+            around(first + 1..line).chain([written]).chain(around(line + 1..last)).collect()
+        }
+    };
+    if body.iter().all(|l| l.trim().is_empty()) {
         return None;
     }
-    let first = (0..line).rev().find(|i| mark_at(*i))?;
-    let last = (line + 1..lines.len()).find(|i| mark_at(*i)).unwrap_or(lines.len().max(line + 1));
-    let around = |range: std::ops::Range<usize>| lines.get(range).unwrap_or_default().iter().map(String::as_str);
-    let body: Vec<&str> = around(first + 1..line).chain([written]).chain(around(line + 1..last)).collect();
     Some(format!("$$\n{}\n$$", body.join("\n")))
 }
 
@@ -602,7 +629,24 @@ mod tests {
         assert_eq!(open_formula(&lines, 2, "x^2").as_deref(), Some("$$\nx^2\n$$"));
         assert_eq!(open_formula(&lines, 0, "Text"), None);
         assert_eq!(open_formula(&lines, 2, "$$"), None);
+        let done: Vec<String> = ["Text", "$$", "x", "$$"].map(String::from).to_vec();
+        assert_eq!(open_formula(&done, 3, "$$").as_deref(), Some("$$\nx\n$$"));
+        assert_eq!(open_formula(&done, 1, "$$").as_deref(), Some("$$\nx\n$$"));
         let open: Vec<String> = ["$$", "a"].map(String::from).to_vec();
         assert_eq!(open_formula(&open, 2, "b").as_deref(), Some("$$\na\nb\n$$"));
+    }
+
+    #[test]
+    fn a_line_between_formula_marks_is_inside_the_formula() {
+        let lines = ["Text", "$$", "x", "", "$$", "nach"];
+        assert!(!inside_formula(&lines, 0));
+        assert!(!inside_formula(&lines, 1));
+        assert!(inside_formula(&lines, 2));
+        assert!(inside_formula(&lines, 3));
+        assert!(!inside_formula(&lines, 4));
+        assert!(!inside_formula(&lines, 5));
+        assert!(inside_formula(&["$$", "a"], 1));
+        assert!(!inside_formula(&["```", "$$", "```", "Text"], 3));
+        assert!(inside_formula(&["$$", "```", "x"], 2));
     }
 }

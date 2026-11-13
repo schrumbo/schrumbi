@@ -257,6 +257,11 @@ pub mod coach {
     pub const LABEL_ROOM: f32 = 96.;
 }
 
+pub mod table {
+    /// The width of a column with no text yet, so a new table has room to click into.
+    pub const EMPTY_COLUMN: f32 = 72.;
+}
+
 /// The suggestion list under the caret.
 pub mod suggestions {
     /// The widest the list gets; longer names end in an ellipsis.

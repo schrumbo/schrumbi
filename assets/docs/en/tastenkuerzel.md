@@ -96,6 +96,15 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Code} | {key:inlineCode} |
 | {ui:Aufgabe abhaken} | {key:toggleTask} |
 | {ui:Auskommentieren} | {key:toggleComment} |
+| {ui:Überschrift 4} | {key:heading4} |
+| {ui:Tabelle einfügen} | {key:insertTable} |
+| {ui:Codeblock einfügen} | {key:insertCodeBlock} |
+| {ui:Hinweisbox einfügen} | {key:insertCallout} |
+| {ui:Trennlinie einfügen} | {key:insertDivider} |
+| {ui:Notiz einbetten} | {key:embedNote} |
+| {ui:Fußnote einfügen} | {key:insertFootnote} |
+| {ui:Karteikarte einfügen} | {key:insertCard} |
+| {ui:Lückentext einfügen} | {key:insertCloze} |
 | {ui:Zeile nach oben} | {key:moveLineUp} |
 | {ui:Zeile nach unten} | {key:moveLineDown} |
 | {ui:Zeile oben duplizieren} | {key:copyLineUp} |

@@ -162,7 +162,7 @@ Notes open in the Live view, in a column of comfortable reading width. You choos
 
 Switching keeps the cursor at its place in the text, and {key:Undo} also takes back changes made before the switch. The buttons stay where they are; {ui:Geteilte Ansicht} is greyed out in the live editor.
 
-`/` at the start of a line opens a list to insert from: headings, lists, tasks, table, {ui:Formelblock}, {ui:Hinweisbox}, {ui:Notiz einbetten} and more. Typing filters; what starts with the letters comes first. The shortcut shows on the right where there is one. {key:return} or {key:tab} inserts.
+`/` at the start of a line opens a list to insert from: headings, lists, tasks, table, {ui:Formelblock}, {ui:Hinweisbox}, {ui:Notiz einbetten} and more. Typing filters; what starts with the letters comes first. The shortcut shows on the right where there is one. {key:return} or {key:tab} inserts. Without `/`: right-click → {ui:Hinzufügen}, or {ui:Tabelle einfügen} and the like in the {key:CommandPalette}. Give one its own shortcut in {key:OpenSettings} → {ui:Tastenkürzel}.
 
 ## Find in a Note
 
