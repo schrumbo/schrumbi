@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -84,29 +85,45 @@ const fn slash(name: &'static str, text: &'static str, mark: &'static str, icon:
     SlashCommand { name, text, mark, icon, action }
 }
 
+impl SlashCommand {
+    fn inline(&self) -> bool {
+        matches!(self.action, Some("embedNote" | "insertFootnote" | "insertCard" | "insertCloze"))
+    }
+}
+
 const SLASH: [SlashCommand; 17] = [
     slash("Überschrift 1", "# ", "#", "heading-1", Some("Heading1")),
     slash("Überschrift 2", "## ", "##", "heading-2", Some("Heading2")),
     slash("Überschrift 3", "### ", "###", "heading-3", Some("Heading3")),
-    slash("Überschrift 4", "#### ", "####", "heading", None),
+    slash("Überschrift 4", "#### ", "####", "heading", Some("heading4")),
     slash("Aufgabe", "- [ ] ", "- [ ]", "square-check", Some("ToggleTask")),
     slash("Liste", "- ", "-", "list", Some("BulletList")),
     slash("Nummerierte Liste", "1. ", "1.", "list-ordered", Some("NumberedList")),
-    slash("Tabelle", "| $0 |  |\n|--|--|\n|  |  |\n", "|", "table", None),
+    slash("Tabelle", "| $0 |  |  |\n|--|--|--|\n|  |  |  |\n", "|", "table", Some("insertTable")),
     slash("Formelblock", "$$\n$0\n$$", "$$", "sigma", Some("MathBlock")),
     slash("Zitat", "> ", ">", "quote", Some("Quote")),
-    slash("Hinweisbox", "> [!note] ", "> [!note]", "info", None),
-    slash("Notiz einbetten", "![[", "![[", "file-text", None),
-    slash("Code", "```\n$0\n```", "```", "code", None),
-    slash("Trennlinie", "---\n", "---", "minus", None),
-    slash("Fußnote", "[^1]", "[^1]", "sticky-note", None),
-    slash("Karteikarte", " :: ", "::", "layers", None),
-    slash("Lückentext", "{{c1::$0}}", "{{c1::}}", "square-dashed", None),
+    slash("Hinweisbox", "> [!note] ", "> [!note]", "info", Some("insertCallout")),
+    slash("Notiz einbetten", "![[", "![[", "file-text", Some("embedNote")),
+    slash("Codeblock", "```\n$0\n```", "```", "code", Some("insertCodeBlock")),
+    slash("Trennlinie", "---\n", "---", "minus", Some("insertDivider")),
+    slash("Fußnote", "[^1]", "[^1]", "sticky-note", Some("insertFootnote")),
+    slash("Karteikarte", " :: ", "::", "layers", Some("insertCard")),
+    slash("Lückentext", "{{c1::$0}}", "{{c1::}}", "square-dashed", Some("insertCloze")),
 ];
+
+/// What the field being written in holds, when the text alone cannot tell.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Field {
+    #[default]
+    Text,
+    Formula,
+    Cell,
+}
 
 /// Suggestions while writing a link or a slash command.
 pub struct NoteCompletion {
     pub note: PathBuf,
+    pub field: Rc<Cell<Field>>,
 }
 
 impl NoteCompletion {
@@ -192,7 +209,8 @@ impl NoteCompletion {
     }
 
     fn slash_items(&self, typed: &str, range: Range, keys: impl Fn(&str) -> Option<String>) -> Vec<CompletionItem> {
-        let mut found: Vec<(i64, usize, String, &SlashCommand)> = SLASH.iter().enumerate().filter_map(|(i, c)| score(&tr(c.name), typed).map(|s| (s, i, tr(c.name), c))).collect();
+        let cell = self.field.get() == Field::Cell;
+        let mut found: Vec<(i64, usize, String, &SlashCommand)> = SLASH.iter().enumerate().filter(|(_, c)| !cell || c.inline()).filter_map(|(i, c)| score(&tr(c.name), typed).map(|s| (s, i, tr(c.name), c))).collect();
         found.sort_by_key(|f| (f.0, f.1));
         found
             .into_iter()
@@ -282,9 +300,9 @@ fn highlight_typed(query: &str, item: &CompletionItem) -> Vec<std::ops::Range<us
 }
 
 /// Sets the suggestions and their highlighting on a note's editor.
-pub fn attach(state: &mut gpui_kit::component::input::EditorState, note: PathBuf) {
+pub fn attach(state: &mut gpui_kit::component::input::EditorState, note: PathBuf, field: Rc<Cell<Field>>) {
     let lsp = state.lsp_mut();
-    lsp.completion_provider = Some(provider(note));
+    lsp.completion_provider = Some(provider(note, field));
     lsp.completion_menu.max_width = px(super::theme::suggestions::WIDTH);
     lsp.set_completion_highlighter(Rc::new(highlight_typed));
 }
@@ -312,7 +330,7 @@ impl CompletionProvider for NoteCompletion {
                 let range = Range { start: Position { line: line_number, character: start_utf16 }, end: Position { line: line_number, character: caret } };
                 self.tag_items(&typed, range)
             }
-            Some(Context_::Command { typed, start }) if in_formula(&all, line_start, offset) => {
+            Some(Context_::Command { typed, start }) if self.field.get() == Field::Formula || in_formula(&all, line_start, offset) => {
                 let start_utf16: u32 = line.chars().take(start).map(|c| c.len_utf16() as u32).sum();
                 let range = Range { start: Position { line: line_number, character: start_utf16 }, end: Position { line: line_number, character: caret } };
                 self.command_items(&typed, range)
@@ -350,8 +368,8 @@ impl CompletionProvider for NoteCompletion {
 }
 
 /// The provider a note's editor uses.
-pub fn provider(note: PathBuf) -> Rc<dyn CompletionProvider> {
-    Rc::new(NoteCompletion { note })
+pub fn provider(note: PathBuf, field: Rc<Cell<Field>>) -> Rc<dyn CompletionProvider> {
+    Rc::new(NoteCompletion { note, field })
 }
 
 #[cfg(test)]
@@ -381,9 +399,16 @@ mod tests {
 
     #[test]
     fn slash_commands_that_start_with_the_letters_come_first() {
-        let menu = super::NoteCompletion { note: "a.md".into() };
+        let menu = super::NoteCompletion { note: "a.md".into(), field: std::rc::Rc::default() };
         let labels: Vec<String> = menu.slash_items("t", lsp_types::Range::default(), |_| None).into_iter().map(|i| i.label).collect();
         assert_eq!(labels.first().map(String::as_str), Some("Tabelle"));
+    }
+
+    #[test]
+    fn a_table_cell_offers_only_what_fits_in_a_cell() {
+        let menu = super::NoteCompletion { note: "a.md".into(), field: std::rc::Rc::new(std::cell::Cell::new(super::Field::Cell)) };
+        let labels: Vec<String> = menu.slash_items("", lsp_types::Range::default(), |_| None).into_iter().map(|i| i.label).collect();
+        assert_eq!(labels, ["Notiz einbetten", "Fußnote", "Karteikarte", "Lückentext"]);
     }
 
     #[test]

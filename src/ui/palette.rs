@@ -171,7 +171,7 @@ fn commands(cx: &App) -> Vec<Command> {
         add(&edit, tr("In Notiz ersetzen"), "replace", Some(if cfg!(target_os = "macos") { Shortcut { key: "f".into(), command: true, shift: false, option: true, control: false } } else { fixed_shortcut("h", false) }.display()), Run::NoteAction(Box::new(super::find_bar::ReplaceInNote)));
         use super::documents as d;
         let chord = |key: &str, shift: bool, option: bool| Shortcut { key: key.into(), command: true, shift, option, control: false }.display();
-        let configurable: [(S, &'static str, Box<dyn Action>); 14] = [
+        let configurable: [(S, &'static str, Box<dyn Action>); 23] = [
             (S::Bold, "bold", Box::new(d::Bold)),
             (S::Italic, "italic", Box::new(d::Italic)),
             (S::Link, "link", Box::new(d::InsertLink)),
@@ -186,6 +186,15 @@ fn commands(cx: &App) -> Vec<Command> {
             (S::SelectLine, "text-search", Box::new(d::SelectLine)),
             (S::Indent, "arrow-right", Box::new(d::IndentLines)),
             (S::Outdent, "arrow-left", Box::new(d::OutdentLines)),
+            (S::Heading4, "heading", Box::new(d::Heading4)),
+            (S::InsertTable, "table", Box::new(d::InsertTable)),
+            (S::InsertCodeBlock, "code", Box::new(d::InsertCodeBlock)),
+            (S::InsertCallout, "info", Box::new(d::InsertCallout)),
+            (S::InsertDivider, "minus", Box::new(d::InsertDivider)),
+            (S::EmbedNote, "file-text", Box::new(d::EmbedNote)),
+            (S::InsertFootnote, "sticky-note", Box::new(d::InsertFootnote)),
+            (S::InsertCard, "layers", Box::new(d::InsertCard)),
+            (S::InsertCloze, "square-dashed", Box::new(d::InsertCloze)),
         ];
         for (action, icon_name, run) in configurable {
             add(&edit, action.label(), icon_name, keys(action), Run::NoteAction(run));

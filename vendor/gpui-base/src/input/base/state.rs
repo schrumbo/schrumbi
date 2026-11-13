@@ -553,6 +553,7 @@ pub struct InputBaseState<M: InputModeKind> {
 
     /// A flag to indicate if we are currently inserting a completion item.
     pub(super) completion_inserting: bool,
+    pub(super) menu_open_before_edit: bool,
     pub(super) overlay_action_handler: Option<
         Rc<
             dyn Fn(
@@ -1016,6 +1017,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             pending_context_menu: None,
             enable_context_menu: true,
             completion_inserting: false,
+            menu_open_before_edit: false,
             overlay_action_handler: None,
             silent_replace_text: false,
             emit_events: true,
@@ -4230,6 +4232,7 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         // Every edit invalidates provider responses for the previous document,
         // including deletion and indentation which do not trigger completion.
+        self.menu_open_before_edit = M::is_context_menu_open(self, cx);
         M::hide_context_menu(self, cx);
         M::clear_inline_completion(self, cx);
 

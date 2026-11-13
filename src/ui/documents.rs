@@ -40,7 +40,8 @@ actions!(
     schrumbi_editor,
     [
         Bold, Italic, InsertLink, InlineCode, ToggleTask, ToggleComment, MoveLineUp, MoveLineDown, CopyLineUp, CopyLineDown, DeleteLine, SelectLine, IndentLines, OutdentLines, ZoomIn, ZoomOut, ZoomReset,
-        ListNewline, ListTab, ListBacktab, ExtractSelection, CardFromSelection, AskAiSelection, CardsAiSelection, ExplainAiSelection, PlainNewline, Strike, Mark, InlineMath, MathBlock, Quote, BulletList, NumberedList, Heading1, Heading2, Heading3, ToggleWrap
+        ListNewline, ListTab, ListBacktab, ExtractSelection, CardFromSelection, AskAiSelection, CardsAiSelection, ExplainAiSelection, PlainNewline, Strike, Mark, InlineMath, MathBlock, Quote, BulletList, NumberedList, Heading1, Heading2, Heading3, ToggleWrap,
+        Heading4, InsertTable, InsertCodeBlock, InsertCallout, InsertDivider, EmbedNote, InsertFootnote, InsertCard, InsertCloze
     ]
 );
 
@@ -357,6 +358,7 @@ pub struct NoteView {
     text_undone: Option<std::time::Instant>,
     app_undone: Option<ropey::Rope>,
     last_snapshot: Option<std::time::Instant>,
+    field_kind: Rc<std::cell::Cell<super::completion::Field>>,
     found: Option<markdown_view::Found>,
     change_marks: Option<TextDecorationCollection>,
     /// Editor and reader offsets at the last sync of the split view.
@@ -400,9 +402,10 @@ impl NoteView {
         let wrap_override = prefs::with(|p| p.note_wraps.get(path.to_string_lossy().as_ref()).copied());
         let wrap = wraps_note(&text, wrap_override);
         let editor = cx.new(|cx| EditorState::new(window, cx).language(editor_language(text.len())).soft_wrap(wrap).line_number(true).default_value(text.clone()));
-        editor.update(cx, |s, _| super::completion::attach(s, path.clone()));
+        editor.update(cx, |s, _| super::completion::attach(s, path.clone(), Rc::default()));
         let block = cx.new(|cx| EditorState::new(window, cx).soft_wrap(true).line_number(false).folding(false).smart_indent(false).scroll_beyond_last_line(Some(0)));
-        block.update(cx, |s, _| super::completion::attach(s, path.clone()));
+        let field_kind: Rc<std::cell::Cell<super::completion::Field>> = Rc::default();
+        block.update(cx, |s, _| super::completion::attach(s, path.clone(), field_kind.clone()));
         let lib = state::lib(cx);
         let subs = vec![
             cx.subscribe_in(&editor, window, |this, e, ev: &InputEvent, window, cx| match ev {
@@ -516,7 +519,7 @@ impl NoteView {
         let list_for_focus = reader_list.clone();
         let saved_folds = prefs::get().note_folds.get(&path.to_string_lossy().to_string()).cloned().unwrap_or_default().into_iter().collect();
         let own_path = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: just_made || (mode == Mode::Source && text.trim().chars().count() < 40), mode, block: block.clone(), caret_seen: (0, 0), follow_caret: false, live: None, history: Vec::new(), live_left: None, future: Vec::new(), text_undone: None, app_undone: None, last_snapshot: None, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, split_lead: None, reparse: None, parse_hold: false, first_parse: true, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, change_marks: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, caret_placed: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), pdf_drop: None, pdf_drop_bar: None, fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
+        Self { editor_plain: text.len() > RICH_EDITOR_UNTIL, editor_wrap: wrap, wrap_override, wrap_notice: None, path, caret_to_end: just_made || (mode == Mode::Source && text.trim().chars().count() < 40), mode, block: block.clone(), caret_seen: (0, 0), follow_caret: false, live: None, history: Vec::new(), live_left: None, future: Vec::new(), text_undone: None, app_undone: None, last_snapshot: None, field_kind, editor, reader_list, row_estimate: (0., None), measured_scale: note_scale(), measured_full: prefs::get().reader_full_width, live_preview: None, reveal_line: None, reveal_nth: 0, item_hashes: Vec::new(), split_sync: (0., 0.), split_hold: None, split_lead: None, reparse: None, parse_hold: false, first_parse: true, parse_job: None, parse_slow: false, parse_notice: None, words: (0, None), words_task: None, split_rows: None, segments: Rc::default(), source_lines: Rc::default(), definitions: Rc::default(), fragments: Rc::default(), parsed_text: None, marks: None, keep_line: None, source_detour: false, long_line: false, editor_kind: prefs::get().note_editor, reader_width: px(720.), spell_task: None, spell: SpellState::default(), find: FindState::default(), last_line: None, took_over: false, found: None, change_marks: None, link_focus: markdown_view::LinkFocus { index: None, note: Some(own_path), list: Some(list_for_focus), text_click: None, edit_item: None, folds: Rc::new(std::cell::RefCell::new(saved_folds)), find: None }, place_restored: false, caret_placed: false, parsed: None, revision, version, external, syncing: false, autosave: None, save_problem: None, save_pending: None, save_flash: None, folder_wait: None, retry_focus: cx.focus_handle(), retry_held: false, embedded, focus: cx.focus_handle(), needs_focus: !embedded, window_title: String::new(), pdf_drop: None, pdf_drop_bar: None, fit: BarFit::default(), toc: Rc::default(), toc_of: None, _subs: subs }
     }
 
     pub fn path(&self) -> &Path {
@@ -1178,8 +1181,9 @@ impl NoteView {
     fn follow_move(&mut self, to: PathBuf, cx: &mut Context<Self>) {
         let settled = dunce::canonicalize(&to).unwrap_or_else(|_| to.clone());
         self.link_focus.note = Some(settled);
-        self.editor.update(cx, |s, _| super::completion::attach(s, to.clone()));
-        self.block.update(cx, |s, _| super::completion::attach(s, to.clone()));
+        self.editor.update(cx, |s, _| super::completion::attach(s, to.clone(), Rc::default()));
+        let field_kind = self.field_kind.clone();
+        self.block.update(cx, |s, _| super::completion::attach(s, to.clone(), field_kind));
         self.path = to;
         cx.notify();
     }
@@ -1303,6 +1307,7 @@ impl NoteView {
             return;
         }
         let single = !matches!(kind, SegmentKind::Whole { .. });
+        self.field_kind.set(if single && live_text::inside_formula(&lines, line) { super::completion::Field::Formula } else { super::completion::Field::Text });
         self.fill_field(source, at..at, true, window, cx);
         self.live = Some(LiveBlock { index, first_line, line_count, single, cell: None, selecting: false });
         self.after_open(index, cx);
@@ -1319,6 +1324,7 @@ impl NoteView {
         let Some(cell) = cells.get(column).cloned() else { return };
         let value = line[cell].to_string();
         let at = caret.unwrap_or(value.len()).min(value.len());
+        self.field_kind.set(super::completion::Field::Cell);
         self.fill_field(value, at..at, false, window, cx);
         self.live = Some(LiveBlock { index, first_line: segment.line, line_count: segment.count, single: true, cell: Some(LiveCell { row, column, line: line_no }), selecting: false });
         self.after_open(index, cx);
@@ -1667,6 +1673,31 @@ impl NoteView {
         if down { range.end == b.value().len() } else { range.start == 0 }
     }
 
+    /// Typing the second `$` of a lone `$$` line in an open formula steps onto the closing `$$` below the open line.
+    fn close_live_formula(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(live) = self.live else { return false };
+        if !live.single || live.cell.is_some() {
+            return false;
+        }
+        let range = self.block.read(cx).selected_range();
+        if !range.is_empty() {
+            return false;
+        }
+        let text = self.current_text(cx);
+        let at = Self::line_offset(&text, live.first_line) + range.start;
+        let Some(edit) = edit_ops::closes_formula(&text, at.min(text.len()), "$") else { return false };
+        let changed = edit_ops::apply(&text, &edit);
+        let line = changed[..edit.select.start].matches('\n').count();
+        let column = edit.select.start - Self::line_offset(&changed, line);
+        self.history.push((text.to_string(), live.first_line));
+        self.future.clear();
+        self.live = None;
+        self.put_text(changed, cx);
+        self.open_line(line, Some(column), window, cx);
+        self.schedule_autosave(cx);
+        true
+    }
+
     /// The byte where a source line starts in the whole note.
     fn line_offset(text: &str, line: usize) -> usize {
         text.split_inclusive('\n').take(line).map(str::len).sum()
@@ -1703,6 +1734,7 @@ impl NoteView {
     #[allow(clippy::too_many_arguments)]
     fn open_selecting(&mut self, first: usize, count: usize, value: String, selection: std::ops::Range<usize>, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let at = self.segments.iter().position(|s| first < s.line + s.count).unwrap_or(index);
+        self.field_kind.set(super::completion::Field::Text);
         self.fill_field(value, selection, true, window, cx);
         self.live = Some(LiveBlock { index: at, first_line: first, line_count: count, single: false, cell: None, selecting: true });
         self.after_open(at, cx);
@@ -2713,6 +2745,14 @@ impl NoteView {
         if self.live.is_some() { edit_ops::eol(&self.current_text(cx)) } else { edit_ops::eol(field) }
     }
 
+    fn text_around_field(&self, cx: &App) -> (bool, bool) {
+        let Some(l) = self.live else { return (false, false) };
+        let text = self.current_text(cx);
+        let lines: Vec<&str> = text.split('\n').collect();
+        let has_text = |i: Option<usize>| i.and_then(|i| lines.get(i)).is_some_and(|l| !l.trim().is_empty());
+        (has_text(l.first_line.checked_sub(1)), has_text(Some(l.first_line + l.line_count)))
+    }
+
     fn with_text(&mut self, cx: &mut Context<Self>) -> (String, std::ops::Range<usize>) {
         let target = self.target();
         let s = target.read(cx);
@@ -3687,6 +3727,10 @@ impl NoteView {
                         cx.stop_propagation();
                         return;
                     }
+                    if n.close_live_formula(w, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
                 }
                 if n.live.is_some() && !n.target().read(cx).completion_menu_state().open {
                     let (s, r) = n.with_text(cx);
@@ -3757,6 +3801,62 @@ impl NoteView {
             .on_action(cx.listener(|n, _: &Heading3, w, cx| {
                 let (s, r) = n.with_text(cx);
                 n.apply(edit_ops::set_heading(&s, r, 3), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &Heading4, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::set_heading(&s, r, 4), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &InsertTable, w, cx| {
+                if n.live.is_some_and(|l| l.cell.is_some()) {
+                    return;
+                }
+                let (s, r) = n.with_text(cx);
+                let nl = n.line_break(&s, cx);
+                let outside = n.text_around_field(cx);
+                n.apply(edit_ops::table(&s, r.start, nl, outside), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &InsertDivider, w, cx| {
+                if n.live.is_some_and(|l| l.cell.is_some()) {
+                    return;
+                }
+                let (s, r) = n.with_text(cx);
+                let nl = n.line_break(&s, cx);
+                let outside = n.text_around_field(cx);
+                let note_start = n.live.is_none_or(|l| l.first_line == 0);
+                n.apply(edit_ops::divider(&s, r.start, nl, outside, note_start), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &InsertCodeBlock, w, cx| {
+                if n.live.is_some_and(|l| l.cell.is_some()) {
+                    return;
+                }
+                let (s, r) = n.with_text(cx);
+                let nl = n.line_break(&s, cx);
+                n.apply(edit_ops::fenced_block(&s, r, nl, "```"), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &InsertCallout, w, cx| {
+                if n.live.is_some_and(|l| l.cell.is_some()) {
+                    return;
+                }
+                let (s, r) = n.with_text(cx);
+                let nl = n.line_break(&s, cx);
+                n.apply(edit_ops::callout(&s, r, nl), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &EmbedNote, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::surround(&s, r, "![[", "]]"), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &InsertFootnote, w, cx| {
+                let (s, r) = n.with_text(cx);
+                let note = format!("{}{s}", n.current_text(cx));
+                n.apply(edit_ops::footnote(&note, r), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &InsertCard, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::surround(&s, r.end..r.end, " :: ", ""), w, cx)
+            }))
+            .on_action(cx.listener(|n, _: &InsertCloze, w, cx| {
+                let (s, r) = n.with_text(cx);
+                n.apply(edit_ops::surround(&s, r, "{{c1::", "}}"), w, cx)
             }))
             .capture_action(cx.listener(|n, _: &gpui_kit::component::input::Paste, w, cx| n.paste(w, cx)))
             .on_action(cx.listener(|n, _: &ListNewline, w, cx| {
@@ -4920,11 +5020,24 @@ fn writing_menu(field: Editor) -> Editor {
             .menu(tr("Überschrift 1"), Box::new(Heading1))
             .menu(tr("Überschrift 2"), Box::new(Heading2))
             .menu(tr("Überschrift 3"), Box::new(Heading3))
+            .menu(tr("Überschrift 4"), Box::new(Heading4))
             .menu(tr("Zitat"), Box::new(Quote))
             .menu(tr("Liste"), Box::new(BulletList))
             .menu(tr("Nummerierte Liste"), Box::new(NumberedList))
             .menu(tr("Aufgabe"), Box::new(ToggleTask))
             .menu(tr("Link"), Box::new(InsertLink))
+            .submenu(
+                tr("Hinzufügen"),
+                gpui_kit::component::native_menu::NativeMenu::new()
+                    .menu(tr("Tabelle"), Box::new(InsertTable))
+                    .menu(tr("Codeblock"), Box::new(InsertCodeBlock))
+                    .menu(tr("Hinweisbox"), Box::new(InsertCallout))
+                    .menu(tr("Trennlinie"), Box::new(InsertDivider))
+                    .menu(tr("Notiz einbetten"), Box::new(EmbedNote))
+                    .menu(tr("Fußnote"), Box::new(InsertFootnote))
+                    .menu(tr("Karteikarte"), Box::new(InsertCard))
+                    .menu(tr("Lückentext"), Box::new(InsertCloze)),
+            )
             .separator()
             .menu(tr("Karte aus Auswahl…"), Box::new(CardFromSelection));
         if super::ai::active() {

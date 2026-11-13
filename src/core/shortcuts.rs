@@ -59,6 +59,15 @@ pub enum ShortcutAction {
     ZoomOut,
     ZoomReset,
     ToggleWrap,
+    Heading4,
+    InsertTable,
+    InsertCodeBlock,
+    InsertCallout,
+    InsertDivider,
+    EmbedNote,
+    InsertFootnote,
+    InsertCard,
+    InsertCloze,
     ToggleLive,
     MarkText,
     RotatePagesLeft,
@@ -115,7 +124,7 @@ fn s(key: &str, command: bool, shift: bool, option: bool, control: bool) -> Shor
 }
 
 impl ShortcutAction {
-    pub const ALL: [ShortcutAction; 75] = [
+    pub const ALL: [ShortcutAction; 84] = [
         Self::GoToday,
         Self::GoGrid,
         Self::GoRecord,
@@ -169,6 +178,15 @@ impl ShortcutAction {
         Self::ZoomOut,
         Self::ZoomReset,
         Self::ToggleWrap,
+        Self::Heading4,
+        Self::InsertTable,
+        Self::InsertCodeBlock,
+        Self::InsertCallout,
+        Self::InsertDivider,
+        Self::EmbedNote,
+        Self::InsertFootnote,
+        Self::InsertCard,
+        Self::InsertCloze,
         Self::ToggleLive,
         Self::MarkText,
         Self::RotatePagesLeft,
@@ -249,6 +267,15 @@ impl ShortcutAction {
             Self::ZoomOut => "zoomOut",
             Self::ZoomReset => "zoomReset",
             Self::ToggleWrap => "toggleWrap",
+            Self::Heading4 => "heading4",
+            Self::InsertTable => "insertTable",
+            Self::InsertCodeBlock => "insertCodeBlock",
+            Self::InsertCallout => "insertCallout",
+            Self::InsertDivider => "insertDivider",
+            Self::EmbedNote => "embedNote",
+            Self::InsertFootnote => "insertFootnote",
+            Self::InsertCard => "insertCard",
+            Self::InsertCloze => "insertCloze",
             Self::ToggleLive => "toggleLive",
             Self::MarkText => "markText",
             Self::RotatePagesLeft => "rotatePagesLeft",
@@ -360,6 +387,15 @@ impl ShortcutAction {
             Self::ZoomOut => "Schrift kleiner",
             Self::ZoomReset => "Schriftgröße zurücksetzen",
             Self::ToggleWrap => "Zeilenumbruch ein-/ausschalten",
+            Self::Heading4 => "Überschrift 4",
+            Self::InsertTable => "Tabelle einfügen",
+            Self::InsertCodeBlock => "Codeblock einfügen",
+            Self::InsertCallout => "Hinweisbox einfügen",
+            Self::InsertDivider => "Trennlinie einfügen",
+            Self::EmbedNote => "Notiz einbetten",
+            Self::InsertFootnote => "Fußnote einfügen",
+            Self::InsertCard => "Karteikarte einfügen",
+            Self::InsertCloze => "Lückentext einfügen",
             Self::ToggleLive => "Live-Ansicht ein-/ausschalten",
             Self::MarkText => "Markieren",
             Self::RotatePagesLeft => "Seiten links drehen",
@@ -391,7 +427,7 @@ impl ShortcutAction {
     }
 
     fn default_on(self, os: Os) -> Option<Shortcut> {
-        if matches!(self, Self::ToggleComment | Self::SelectTool | Self::MarkList | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick) {
+        if matches!(self, Self::ToggleComment | Self::Heading4 | Self::InsertTable | Self::InsertCodeBlock | Self::InsertCallout | Self::InsertDivider | Self::EmbedNote | Self::InsertFootnote | Self::InsertCard | Self::InsertCloze | Self::SelectTool | Self::MarkList | Self::InkBlack | Self::InkRed | Self::InkBlue | Self::InkGreen | Self::InkThin | Self::InkThick) {
             return None;
         }
         if os != Os::Mac {
@@ -466,6 +502,7 @@ impl ShortcutAction {
             Self::ZoomOut => s("-", true, false, false, false),
             Self::ZoomReset => s("0", true, false, false, false),
             Self::ToggleWrap => s("z", true, false, true, false),
+            Self::Heading4 | Self::InsertTable | Self::InsertCodeBlock | Self::InsertCallout | Self::InsertDivider | Self::EmbedNote | Self::InsertFootnote | Self::InsertCard | Self::InsertCloze => return None,
             Self::ToggleLive => s("l", true, false, true, false),
             Self::MarkText => s("h", false, false, false, false),
             Self::RotatePagesLeft => s("r", false, true, false, false),
