@@ -35,7 +35,7 @@ If the name does not exist yet, Schrumbi offers to create the note.
 
 ## Search All Files
 
-Searches names, folders, PDFs and notes. Matching entries are listed on top as well.
+Searches names, folders, PDFs and notes. Matching entries are listed on top as well. {key:up} {key:down} choose a match, {key:return} opens it. The caret then sits at the start of the match, which lights up briefly.
 
 | Input | Finds |
 |---|---|

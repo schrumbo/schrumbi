@@ -115,23 +115,30 @@ impl MainWindow {
             cx.subscribe(&search, |this, s, e: &InputEvent, cx| match e {
                 InputEvent::Change if !this.syncing_search => {
                     let text = s.read(cx).value().to_string();
-                    if !text.is_empty() {
-                        crate::core::prefs::mark_used("search");
-                    }
-                    act(cx, |l| {
-                        if let Route::Module(_) = l.route() {
-                            l.module_query = text;
-                        } else {
-                            l.search_query = text.clone();
-                            if !text.is_empty() && *l.route() != Route::Search {
-                                l.set_route(Route::Search);
-                            }
-                        }
+                    let changed = state::read(cx, |l| match l.route() {
+                        Route::Module(_) => l.module_query != text,
+                        _ => l.search_query != text,
                     });
+                    if changed {
+                        if !text.is_empty() {
+                            crate::core::prefs::mark_used("search");
+                        }
+                        act(cx, |l| {
+                            if let Route::Module(_) = l.route() {
+                                l.module_query = text;
+                            } else {
+                                l.search_query = text.clone();
+                                if !text.is_empty() && *l.route() != Route::Search {
+                                    l.set_route(Route::Search);
+                                }
+                            }
+                        });
+                    }
                 }
                 InputEvent::PressEnter { .. } => {
-                    let pages = this.pages.clone();
-                    pages.update(cx, |p, cx| p.open_search_selection(cx));
+                    if this.pages.update(cx, |p, cx| p.open_search_selection(cx)) {
+                        state::return_focus_to_page(cx);
+                    }
                 }
                 _ => {}
             }),
@@ -211,9 +218,7 @@ impl MainWindow {
     }
 
     fn step_results(&mut self, step: i64, cx: &mut Context<Self>) {
-        if state::read(cx, |l| *l.route() == Route::Search) {
-            self.pages.update(cx, |p, cx| p.move_search_selection(step, cx));
-        }
+        self.pages.update(cx, |p, cx| p.move_search_selection(step, cx));
     }
 
     pub fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {

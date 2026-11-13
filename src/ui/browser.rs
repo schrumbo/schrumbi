@@ -465,6 +465,16 @@ impl FileBrowser {
         cx.notify();
     }
 
+    /// Opens the selected file, or the first one when none is selected; false when there is none.
+    pub fn open_selected_or_first(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.selected.is_none() {
+            self.move_selection(0, cx);
+        }
+        let any = self.selected.is_some();
+        self.open_selected(cx);
+        any
+    }
+
     /// Opens the selected file; a content match opens at its first occurrence.
     pub fn open_selected(&mut self, cx: &mut App) {
         if let Some((names, was_searching)) = self.pending.take() {

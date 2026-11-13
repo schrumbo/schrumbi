@@ -53,6 +53,11 @@ impl BlinkCursor {
         cx.notify();
     }
 
+    /// Whether the cursor is blinking or paused, i.e. started and not stopped since.
+    pub(crate) fn is_running(&self) -> bool {
+        self.epoch != 0
+    }
+
     fn next_epoch(&mut self) -> usize {
         self.epoch += 1;
         self.epoch

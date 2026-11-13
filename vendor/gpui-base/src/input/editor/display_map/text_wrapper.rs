@@ -103,6 +103,93 @@ fn measured_wrap_boundaries(
     result
 }
 
+/// Rows of a long line that an edit inside it leaves, re-wrapping only from the
+/// row before the edit until a new row start meets an old one past the edit.
+///
+/// `edit` is in the old line's bytes, `line` is the new line. Returns `None`
+/// where re-wrapping the whole line is needed: indented lines, short lines,
+/// or a part to re-wrap that starts with a space.
+fn rewrap_edited_rows<F>(
+    old: &LineItem,
+    line: &str,
+    edit: Range<usize>,
+    new_len: usize,
+    wrap_width: Pixels,
+    line_start: usize,
+    wrap_line: &mut F,
+) -> Option<SmallVec<[Range<usize>; 1]>>
+where
+    F: FnMut(&str, Pixels, usize) -> Vec<gpui::Boundary>,
+{
+    let rows = &old.wrapped_lines;
+    if old.indent > 0
+        || rows.len() < 8
+        || edit.end > old.len
+        || line.is_empty()
+        || line.starts_with(' ')
+    {
+        return None;
+    }
+    let delta = new_len as isize - edit.len() as isize;
+    let edited = rows
+        .partition_point(|r| r.end <= edit.start)
+        .min(rows.len() - 1);
+    let start = rows[edited.saturating_sub(1)].start;
+    if start > 0 && line[start..].starts_with(' ') {
+        return None;
+    }
+    let edit_end = edit.start + new_len;
+    let mut ahead = 8;
+    loop {
+        let last = (edited + ahead).min(rows.len() - 1);
+        let end = if last + 1 == rows.len() {
+            line.len()
+        } else if rows[last].end < edit.end {
+            ahead *= 2;
+            continue;
+        } else {
+            rows[last].end.checked_add_signed(delta)?
+        };
+        let ends: Vec<usize> = wrap_line(&line[start..end], wrap_width, line_start + start)
+            .into_iter()
+            .map(|b| start + b.ix)
+            .collect();
+        let mut result: SmallVec<[Range<usize>; 1]> =
+            rows[..edited.saturating_sub(1)].iter().cloned().collect();
+        let mut row_start = start;
+        if end == line.len() {
+            for ix in ends {
+                result.push(row_start..ix);
+                row_start = ix;
+            }
+            result.push(row_start..line.len());
+            return Some(result);
+        }
+        let met = ends
+            .iter()
+            .take(ends.len().saturating_sub(1))
+            .enumerate()
+            .filter(|&(_, &ix)| ix >= edit_end)
+            .find_map(|(i, &ix)| {
+                let old_ix = ix.checked_add_signed(-delta)?;
+                let j = rows.partition_point(|r| r.start < old_ix);
+                (j < rows.len() && rows[j].start == old_ix).then_some((i, j))
+            });
+        if let Some((i, j)) = met {
+            for &ix in &ends[..=i] {
+                result.push(row_start..ix);
+                row_start = ix;
+            }
+            let shift = |ix: usize| ix.checked_add_signed(delta);
+            for r in &rows[j..] {
+                result.push(shift(r.start)?..shift(r.end)?);
+            }
+            return Some(result);
+        }
+        ahead *= 2;
+    }
+}
+
 /// A line with soft wrapped lines info.
 #[derive(Debug, Clone)]
 pub(crate) struct LineItem {
@@ -231,6 +318,8 @@ pub(crate) struct TextWrapper {
     pub(crate) lines: SumTree<LineItem>,
 
     inline_metrics: Rc<[(Range<usize>, Pixels)]>,
+    /// Whether inline metrics were set before the last edit, so the old rows came from the token wrapper.
+    metrics_before_edit: bool,
     _initialized: bool,
 }
 
@@ -246,6 +335,7 @@ impl TextWrapper {
             tab_size: TabSize::default().tab_size,
             lines: SumTree::new(&()),
             inline_metrics: Rc::from([]),
+            metrics_before_edit: false,
             _initialized: false,
         }
     }
@@ -454,6 +544,7 @@ impl TextWrapper {
     }
 
     pub(crate) fn adjust_inline_metrics(&mut self, range: &Range<usize>, new_len: usize) {
+        self.metrics_before_edit = !self.inline_metrics.is_empty();
         if self.inline_metrics.is_empty() {
             return;
         }
@@ -554,6 +645,11 @@ impl TextWrapper {
 
         let mut new_lines = Vec::with_capacity(new_end_row.saturating_sub(new_start_row) + 1);
         let wrap_width = self.wrap_width;
+        let within_one_line =
+            start_row == end_row
+                && new_start_row == new_end_row
+                && !self.metrics_before_edit
+                && self.inline_metrics.is_empty();
 
         // line not contains `\n`.
         for row in new_start_row..=new_end_row {
@@ -566,35 +662,55 @@ impl TextWrapper {
             if let Some(wrap_width) = wrap_width {
                 // Borrowed for lines within a single rope chunk.
                 let line_str: Cow<str> = line.into();
-                match self.wrapping_indent {
-                    WrappingIndent::Same => {
-                        // Here only have wrapped line, if there is no wrap meet, the `line_wraps`
-                        // result will empty.
-                        for boundary in
-                            wrap_line(&line_str, wrap_width, changed_text.line_start_offset(row))
-                        {
-                            wrapped_lines.push(prev_boundary_ix..boundary.ix);
-                            prev_boundary_ix = boundary.ix;
-                            indent_chars = boundary.next_indent;
+                let line_start = changed_text.line_start_offset(row);
+                let rewrapped = within_one_line
+                    .then(|| self.line(row))
+                    .flatten()
+                    .and_then(|old| {
+                        rewrap_edited_rows(
+                            old,
+                            &line_str,
+                            range.start - line_start..range.end - line_start,
+                            new_text.len(),
+                            wrap_width,
+                            line_start,
+                            wrap_line,
+                        )
+                    });
+                if let Some(rows) = rewrapped {
+                    wrapped_lines = rows;
+                    prev_boundary_ix = line.len();
+                } else {
+                    match self.wrapping_indent {
+                        WrappingIndent::Same => {
+                            // Here only have wrapped line, if there is no wrap meet, the `line_wraps`
+                            // result will empty.
+                            for boundary in
+                                wrap_line(&line_str, wrap_width, changed_text.line_start_offset(row))
+                            {
+                                wrapped_lines.push(prev_boundary_ix..boundary.ix);
+                                prev_boundary_ix = boundary.ix;
+                                indent_chars = boundary.next_indent;
+                            }
                         }
-                    }
-                    WrappingIndent::None => {
-                        // The first visual line keeps the line's leading indentation, so it is
-                        // wrapped as is.
-                        let boundaries =
-                            wrap_line(&line_str, wrap_width, changed_text.line_start_offset(row));
-                        if let Some(first_ix) = boundaries.first().map(|b| b.ix) {
-                            wrapped_lines.push(prev_boundary_ix..first_ix);
-                            prev_boundary_ix = first_ix;
+                        WrappingIndent::None => {
+                            // The first visual line keeps the line's leading indentation, so it is
+                            // wrapped as is.
+                            let boundaries =
+                                wrap_line(&line_str, wrap_width, changed_text.line_start_offset(row));
+                            if let Some(first_ix) = boundaries.first().map(|b| b.ix) {
+                                wrapped_lines.push(prev_boundary_ix..first_ix);
+                                prev_boundary_ix = first_ix;
 
-                            for boundary in wrap_line(
-                                &line_str[first_ix..],
-                                wrap_width,
-                                changed_text.line_start_offset(row) + first_ix,
-                            ) {
-                                let ix = first_ix + boundary.ix;
-                                wrapped_lines.push(prev_boundary_ix..ix);
-                                prev_boundary_ix = ix;
+                                for boundary in wrap_line(
+                                    &line_str[first_ix..],
+                                    wrap_width,
+                                    changed_text.line_start_offset(row) + first_ix,
+                                ) {
+                                    let ix = first_ix + boundary.ix;
+                                    wrapped_lines.push(prev_boundary_ix..ix);
+                                    prev_boundary_ix = ix;
+                                }
                             }
                         }
                     }
@@ -894,6 +1010,9 @@ impl LineLayout {
             };
 
             if matches {
+                if line.is_unshaped() {
+                    return None;
+                }
                 let x = line.x_for_index(offset.saturating_sub(acc_len))
                     + x_offset
                     + self.line_indent(i);
@@ -1459,6 +1578,65 @@ mod tests {
             "This is a full text.\nThis is a second line."
         );
         assert_eq!(wrapper.lines_count(), 2);
+    }
+
+    /// An edit inside a long line re-wraps only nearby rows, yet ends with the
+    /// rows a full wrap of the new text gives, in both indent modes.
+    #[test]
+    fn test_edit_in_long_line_rewraps_like_a_full_wrap() {
+        for indent in [WrappingIndent::Same, WrappingIndent::None] {
+            let mut wrap = |line: &str, width: Pixels, _: usize| {
+                measured_wrap_boundaries(line, width, indent, |text| {
+                    px(text.chars().count() as f32 * 7.)
+                })
+            };
+            let rows = |wrapper: &TextWrapper| {
+                wrapper
+                    .iter_lines()
+                    .map(|line| line.wrapped_lines.clone())
+                    .collect::<Vec<_>>()
+            };
+            let new_wrapper = || {
+                let mut wrapper = TextWrapper::new(test_font(), px(14.), Some(px(200.)));
+                wrapper.wrapping_indent = indent;
+                wrapper
+            };
+            let words = ["a", "lang", "Übung", "Wort", "Aufgabenblatt", "x"];
+            let mut text: String = (0..1500).map(|i| format!("{} ", words[i * 7 % 6])).collect();
+            text.push_str("\nzweite Zeile");
+            let mut rope = Rope::from(text.as_str());
+            let mut wrapper = new_wrapper();
+            wrapper._update(&rope, &(0..rope.len()), &rope, &mut wrap);
+            let mut seed = 7u64;
+            for step in 0..300 {
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let len = text.find('\n').unwrap();
+                let mut at = (seed >> 33) as usize % len;
+                while !text.is_char_boundary(at) {
+                    at -= 1;
+                }
+                let next = text[at..].chars().next().map_or(at, |c| at + c.len_utf8());
+                let (range, insert) = match step % 4 {
+                    0 => (at..at, "q"),
+                    1 => (at..at, " "),
+                    2 => (at..next.min(len), ""),
+                    _ => (at..at, "Hausaufgabe "),
+                };
+                text.replace_range(range.clone(), insert);
+                rope = Rope::from(text.as_str());
+                wrapper._update(&rope, &range, &Rope::from(insert), &mut wrap);
+                let mut full = new_wrapper();
+                full._update(&rope, &(0..rope.len()), &rope, &mut wrap);
+                assert_eq!(rows(&wrapper), rows(&full), "{indent:?} step {step}");
+            }
+            let range = 0..text.find('\n').unwrap();
+            text.replace_range(range.clone(), "");
+            rope = Rope::from(text.as_str());
+            wrapper._update(&rope, &range, &Rope::new(), &mut wrap);
+            assert_eq!(rows(&wrapper)[0].as_slice(), &[0..0], "{indent:?} emptied");
+        }
     }
 
     fn test_font() -> gpui::Font {

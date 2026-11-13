@@ -1109,18 +1109,18 @@ impl<M: InputModeKind> TextElement<M> {
         state: &InputBaseState<M>,
         line_height: Pixels,
         input_height: Pixels,
-    ) -> (Range<usize>, Vec<usize>, Pixels) {
+    ) -> (Range<usize>, Vec<usize>, Pixels, Pixels) {
         // Add extra rows to avoid showing empty space when scroll to bottom.
         let extra_rows = 1;
         if state.is_single_line() {
-            return (0..1, vec![0], px(0.));
+            return (0..1, vec![0], px(0.), px(0.));
         }
 
         let total_lines = state.display_map.wrap_row_count();
         let display_count = state.display_map.display_row_count();
         let buffer_line_count = state.display_map.buffer_line_count();
         if display_count == 0 || buffer_line_count == 0 {
-            return (0..0, Vec::new(), px(0.));
+            return (0..0, Vec::new(), px(0.), px(0.));
         }
 
         let mut scroll_top = if let Some(deferred_scroll_offset) = state.deferred_scroll_offset {
@@ -1172,7 +1172,7 @@ impl<M: InputModeKind> TextElement<M> {
             }
         }
 
-        (visible_range, visible_buffer_lines, visible_top)
+        (visible_range, visible_buffer_lines, visible_top, viewport_top)
     }
 
     /// Return (line_number_width, line_number_len)
@@ -1770,7 +1770,7 @@ impl<M: InputModeKind> TextElement<M> {
                     .iter()
                     .any(|span| !cache.widths.contains_key(span.token()))
         });
-        let (visible, _, _) = self.calculate_visible_range(state, line_height, viewport);
+        let (visible, _, _, _) = self.calculate_visible_range(state, line_height, viewport);
         let start = state.text.line_start_offset(visible.start);
         let end = state.text.line_end_offset(visible.end.saturating_sub(1));
         let spans = state.token_spans();
@@ -2138,17 +2138,22 @@ impl<M: InputModeKind> TextElement<M> {
         out
     }
 
+    /// Shapes the visible lines. Rows of a soft-wrapped line outside
+    /// `shaped_rows` (content-space y) and away from every cursor stay unshaped.
     #[allow(clippy::too_many_arguments)]
     fn layout_lines(
         state: &InputBaseState<M>,
         display_text: &Rope,
         last_layout: &LastLayout,
+        shaped_rows: Range<Pixels>,
         font_size: Pixels,
         runs: &[TextRun],
         bg_segments: &[(Range<usize>, Hsla)],
         whitespace_indicators: Option<WhitespaceIndicators>,
         window: &mut Window,
     ) -> Vec<LineLayout> {
+        use crate::input::display_map::InputLine;
+
         let is_single_line = state.is_single_line();
         if state.tokens_visible() {
             return Self::layout_token_lines(state, last_layout, font_size, runs, window);
@@ -2207,6 +2212,8 @@ impl<M: InputModeKind> TextElement<M> {
         // This is separate from the visible_text offset because runs from highlight_lines
         // only cover visible (non-folded) lines.
         let mut run_offset = 0;
+        let line_height = last_layout.line_height;
+        let mut row_top = last_layout.visible_top;
 
         for (vi, &buffer_line) in last_layout.visible_buffer_lines.iter().enumerate() {
             let line_text: String = display_text.slice_line(buffer_line).into();
@@ -2217,10 +2224,37 @@ impl<M: InputModeKind> TextElement<M> {
 
             debug_assert_eq!(line_item.len(), line_text.len());
 
-            let mut wrapped_lines: SmallVec<[ShapedLine; 1]> = SmallVec::with_capacity(1);
+            let rows = &line_item.wrapped_lines;
+            let mut wrapped_lines: SmallVec<[InputLine; 1]> = SmallVec::with_capacity(rows.len());
             let mut line_has_background = false;
+            let mut near_cursor = vec![false; if rows.len() > 1 { rows.len() } else { 0 }];
+            if rows.len() > 1 {
+                let line_start = state.text.line_start_offset(buffer_line);
+                let line_end = line_start + line_text.len();
+                for selection in state.selections.iter() {
+                    for offset in [selection.start, selection.end] {
+                        if (line_start..=line_end).contains(&offset) {
+                            let local = offset - line_start;
+                            let row = rows
+                                .partition_point(|r| r.end < local)
+                                .min(rows.len() - 1);
+                            for near in row.saturating_sub(1)..(row + 2).min(rows.len()) {
+                                near_cursor[near] = true;
+                            }
+                        }
+                    }
+                }
+            }
 
-            for range in &line_item.wrapped_lines {
+            for (row, range) in rows.iter().enumerate() {
+                let top = row_top + line_height * row;
+                if row > 0
+                    && !near_cursor[row]
+                    && (top + line_height <= shaped_rows.start || top >= shaped_rows.end)
+                {
+                    wrapped_lines.push(InputLine::unshaped(range.len()));
+                    continue;
+                }
                 let line_runs = runs_for_range(runs, run_offset, &range);
                 let line_runs = if bg_segments.is_empty() {
                     line_runs
@@ -2241,8 +2275,9 @@ impl<M: InputModeKind> TextElement<M> {
                 expand_tabs(&mut shaped_line, tab_stop);
 
                 line_has_background |= has_background(&line_runs);
-                wrapped_lines.push(shaped_line);
+                wrapped_lines.push(shaped_line.into());
             }
+            row_top += line_height * rows.len();
 
             // Use the first visual line's indentation width for continuation lines.
             let wrap_indent = if line_item.indent > 0 && wrapped_lines.len() > 1 {
@@ -2257,7 +2292,7 @@ impl<M: InputModeKind> TextElement<M> {
             };
 
             let line_layout = LineLayout::new()
-                .lines(wrapped_lines)
+                .inline_lines(wrapped_lines)
                 .wrap_indent(wrap_indent)
                 .with_background(line_has_background)
                 .with_whitespaces(whitespace_indicators.clone());
@@ -2437,7 +2472,8 @@ pub(super) struct PrepaintState {
     /// The lines only contains the visible lines in the viewport, based on `visible_range`.
     ///
     /// The child is the soft lines.
-    line_numbers: Option<Vec<SmallVec<[ShapedLine; 1]>>>,
+    /// The number of each visible line with the count of its visual rows.
+    line_numbers: Option<Vec<(ShapedLine, usize)>>,
     /// Size of the scrollable area by entire lines.
     scroll_size: Size<Pixels>,
     /// Caret bounds for every selection, active flagged.
@@ -2770,8 +2806,10 @@ impl<M: InputModeKind> Element for TextElement<M> {
         );
         let state = self.state.read(cx);
 
-        let (visible_range, visible_buffer_lines, visible_top) =
+        let (visible_range, visible_buffer_lines, visible_top, viewport_top) =
             self.calculate_visible_range(&state, line_height, bounds.size.height);
+        let shaped_rows =
+            (viewport_top - line_height * 4.)..(viewport_top + bounds.size.height + line_height * 4.);
         let visible_start_offset = state.text.line_start_offset(visible_range.start);
         let visible_end_offset = state
             .text
@@ -2891,6 +2929,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             &state,
             &display_text,
             &last_layout,
+            shaped_rows,
             text_size,
             &runs,
             &document_colors,
@@ -3147,16 +3186,10 @@ impl<M: InputModeKind> Element for TextElement<M> {
                     &other_line_runs
                 };
 
-                let mut sub_lines: SmallVec<[ShapedLine; 1]> = SmallVec::new();
-                sub_lines.push(
-                    window
-                        .text_system()
-                        .shape_line(line_no, text_size, &runs, None),
-                );
-                for _ in 0..line.wrapped_lines.len().saturating_sub(1) {
-                    sub_lines.push(ShapedLine::default());
-                }
-                line_numbers.push(sub_lines);
+                let shaped = window
+                    .text_system()
+                    .shape_line(line_no, text_size, &runs, None);
+                line_numbers.push((shaped, line.wrapped_lines.len().max(1)));
             }
             Some(line_numbers)
         } else {
@@ -3264,13 +3297,13 @@ impl<M: InputModeKind> Element for TextElement<M> {
             offset_y += invisible_top_padding;
 
             // Each item is the normal lines.
-            for (lines, &buffer_line) in line_numbers
+            for ((_, rows), &buffer_line) in line_numbers
                 .iter()
                 .zip(prepaint.last_layout.visible_buffer_lines.iter())
             {
                 let is_active = prepaint.current_row == Some(buffer_line);
                 let p = point(input_bounds.origin.x, origin.y + offset_y);
-                let height = line_height * lines.len() as f32;
+                let height = line_height * *rows as f32;
                 // Paint the current line background
                 if is_active {
                     if let Some(bg_color) = active_line_color {
@@ -3474,14 +3507,14 @@ impl<M: InputModeKind> Element for TextElement<M> {
             window.paint_quad(fill(gutter_bounds, gutter_bg));
 
             // Each item is the normal lines.
-            for (lines, &buffer_line) in line_numbers
+            for ((line, rows), &buffer_line) in line_numbers
                 .iter()
                 .zip(prepaint.last_layout.visible_buffer_lines.iter())
             {
                 let p = point(input_bounds.origin.x, origin.y + offset_y);
                 let is_active = prepaint.current_row == Some(buffer_line);
 
-                let height = line_height * lines.len() as f32;
+                let height = line_height * *rows as f32;
                 // paint active line number background
                 if is_active {
                     if let Some(bg_color) = active_line_color {
@@ -3495,10 +3528,8 @@ impl<M: InputModeKind> Element for TextElement<M> {
                     }
                 }
 
-                for line in lines {
-                    _ = line.paint(p, line_height, TextAlign::Left, None, window, cx);
-                    offset_y += line_height;
-                }
+                _ = line.paint(p, line_height, TextAlign::Left, None, window, cx);
+                offset_y += height;
 
                 // Add ghost line height after cursor row for line numbers alignment
                 if !prepaint.ghost_lines.is_empty() && prepaint.current_row == Some(buffer_line) {
@@ -4615,6 +4646,40 @@ mod tests {
             );
             assert_eq!(fills.len(), 1);
             assert_eq!(frames.len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    fn long_wrapped_line_shapes_only_rows_near_the_viewport_and_cursor(cx: &mut TestAppContext) {
+        let text = "word ".repeat(4000);
+        let (editor, window) = decoration_editor(cx, &text, true);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| {
+            editor.update(cx, |state, cx| state.move_to(0, None, cx));
+            window.draw(cx).clear(cx);
+            let middle = {
+                let state = editor.read(cx);
+                let line = &state.last_layout.as_ref().unwrap().lines[0];
+                let rows = line.wrapped_lines.len();
+                assert!(rows > 100);
+                assert_eq!(line.len(), text.len());
+                assert!(line.wrapped_lines[0].width > px(0.));
+                let middle = &line.wrapped_lines[rows / 2];
+                assert!(middle.len > 0);
+                assert_eq!(middle.width, px(0.));
+                let row_start = line.wrapped_lines[..40].iter().map(|l| l.len).sum::<usize>();
+                assert!(line.wrapped_lines[40].is_unshaped());
+                let (target, _) = state.vertical_target(2, None, false, 40);
+                assert!((row_start..row_start + 6).contains(&target), "{target} {row_start}");
+                line.wrapped_lines[..rows / 2].iter().map(|l| l.len).sum::<usize>()
+            };
+            editor.update(cx, |state, cx| state.move_to(middle + 1, None, cx));
+            window.draw(cx).clear(cx);
+            let state = editor.read(cx);
+            let line = &state.last_layout.as_ref().unwrap().lines[0];
+            let rows = line.wrapped_lines.len();
+            assert!(line.wrapped_lines[rows / 2].width > px(0.));
+            assert!(line.wrapped_lines[rows / 2 + 1].width > px(0.));
         });
     }
 

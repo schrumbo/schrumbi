@@ -35,7 +35,7 @@ Gibt es den Namen noch nicht, bietet Schrumbi an, die Notiz anzulegen.
 
 ## In allen Dateien suchen
 
-Durchsucht Namen, Ordner, PDFs und Notizen. Passende Einträge stehen oben dazu.
+Durchsucht Namen, Ordner, PDFs und Notizen. Passende Einträge stehen oben dazu. {key:up} {key:down} wählen einen Treffer, {key:return} öffnet ihn. Die Schreibmarke steht dann am Anfang der Fundstelle, die kurz aufleuchtet.
 
 | Eingabe | Findet |
 |---|---|
