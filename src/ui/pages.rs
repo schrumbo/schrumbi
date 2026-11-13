@@ -159,14 +159,23 @@ impl Pages {
         }
     }
 
-    /// Return in the search field opens the selected search result.
-    pub fn open_search_selection(&mut self, cx: &mut Context<Self>) {
-        let search = self.search.clone();
-        search.update(cx, |b, cx| b.open_selected(cx));
+    fn search_results(&self, cx: &App) -> Option<Entity<FileBrowser>> {
+        state::read(cx, |l| match l.route() {
+            Route::Search => Some(self.search.clone()),
+            Route::Module(_) if !l.module_query.is_empty() => Some(self.module_files.clone()),
+            _ => None,
+        })
+    }
+
+    /// Return in the search field opens the selected result of the search or module filter; false when nothing opened.
+    pub fn open_search_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        self.search_results(cx).is_some_and(|results| results.update(cx, |b, cx| b.open_selected_or_first(cx)))
     }
 
     pub fn move_search_selection(&mut self, step: i64, cx: &mut Context<Self>) {
-        self.search.update(cx, |b, cx| b.move_selection(step, cx));
+        if let Some(results) = self.search_results(cx) {
+            results.update(cx, |b, cx| b.move_selection(step, cx));
+        }
     }
 
     fn search_page(&self, lib: &Library, width: f32, t: &Theme) -> AnyElement {

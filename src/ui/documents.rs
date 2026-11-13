@@ -526,7 +526,7 @@ impl NoteView {
     /// Selects a search match in the editor and scrolls the reader to its block.
     fn reveal(&mut self, term: &str, nth: usize, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(range) = search_index::occurrences(text, term).into_iter().nth(nth) else { return };
-        self.editor.update(cx, |s, cx| s.set_selected_range(range.clone(), cx));
+        self.editor.update(cx, |s, cx| s.set_selected_range(range.start..range.start, cx));
         let token = self.found.as_ref().map_or(0, |f| f.token + 1);
         let block = markdown_view::block_at(text, range.start);
         let line = text.get(..range.start).unwrap_or_default().matches('\n').count();
@@ -536,18 +536,29 @@ impl NoteView {
         }
         let still = cx.reduce_motion();
         self.found = Some(markdown_view::Found::one(block, line, token, still));
-        if still {
-            cx.spawn_in(window, async move |this, cx| {
-                cx.background_executor().timer(markdown_view::FOUND_HOLD).await;
-                let _ = this.update(cx, |n, cx| {
-                    if n.found.as_ref().is_some_and(|f| f.token == token) {
-                        n.found = None;
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
+        let t = Theme::get(cx);
+        let fill = HighlightStyle { background_color: Some(t.accent.opacity(0.22)), ..Default::default() };
+        let decorations: Vec<TextDecoration> = (range.end > range.start).then(|| TextDecoration::new(range, fill)).into_iter().collect();
+        match &self.change_marks {
+            Some(known) => known.set(decorations, cx),
+            None if decorations.is_empty() => {}
+            None => self.change_marks = Some(self.editor.update(cx, |e, cx| e.create_decorations_collection(decorations, cx))),
         }
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(markdown_view::FOUND_HOLD).await;
+            let _ = this.update(cx, |n, cx| {
+                if n.found.as_ref().is_some_and(|f| f.token == token) {
+                    if let Some(marks) = &n.change_marks {
+                        marks.set(Vec::new(), cx);
+                    }
+                    if still {
+                        n.found = None;
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Shows what the assistant changed: the first changed line comes into view and every changed line is marked for a moment.
