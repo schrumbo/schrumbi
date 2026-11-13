@@ -134,8 +134,11 @@ impl QuickAdd {
     }
 }
 
+const MENU_MAX: f32 = 380.;
+const MENU_CHARS: usize = 44;
+
 fn row(label: String, content: impl IntoElement, t: &Theme) -> Div {
-    div().flex().items_start().gap(px(space::M)).child(div().w(px(70.)).pt(px(space::XS)).text_color(t.secondary).child(label)).child(div().flex_1().child(content))
+    div().flex().items_start().gap(px(space::M)).child(div().w(px(70.)).flex_none().pt(px(space::XS)).text_color(t.secondary).child(label)).child(div().flex_1().min_w_0().child(content))
 }
 
 impl Render for QuickAdd {
@@ -174,10 +177,12 @@ impl Render for QuickAdd {
             );
         }
         let e = me.clone();
-        let module_menu = Button::new("qa-module").label(current).dropdown_caret(true).dropdown_menu(move |mut menu, _, _| {
+        let module_menu = Button::new("qa-module").w_full().label(current).dropdown_caret(true).dropdown_menu(move |menu, _, _| {
+            let mut menu = menu.max_w(px(MENU_MAX));
             for (id, name) in &modules {
                 let (e, id) = (e.clone(), id.clone());
-                menu = menu.item(PopupMenuItem::new(name.clone()).on_click(move |_, _, cx| e.update(cx, |q, cx| {
+                let name = if name.chars().count() > MENU_CHARS { format!("{}…", name.chars().take(MENU_CHARS - 1).collect::<String>().trim_end()) } else { name.clone() };
+                menu = menu.item(PopupMenuItem::new(name).on_click(move |_, _, cx| e.update(cx, |q, cx| {
                     q.module = id.clone();
                     cx.notify();
                 })));
@@ -222,7 +227,7 @@ impl Render for QuickAdd {
         let reminder_now = reminder_choices.iter().find(|(h, _)| *h == self.remind).map(|(_, l)| l.clone()).unwrap_or_default();
         let remind_menu = {
             let e = me.clone();
-            Button::new("qa-remind").label(reminder_now).dropdown_caret(true).dropdown_menu(move |mut menu, _, _| {
+            Button::new("qa-remind").w_full().label(reminder_now).dropdown_caret(true).dropdown_menu(move |mut menu, _, _| {
                 for (hours, label) in &reminder_choices {
                     let (e, hours) = (e.clone(), *hours);
                     menu = menu.item(PopupMenuItem::new(label.clone()).on_click(move |_, _, cx| e.update(cx, |q, cx| {
@@ -410,7 +415,7 @@ actions!(schrumbi_quick, [QuickUp, QuickDown]);
 
 impl QuickOpen {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::with(tr("Dateiname, Ordner, „w3“ …"), None, window, cx)
+        Self::with(tr("Dateiname oder Ordner …"), None, window, cx)
     }
 
     /// Finds a file to link to a deadline: its suggestions and the unlinked files in its folder first.
@@ -606,7 +611,7 @@ impl Render for QuickOpen {
                             .flex()
                             .flex_col()
                             .gap(px(space::XXS))
-                            .child(div().truncate().child(f.name().to_string()))
+                            .child(div().truncate().child(if crate::core::markdown::is_markdown(f.path()) { f.path().file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default() } else { f.name().to_string() }))
                             .child(
                                 div()
                                     .flex()

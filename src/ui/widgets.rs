@@ -31,7 +31,7 @@ pub trait KeyNav {
 impl KeyNav for Stateful<Div> {
     fn key_nav(self) -> Self {
         let (fill, line) = (super::theme::ring::fill(), super::theme::ring::line());
-        let shadow = vec![BoxShadow { color: line, offset: point(px(0.), px(0.)), blur_radius: px(0.), inset: false, spread_radius: px(super::theme::ring::WIDTH) }];
+        let shadow = vec![BoxShadow { color: line, offset: point(px(0.), px(0.)), blur_radius: px(0.), inset: true, spread_radius: px(super::theme::ring::WIDTH) }];
         super::drive::marked(self, "clickable").tab_index(0).focus_visible(move |s| s.bg(fill).shadow(shadow.clone()))
     }
 }

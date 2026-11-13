@@ -324,6 +324,17 @@ pub fn mermaid_link_spots(svg: &str, links: &[String]) -> Vec<(String, f32, f32)
 
 /// A formula in running text as plain characters, where that is possible; text has no room for an image.
 pub fn math_inline(latex: &str) -> Option<String> {
+    math_chars(latex, false)
+}
+
+/// A formula as readable characters for a list line; what has no character of its own stays close to how it is written.
+pub fn math_readable(latex: &str) -> String {
+    static COMMAND: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\\([A-Za-z]+)").unwrap());
+    let out = math_chars(latex, true).unwrap_or_default();
+    COMMAND.replace_all(&out, "$1").replace('\\', "")
+}
+
+fn math_chars(latex: &str, lenient: bool) -> Option<String> {
     let mut out = latex.trim().to_string();
     for (from, to) in COMMANDS {
         out = out.replace(from, to);
@@ -343,17 +354,35 @@ pub fn math_inline(latex: &str) -> Option<String> {
                 let map = if marker == '^' { script_up as fn(char) -> Option<char> } else { script_down };
                 i += 1;
                 let group: Vec<char> = if chars.get(i) == Some(&'{') {
-                    let end = chars[i..].iter().position(|c| *c == '}')?;
+                    let end = match chars[i..].iter().position(|c| *c == '}') {
+                        Some(end) => end,
+                        None if lenient => chars.len() - i,
+                        None => return None,
+                    };
                     let g = chars[i + 1..i + end].to_vec();
-                    i += end + 1;
+                    i = (i + end + 1).min(chars.len());
                     g
+                } else if lenient && i >= chars.len() {
+                    Vec::new()
                 } else {
                     let g = vec![*chars.get(i)?];
                     i += 1;
                     g
                 };
-                for c in group {
-                    result.push(map(c)?);
+                match group.iter().map(|c| map(*c)).collect::<Option<String>>() {
+                    Some(mapped) if !group.is_empty() => result.push_str(&mapped),
+                    _ if lenient => {
+                        result.push(marker);
+                        if group.len() > 1 {
+                            result.push('(');
+                            result.extend(group);
+                            result.push(')');
+                        } else {
+                            result.extend(group);
+                        }
+                    }
+                    Some(_) => {}
+                    None => return None,
                 }
             }
             '{' | '}' => i += 1,
@@ -363,7 +392,7 @@ pub fn math_inline(latex: &str) -> Option<String> {
             }
         }
     }
-    (!result.contains('\\')).then_some(result)
+    (lenient || !result.contains('\\')).then_some(result)
 }
 
 const COMMANDS: &[(&str, &str)] = &[
@@ -462,6 +491,16 @@ mod tests {
         assert_eq!(math_inline(r"\frac{a}{b}").as_deref(), Some("(a)/(b)"));
         assert_eq!(math_inline(r"e^{2i\pi}"), None);
         assert_eq!(math_inline(r"\unbekannt{x}"), None);
+    }
+
+    #[test]
+    fn any_formula_reads_as_text_in_a_list() {
+        assert_eq!(math_readable(r"e^{i\pi} - 1"), "e^(iπ) - 1");
+        assert_eq!(math_readable(r"x^2 + y_1"), "x² + y₁");
+        assert_eq!(math_readable(r"\unbekannt{x}"), "unbekanntx");
+        assert_eq!(math_readable(r"a^{b"), "aᵇ");
+        assert_eq!(math_readable("x^"), "x^");
+        assert_eq!(crate::core::cards::plain_text(r"Was ist $e^{i\pi}$?"), "Was ist e^(iπ)?");
     }
 }
 

@@ -86,6 +86,7 @@ The week starts today and shows the next seven days. From there ‹ and › page
 | {key:w} and {key:m} | Week or month |
 
 - In the month, every entry is a chip in its module colour, exams with a cap. If not all fit into a day, the last line opens the whole list.
+- Lectures and tutorials appear below as a thin line with their time while the day still has room.
 - Clicking the day number opens that week. Chips can be dragged to another day.
 - Weekends and lecture-free time from the semester are tinted lightly, in week and month.
 - The top shows the date range, beside it in small type the lecture week or the break. The calendar week is in the tooltip over the range.

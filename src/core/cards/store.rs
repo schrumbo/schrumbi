@@ -1255,7 +1255,9 @@ pub fn merge_log(ours: &str, theirs: &str) -> String {
 pub fn plain_text(markdown_text: &str) -> String {
     static NOISE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"[*_`$]|\[\[|\]\]|==|(?:^|\s)#[\p{L}\p{N}/_-]+").unwrap());
     static HIDDEN: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\\boxed\{\\text\{\?\}\}").unwrap());
+    static MATH: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\$\$([^$]+)\$\$|\$([^$\n]+)\$").unwrap());
     let text = HIDDEN.replace_all(markdown_text, "[...]");
+    let text = MATH.replace_all(&text, |c: &regex::Captures| crate::core::vault::render::math_readable(c.get(1).or_else(|| c.get(2)).map_or("", |m| m.as_str())));
     NOISE.replace_all(&text, "").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

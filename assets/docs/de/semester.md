@@ -15,6 +15,7 @@ Ein Semester hat Vorlesungswochen, ein Modul hat einen Ordner. Mehr braucht Schr
 Klick auf ein Modul in der Seitenleiste öffnet seine Seite. Links stehen alle {ui:Abgaben} mit ihren Dateien, {ui:Zuletzt geschrieben} und {ui:Dateien}, rechts Karten, Termine, Note und Links.
 
 - Was noch offen ist, steht oben unter {ui:Noch offen}. Die graue Zahl neben {ui:Abgaben} zählt genau diese Einträge, wie in der Seitenleiste.
+- Ist schon etwas überfällig, steht nur der jüngste Eintrag da. Die älteren sind darunter eingeklappt, mit ihrer Anzahl.
 - Danach kommen die nächsten zwei Wochen. Spätere und erledigte Abgaben sind eingeklappt und zeigen die ersten fünf.
 - Erledigtes gleitet aus der Liste, {ui:Erledigt} leuchtet kurz auf.
 - {ui:Neuer Eintrag…} neben {ui:Abgaben} legt eine Abgabe an.

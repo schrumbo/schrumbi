@@ -117,6 +117,8 @@ pub enum Change {
     Cards { root: Option<PathBuf>, swaps: Vec<super::cards::Swap> },
     /// Puts the calendar address of a workspace back; `None` takes it away.
     CalendarSource { root: String, url: Option<String> },
+    /// Makes a folder, or removes it while it is empty; a folder with anything in it stays.
+    Folder { path: PathBuf, exists: bool },
 }
 
 /// What one undo or redo reverts.
@@ -137,6 +139,8 @@ pub struct ClassContext {
     pub day: NaiveDate,
     pub days_ago: i64,
     pub base: PathBuf,
+    /// Where that day's submission goes when its rule files by week; material of the day goes beside it.
+    pub week_folder: Option<PathBuf>,
 }
 
 impl ClassContext {
@@ -1306,17 +1310,33 @@ impl Library {
 
     /// A new, empty note beside the open one, named `Unbenannt`, ready to be named.
     pub fn new_untitled_note(&mut self, folder: Option<&Path>) -> Option<PathBuf> {
+        self.new_untitled(folder, "md")
+    }
+
+    /// An empty canvas or base where a new note would go, opened.
+    pub fn new_untitled_file(&mut self, folder: Option<&Path>, ext: &str) -> Option<PathBuf> {
+        self.new_untitled(folder, ext)
+    }
+
+    fn new_untitled(&mut self, folder: Option<&Path>, ext: &str) -> Option<PathBuf> {
         let vault = super::vault::index::current();
         let beside = self.active_document.as_deref().and_then(Path::parent).filter(|p| p.starts_with(&vault.root)).map(Path::to_path_buf);
         let chosen = (vault.config.new_file_location == "folder").then(|| self.vault_root().map(|r| vault.config.new_note_folder(&r, None))).flatten();
         let folder = folder.map(Path::to_path_buf).or(chosen).or(beside).or_else(|| self.vault_root().map(|r| vault.config.new_note_folder(&r, None)))?;
-        let target = unique_path(&folder.join(format!("{}.md", tr("Unbenannt"))));
-        let written = std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(&target, ""));
+        let target = unique_path(&folder.join(format!("{}.{ext}", tr("Unbenannt"))));
+        let text = match ext {
+            "canvas" => super::vault::canvas::Canvas::default().to_json(),
+            "base" => format!("views:\n  - type: table\n    name: {}\n", tr("Tabelle")),
+            _ => String::new(),
+        };
+        let written = std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(&target, text));
         if let Err(e) = written {
             self.last_error = Some(trf("Notiz konnte nicht angelegt werden: %@", &[&explain(&e.into())]));
             return None;
         }
-        self.mark_made_here(&target);
+        if ext == "md" {
+            self.mark_made_here(&target);
+        }
         self.refresh();
         self.commit(trf("Angelegt: %@", &[&name_of(&target)]), "square-pen", vec![Change::Trash(target.clone())]);
         self.open_document(&target);
@@ -2415,20 +2435,20 @@ impl Library {
             let week = weeks.iter().rev().find(|w| w.monday <= d);
             for m in self.semester_modules() {
                 let module_root = root.join(&m.folder);
-                let mut bases: Vec<PathBuf> = Vec::new();
+                let mut bases: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
                 for rule in m.rules.iter().filter(|r| r.week_offset == 0 && r.weekday == weekday) {
                     let Some(w) = week else { continue };
                     if let Some(a) = self.assignment(&format!("{}.{}.w{}", m.id, rule.id, w.index)) {
-                        bases.push(if a.per_week_folder { a.folder.parent().map(Path::to_path_buf).unwrap_or(module_root.clone()) } else { module_root.clone() });
+                        bases.push(if a.per_week_folder { (a.folder.parent().map(Path::to_path_buf).unwrap_or(module_root.clone()), self.filing_folder(a)) } else { (module_root.clone(), None) });
                     }
                 }
                 if bases.is_empty() && s.break_at(d).is_none() && m.sessions.iter().any(|x| x.weekday == weekday) {
                     let week_folder = week.and_then(|w| subdirs(&module_root).into_iter().find(|f| catalog::week_index(&name_of(f)) == Some(w.index)));
-                    bases.push(week_folder.unwrap_or(module_root.clone()));
+                    bases.push((week_folder.unwrap_or(module_root.clone()), None));
                 }
-                for base in bases {
+                for (base, week_folder) in bases {
                     if !out.iter().any(|c| c.base == base) {
-                        out.push(ClassContext { module: m.clone(), day: d, days_ago: offset, base });
+                        out.push(ClassContext { module: m.clone(), day: d, days_ago: offset, base, week_folder });
                     }
                 }
             }
@@ -2451,6 +2471,9 @@ impl Library {
             }
         };
         for c in self.recent_classes(3) {
+            if let Some(w) = &c.week_folder {
+                add(w.clone(), &c.module, Some(c.clone()));
+            }
             let subs = Self::material_subfolders(&c.base);
             if subs.is_empty() {
                 add(c.base.clone(), &c.module, Some(c.clone()));
@@ -3002,6 +3025,14 @@ impl Library {
                     Change::Cards { root, swaps: back }
                 }
                 Change::CalendarSource { root, url } => Change::CalendarSource { url: set_calendar_source(&root, url), root },
+                Change::Folder { path, exists: true } => {
+                    std::fs::create_dir_all(&path)?;
+                    Change::Folder { path, exists: false }
+                }
+                Change::Folder { path, exists: false } => {
+                    let _ = std::fs::remove_dir(&path);
+                    Change::Folder { path, exists: true }
+                }
             })
         })();
         match result {
@@ -3296,12 +3327,15 @@ impl Library {
         self.commit(message, icon, vec![Change::Cards { root: super::cards::store_root(), swaps: back }]);
     }
 
-    /// Reports an import of flashcards; taking it back removes the new files, the cards added to notes that were there,
-    /// and the progress that came along.
+    /// Reports an import of flashcards; taking it back removes the new files, the folders made for them once empty,
+    /// the cards added to notes that were there, and the progress that came along.
     pub fn cards_imported(&mut self, done: super::cards::anki::ImportResult, progress: Vec<super::cards::Swap>) {
         self.refresh();
         let (added, duplicates) = (done.added, done.duplicates);
         if added == 0 && duplicates > 0 && done.created.is_empty() && done.appended.is_empty() && progress.is_empty() {
+            for dir in done.created_dirs.iter().rev() {
+                let _ = std::fs::remove_dir(dir);
+            }
             self.notify(tr("Alle Karten waren schon da, es wurde nichts importiert."), "layers", None, None);
             return;
         }
@@ -3319,7 +3353,8 @@ impl Library {
             0 => message,
             n => format!("{message} · {}", trf("%@ Bilder oder Töne ausgelassen", &[&n.to_string()])),
         };
-        let mut changes: Vec<Change> = done.created.into_iter().map(Change::Trash).collect();
+        let mut changes: Vec<Change> = done.created_dirs.into_iter().map(|path| Change::Folder { path, exists: false }).collect();
+        changes.extend(done.created.into_iter().map(Change::Trash));
         changes.extend(done.appended.into_iter().map(|(path, bytes)| Change::Bytes { path, bytes }));
         if !progress.is_empty() {
             changes.push(Change::Cards { root: super::cards::store_root(), swaps: progress });

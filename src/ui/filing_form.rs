@@ -78,6 +78,7 @@ pub struct FilingForm {
     details: bool,
     /// Width of the form, measured while painting.
     width: f32,
+    height: f32,
     focus: FocusHandle,
     load: Option<Task<()>>,
     ai: Option<AiFill>,
@@ -100,6 +101,10 @@ pub fn byline_from(author: Option<&str>) -> String {
     format!("{} {}", words[words.len() - 1], words[0].chars().next().unwrap_or_default())
 }
 
+const CHOICE_MIN: f32 = 300.;
+const PICTURE_MIN: f32 = 140.;
+const TALL_ENOUGH: f32 = 640.;
+
 impl FilingForm {
     pub fn new(paths: Vec<PathBuf>, preset: Option<String>, grab_focus: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let title = cx.new(|cx| InputState::new(window, cx).placeholder(tr("z. B. Persona-Board")));
@@ -108,6 +113,7 @@ impl FilingForm {
         let author = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Nachname-V, z. B. Muster-M")));
         let date = cx.new(|cx| DatePickerState::new(window, cx).date_format(if crate::core::i18n::lang() == crate::core::i18n::Lang::En { "%m/%d/%Y" } else { "%d.%m.%Y" }));
         let subs = vec![
+            cx.observe_window_bounds(window, |_, _, cx| cx.notify()),
             cx.subscribe(&author, |_, s, e: &InputEvent, cx| {
                 if matches!(e, InputEvent::Change) {
                     let v = s.read(cx).value().trim().to_string();
@@ -163,6 +169,7 @@ impl FilingForm {
             grab_focus,
             details: false,
             width: 560.,
+            height: 800.,
             focus: cx.focus_handle(),
             load: None,
             ai: None,
@@ -612,9 +619,8 @@ impl FilingForm {
     /// The suggestion as one decision: where the file goes and what it will be called.
     #[allow(clippy::too_many_arguments)]
     fn summary(&self, me: Entity<Self>, thumb: AnyElement, preview: PathBuf, final_name: &str, valid: bool, can_file: bool, l: &Library, cx: &App, t: &Theme) -> Div {
-        const CHOICE_MIN: f32 = 300.;
-        let room = self.width - 2. * space::XL - space::XL - CHOICE_MIN;
-        let stacked = room < 140.;
+        let stacked = self.stacked();
+        let room = self.room();
         let preview_w = if stacked { (self.width - 2. * space::XL).min(320.) } else { room.min(480.) };
         let preview_h = if stacked { 160. } else { preview_w * 1.375 };
         let source = self.path().map(|p| name_of(p)).unwrap_or_default();
@@ -683,7 +689,7 @@ impl FilingForm {
                     .child(div().flex_1().min_w_0().text_size(px(font::BODY)).line_clamp(2).child(if ready { final_name.to_string() } else { "…".to_string() })),
             )
             .children(folder.map(|f| div().flex().items_center().gap(px(space::XS)).text_size(px(font::CAPTION)).text_color(t.secondary).child(icon("folder", iconsize::XS, t.secondary)).child(div().truncate().child(l.relative_path(&f)))))
-            .child(
+            .when(!self.compact(), |d| d.child(
                 div()
                     .flex()
                     .items_center()
@@ -691,7 +697,7 @@ impl FilingForm {
                     .child(div().flex_1().child(Button::new("file-commit").primary().w_full().h(px(control::M)).label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| commit.update(cx, |f, cx| f.commit(window, cx)))))
                     .child(kbd("↩", t))
                     .child(Button::new("filing-change").ghost().label(tr("Ändern")).on_click(move |_, window, cx| change.update(cx, |f, cx| f.set_details(true, window, cx)))),
-            );
+            ));
 
         let others = self.alternatives();
         if !others.is_empty() {
@@ -723,13 +729,25 @@ impl FilingForm {
         div().flex().when(stacked, |d| d.flex_col()).items_start().gap(px(space::XL)).p(px(space::XL)).child(picture).child(choice.w_full().max_w(px(640.)))
     }
 
+    fn room(&self) -> f32 {
+        self.width - 3. * space::XL - CHOICE_MIN
+    }
+
+    fn stacked(&self) -> bool {
+        self.room() < PICTURE_MIN
+    }
+
+    fn compact(&self) -> bool {
+        self.stacked() || self.height < TALL_ENOUGH
+    }
+
     fn footer(&self, me: Entity<Self>, has_folder: bool, can_file: bool, primary: bool, t: &Theme) -> Option<Div> {
         let last = self.index + 1 >= self.paths.len();
         let multi = self.paths.len() > 1;
         if !multi && !primary {
             return None;
         }
-        let (e1, e2, e3) = (me.clone(), me.clone(), me);
+        let (e1, e2, e3, e4) = (me.clone(), me.clone(), me.clone(), me);
         Some(
             div()
                 .flex()
@@ -752,7 +770,8 @@ impl FilingForm {
                     })
                 })
                 .child(div().flex_1())
-                .when(primary, |d| d.child(Button::new("file-commit").primary().label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| e3.update(cx, |f, cx| f.commit(window, cx))))),
+                .when(primary && !self.details, |d| d.child(Button::new("filing-change").ghost().label(tr("Ändern")).on_click(move |_, window, cx| e4.update(cx, |f, cx| f.set_details(true, window, cx)))))
+                .when(primary, |d| d.child(Button::new("file-commit").primary().label(if multi && !last { tr("Ablegen & weiter") } else { tr("Ablegen") }).disabled(!can_file).on_click(move |_, window, cx| e3.update(cx, |f, cx| f.commit(window, cx)))).when(self.compact(), |d| d.child(kbd("↩", t)))),
         )
     }
 
@@ -809,13 +828,14 @@ impl FilingForm {
             .key_context("FilingForm")
             .child({
                 let me = cx.entity();
-                let known = self.width;
+                let known = (self.width, self.height);
                 canvas(
                     move |bounds, _, cx| {
-                        let width = f32::from(bounds.size.width);
-                        if (width - known).abs() > 1. {
+                        let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+                        if (width - known.0).abs() > 1. || (height - known.1).abs() > 1. {
                             me.update(cx, |f, cx| {
                                 f.width = width;
+                                f.height = height;
                                 cx.notify();
                             });
                         }
@@ -892,7 +912,7 @@ impl Render for FilingForm {
         };
         if !self.details {
             let body = self.summary(me.clone(), thumb, preview_path, &final_name, valid, can_file, l, cx, &t);
-            let footer = self.footer(me, folder.is_some(), can_file, false, &t);
+            let footer = self.footer(me, folder.is_some(), can_file, self.compact(), &t);
             return self.shell(body, footer, cx).into_any_element();
         }
         let p2 = path.clone();

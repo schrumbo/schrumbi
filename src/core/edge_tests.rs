@@ -1196,6 +1196,31 @@ F2 :: B2
 }
 
 #[test]
+fn taking_back_a_cards_import_removes_only_the_folders_it_made_once_they_are_empty() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (root, mut lib) = workspace("import-folders", &config(1, 1));
+    let mine = root.join("Anki/Mein");
+    std::fs::create_dir_all(&mine).unwrap();
+    let deck = |parts: &[&str], text: &str| (parts.iter().map(|p| p.to_string()).collect::<Vec<_>>(), vec![super::cards::anki::ImportNote { text: text.into(), progress: vec![Default::default()], tags: Vec::new() }]);
+    let package = super::cards::anki::Package { decks: std::collections::BTreeMap::from([deck(&["Beispiel", "Tief", "Vokabeln"], "Haus :: house"), deck(&["Leer", "Satz"], "Baum :: tree")]), media: vec![("a.png".into(), b"png".to_vec())], ..Default::default() };
+    let done = super::cards::anki::write(package, &root.join("Anki"), false, &std::collections::HashSet::new(), |p| p.to_string_lossy().to_string()).unwrap();
+    assert_eq!(done.created_dirs, vec![root.join("Anki/Beispiel"), root.join("Anki/Beispiel/Tief"), root.join("Anki/Leer"), root.join("Anki/Medien")]);
+    lib.cards_imported(done, Vec::new());
+    std::fs::write(root.join("Anki/Leer/Eigenes.md"), "meins").unwrap();
+    lib.undo();
+    assert!(!root.join("Anki/Beispiel").exists(), "a folder the import made goes once it is empty");
+    assert!(!root.join("Anki/Medien").exists());
+    assert!(mine.exists() && root.join("Anki").exists(), "folders that were there stay");
+    assert_eq!(std::fs::read_to_string(root.join("Anki/Leer/Eigenes.md")).unwrap(), "meins", "a folder the user put a file into stays with it");
+    assert!(!root.join("Anki/Leer/Satz.md").exists());
+    lib.redo();
+    assert!(root.join("Anki/Beispiel/Tief/Vokabeln.md").exists());
+    assert!(root.join("Anki/Medien/a.png").exists());
+    super::cards::close();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn names_stay_as_typed_and_take_the_convention_only_when_asked() {
     let (root, mut lib) = workspace("convention-heading", &config(1, 1));
     let today = chrono::Local::now().date_naive();
@@ -2768,5 +2793,24 @@ fn moving_all_open_items_is_one_undo_step() {
     for (id, was) in open.iter().zip(&before) {
         assert_eq!(lib.assignment(id).unwrap().due, *was, "one undo takes all of them back");
     }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn material_of_a_day_with_a_weekly_submission_is_offered_in_that_weeks_folder_first() {
+    let _guard = VAULT_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut c = config(1, 0);
+    let weekday = chrono::Datelike::weekday(&chrono::Local::now().date_naive()).number_from_monday();
+    c["modules"][0]["rules"] = json!([{ "id": "u", "title": "Übungsblatt", "short": "UB", "weekday": weekday, "time": "23:59", "weekOffset": 0, "interval": 1, "upload": true, "folder": "Übungen/W{w}", "filePattern": "*.pdf" }]);
+    let (root, lib) = workspace("material-week", &c);
+    let week = lib.current_week().unwrap().index;
+    let a = lib.assignment(&format!("m0.u.w{week}")).unwrap().clone();
+    assert_eq!(lib.material_targets().first().map(|t| t.path.clone()), lib.filing_folder(&a), "a sheet goes where that week's submission goes");
+    assert_eq!(lib.filing_folder(&a), Some(a.folder.clone()));
+    c["createFolders"] = json!(false);
+    std::fs::create_dir_all(root.join("M0/Übungen")).unwrap();
+    std::fs::write(root.join("schrumbi.json"), serde_json::to_vec_pretty(&c).unwrap()).unwrap();
+    let lib = open(&root);
+    assert_eq!(lib.material_targets().first().map(|t| t.path.clone()), Some(root.join("M0/Übungen")), "without new folders both fall back to the same existing one");
     let _ = std::fs::remove_dir_all(root);
 }

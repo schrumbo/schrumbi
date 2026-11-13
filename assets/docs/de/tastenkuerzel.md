@@ -15,6 +15,8 @@ Alle Kürzel, so wie sie gerade eingestellt sind. Ändern kannst du sie in {key:
 | {ui:Neuer Eintrag} | {key:newEntry} |
 | {ui:Neue Notiz, Datei oder Ordner} | {key:newFile} |
 | {ui:Tagesnotiz öffnen} | {key:dailyNote} |
+| {ui:Neue Karte} | {key:newCard} |
+| {ui:Seitenleiste ein-/ausklappen} | {key:toggleSidebar} |
 | {ui:Jetzt synchronisieren} | {key:syncNow} |
 | {ui:Aktualisieren} | {key:refresh} |
 | {ui:In Obsidian öffnen} | {key:openInObsidian} |

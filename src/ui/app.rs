@@ -45,6 +45,8 @@ actions!(
         Refresh,
         SyncNow,
         DailyNote,
+        NewCard,
+        ToggleSidebar,
         OpenInObsidian,
         SyncSetup,
         ResolveConflicts,
@@ -189,6 +191,17 @@ pub fn init(cx: &mut App) {
             }
         })
     });
+    cx.on_action(|_: &ToggleSidebar, cx| super::sidebar::toggle_compact(cx));
+    cx.on_action(|_: &NewCard, cx| {
+        if state::read(cx, |l| l.root.is_none()) {
+            return;
+        }
+        if let Some(w) = cx.active_window() {
+            cx.defer(move |cx| {
+                let _ = w.update(cx, |_, window, cx| super::cards_page::new_card(window, cx));
+            });
+        }
+    });
     cx.on_action(|_: &QuickOpen, cx| {
         prefs::mark_used("quick_open");
         act(cx, |l| if l.root.is_some() { l.show_quick_open = true })
@@ -222,7 +235,7 @@ pub fn init(cx: &mut App) {
         }
     });
     cx.on_action(|_: &ToggleInspector, cx| super::ai::toggle_details(cx));
-    cx.on_action(|_: &ToggleAi, cx| super::ai::toggle_column(cx));
+    cx.on_action(|_: &ToggleAi, cx| if super::ai::active() { super::ai::toggle_column(cx) } else { super::settings::open_ai(cx) });
     cx.on_action(|_: &Refresh, cx| {
         act(cx, |l| l.refresh());
         state::reindex(cx);
@@ -552,10 +565,12 @@ pub fn bind_keys(cx: &mut App) {
             binding(ShortcutAction::NewFile, NewFile, None),
             binding(ShortcutAction::GoBack, GoBack, None),
             binding(ShortcutAction::ToggleInspector, ToggleInspector, None),
-            super::ai::active().then(|| binding(ShortcutAction::ToggleAi, ToggleAi, None)).flatten(),
+            binding(ShortcutAction::ToggleAi, ToggleAi, None),
             binding(ShortcutAction::Refresh, Refresh, None),
             binding(ShortcutAction::Sync, SyncNow, None),
             binding(ShortcutAction::DailyNote, DailyNote, None),
+            binding(ShortcutAction::NewCard, NewCard, None),
+            binding(ShortcutAction::ToggleSidebar, ToggleSidebar, None),
             binding(ShortcutAction::OpenInObsidian, OpenInObsidian, None),
             Some(gpui_kit::KeyBinding::new("tab", super::canvas_view::NextItem, Some("WalkItems"))),
             Some(gpui_kit::KeyBinding::new("shift-tab", super::canvas_view::PreviousItem, Some("WalkItems"))),
@@ -678,6 +693,7 @@ pub fn rebuild_menus(cx: &mut App) {
             MenuItem::action(tr("Zeilenumbruch ein-/ausschalten"), super::documents::ToggleWrap).disabled(!wrap_is_available(cx)),
             MenuItem::action(tr("Notiz als PDF exportieren"), ExportPdf),
             MenuItem::separator(),
+            MenuItem::action(tr("Seitenleiste ein-/ausklappen"), ToggleSidebar),
             MenuItem::action(tr("Details ein-/ausblenden"), ToggleInspector),
             MenuItem::action(tr("Aktualisieren"), Refresh),
             MenuItem::separator(),

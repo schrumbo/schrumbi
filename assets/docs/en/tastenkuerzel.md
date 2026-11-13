@@ -15,6 +15,8 @@ All shortcuts as they are currently set. You can change them in {key:OpenSetting
 | {ui:Neuer Eintrag} | {key:newEntry} |
 | {ui:Neue Notiz, Datei oder Ordner} | {key:newFile} |
 | {ui:Tagesnotiz öffnen} | {key:dailyNote} |
+| {ui:Neue Karte} | {key:newCard} |
+| {ui:Seitenleiste ein-/ausklappen} | {key:toggleSidebar} |
 | {ui:Jetzt synchronisieren} | {key:syncNow} |
 | {ui:Aktualisieren} | {key:refresh} |
 | {ui:In Obsidian öffnen} | {key:openInObsidian} |

@@ -61,6 +61,8 @@ pub struct ImportResult {
     pub appended: Vec<(PathBuf, Vec<u8>)>,
     /// Media files left out because their name cannot be a file name.
     pub skipped_media: usize,
+    /// Folders the import made, outer ones first.
+    pub created_dirs: Vec<PathBuf>,
 }
 
 /// Reads a package or a text export, whichever the file is.
@@ -507,13 +509,20 @@ fn distinguished(text: &str, front: &str, n: usize) -> String {
     format!("{} ({n}){}", &text[..at], &text[at..])
 }
 
+fn make_dirs(dir: &Path, made: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    let missing: Vec<PathBuf> = dir.ancestors().take_while(|d| !d.as_os_str().is_empty() && !d.exists()).map(Path::to_path_buf).collect();
+    std::fs::create_dir_all(dir)?;
+    made.extend(missing.into_iter().rev());
+    Ok(())
+}
+
 /// Writes a package into notes under `folder`, media beside them. What is already there is not written twice.
 pub fn write(package: Package, folder: &Path, keep_progress: bool, known: &HashSet<String>, rel_of: impl Fn(&Path) -> String) -> Result<ImportResult> {
     let mut result = ImportResult { skipped_media: package.skipped_media, ..Default::default() };
     let mut seen: HashSet<String> = HashSet::new();
     let mut texts: HashSet<String> = HashSet::new();
     let mut by_anki: HashMap<i64, String> = HashMap::new();
-    std::fs::create_dir_all(folder)?;
+    make_dirs(folder, &mut result.created_dirs)?;
     for (deck, notes) in package.decks {
         let mut path = folder.to_path_buf();
         for part in &deck[..deck.len().saturating_sub(1)] {
@@ -590,7 +599,7 @@ pub fn write(package: Package, folder: &Path, keep_progress: bool, known: &HashS
             continue;
         }
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            make_dirs(parent, &mut result.created_dirs)?;
         }
         let existing = before.as_ref().map(|b| String::from_utf8_lossy(b).into_owned());
         let start = match &existing {
@@ -607,7 +616,7 @@ pub fn write(package: Package, folder: &Path, keep_progress: bool, known: &HashS
     }
     if !package.media.is_empty() {
         let media = folder.join("Medien");
-        std::fs::create_dir_all(&media)?;
+        make_dirs(&media, &mut result.created_dirs)?;
         for (name, bytes) in package.media {
             if crate::core::text::file_name_problem(&name).is_some() || name.starts_with('.') {
                 result.skipped_media += 1;

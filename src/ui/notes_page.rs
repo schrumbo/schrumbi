@@ -690,9 +690,14 @@ impl NotesPage {
 
     /// Where a new note goes: the chosen folder, or next to the open note.
     pub fn new_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_file("md", window, cx);
+    }
+
+    /// A new note, canvas or base in the folder in focus, its name ready to be typed.
+    pub fn new_file(&mut self, ext: &str, window: &mut Window, cx: &mut Context<Self>) {
         let folder = self.target_folder.as_deref().map(Self::folder_path);
         let made = act(cx, |l| {
-            let made = l.new_untitled_note(folder.as_deref());
+            let made = l.new_untitled_file(folder.as_deref(), ext);
             l.quiet_open = made.is_some();
             made
         });
@@ -822,13 +827,7 @@ impl NotesPage {
             }
             Row::File { path, .. } => {
                 self.target_folder = None;
-                let p = path.clone();
-                let empty = std::fs::metadata(&p).is_ok_and(|m| m.len() == 0);
-                act(cx, |l| {
-                    l.quiet_open = true;
-                    l.open_file(&p);
-                    l.focus_document |= empty;
-                });
+                open_from_tree(path, cx);
             }
             Row::Tag { tag, .. } => {
                 let t = tag.clone();
@@ -1128,6 +1127,15 @@ pub fn explorer_wanted(window_width: f32) -> bool {
     !crate::core::prefs::get().notes_explorer_hidden && (window_width >= NARROW_WINDOW || EXPLORER_OPENED.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// Opens a file clicked in the explorer and hands it the keyboard, as a new note gets it.
+pub fn open_from_tree(path: &Path, cx: &mut App) {
+    act(cx, |l| {
+        l.quiet_open = true;
+        l.open_file(path);
+        l.focus_document |= crate::core::library::Library::opens_in_app(path);
+    });
+}
+
 /// Shows or hides the explorer beside the document.
 pub fn set_hidden(hidden: bool, cx: &mut App) {
     EXPLORER_OPENED.store(!hidden, std::sync::atomic::Ordering::Relaxed);
@@ -1253,7 +1261,10 @@ impl Render for NotesPage {
                 let me = me.clone();
                 move |menu, _, _| {
                     let (a, b, c, d) = (me.clone(), me.clone(), me.clone(), me.clone());
+                    let (canvas, base) = (me.clone(), me.clone());
                     menu.item(PopupMenuItem::new(tr("Neuer Ordner")).icon(menu_icon("folder-plus")).on_click(move |_, window, cx| a.update(cx, |s, cx| s.new_folder(None, window, cx))))
+                        .item(PopupMenuItem::new(tr("Neue Leinwand")).icon(menu_icon("presentation")).on_click(move |_, window, cx| canvas.update(cx, |s, cx| s.new_file("canvas", window, cx))))
+                        .item(PopupMenuItem::new(tr("Neue Tabelle (Base)")).icon(menu_icon("table")).on_click(move |_, window, cx| base.update(cx, |s, cx| s.new_file("base", window, cx))))
                         .item(keyed_item(tr("Tagesnotiz öffnen"), Some(crate::core::shortcuts::ShortcutAction::DailyNote)).icon(menu_icon("calendar")).on_click(|_, _, cx| {
                             act(cx, |l| l.open_daily_note());
                             state::reindex(cx);
@@ -1311,7 +1322,7 @@ impl Render for NotesPage {
         };
         let _ = active;
         let accent = t.accent;
-        let handle = div().id("explorer-split").block_mouse_except_scroll().absolute().top_0().bottom_0().right_0().w(px(control::S)).flex_none().cursor_col_resize().soft_strip(accent.opacity(tint::SELECTED_EDGE), space::XS).child(div().absolute().top_0().bottom_0().right_0().w(px(space::XS)).border_r_1().border_color(t.separator)).on_drag(ExplorerSplit, |d, _, _, cx| cx.new(|_| d.clone()));
+        let handle = div().id("explorer-split").block_mouse_except_scroll().absolute().top_0().bottom_0().right_0().w(px(space::S)).flex_none().cursor_col_resize().soft_strip(accent.opacity(tint::SELECTED_EDGE), space::XS).child(div().absolute().top_0().bottom_0().right_0().w(px(space::XS)).border_r_1().border_color(t.separator)).on_drag(ExplorerSplit, |d, _, _, cx| cx.new(|_| d.clone()));
         if self.resizing && !cx.has_active_drag() {
             self.resizing = false;
             let width = self.width;

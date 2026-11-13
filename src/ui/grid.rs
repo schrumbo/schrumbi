@@ -154,6 +154,8 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
     let (done, _, total) = lib.progress();
     let weeks = strip.iter().filter(|s| s.0.lecture.is_some()).count();
     let summary = match lib.current_week() {
+        Some(w) if total == 0 => trf("Vorlesungswoche %lld von %lld", &[&w.index, &weeks]),
+        None if total == 0 => tr("Noch keine Pflichtabgaben"),
         Some(w) => trf("Vorlesungswoche %lld von %lld · %lld von %lld Pflichtabgaben erledigt", &[&w.index, &weeks, &done, &total]),
         None => trf("%lld von %lld Pflichtabgaben erledigt", &[&done, &total]),
     };
@@ -168,7 +170,7 @@ fn progress_card(lib: &Library, strip: &[(Slot, Option<f32>)], current: NaiveDat
                 .flex()
                 .items_center()
                 .gap(px(space::XL))
-                .child(progress_ring(if total > 0 { done as f32 / total as f32 } else { 0. }, 56., t))
+                .when(total > 0, |d| d.child(progress_ring(done as f32 / total as f32, 56., t)))
                 .child(
                     div()
                         .flex_1()

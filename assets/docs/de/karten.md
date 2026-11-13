@@ -28,7 +28,7 @@ Die {{c1::Varianz}} ist das Quadrat der {{c2::Standardabweichung}}.
 - In Notizen mit `#karten` oder `#flashcards` werden auch `{{Lücke}}` und `==Markiertes==` zu Lücken.
 - `cards: false` in den Eigenschaften nimmt eine Notiz aus. Code und Formelblöcke ergeben nie eine Karte.
 
-Ohne Tippen: Text markieren und {ui:Karte aus Auswahl…}, oder {ui:Neue Karte} mit {key:n}.
+Ohne Tippen: Text markieren und {ui:Karte aus Auswahl…}, oder {ui:Neue Karte} mit {key:n}. Von überall öffnet {key:newCard} eine neue Karte.
 
 Solange es keine Karten gibt, zeigt die Seite nur die zwei einfachsten Schreibweisen; {ui:Mehr Schreibweisen} klappt den Rest auf.
 

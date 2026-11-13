@@ -69,6 +69,12 @@ fn score(name: &str, query: &str) -> Option<i64> {
     crate::core::catalog::fuzzy(&query, &name).map(|s| (1000. - s * 100.) as i64)
 }
 
+fn linkable(root: &std::path::Path, path: &std::path::Path) -> bool {
+    let Ok(rel) = path.strip_prefix(root) else { return false };
+    let hidden = rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
+    !hidden && !rel.as_os_str().eq_ignore_ascii_case("schrumbi.json")
+}
+
 fn item(label: String, detail: Option<String>, sort: String, range: Range, new_text: String) -> CompletionItem {
     CompletionItem { label, detail, sort_text: Some(sort), text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text })), ..Default::default() }
 }
@@ -159,7 +165,7 @@ impl NoteCompletion {
         }
         let folder = self.note.parent().map(PathBuf::from);
         let mut found: Vec<(i64, String, Option<String>, &PathBuf)> = Vec::new();
-        for path in &vault.files {
+        for path in vault.files.iter().filter(|p| linkable(&vault.root, p)) {
             let is_note = crate::core::markdown::is_markdown(path);
             let name = if is_note { path.file_stem() } else { path.file_name() }.map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             let facts = vault.notes.get(path);
@@ -418,6 +424,19 @@ mod tests {
         assert_eq!(super::highlight_typed("/ab", &named("Tabelle")), vec![1..3]);
         assert_eq!(super::highlight_typed("/üs", &named("Überschrift 1")), vec![0..2, 5..6]);
         assert_eq!(super::highlight_typed("/xq", &named("Tabelle")), Vec::<std::ops::Range<usize>>::new());
+    }
+
+    #[test]
+    fn app_files_are_never_offered_as_links() {
+        let root = std::path::Path::new("/s");
+        assert!(super::linkable(root, &root.join("M1/Notiz.md")));
+        assert!(super::linkable(root, &root.join("M1/schrumbi.json")));
+        assert!(!super::linkable(root, &root.join("schrumbi.json")));
+        assert!(!super::linkable(root, &root.join("Schrumbi.JSON")));
+        assert!(!super::linkable(root, &root.join(".schrumbi-state.json")));
+        assert!(!super::linkable(root, &root.join(".schrumbi-cards.json")));
+        assert!(!super::linkable(root, &root.join(".obsidian/app.json")));
+        assert!(!super::linkable(root, &root.join("M1/.hidden.md")));
     }
 
     #[test]
